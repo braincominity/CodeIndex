@@ -762,11 +762,14 @@ public class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages");
         var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
         var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
+        var objc = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "objc");
 
         Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
     [Fact]
@@ -14049,6 +14052,47 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlTempTablesDoNotLookAheadAcrossProcedureBodies()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_temp_body_boundary");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                CREATE PROCEDURE dbo.ReadTemp AS
+                BEGIN
+                    SELECT * FROM #later_temp;
+                END;
+                GO
+                CREATE PROCEDURE dbo.EstablishTemp AS
+                BEGIN
+                    SELECT id INTO #later_temp FROM users;
+                END;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "#later_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var row = Assert.Single(rows);
+            var json = row.RootElement;
+            Assert.Equal("#later_temp", json.GetProperty("symbol_name").GetString());
+            Assert.Equal(8, json.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlSameLineDollarQuotedBodiesDoNotHideLaterReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_same_line_dollar_quoted_bodies");
@@ -17849,6 +17893,47 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(4, rows.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlQuotedTvfCallsStayVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_quoted_tvf_calls");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/repro.sql", "sql",
+                """
+                SELECT * FROM [dbo].[fn_GetUserStats](42);
+                SELECT * FROM `fn_GetUserStats`(42);
+                SELECT * FROM dbo.fn_GetUserStats(42);
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["fn_GetUserStats", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, rows.Count);
+            Assert.All(rows, row =>
+            {
+                Assert.Equal("fn_GetUserStats", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("call", row.GetProperty("reference_kind").GetString());
+            });
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 1);
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 2);
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 3);
         }
         finally
         {
