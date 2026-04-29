@@ -17901,6 +17901,47 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlQuotedTvfCallsStayVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_quoted_tvf_calls");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/repro.sql", "sql",
+                """
+                SELECT * FROM [dbo].[fn_GetUserStats](42);
+                SELECT * FROM `fn_GetUserStats`(42);
+                SELECT * FROM dbo.fn_GetUserStats(42);
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["fn_GetUserStats", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, rows.Count);
+            Assert.All(rows, row =>
+            {
+                Assert.Equal("fn_GetUserStats", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("call", row.GetProperty("reference_kind").GetString());
+            });
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 1);
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 2);
+            Assert.Contains(rows, row => row.GetProperty("line").GetInt32() == 3);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_NonExactJson_CSharpMultiLineUsingStaticConstantPatternKeepsRows()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_constant_pattern_refs");
