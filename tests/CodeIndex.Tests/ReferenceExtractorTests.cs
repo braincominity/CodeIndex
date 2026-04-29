@@ -15632,4 +15632,111 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "scalaNestedPhantom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "scalaPlainNestedPhantom" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_KotlinTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Kotlin
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph. The triple body's default `masked[pos] = ' '` path masks
+        // every char, so the quoted span (including the call shape) is fully blanked.
+        // issue #998 のレビュー懸念に対する回帰: Kotlin の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        WHERE message = "kotlinQuotedPhantom(42)"
+                        AND extra = "anotherKotlinQuotedPhantom('inner')"
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun realKotlinCall() {}
+                private fun kotlinQuotedPhantom(x: Int): Int = x
+                private fun anotherKotlinQuotedPhantom(s: String): String = s
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherKotlinQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Swift
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph.
+        // issue #998 のレビュー懸念に対する回帰: Swift の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        WHERE message = "swiftQuotedPhantom(42)"
+                        AND extra = "anotherSwiftQuotedPhantom('inner')"
+                        """
+                    realSwiftCall()
+                }
+
+                func realSwiftCall() {}
+                func swiftQuotedPhantom(_ x: Int) -> Int { x }
+                func anotherSwiftQuotedPhantom(_ s: String) -> String { s }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherSwiftQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Scala
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph.
+        // issue #998 のレビュー懸念に対する回帰: Scala の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val sql =
+                  """
+                    |WHERE message = "scalaQuotedPhantom(42)"
+                    |AND extra = "anotherScalaQuotedPhantom('inner')"
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def realScalaCall(): Unit = ()
+              def scalaQuotedPhantom(x: Int): Int = x
+              def anotherScalaQuotedPhantom(s: String): String = s
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherScalaQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
 }
