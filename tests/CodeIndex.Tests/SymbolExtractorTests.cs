@@ -11052,6 +11052,8 @@ public class SymbolExtractorTests
     {
         // C++: function-returning-pointer declarations / C++: 関数が関数ポインタを返す宣言
         var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
             extern int (*XSynchronize(
                 Display* display,
                 Bool onoff
@@ -11067,6 +11069,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
     }
 
     [Fact]
