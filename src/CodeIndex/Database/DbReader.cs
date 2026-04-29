@@ -2898,6 +2898,12 @@ public partial class DbReader
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
+    private static bool IsBareVerbatimQueryToken(string? value)
+    {
+        var trimmed = value?.Trim();
+        return trimmed is { Length: > 0 } && trimmed.All(ch => ch == '@');
+    }
+
     private static string? CombineDbQualifiedName(string? parentQualifiedName, string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -3146,6 +3152,8 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+            return new List<CallerResult>();
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -3266,6 +3274,8 @@ public partial class DbReader
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+            return 0;
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
@@ -3405,6 +3415,8 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+            return new List<CalleeResult>();
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
@@ -3519,6 +3531,8 @@ public partial class DbReader
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+            return 0;
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();

@@ -23756,6 +23756,27 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_BareVerbatimQueryWithExactReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_bare_verbatim_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["@", "--db", dbPath, "--exact", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("bare verbatim prefixes", stderr);
+            Assert.Equal(string.Empty, stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_WithJsonIncludesWorkspaceMetadataForProjectDb()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map");
