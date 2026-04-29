@@ -1949,3 +1949,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
+# Changelog
+
+## [Unreleased]
+### Fixed
+- TypeScript ambient declarations now index `declare function` and `declare const`, `type` aliases are classified as `interface`, same-line decorators no longer hide class members, and overload signatures collapse down to the implementation row.
+
+## [未リリース]
+### 修正
+- TypeScript の `declare function` と `declare const` を再びインデックスし、`type` エイリアスを `interface` として扱い、同一行の decorator 付きメンバーを取りこぼさず、関数オーバーロードの signature 行を implementation 1 行に畳みます。
