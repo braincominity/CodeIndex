@@ -1,3 +1,4 @@
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -394,6 +395,124 @@ public class LegacySchemaMigrationTests : IDisposable
             File.SetUnixFileMode(_dbDir, originalMode);
             SqliteConnection.ClearAllPools();
         }
+    }
+
+    [Fact]
+    public void DbContext_OpenSqliteConnectionWithRetry_RetriesTransientBusy()
+    {
+        // The retry helper should back off on transient busy/locked failures before giving up.
+        // retry helper は transient busy/locked ではすぐ諦めず backoff して再試行するべき。
+        var attempts = 0;
+        var sleeps = new List<int>();
+        var connection = DbContext.OpenSqliteConnectionWithRetry(
+            () => new SqliteConnection("Data Source=:memory:"),
+            _ =>
+            {
+                attempts++;
+                if (attempts < 3)
+                    throw CreateTransientBusyException();
+            },
+            sleep: sleeps.Add,
+            maxOpenAttempts: 5);
+
+        try
+        {
+            Assert.Equal(3, attempts);
+            Assert.Equal(new[] { 50, 100 }, sleeps);
+            Assert.NotNull(connection);
+        }
+        finally
+        {
+            connection.Dispose();
+        }
+    }
+
+    [Fact]
+    public void TryValidateExistingCodeIndexDb_RetriesTransientBusyOpen()
+    {
+        // backfill-fold validation must use the same retry/backoff path as the main open.
+        // backfill-fold の validation も main open と同じ retry/backoff を使う必要がある。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_validation_retry_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+
+            var attempts = 0;
+            var sleeps = new List<int>();
+            var valid = DbContext.TryValidateExistingCodeIndexDb(
+                dbPath,
+                openTarget =>
+                {
+                    var builder = new SqliteConnectionStringBuilder
+                    {
+                        DataSource = openTarget,
+                        Mode = SqliteOpenMode.ReadWrite,
+                    };
+                    return new SqliteConnection(builder.ConnectionString);
+                },
+                connection =>
+                {
+                    attempts++;
+                    if (attempts < 3)
+                        throw CreateTransientBusyException();
+                    connection.Open();
+                },
+                sleeps.Add,
+                out var message,
+                out var isNotFound);
+
+            Assert.True(valid);
+            Assert.Equal(3, attempts);
+            Assert.Equal(new[] { 50, 100 }, sleeps);
+            Assert.False(isNotFound);
+            Assert.Equal(string.Empty, message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void TryValidateExistingCodeIndexDb_PublicWrapper_SucceedsForExistingDb()
+    {
+        // The public validation path should go through the same open logic and accept a real DB.
+        // 公開 validation 経路も同じ open ロジックを通り、実在する DB を受け入れること。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_validation_public_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+
+            var valid = DbContext.TryValidateExistingCodeIndexDb(dbPath, out var message, out var isNotFound);
+
+            Assert.True(valid);
+            Assert.False(isNotFound);
+            Assert.Equal(string.Empty, message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static SqliteException CreateTransientBusyException()
+    {
+        var exception = Activator.CreateInstance(
+            typeof(SqliteException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["busy", 5],
+            culture: null) as SqliteException;
+
+        return exception ?? throw new InvalidOperationException("Failed to create SqliteException for retry test.");
     }
 
     [Fact]
