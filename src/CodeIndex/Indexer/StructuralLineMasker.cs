@@ -439,6 +439,82 @@ internal static class StructuralLineMasker
             buffer[i] = ' ';
     }
 
+    private static bool LooksLikeDeepTripleOpenerContext(string[] lines, int lineIndex, int pos, int delimiterLength)
+    {
+        if (LooksLikeDeepTripleCloserTail(lines[lineIndex], pos + delimiterLength))
+            return false;
+
+        if (!TryGetPreviousNonWhitespacePosition(lines, lineIndex, pos, out var prevLine, out var prevPos))
+            return true;
+
+        var prev = lines[prevLine][prevPos];
+        if (prev is ')' or ']' or '}' or '.' or '"' or '\'')
+            return false;
+
+        if (IsIdentifierPart(prev))
+        {
+            var identLine = prevLine;
+            var identPos = prevPos;
+            while (TryGetPreviousNonWhitespacePosition(lines, identLine, identPos, out var runLine, out var runPos)
+                && IsIdentifierPart(lines[runLine][runPos]))
+            {
+                identLine = runLine;
+                identPos = runPos;
+            }
+
+            if (!TryGetPreviousNonWhitespacePosition(lines, identLine, identPos, out var beforeLine, out var beforePos))
+                return true;
+
+            prev = lines[beforeLine][beforePos];
+        }
+
+        return prev is '(' or '[' or '{' or '=' or ',' or ';' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '!' or '<' or '>' or '#';
+    }
+
+    private static bool LooksLikeDeepTripleCloserTail(string line, int startIndex)
+    {
+        for (int i = startIndex; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (IsDeepTripleWhitespace(ch))
+                continue;
+
+            return ch is ')' or ']' or '}' or ',' or ';' or '.';
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPreviousNonWhitespacePosition(string[] lines, int lineIndex, int pos, out int previousLineIndex, out int previousColumn)
+    {
+        previousLineIndex = lineIndex;
+        previousColumn = pos - 1;
+
+        while (previousLineIndex >= 0)
+        {
+            var line = lines[previousLineIndex];
+            while (previousColumn >= 0)
+            {
+                var ch = line[previousColumn];
+                if (!IsDeepTripleWhitespace(ch))
+                    return true;
+
+                previousColumn--;
+            }
+
+            previousLineIndex--;
+            if (previousLineIndex < 0)
+                break;
+
+            previousColumn = lines[previousLineIndex].Length - 1;
+        }
+
+        return false;
+    }
+
+    private static bool IsDeepTripleWhitespace(char ch) =>
+        char.IsWhiteSpace(ch) || ch == '\uFEFF';
+
     // Python triple-quoted strings: """...""" and '''...''' (with optional r/b/u/f prefixes).
     // f-string interpolation holes `{expr}` preserve expression contents so downstream
     // reference extraction still sees real call edges; `{{` / `}}` are escape sequences.
@@ -2618,6 +2694,7 @@ internal static class StructuralLineMasker
         // 3 段以上のネスト triple に対する防御的な深さ追跡。> 0 の間は本文をマスクし、
         // 4 段以上の本物の call は保持しないが、phantom の漏れは防ぐ。
         var deepNestedTripleDepth = 0;
+        var deepNestedTripleHashCounts = new Stack<int>();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2676,16 +2753,30 @@ internal static class StructuralLineMasker
                                 // 本物の call が reference graph に届くようにする。
                                 if (deepNestedTripleDepth > 0)
                                 {
-                                    // 3+ level deep triple body: mask through to the
-                                    // matching close so phantom calls cannot leak.
-                                    // Real calls 4+ levels deep are not preserved.
-                                    // 3 段以上深い triple 本文: 一致する閉じまでマスク。
+                                    // 3+ level deep triple body: keep masking through
+                                    // nested open/close pairs so a 4th opener cannot
+                                    // unwind the 3-deep frame early.
+                                    // 3 段以上深い triple 本文: ネスト open/close を
+                                    // 追跡し、4 段目の opener で 3 段深い frame が
+                                    // 早抜けしないようにする。
                                     if (pos + 2 < line.Length
                                         && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
                                     {
+                                        var looksLikeNestedOpen = LooksLikeDeepTripleOpenerContext(lines, i, pos, 3);
+                                        if (looksLikeNestedOpen)
+                                        {
+                                            ReplaceWithSpaces(masked, pos, 3);
+                                            pos += 3;
+                                            deepNestedTripleDepth++;
+                                            deepNestedTripleHashCounts.Push(0);
+                                            continue;
+                                        }
+
                                         ReplaceWithSpaces(masked, pos, 3);
                                         pos += 3;
                                         deepNestedTripleDepth--;
+                                        if (deepNestedTripleHashCounts.Count > 0)
+                                            deepNestedTripleHashCounts.Pop();
                                         continue;
                                     }
                                     masked[pos] = ' ';
@@ -2718,6 +2809,7 @@ internal static class StructuralLineMasker
                                     ReplaceWithSpaces(masked, pos, 3);
                                     pos += 3;
                                     deepNestedTripleDepth = 1;
+                                    deepNestedTripleHashCounts.Push(0);
                                     continue;
                                 }
                                 if (line[pos] == '"' || line[pos] == '\'')
@@ -2754,16 +2846,17 @@ internal static class StructuralLineMasker
                             // still reach the reference graph), and otherwise mask.
                             // 外側ホール内で開いた nested triple 本体。閉じ `"""`、内側
                             // `${...}` ホール、それ以外は body としてマスク。
-                            if (pos + 2 < line.Length
-                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
-                            {
-                                ReplaceWithSpaces(masked, pos, 3);
-                                pos += 3;
-                                nestedTripleOpen = false;
-                                nestedHoleBraceDepth = -1;
-                                deepNestedTripleDepth = 0;
-                                continue;
-                            }
+                                if (pos + 2 < line.Length
+                                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                                {
+                                    ReplaceWithSpaces(masked, pos, 3);
+                                    pos += 3;
+                                    nestedTripleOpen = false;
+                                    nestedHoleBraceDepth = -1;
+                                    deepNestedTripleDepth = 0;
+                                    deepNestedTripleHashCounts.Clear();
+                                    continue;
+                                }
                             if (pos + 1 < line.Length && line[pos] == '$' && line[pos + 1] == '{')
                             {
                                 ReplaceWithSpaces(masked, pos, 2);
@@ -2850,6 +2943,7 @@ internal static class StructuralLineMasker
                         nestedTripleOpen = false;
                         nestedHoleBraceDepth = -1;
                         deepNestedTripleDepth = 0;
+                        deepNestedTripleHashCounts.Clear();
                         continue;
                     }
 
@@ -2943,10 +3037,10 @@ internal static class StructuralLineMasker
         // be needed for that — but masking soundness is.
         // 3 段以上のネスト triple に対する防御的な深さ追跡。
         var deepNestedTripleDepth = 0;
-        // Hash count required at the deep triple's matching close. 0 for plain
-        // `"""..."""`, N for hash-delimited `<N>#"""..."""<N>#` deep opens.
-        // 深い triple の閉じに必要な hash 個数。
-        var deepNestedTripleHashCount = 0;
+        // Hash count required at each deep triple's matching close. Stack top
+        // tracks the currently-open deep frame.
+        // 各 deep triple の閉じに必要な hash 個数。スタック頂点が現在の deep frame。
+        var deepNestedTripleHashCounts = new Stack<int>();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -3002,23 +3096,74 @@ internal static class StructuralLineMasker
                                 // nested triple 内の `\(...)` ホール内: 本物の call を残す。
                                 if (deepNestedTripleDepth > 0)
                                 {
-                                    // 3+ level deep triple body: mask through to the
-                                    // matching close. The close requires the same hash
-                                    // count as the deep open (closes #1000) so a deep
-                                    // raw triple `<N>#"""..."""<N>#` only exits on its
-                                    // matching `"""<N>#` and not on a stray bare `"""`.
-                                    // 3 段以上深い triple 本文: 一致する hash 数の閉じまでマスク。
+                                    // 3+ level deep triple body: mask through nested
+                                    // opener/close pairs so a 4th opener cannot unwind
+                                    // the 3-deep frame early.
+                                    // 3 段以上深い triple 本文: ネスト open/close を
+                                    // 追跡し、4 段目の opener で 3 段深い frame が
+                                    // 早抜けしないようにする。
+                                    var deepBodyHashes = CountRun(line, pos, '#');
                                     if (pos + 2 < line.Length
-                                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
-                                        && HasHashRun(line, pos + 3, deepNestedTripleHashCount))
+                                        && line[pos] == '"'
+                                        && line[pos + 1] == '"'
+                                        && line[pos + 2] == '"')
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3 + deepNestedTripleHashCount);
-                                        pos += 3 + deepNestedTripleHashCount;
-                                        deepNestedTripleDepth--;
-                                        if (deepNestedTripleDepth == 0)
-                                            deepNestedTripleHashCount = 0;
+                                        var closeHashCount = CountRun(line, pos + 3, '#');
+                                        if (closeHashCount > 0
+                                            && !LooksLikeDeepTripleOpenerContext(lines, i, pos, 3 + closeHashCount))
+                                        {
+                                            ReplaceWithSpaces(masked, pos, 3 + closeHashCount);
+                                            pos += 3 + closeHashCount;
+                                            deepNestedTripleDepth--;
+                                            if (deepNestedTripleHashCounts.Count > 0)
+                                                deepNestedTripleHashCounts.Pop();
+                                            continue;
+                                        }
+                                        var currentDeepHashCount = deepNestedTripleHashCounts.Count > 0
+                                            ? deepNestedTripleHashCounts.Peek()
+                                            : 0;
+                                        if (closeHashCount == 0
+                                            && currentDeepHashCount == 0
+                                            && !LooksLikeDeepTripleOpenerContext(lines, i, pos, 3))
+                                        {
+                                            ReplaceWithSpaces(masked, pos, 3);
+                                            pos += 3;
+                                            deepNestedTripleDepth--;
+                                            if (deepNestedTripleHashCounts.Count > 0)
+                                                deepNestedTripleHashCounts.Pop();
+                                            continue;
+                                        }
+                                    }
+                                    if (pos + 2 < line.Length
+                                        && line[pos] == '"'
+                                        && line[pos + 1] == '"'
+                                        && line[pos + 2] == '"'
+                                        && LooksLikeDeepTripleOpenerContext(lines, i, pos, 3))
+                                    {
+                                        ReplaceWithSpaces(masked, pos, 3);
+                                        pos += 3;
+                                        deepNestedTripleDepth++;
+                                        deepNestedTripleHashCounts.Push(0);
                                         continue;
                                     }
+                                    if (deepBodyHashes > 0
+                                        && pos + deepBodyHashes + 2 < line.Length
+                                        && line[pos + deepBodyHashes] == '"'
+                                        && line[pos + deepBodyHashes + 1] == '"'
+                                        && line[pos + deepBodyHashes + 2] == '"')
+                                    {
+                                        var looksLikeNestedOpen = LooksLikeDeepTripleOpenerContext(lines, i, pos, deepBodyHashes + 3);
+                                        if (looksLikeNestedOpen)
+                                        {
+                                            ReplaceWithSpaces(masked, pos, deepBodyHashes + 3);
+                                            pos += deepBodyHashes + 3;
+                                            deepNestedTripleDepth++;
+                                            deepNestedTripleHashCounts.Push(deepBodyHashes);
+                                            continue;
+                                        }
+
+                                    }
+
                                     masked[pos] = ' ';
                                     pos++;
                                     continue;
@@ -3052,7 +3197,7 @@ internal static class StructuralLineMasker
                                     ReplaceWithSpaces(masked, pos, deepHashes + 3);
                                     pos += deepHashes + 3;
                                     deepNestedTripleDepth = 1;
-                                    deepNestedTripleHashCount = deepHashes;
+                                    deepNestedTripleHashCounts.Push(deepHashes);
                                     continue;
                                 }
                                 // Single-line `#"..."#` raw string inside the inner hole.
@@ -3113,7 +3258,7 @@ internal static class StructuralLineMasker
                                 nestedTripleHashCount = -1;
                                 nestedHoleParenDepth = -1;
                                 deepNestedTripleDepth = 0;
-                                deepNestedTripleHashCount = 0;
+                                deepNestedTripleHashCounts.Clear();
                                 continue;
                             }
                             if (line[pos] == '\\'
@@ -3237,7 +3382,7 @@ internal static class StructuralLineMasker
                         nestedTripleHashCount = -1;
                         nestedHoleParenDepth = -1;
                         deepNestedTripleDepth = 0;
-                        deepNestedTripleHashCount = 0;
+                        deepNestedTripleHashCounts.Clear();
                         continue;
                     }
 
@@ -3384,6 +3529,7 @@ internal static class StructuralLineMasker
         // 3 段以上のネスト triple に対する防御的な深さ追跡。> 0 の間は本文をマスクし、
         // 4 段以上の本物の call は保持しないが、phantom の漏れは防ぐ。
         var deepNestedTripleDepth = 0;
+        var deepNestedTripleHashCounts = new Stack<int>();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -3438,17 +3584,42 @@ internal static class StructuralLineMasker
                                 // 内: 本物の call を残す。
                                 if (deepNestedTripleDepth > 0)
                                 {
-                                    // 3+ level deep triple body: mask through to the
-                                    // matching close so phantom calls cannot leak.
-                                    // 3 段以上深い triple 本文: 一致する閉じまでマスク。
-                                    if (pos + 2 < line.Length
-                                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                                    // 3+ level deep triple body: keep masking through
+                                    // nested open/close pairs so a 4th opener cannot
+                                    // unwind the 3-deep frame early.
+                                    // 3 段以上深い triple 本文: ネスト open/close を
+                                    // 追跡し、4 段目の opener で 3 段深い frame が
+                                    // 早抜けしないようにする。
+                                    var deepHashes = CountRun(line, pos, '#');
+                                    if (pos + deepHashes + 2 < line.Length
+                                        && line[pos + deepHashes] == '"'
+                                        && line[pos + deepHashes + 1] == '"'
+                                        && line[pos + deepHashes + 2] == '"')
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3);
-                                        pos += 3;
-                                        deepNestedTripleDepth--;
-                                        continue;
+                                        var looksLikeNestedOpen = LooksLikeDeepTripleOpenerContext(lines, i, pos, deepHashes + 3);
+                                        if (looksLikeNestedOpen)
+                                        {
+                                            ReplaceWithSpaces(masked, pos, deepHashes + 3);
+                                            pos += deepHashes + 3;
+                                            deepNestedTripleDepth++;
+                                            deepNestedTripleHashCounts.Push(deepHashes);
+                                            continue;
+                                        }
+
+                                        var currentDeepHashCount = deepNestedTripleHashCounts.Count > 0
+                                            ? deepNestedTripleHashCounts.Peek()
+                                            : 0;
+                                        if (deepHashes == currentDeepHashCount)
+                                        {
+                                            ReplaceWithSpaces(masked, pos, 3 + deepHashes);
+                                            pos += 3 + deepHashes;
+                                            deepNestedTripleDepth--;
+                                            if (deepNestedTripleHashCounts.Count > 0)
+                                                deepNestedTripleHashCounts.Pop();
+                                            continue;
+                                        }
                                     }
+
                                     masked[pos] = ' ';
                                     pos++;
                                     continue;
@@ -3478,6 +3649,7 @@ internal static class StructuralLineMasker
                                     ReplaceWithSpaces(masked, pos, 3);
                                     pos += 3;
                                     deepNestedTripleDepth = 1;
+                                    deepNestedTripleHashCounts.Push(0);
                                     continue;
                                 }
                                 if (line[pos] == '"' || line[pos] == '\'')
@@ -3515,17 +3687,18 @@ internal static class StructuralLineMasker
                             // 外側ホール内で開いた nested triple 本体。閉じ `"""`、
                             // interpolator 付きでは `${...}` を内部ホールとして開く、
                             // それ以外は body としてマスク。
-                            if (pos + 2 < line.Length
-                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
-                            {
-                                ReplaceWithSpaces(masked, pos, 3);
-                                pos += 3;
-                                nestedTripleOpen = false;
-                                nestedTripleIsInterpolator = false;
-                                nestedHoleBraceDepth = -1;
-                                deepNestedTripleDepth = 0;
-                                continue;
-                            }
+                                if (pos + 2 < line.Length
+                                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                                {
+                                    ReplaceWithSpaces(masked, pos, 3);
+                                    pos += 3;
+                                    nestedTripleOpen = false;
+                                    nestedTripleIsInterpolator = false;
+                                    nestedHoleBraceDepth = -1;
+                                    deepNestedTripleDepth = 0;
+                                    deepNestedTripleHashCounts.Clear();
+                                    continue;
+                                }
                             if (nestedTripleIsInterpolator
                                 && pos + 1 < line.Length
                                 && line[pos] == '$' && line[pos + 1] == '{')
@@ -3622,6 +3795,7 @@ internal static class StructuralLineMasker
                         nestedTripleIsInterpolator = false;
                         nestedHoleBraceDepth = -1;
                         deepNestedTripleDepth = 0;
+                        deepNestedTripleHashCounts.Clear();
                         continue;
                     }
 
