@@ -676,7 +676,7 @@ To let AI agents use the generated index, place a `CLAUDE.md` in your project ro
 # Code Search Rules
 
 This project uses **cdidx** for fast code search via a pre-built SQLite index (`.cdidx/codeindex.db`).
-**Query this database** instead of using `find`, `grep`, or `ls -R`.
+**Query this database** instead of using `find`, `grep`, `rg`, or `ls -R`.
 
 ## Setup
 
@@ -1651,7 +1651,7 @@ AIエージェントにインデックスを活用させるには、プロジェ
 # コードベース検索ルール
 
 このプロジェクトは **cdidx** を使い、事前構築済みSQLiteインデックス（`.cdidx/codeindex.db`）で高速コード検索を行います。
-コードを検索する際は `find`, `grep`, `ls -R` ではなく**このデータベースを検索**してください。
+コードを検索する際は `find`, `grep`, `rg`, `ls -R` ではなく**このデータベースを検索**してください。
 
 ## セットアップ
 
