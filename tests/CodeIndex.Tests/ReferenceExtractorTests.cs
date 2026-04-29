@@ -705,6 +705,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
+    {
+        // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
+        // indented raw string. Otherwise the scanner stays in raw-string mode, misses the
+        // following ordinary block comment, and treats its `/**` opener as XML doc.
+        // 回帰: BuildCSharpBlockCommentLines はインデント付き raw string の閉じ記号を認識する必要がある。
+        // さもないと raw-string mode に居座って後続の通常 block comment を見失い、その `/**` を XML doc と
+        // 誤認してしまう。
+        var content =
+            "namespace App;\n"
+            + "\n"
+            + "public class Demo\n"
+            + "{\n"
+            + "    public void M()\n"
+            + "    {\n"
+            + "        var raw = \"\"\"\n"
+            + "            ignored content\n"
+            + "            \"\"\";\n"
+            + "\n"
+            + "        /*\n"
+            + "         * /**\n"
+            + "         * <see cref=\"PhantomCall\"/>\n"
+            + "         */\n"
+            + "\n"
+            + "        RealCall();\n"
+            + "    }\n"
+            + "\n"
+            + "    private void RealCall() { }\n"
+            + "    private void PhantomCall() { }\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored
