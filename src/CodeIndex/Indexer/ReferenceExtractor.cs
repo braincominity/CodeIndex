@@ -31,6 +31,14 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
+    private static readonly Regex ScssVariableReferenceRegex = new(
+        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ScssExtendReferenceRegex = new(
+        @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -1600,6 +1608,18 @@ public static class ReferenceExtractor
                 }
             }
 
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
             // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
             // through and the type is otherwise never recorded as instantiated. Emit an
@@ -1714,6 +1734,18 @@ public static class ReferenceExtractor
                         }
                     }
                 }
+            }
+
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
 
             // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
@@ -6221,6 +6253,72 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static void EmitCssScssReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ScssVariableReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (ShouldSkipScssVariableReference(preparedLine, nameGroup.Index))
+                continue;
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in ScssExtendReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (trimmed.StartsWith("$", StringComparison.Ordinal))
+        {
+            var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
+            if (declarationColonIndex >= 0)
+                return true;
+        }
+
+        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
+            || trimmed.StartsWith("@function", StringComparison.Ordinal))
+        {
+            var braceIndex = preparedLine.IndexOf('{');
+            if (braceIndex < 0)
+                return true;
+            if (variableIndex < braceIndex)
+                return true;
+        }
+
+        return false;
+    }
 
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,

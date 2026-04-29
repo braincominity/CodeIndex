@@ -233,6 +233,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_ScssVariableAndExtendReferences_AreIndexed()
+    {
+        const string content = """
+            $primary: #3366cc;
+            $spacing-base: 8px;
+
+            @mixin rounded($radius) {
+              border-radius: $radius;
+            }
+
+            %button-base {
+              padding: 4px;
+            }
+
+            .button {
+              color: $primary;
+              padding: $spacing-base * 2;
+              @include rounded(4px);
+            }
+
+            .card {
+              @extend %button-base;
+              border: 1px solid $primary;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "%button-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "radius"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "rounded"));
+    }
+
+    [Fact]
     public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
     {
         // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
