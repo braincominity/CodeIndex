@@ -608,6 +608,16 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, chunk_index)
             )");
 
+        // Shared reference-line context table / 参照行コンテキスト共有テーブル
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS reference_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                line        INTEGER NOT NULL,
+                context     TEXT NOT NULL,
+                UNIQUE(file_id, line)
+            )");
+
         // Symbols table / シンボルテーブル
         Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
@@ -640,6 +650,7 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id),
                 container_kind  TEXT,
                 container_name  TEXT
             )");
@@ -680,6 +691,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
         EnsureColumn("symbols", "is_metadata_target", "INTEGER");
+        EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -716,6 +728,8 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
         // Case-insensitive exact-match indexes for `references --exact` / `callers --exact` / `callees --exact` (#83).
         // Mirror idx_symbols_name_nocase so `= @q COLLATE NOCASE` stays O(log n) per name across graph commands.
         // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
@@ -768,6 +782,7 @@ public class DbContext : IDisposable
         Execute("DROP TABLE IF EXISTS fts_chunks");
         Execute("DROP TABLE IF EXISTS file_issues");
         Execute("DROP TABLE IF EXISTS symbol_references");
+        Execute("DROP TABLE IF EXISTS reference_lines");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
         Execute("DROP TABLE IF EXISTS files");
@@ -798,6 +813,14 @@ public class DbContext : IDisposable
 
         try
         {
+            Execute(@"
+                CREATE TABLE IF NOT EXISTS reference_lines (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    line        INTEGER NOT NULL,
+                    context     TEXT NOT NULL,
+                    UNIQUE(file_id, line)
+                )");
             // Ensure the references table exists for older DBs missing it
             // 古いDBに参照テーブルが無い場合に作成する
             Execute(@"
@@ -809,12 +832,16 @@ public class DbContext : IDisposable
                     line            INTEGER,
                     column_number   INTEGER,
                     context         TEXT,
+                    reference_line_id INTEGER REFERENCES reference_lines(id),
                     container_kind  TEXT,
                     container_name  TEXT
                 )");
+            EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)");
 

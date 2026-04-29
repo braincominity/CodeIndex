@@ -280,6 +280,11 @@ public class DbWriter
         cmd3.CommandText = "DELETE FROM symbol_references WHERE file_id = @fid";
         cmd3.Parameters.AddWithValue("@fid", fileId);
         cmd3.ExecuteNonQuery();
+
+        using var cmd4 = _conn.CreateCommand();
+        cmd4.CommandText = "DELETE FROM reference_lines WHERE file_id = @fid";
+        cmd4.Parameters.AddWithValue("@fid", fileId);
+        cmd4.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -424,21 +429,34 @@ public class DbWriter
     {
         if (references.Count == 0) return;
 
+        var referenceLineIds = new Dictionary<(long FileId, int Line), long>();
         for (int i = 0; i < references.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, references.Count);
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
+            using var lineCmd = _conn.CreateCommand();
+            lineCmd.CommandText = @"
+                INSERT INTO reference_lines (file_id, line, context)
+                VALUES (@fid, @line, @context)
+                ON CONFLICT(file_id, line) DO UPDATE SET
+                    context = excluded.context
+                RETURNING id";
+            var pReferenceLineFid = lineCmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pReferenceLineNumber = lineCmd.Parameters.Add("@line", SqliteType.Integer);
+            var pReferenceLineContext = lineCmd.Parameters.Add("@context", SqliteType.Text);
+            lineCmd.Prepare();
+
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
-                    context, container_kind, container_name,
+                    context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded
                 )
                 VALUES (
                     @fid, @symbolName, @referenceKind, @line, @columnNumber,
-                    @context, @containerKind, @containerName,
+                    @context, @referenceLineId, @containerKind, @containerName,
                     @symbolNameFolded, @containerNameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
@@ -447,6 +465,7 @@ public class DbWriter
             var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
             var pColumnNumber = cmd.Parameters.Add("@columnNumber", SqliteType.Integer);
             var pContext = cmd.Parameters.Add("@context", SqliteType.Text);
+            var pReferenceLineId = cmd.Parameters.Add("@referenceLineId", SqliteType.Integer);
             var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
             var pSymbolNameFolded = cmd.Parameters.Add("@symbolNameFolded", SqliteType.Text);
@@ -456,12 +475,23 @@ public class DbWriter
             for (int j = i; j < end; j++)
             {
                 var reference = references[j];
+                var referenceLineKey = (reference.FileId, reference.Line);
+                if (!referenceLineIds.TryGetValue(referenceLineKey, out var referenceLineId))
+                {
+                    pReferenceLineFid.Value = reference.FileId;
+                    pReferenceLineNumber.Value = reference.Line;
+                    pReferenceLineContext.Value = reference.Context;
+                    referenceLineId = (long)lineCmd.ExecuteScalar()!;
+                    referenceLineIds[referenceLineKey] = referenceLineId;
+                }
+
                 pFid.Value = reference.FileId;
                 pSymbolName.Value = reference.SymbolName;
                 pReferenceKind.Value = reference.ReferenceKind;
                 pLine.Value = reference.Line;
                 pColumnNumber.Value = reference.Column;
-                pContext.Value = reference.Context;
+                pContext.Value = DBNull.Value;
+                pReferenceLineId.Value = referenceLineId;
                 pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
                 pSymbolNameFolded.Value = (object?)NameFold.Fold(reference.SymbolName) ?? DBNull.Value;

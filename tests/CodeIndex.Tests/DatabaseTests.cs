@@ -208,6 +208,40 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertReferences_DeduplicatesReferenceLinesByFileAndLine()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ref_lines.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "authenticate", ReferenceKind = "call", Line = 2, Column = 4, Context = "return authenticate(user, password)", ContainerKind = "function", ContainerName = "login" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "authorize", ReferenceKind = "call", Line = 2, Column = 16, Context = "return authenticate(user, password)", ContainerKind = "function", ContainerName = "login" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "authenticate", ReferenceKind = "call", Line = 2, Column = 28, Context = "return authenticate(user, password)", ContainerKind = "function", ContainerName = "login" },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId AND line = 2";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId";
+        Assert.Equal(3L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId AND context IS NOT NULL";
+        Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = "SELECT COUNT(DISTINCT reference_line_id) FROM symbol_references WHERE file_id = @fileId";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = "SELECT context FROM reference_lines WHERE file_id = @fileId AND line = 2";
+        Assert.Equal("return authenticate(user, password)", (string)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void CleanExistingFileData_PreventsFtsOrphans()
     {
         // Insert a file with chunks (populates FTS) / ファイルとチャンク（FTS含む）を挿入
@@ -217,6 +251,7 @@ public class DatabaseTests : IDisposable
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def hello_orphan_test(): pass" }]);
+        _writer.InsertReferences([new() { FileId = fileId, SymbolName = "hello_orphan_test", ReferenceKind = "call", Line = 1, Column = 5, Context = "def hello_orphan_test(): pass", ContainerKind = "function", ContainerName = "hello_orphan_test" }]);
 
         // Verify FTS has the entry / FTSにエントリがあることを確認
         using var cmd1 = _db.Connection.CreateCommand();
@@ -242,6 +277,11 @@ public class DatabaseTests : IDisposable
         using var cmd3 = _db.Connection.CreateCommand();
         cmd3.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'world_replacement'";
         Assert.Equal(1L, (long)cmd3.ExecuteScalar()!);
+
+        using var cmd4 = _db.Connection.CreateCommand();
+        cmd4.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId";
+        cmd4.Parameters.AddWithValue("@fileId", fileId);
+        Assert.Equal(0L, (long)cmd4.ExecuteScalar()!);
     }
 
     [Fact]
