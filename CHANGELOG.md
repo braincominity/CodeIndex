@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.16.0] - 2026-04-30
+
 #### Added
 - **Migrated CodeIndex to FSL-1.1-ALv2 with explicit integration and competing-use policy docs** — Replaced the repository-level licensing notice with FSL-1.1-ALv2, added canonical `LICENSES/FSL-1.1-ALv2.txt` and `LICENSES/Apache-2.0.txt`, documented non-competing AI/IDE/MCP/CI integration permissions in `INTEGRATION_POLICY.md`, clarified competing-use terms in `COMMERCIAL_LICENSE.md`, updated `TRADEMARKS.md`, `README.md`, `src/CodeIndex/CodeIndex.csproj`, `install.sh`, and release/license-policy workflows, and packaged the new policy files with official releases and NuGet output.
 - **Installer `--doctor [vX.Y.Z]` network diagnostics with credential-safe proxy env output (#436, #914)** — `install.sh --doctor` now prints the active proxy environment variables (`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` plus their lowercase siblings) and probes the upstream URLs the installer would hit (the latest-release API endpoint, the release tarball asset, and the `sha256sums.txt` checksums asset) using `curl -sSI`. Each value is routed through a new `redact_proxy_userinfo` helper so URL userinfo such as `http://alice:hunter2@proxy:8080` surfaces as `http://<redacted>@proxy:8080` — keeping the host/port visible for reachability diagnosis while ensuring `--doctor` output stays safe to paste into logs / issues / support transcripts (the doctor is primarily used to diagnose blocked installs and its output is likely to be shared externally). Credential-less proxy URLs and bare-host `NO_PROXY` values are not rewritten, so the redaction does not misleadingly advertise credentials that were never there. Each probe reports its HTTP status, and on `CONNECT tunnel failed, response 403` (`curl` exit 56) the doctor reuses the existing upstream-proxy guidance so users get a single, actionable next step without needing prior network knowledge: the deny is in an upstream proxy/egress policy before TLS, route substitution alone will not fix it, ask the network team to allow-list at least one artifact host path, or point `CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL` at a reachable internal mirror. The version argument is optional — when omitted, the doctor reads the bundled `version.json`; when no version is available either, it still runs the API probe and clearly reports the release-asset probes as skipped so a missing version never masquerades as a probe against a bogus `v0.0.0` URL. Does not install anything, never writes outside `/tmp`, and does not short-circuit on the first failure so one network-policy deny does not hide others. Exits 0 when every probe returns 2xx/3xx, exits 1 otherwise. Tests cover the all-200 success path, the CONNECT-tunnel 403 advisory path, explicit-version + `v`-prefix normalization, the `version.json` fallback, the no-version skip path, the HTTP-4xx-reachability-not-confirmed path, the proxy-env surfacing path, the URL-userinfo redaction path (covering `user:password@host`, `user@host`, and SOCKS5 shapes plus the negative case where no credentials are present), the invalid-version-pass-through diagnostic shape, and the dispatcher wiring via a PATH-stubbed `curl` / `uname` shim. Affected: `install.sh`, `tests/CodeIndex.Tests/InstallScriptTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLOUD_BOOTSTRAP_PROMPT.md`, `CHANGELOG.md`. Closes #436, #914.
@@ -967,6 +969,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.16.0] - 2026-04-30
+
 #### 追加
 - **JS/TS の styled-factory ゲートが post-template の比較 / 除算演算子を拒否するよう修正 (#997)** — `SymbolExtractor` が本物のタグ付きテンプレートの後に現れる `<`、`>`、`/` を除外対象として扱うようになり、`styled.div\`...\` < theme`、`styled.div\`...\` > theme`、`styled.div\`...\` / theme` のような形が phantom な component symbol として残らなくなりました。post-template 演算子形を固定する JavaScript / TypeScript の focused regression を追加しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #997。
 - **CodeIndex を FSL-1.1-ALv2 へ移行し、統合許可と競合利用ポリシーを明文化** — リポジトリ全体のライセンス案内を FSL-1.1-ALv2 に置き換え、`LICENSES/FSL-1.1-ALv2.txt` と `LICENSES/Apache-2.0.txt` を追加し、`INTEGRATION_POLICY.md` で AI/IDE/MCP/CI の非競合統合を明確化し、`COMMERCIAL_LICENSE.md` と `TRADEMARKS.md` を整理し、`README.md`、`src/CodeIndex/CodeIndex.csproj`、`install.sh`、および release/license-policy ワークフローを更新し、公式 release と NuGet 出力に新しい policy files を同梱するようにしました。
@@ -1903,7 +1907,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/Widthdom/CodeIndex/compare/v1.15.3...v1.16.0
 [1.15.3]: https://github.com/Widthdom/CodeIndex/compare/v1.15.2...v1.15.3
 [1.15.2]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...v1.15.1
