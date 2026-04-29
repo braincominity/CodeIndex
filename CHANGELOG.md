@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Kotlin `fun` declarations now recognize inheritance modifiers (#324)** — `SymbolExtractor` now accepts `abstract`, `override`, `open`, and `final` in Kotlin function modifier sequences, so inherited and overridable functions are indexed again instead of being skipped. Added a regression that covers abstract base members, overriding members, `final` overrides, and modifier combinations with visibility and `suspend`. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `DEVELOPER_GUIDE.md`. Fixes #324.
 - **SQL `UPDATE TOP (...)` now keeps the real target instead of indexing `TOP` (#654)** — `ReferenceExtractor` now treats `UPDATE` as a dedicated SQL target form so optional `TOP (...)` modifiers do not get mistaken for the mutated object. Added a focused regression covering `UPDATE TOP (10) dbo.Users`, `UPDATE TOP (1) ##session_log`, and the plain `UPDATE dbo.Users` control. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`. Closes #654.
 - **`cdidx find` now accepts `--max-line-width 0` as the no-truncation mode (#980)** — `find` previously rejected zero with a usage error even though the CLI's compatibility contract treats `0` as "disable truncation". The validation path now routes `--max-line-width` through the non-negative integer parser, so `0` works again while other positive-only limits keep their existing checks.
 - **CommonJS multiline brace bodies now keep their symbol ranges in `symbols` output (#904)** — `symbols` now preserves `start_line`, `end_line`, `body_start_line`, and `body_end_line` for direct CommonJS named exports whose function bodies open on the next line, so Allman-style `module.exports.foo = function ()` and `module.exports.bar = () =>` forms stay queryable instead of flattening to the declaration line. Added a CLI regression that indexes a temp JavaScript file and checks the JSON `symbols` payload. Affected: `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
@@ -988,6 +989,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
+- **Kotlin の `fun` 宣言で継承系修飾子を認識するように修正 (#324)** — `SymbolExtractor` が Kotlin の関数修飾子列に `abstract`、`override`、`open`、`final` を受け入れるようになり、継承・オーバーライド対象の関数が取りこぼされずに再びインデックスされるようになりました。抽象ベースメンバー、override するメンバー、`final` override、可視性や `suspend` を含む修飾子の組み合わせをカバーする回帰テストも追加しています。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`、`DEVELOPER_GUIDE.md`. Closes #324.
+- **SQL の `UPDATE TOP (...)` で `TOP` ではなく本来の更新対象を記録するよう修正 (#654)** — `ReferenceExtractor` が `UPDATE` を専用の SQL target 形として扱い、任意の `TOP (...)` 修飾子を更新対象と取り違えないようにしました。`UPDATE TOP (10) dbo.Users`、`UPDATE TOP (1) ##session_log`、および通常の `UPDATE dbo.Users` を含む focused regression を追加しています。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`、`tests/CodeIndex.Tests/ReferenceExtractorTests.cs`。Closes #654.
 - **`cdidx find` が `--max-line-width 0` を no-truncation mode として受け付けるようになりました (#980)** — `find` が `0` を usage error として拒否していましたが、CLI の互換契約では `0` は「truncation を無効化する」扱いです。`--max-line-width` の検証を non-negative integer parser に通すようにしたため、`0` が再び有効になり、他の positive-only 制限値は従来どおり維持されます。
 - **Kotlin の `enum class` エントリが symbols に現れるようになりました (#320)** — `SymbolExtractor` が `NORTH,`、`OK(200),`、`RED(0xFF0000) { ... }` のような Kotlin のインデント付き enum エントリを `property` として拾うようになり、enum 値と entry ごとの override メンバーが `symbols` と関連ナビゲーションに再び出るようになりました。plain / parameterized / bodied の各形と、enum 本体の後ろに続く `fun` / `abstract fun` の回帰テストを追加しています。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`、`DEVELOPER_GUIDE.md`。
 - **TypeScript の ambient declaration と overload 行のインデックスを修正 (#236)** — `SymbolExtractor` が `declare function` / `declare const` を再びインデックスし、`type` エイリアスを `interface` として扱い、同一行の decorator 付きメンバーを取りこぼさず、関数オーバーロードの signature 行を implementation 1 行に畳みます。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`、`CHANGELOG.md`。
@@ -1970,3 +1973,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
+## Unreleased
+
+- Fix Java text blocks so call-shaped lines inside `"""..."""` bodies no longer emit phantom `call` references.

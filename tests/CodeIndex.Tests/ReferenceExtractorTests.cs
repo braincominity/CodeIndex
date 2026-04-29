@@ -408,6 +408,62 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaTextBlock_DoesNotEmitPhantomCallReferences()
+    {
+        const string content = """"
+            public class Main {
+                void doReal() {
+                    legitimateCall();
+                    another(1, 2);
+                }
+
+                String templateA = """
+                    SELECT * FROM users WHERE name = badCall(x);
+                    UPDATE phantomMethod(arg) SET y = z;
+                    otherFake(1, 2, 3);
+                    """;
+
+                String templateB = """
+                    someIdentifier();
+
+                    """;
+
+                String templateC = """
+                    literal only
+                    """ + suffix();
+
+                void legitimateCall() {}
+                void another(int a, int b) {}
+                String suffix() { return ""; }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "badCall"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "otherFake"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "someIdentifier"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "legitimateCall"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "doReal");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "another"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "doReal");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "suffix"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedRawString_KeepsInterpolationCallReferences()
     {
         const string content = """"
