@@ -70,8 +70,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
@@ -142,7 +142,7 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
-        });
+        }, options.RawFts);
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -153,8 +153,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
@@ -282,8 +282,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--max-line-width", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
@@ -348,7 +348,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
@@ -394,8 +394,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
             return CommandExitCodes.UsageError;
@@ -462,7 +462,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
@@ -504,8 +504,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
             return CommandExitCodes.UsageError;
@@ -572,7 +572,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
@@ -634,8 +634,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring", "--name"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring", "--name"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -770,8 +770,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "files"))
             return CommandExitCodes.UsageError;
@@ -1096,8 +1096,13 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--limit" || arg == "--top")
+                {
+                    if (!int.TryParse(value, out var limit) || limit <= 0)
+                        return $"Error: {arg} requires a positive integer, got '{value}'";
+                }
+                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
@@ -1240,8 +1245,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--max-line-width", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
             return CommandExitCodes.UsageError;
@@ -1388,7 +1393,7 @@ public static class QueryCommandRunner
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols under their container / コンテナ内のシンボルをインデント
-                    var indent = sym.ContainerName != null ? "    " : "";
+                    var indent = sym.Depth > 0 ? new string(' ', sym.Depth * 4) : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
@@ -1540,9 +1545,7 @@ public static class QueryCommandRunner
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
             var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
-            var freshness = status.IndexedAt.HasValue
-                ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
-                : "unknown";
+            var freshness = BuildStatusFreshnessLabel(status);
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
             if (IsFoldOnlyReadinessDegraded(status))
             {
@@ -1644,8 +1647,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
             return CommandExitCodes.UsageError;
@@ -2536,6 +2539,20 @@ public static class QueryCommandRunner
 
             switch (normalizedArg)
             {
+                case "--":
+                    if (i + 1 >= args.Length)
+                    {
+                        AddParseError("Error: -- requires a following literal query.");
+                    }
+                    else if (query == null)
+                    {
+                        query = args[++i];
+                    }
+                    else
+                    {
+                        extraNames.Add(args[++i]);
+                    }
+                    break;
                 case "--db":
                     if (TryReadStringOptionValue(args, ref i, "--db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dbPathValue, out var dbPathError))
                     {
@@ -2577,7 +2594,7 @@ public static class QueryCommandRunner
                 case "--query":
                     if (!allowNamedQuery)
                     {
-                        AddParseError("Error: --query is only supported by 'find'.");
+                        AddParseError("Error: --query is not supported by this command.");
                         if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
                             i++;
                     }
@@ -2761,7 +2778,7 @@ public static class QueryCommandRunner
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
-                    else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
+                    else if (TryParseNonNegativeInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
                     {
                         if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
                             AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
@@ -2776,7 +2793,11 @@ public static class QueryCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith('-'))
+                    {
+                        if (allowNamedQuery && query == null)
+                            query = args[i];
                         break;
+                    }
                     else if (query == null)
                     {
                         query = args[i];
@@ -2858,7 +2879,7 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(string dbPath, Func<DbReader, int> action)
+    private static int WithDb(string dbPath, Func<DbReader, int> action, bool allowFtsQuerySyntaxErrors = false)
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
@@ -2894,6 +2915,9 @@ public static class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
+            if (allowFtsQuerySyntaxErrors && TryWriteFtsQuerySyntaxError(ex, out var ftsExitCode))
+                return ftsExitCode;
+
             if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
             {
                 Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
@@ -2911,6 +2935,36 @@ public static class QueryCommandRunner
         {
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static bool TryWriteFtsQuerySyntaxError(Exception ex, out int exitCode)
+    {
+        exitCode = default;
+        if (ex is not SqliteException sqliteEx)
+            return false;
+
+        if (!IsFtsQuerySyntaxError(sqliteEx.Message))
+            return false;
+
+        Console.Error.WriteLine($"Error: FTS5 query syntax: {sqliteEx.Message}");
+        Console.Error.WriteLine(BuildFtsQuerySyntaxHint(sqliteEx.Message));
+        exitCode = CommandExitCodes.UsageError;
+        return true;
+    }
+
+    private static bool IsFtsQuerySyntaxError(string message)
+    {
+        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such column:", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildFtsQuerySyntaxHint(string message)
+    {
+        if (message.Contains("no such column:", StringComparison.OrdinalIgnoreCase))
+            return "Hint: --fts treats `:` as an FTS5 column qualifier. If `:` is part of the identifier, drop `--fts` to use literal-safe search.";
+
+        return "Hint: fix the raw FTS5 syntax or drop `--fts` to use literal-safe search.";
     }
 
     private static void WriteNumberedExcerpt(int startLine, string content)
@@ -2931,14 +2985,21 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions)
+    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
     {
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
+        var skippedQueryLiteral = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
             if (!arg.StartsWith("-", StringComparison.Ordinal))
                 continue;
+
+            if (queryLiteral != null && !skippedQueryLiteral && arg == queryLiteral)
+            {
+                skippedQueryLiteral = true;
+                continue;
+            }
 
             var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
                 ? inlineOptionName!
@@ -2946,13 +3007,15 @@ public static class QueryCommandRunner
 
             if (supported.Contains(normalizedArg))
             {
+                if (normalizedArg == "--" && normalizedArg == arg && i + 1 < cmdArgs.Length)
+                    i++;
                 if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                     i++;
                 continue;
             }
 
-            // `--query` is parsed specially so non-find commands can emit the dedicated
-            // "only supported by 'find'" message instead of the generic unsupported-option error.
+            // `--query` is parsed specially so commands without query literals can emit the
+            // dedicated parser message instead of the generic unsupported-option error.
             // `--query` は専用エラー文言を出したいので generic unsupported 判定からは外す。
             if (normalizedArg == "--query")
             {
@@ -3224,6 +3287,17 @@ public static class QueryCommandRunner
 
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
+
+    private static string BuildStatusFreshnessLabel(StatusResult status)
+    {
+        if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
+            return "unknown";
+
+        if (status.GitIsDirty == true)
+            return "stale";
+
+        return status.IndexedAt.Value >= status.LatestModified.Value ? "fresh" : "stale";
+    }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
     {

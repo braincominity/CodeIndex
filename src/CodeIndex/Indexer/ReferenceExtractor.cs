@@ -11,6 +11,7 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+    private readonly record struct InterpolatedExpressionSpan(int StartIndex, int Length);
     private readonly record struct CSharpMultiLineTypePatternState(
         bool WaitingForHead,
         string? PendingTypeExpression,
@@ -258,6 +259,21 @@ public static class ReferenceExtractor
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlSourceAliasTailPattern =
+        @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + "))?";
+    private const string SqlSourceTableHintTailPattern =
+        @"(?:\s+WITH\s*\((?:[^()]|\([^()]*\))*\))?";
+    // Derived tables need to be skipped so later comma-separated sources still surface.
+    // derived table 本体は飛ばして、後続の comma-separated source を落とさないようにする。
+    private const string SqlParenthesizedSourcePattern =
+        @"\((?:[^()]|\((?<paren>)|\)(?<-paren>))*(?(paren)(?!))\)";
+    private const string SqlDerivedTableColumnAliasListPattern =
+        @"(?:\s*\(\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")(?:\s*,\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @"))*\s*\))?";
+    private const string SqlSourceListItemPattern =
+        @"(?:(?:ONLY|LATERAL)\b\s+)*(?:" +
+        SqlQualifiedIdentifierPattern + SqlSourceTableHintTailPattern + SqlSourceAliasTailPattern +
+        @"|" + SqlParenthesizedSourcePattern + SqlSourceAliasTailPattern + SqlDerivedTableColumnAliasListPattern +
+        @")";
     private const string SqlTopTargetModifierPattern =
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string SqlMergeTargetHintPattern =
@@ -266,16 +282,24 @@ public static class ReferenceExtractor
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL named source references that should become `reference` edges rather than `call` edges.
-    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
-    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
+    // `FROM` now captures comma-separated source lists in a single pass so later tables such as
+    // `accounts` in `FROM users, accounts` are not dropped. `JOIN` / `APPLY` keep the single-source
+    // path. Bare `USING` stays excluded because SQL dialects also reuse it for non-source syntax
+    // such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
     // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
-    // shared CallRegex already captures it as a function call. issues #284 / #695.
+    // shared CallRegex already captures it as a function call. issues #284 / #695 / #802.
     // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
-    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
-    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
+    // `FROM` は comma-separated な source list を 1 回で拾い、`FROM users, accounts` の
+    // `accounts` のような後続 table を落とさない。`JOIN` / `APPLY` は単一 source のまま。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や `ALTER TABLE ... USING expr`
+    // のような非 source 構文にも使われるため意図的に除外する。
     // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    // issues #284 / #695 / #802.
+    private static readonly Regex SqlFromSourceListRegex = new(
+        $@"(?<![\w$])FROM\b\s+{SqlSourceListItemPattern}(?:\s*,\s*{SqlSourceListItemPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlSourceReferenceRegex = new(
-        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+{SqlSourceListItemPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeUsingSourceRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
@@ -291,6 +315,9 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
         @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlFromListContinuationPrefixRegex = new(
+        @"(?<![\w$])FROM\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTargetReferencePrefixRegex = new(
         $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
@@ -329,8 +356,21 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
-        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+    private static readonly Regex SqlUsingKeywordRegex = new(@"(?<![\w$])USING\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // T-SQL temp stored routines: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f`
+    // and `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` variants. Tracks the temp name as
+    // established evidence so later `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` calls keep their edge
+    // after the proc-call `#`-gate that was added for issue #656 to suppress MySQL `# comment`
+    // false positives when no T-SQL temp object exists.
+    // T-SQL の一時ストアド: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f` と、
+    // `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` 変種。issue #656 で proc 呼び出しに追加した
+    // `#` ゲート（MySQL `# comment` 誤検出を抑止するため）が有効でも、ファイル内で当該 temp 名を
+    // 確立したと見なすことで `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` の edge を保持する。
+    private static readonly Regex SqlCreateTempRoutineRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTrailingTempIdentifierRegex = new(
+        $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{SqlTempIdentifierPattern}|{SqlQualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
@@ -852,7 +892,16 @@ public static class ReferenceExtractor
                 return false;
 
             normalized = TrimLeadingCSharpGlobalQualifier(normalized);
-            return csharpKnownTypeNames.Contains(normalized);
+            if (csharpKnownTypeNames.Contains(normalized))
+                return true;
+
+            var shortName = GetLastQualifiedSegment(normalized);
+            return csharpUsingAliases.Any(alias =>
+                alias.TargetsType
+                && alias.Line <= lineNumber
+                && lineNumber >= alias.ScopeStartLine
+                && lineNumber <= alias.ScopeEndLine
+                && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal));
         }
 
         var references = new List<ReferenceRecord>();
@@ -1276,6 +1325,27 @@ public static class ReferenceExtractor
                                     continue;
                                 if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
                                     continue;
+                                // issue #656: bare `#tempProc` / `##tempProc` after `EXEC` / `EXECUTE` / `CALL`
+                                // is ambiguous between a T-SQL temp stored procedure call and a MySQL /
+                                // MariaDB `#` line comment. Require same-file T-SQL evidence (prior
+                                // `CREATE TABLE #x`, `SELECT ... INTO #x`, mutation target of `#x`, or
+                                // `CREATE PROCEDURE|FUNCTION #x`) before emitting a call edge so MySQL
+                                // comments stop being misindexed as temp stored procedures.
+                                // Quoted forms (`EXEC [#tempProc]` / `` EXEC `#tempProc` ``) bypass the
+                                // gate because bracket/backtick quoting is unambiguously an identifier.
+                                // issue #656: `EXEC` / `EXECUTE` / `CALL` の直後に並ぶ bare な
+                                // `#tempProc` / `##tempProc` は T-SQL の一時ストアド呼び出しと MySQL /
+                                // MariaDB の `#` 行コメントのどちらにも見える。同一ファイル内で T-SQL
+                                // 側の確立（先行する `CREATE TABLE #x`、`SELECT ... INTO #x`、`#x` の
+                                // 変更対象、あるいは `CREATE PROCEDURE|FUNCTION #x`）がある場合だけ
+                                // call edge を出すことで、MySQL の `#` コメントを一時ストアドとして
+                                // 誤索引しないようにする。引用形 (`EXEC [#tempProc]` /
+                                // `` EXEC `#tempProc` ``) はブラケット / バッククォート引用が明確に
+                                // 識別子であるため、このゲートを通さず従来どおり edge を出す。
+                                if (!wasQuoted
+                                    && resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
 
                                 var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
                                 AddChainReference(
@@ -1283,37 +1353,74 @@ public static class ReferenceExtractor
                                     "call", context, lineNumber, sqlCallContainer);
                             }
 
+                            foreach (Match match in SqlFromSourceListRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
+                                    {
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
+                                    }
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+
                             foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
                             {
                                 if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
                                     continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-                                if (followedByOpenParen)
+                                foreach (Capture capture in match.Groups["name"].Captures)
                                 {
-                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                                    AddChainReference(
-                                        references, seen, fileId, resolvedName, nameColumn + 1,
-                                        "call", context, lineNumber, sqlCallContainer);
-                                    if (!wasQuoted)
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
                                     {
-                                        sqlSuppressedCallIndices?.Add(
-                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
                                     }
-                                    continue;
-                                }
-                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                    continue;
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
 
-                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
                             }
 
                             foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
@@ -1951,7 +2058,8 @@ public static class ReferenceExtractor
         return SqlTargetReferenceRegex.IsMatch(statement)
             || SqlTruncateTargetRegex.IsMatch(statement)
             || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
-            || SqlCreateTempTableRegex.IsMatch(statement);
+            || SqlCreateTempTableRegex.IsMatch(statement)
+            || SqlCreateTempRoutineRegex.IsMatch(statement);
     }
 
     private static bool CanSqlStatementRequireLineCommentCarry(string statement)
@@ -1961,6 +2069,7 @@ public static class ReferenceExtractor
 
         return CanSqlStatementEstablishTempObject(statement)
             || SqlTargetReferencePrefixRegex.IsMatch(statement)
+            || SqlFromListContinuationPrefixRegex.IsMatch(statement)
             || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
@@ -2156,6 +2265,7 @@ public static class ReferenceExtractor
         CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempRoutineRegex.Matches(statement), statement, names);
     }
 
     private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
@@ -2428,8 +2538,10 @@ public static class ReferenceExtractor
             }
 
             if (IsCSharpNonTypePatternExpression(typeGroup.Value)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeGroup.Value,
+                    continuationIndex,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -2792,6 +2904,7 @@ public static class ReferenceExtractor
                     preparedLine,
                     currentTypeExpression,
                     currentContinuationIndex,
+                    hadLeadingNot,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
@@ -2987,8 +3100,11 @@ public static class ReferenceExtractor
             var currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
             if (looksLikeLambda
                 && !HasStrongCSharpSwitchExpressionTypeSignal(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     hasActiveSameFileCSharpTypeCandidate))
@@ -3044,8 +3160,10 @@ public static class ReferenceExtractor
                 continue;
 
             if (IsCSharpNonTypePatternExpression(currentTypeExpression)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -3070,18 +3188,39 @@ public static class ReferenceExtractor
     }
 
     private static bool HasStrongCSharpSwitchExpressionTypeSignal(
+        string preparedLine,
         string typeExpression,
+        int continuationIndex,
         int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                continuationIndex,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
         return IsCSharpQualifiedTypePatternHead(
                    typeExpression,
                    lineNumber,
                    csharpQualifiedTypePatternLookup,
                    csharpUsingAliases)
-               || hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber);
+               || HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                   preparedLine,
+                   continuationIndex,
+                   typeExpression,
+                   lineNumber,
+                   csharpQualifiedConstantPatternMemberLookup,
+                   csharpUsingAliases,
+                   hasActiveSameFileCSharpTypeCandidate);
     }
 
     private static void EmitCSharpSwitchExpressionArmTypePatternReference(
@@ -5260,6 +5399,7 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
+        bool hadLeadingNot,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -5275,13 +5415,22 @@ public static class ReferenceExtractor
 
         return preparedLine[cursor] switch
         {
-            ':' => !IsCSharpConstantPatternMemberHead(
+            ':' => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    cursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate),
+            '.' => !HasCSharpDottedConstantPatternMemberTail(
+                    preparedLine,
+                    typeExpression,
+                    cursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases),
             '{' or '(' or '[' => true,
             _ => IsCSharpCaseTypePatternIdentifier(
                 preparedLine,
@@ -5317,8 +5466,10 @@ public static class ReferenceExtractor
 
         return rawToken switch
         {
-            "when" => !IsCSharpConstantPatternMemberHead(
+            "when" => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    tokenCursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -5390,8 +5541,10 @@ public static class ReferenceExtractor
 
         if (sawLogicalKeyword
             && !IsCSharpNonTypePatternExpression(currentTypeExpression)
-            && !IsCSharpConstantPatternMemberHead(
+            && !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 currentTypeExpression,
+                currentContinuationIndex,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5465,8 +5618,10 @@ public static class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
-        if (IsCSharpConstantPatternMemberHead(
+        if (IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 typeExpression,
+                cursor,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5601,6 +5756,97 @@ public static class ReferenceExtractor
     {
         return IsCSharpQualifiedConstantPatternMemberHead(
             typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                preparedLine,
+                cursor,
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            return false;
+        }
+
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                cursor,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return true;
+        }
+
+        return IsCSharpConstantPatternMemberHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
+    }
+
+    private static bool HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+        string preparedLine,
+        int cursor,
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (!hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber))
+            return false;
+
+        if (IsCSharpQualifiedConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        return nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.';
+    }
+
+    private static bool HasCSharpDottedConstantPatternMemberTail(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        if (nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.')
+            return false;
+
+        nextCursor = SkipWhitespace(preparedLine, nextCursor + 1);
+        var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextCursor);
+        if (!nextMatch.Success)
+            return false;
+
+        return IsCSharpQualifiedConstantPatternMemberHead(
+            typeExpression + "." + nextMatch.Groups["type"].Value,
             lineNumber,
             csharpQualifiedConstantPatternMemberLookup,
             csharpUsingAliases);
@@ -11376,11 +11622,29 @@ public static class ReferenceExtractor
         while (probe >= 0 && line[probe] == ',')
         {
             var priorListItem = line[..probe];
-            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            int sourceStart = FindLastSqlCommaOutsideQuotedIdentifiers(priorListItem);
+            if (sourceStart >= 0)
+                sourceStart++;
+            else
+            {
+                var usingMatches = SqlUsingKeywordRegex.Matches(priorListItem);
+                if (usingMatches.Count > 0)
+                    sourceStart = usingMatches[^1].Index + usingMatches[^1].Length;
+                else
+                {
+                    sourceStart = priorListItem.LastIndexOf('#');
+                    if (sourceStart < 0)
+                        return true;
+                }
+            }
+            while (sourceStart < priorListItem.Length && char.IsWhiteSpace(priorListItem[sourceStart]))
+                sourceStart++;
+
+            var listMatch = SqlTrailingTempIdentifierRegex.Match(priorListItem[sourceStart..]);
             if (!listMatch.Success)
                 return true;
 
-            probe = listMatch.Index - 1;
+            probe = sourceStart - 1;
             while (probe >= 0 && char.IsWhiteSpace(line[probe]))
                 probe--;
         }
@@ -11427,6 +11691,21 @@ public static class ReferenceExtractor
             return true;
 
         var token = line[tokenStart..(tokenEnd + 1)];
+        // issue #656: keep `#name` as a temp-object identifier after keywords that precede an object
+        // name in T-SQL. MySQL `# comment` false positives introduced by treating the call-keyword
+        // positions as identifier prefixes are then caught downstream by the proc-call / source-ref
+        // establishment gate, which requires the same file to first establish `#name` via
+        // `CREATE TABLE #x`, `SELECT ... INTO #x`, a mutation target of `#x`, or
+        // `CREATE PROCEDURE|FUNCTION #x`. `CALL`, `PROCEDURE`, `PROC`, and `FUNCTION` are added so
+        // established temp routines stay callable (`CREATE PROCEDURE #sp ... CALL #sp;`) without
+        // reopening the unestablished MySQL-comment regression.
+        // issue #656: T-SQL でオブジェクト名の直前に来るキーワードの後ろでは `#name` を識別子として
+        // 残し、`EXEC` / `EXECUTE` / `CALL` や FROM/JOIN 側の establishment ゲートに判定を委ねる。
+        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 / `CREATE PROCEDURE|FUNCTION #x`
+        // のいずれかで同一ファイル内に establish した `#name` だけを後段で有効な edge として残す。
+        // `CALL` / `PROCEDURE` / `PROC` / `FUNCTION` を加えるのは、establish した一時ストアドを
+        // `CREATE PROCEDURE #sp ... CALL #sp;` のように呼び戻せるようにするためで、非 establish の
+        // MySQL コメント誤索引は establishment ゲートで引き続き抑止する。
         return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
@@ -11435,7 +11714,48 @@ public static class ReferenceExtractor
             && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "CALL", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "PROCEDURE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "PROC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "FUNCTION", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int FindLastSqlCommaOutsideQuotedIdentifiers(string text)
+    {
+        int lastComma = -1;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == ',')
+                lastComma = i;
+        }
+
+        return lastComma;
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
@@ -11445,21 +11765,22 @@ public static class ReferenceExtractor
 
     private static string PrepareLine(string lang, string line)
     {
-        var result = StringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
+        var result = ReplaceRegexMatchesWithSpaces(StringLiteralRegex, line);
+        result = RestoreInterpolatedExpressionSpans(lang, line, result);
+        result = ReplaceRegexMatchesWithSpaces(InlineBlockCommentRegex, result);
 
         if (UsesHashComments(lang))
         {
             var hashIndex = result.IndexOf('#');
             if (hashIndex >= 0)
-                result = result[..hashIndex];
+                result = ReplaceRangeWithSpaces(result, hashIndex);
         }
 
         if (UsesSlashComments(lang))
         {
             var slashIndex = result.IndexOf("//", StringComparison.Ordinal);
             if (slashIndex >= 0)
-                result = result[..slashIndex];
+                result = ReplaceRangeWithSpaces(result, slashIndex);
         }
 
         // Lua, SQL, Haskell use -- for line comments / Lua、SQL、Haskell は -- を行コメントに使う
@@ -11467,7 +11788,7 @@ public static class ReferenceExtractor
         {
             var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (dashCommentIndex >= 0)
-                result = result[..dashCommentIndex];
+                result = ReplaceRangeWithSpaces(result, dashCommentIndex);
         }
 
         // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
@@ -11475,10 +11796,555 @@ public static class ReferenceExtractor
         {
             var vbCommentIndex = result.IndexOf('\'');
             if (vbCommentIndex >= 0)
-                result = result[..vbCommentIndex];
+                result = ReplaceRangeWithSpaces(result, vbCommentIndex);
         }
 
         return result;
+    }
+
+    private static string RestoreInterpolatedExpressionSpans(string lang, string originalLine, string maskedLine)
+    {
+        if (!UsesInterpolatedExpressionRestoration(lang))
+            return maskedLine;
+
+        var spans = CollectInterpolatedExpressionSpans(lang, originalLine);
+        if (spans.Count == 0)
+            return maskedLine;
+
+        var chars = maskedLine.ToCharArray();
+        foreach (var span in spans)
+        {
+            if (span.StartIndex < 0 || span.StartIndex >= originalLine.Length || span.Length <= 0)
+                continue;
+
+            var length = Math.Min(span.Length, originalLine.Length - span.StartIndex);
+            if (span.StartIndex >= chars.Length)
+                continue;
+
+            length = Math.Min(length, chars.Length - span.StartIndex);
+            if (length <= 0)
+                continue;
+
+            var fragment = originalLine.Substring(span.StartIndex, length);
+            for (var i = 0; i < fragment.Length; i++)
+                chars[span.StartIndex + i] = fragment[i];
+        }
+
+        return new string(chars);
+    }
+
+    private static bool UsesInterpolatedExpressionRestoration(string lang) =>
+        lang is "csharp" or "javascript" or "typescript" or "python";
+
+    private static List<InterpolatedExpressionSpan> CollectInterpolatedExpressionSpans(string lang, string line)
+    {
+        var spans = new List<InterpolatedExpressionSpan>();
+        switch (lang)
+        {
+            case "csharp":
+                CollectCSharpInterpolatedExpressionSpans(line, spans);
+                break;
+            case "javascript":
+            case "typescript":
+                CollectJsTemplateExpressionSpans(line, spans);
+                break;
+            case "python":
+                CollectPythonInterpolatedExpressionSpans(line, spans);
+                break;
+        }
+
+        return spans;
+    }
+
+    private static string ReplaceRangeWithSpaces(string input, int startIndex)
+    {
+        if (startIndex < 0 || startIndex >= input.Length)
+            return input;
+
+        var chars = input.ToCharArray();
+        for (var i = startIndex; i < chars.Length; i++)
+            chars[i] = ' ';
+        return new string(chars);
+    }
+
+    private static void CollectCSharpInterpolatedExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (!TryReadCSharpStringStart(line, i, out var openerLength, out var isInterpolated, out var isVerbatim))
+                continue;
+
+            i += openerLength;
+            if (!isInterpolated)
+            {
+                SkipCSharpStringLiteral(line, ref i, isVerbatim);
+                continue;
+            }
+
+            ScanCSharpInterpolatedStringBody(line, ref i, isVerbatim, spans);
+        }
+    }
+
+    private static bool TryReadCSharpStringStart(
+        string line,
+        int index,
+        out int openerLength,
+        out bool isInterpolated,
+        out bool isVerbatim)
+    {
+        openerLength = 0;
+        isInterpolated = false;
+        isVerbatim = false;
+
+        if (index < 0 || index >= line.Length)
+            return false;
+
+        if (line[index] == '"' )
+        {
+            openerLength = 1;
+            return true;
+        }
+
+        if (line[index] == '@')
+        {
+            if (index + 2 < line.Length && line[index + 1] == '$' && line[index + 2] == '"')
+            {
+                openerLength = 3;
+                isInterpolated = true;
+                isVerbatim = true;
+                return true;
+            }
+
+            if (index + 1 < line.Length && line[index + 1] == '"')
+            {
+                openerLength = 2;
+                isVerbatim = true;
+                return true;
+            }
+        }
+
+        if (line[index] == '$')
+        {
+            if (index + 2 < line.Length && line[index + 1] == '@' && line[index + 2] == '"')
+            {
+                openerLength = 3;
+                isInterpolated = true;
+                isVerbatim = true;
+                return true;
+            }
+
+            if (index + 1 < line.Length && line[index + 1] == '"')
+            {
+                openerLength = 2;
+                isInterpolated = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void SkipCSharpStringLiteral(string line, ref int index, bool isVerbatim)
+    {
+        while (index < line.Length)
+        {
+            if (isVerbatim)
+            {
+                if (line[index] == '"')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"')
+                break;
+
+            index++;
+        }
+    }
+
+    private static void ScanCSharpInterpolatedStringBody(
+        string line,
+        ref int index,
+        bool isVerbatim,
+        List<InterpolatedExpressionSpan> spans)
+    {
+        while (index < line.Length)
+        {
+            if (isVerbatim)
+            {
+                if (line[index] == '"')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (line[index] == '{')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '{')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                    continue;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"')
+                break;
+
+            if (line[index] == '{')
+            {
+                if (index + 1 < line.Length && line[index + 1] == '{')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void CollectJsTemplateExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] != '`')
+                continue;
+
+            i++;
+            while (i < line.Length)
+            {
+                if (line[i] == '\\')
+                {
+                    i += 2;
+                    continue;
+                }
+
+                if (line[i] == '`')
+                    break;
+
+                if (line[i] == '$' && i + 1 < line.Length && line[i + 1] == '{')
+                {
+                    i += 2;
+                    TryCaptureInterpolatedExpressionSpan(line, ref i, spans, '{', '}');
+                    continue;
+                }
+
+                i++;
+            }
+        }
+    }
+
+    private static void CollectPythonInterpolatedExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (!TryReadPythonStringStart(line, i, out var openerLength, out var isInterpolated, out var quoteLength))
+                continue;
+
+            i += openerLength;
+            if (!isInterpolated)
+            {
+                SkipPythonStringLiteral(line, ref i, quoteLength);
+                continue;
+            }
+
+            ScanPythonInterpolatedStringBody(line, ref i, quoteLength, spans);
+        }
+    }
+
+    private static bool TryReadPythonStringStart(
+        string line,
+        int index,
+        out int openerLength,
+        out bool isInterpolated,
+        out int quoteLength)
+    {
+        openerLength = 0;
+        isInterpolated = false;
+        quoteLength = 0;
+
+        if (index < 0 || index >= line.Length)
+            return false;
+
+        if (line[index] is not ('"' or '\''))
+            return false;
+
+        var prefixStart = index - 1;
+        while (prefixStart >= 0 && char.IsLetter(line[prefixStart]))
+            prefixStart--;
+
+        var prefix = line[(prefixStart + 1)..index];
+        if (prefix.Length > 0 && !prefix.All(ch => char.IsLetter(ch)))
+            return false;
+
+        if (prefix.Any(ch => ch is not ('f' or 'F' or 'r' or 'R' or 'u' or 'U' or 'b' or 'B')))
+            return false;
+
+        quoteLength = index + 2 < line.Length && line[index + 1] == line[index] && line[index + 2] == line[index]
+            ? 3
+            : 1;
+        openerLength = prefix.Length + quoteLength;
+        isInterpolated = prefix.Any(ch => ch is 'f' or 'F');
+        return true;
+    }
+
+    private static void SkipPythonStringLiteral(string line, ref int index, int quoteLength)
+    {
+        while (index < line.Length)
+        {
+            if (quoteLength == 3)
+            {
+                if (index + 2 < line.Length
+                    && line[index] == line[index + 1]
+                    && line[index] == line[index + 2])
+                {
+                    index += 3;
+                    return;
+                }
+
+                if (line[index] == '\\')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"' || line[index] == '\'')
+                return;
+
+            index++;
+        }
+    }
+
+    private static void ScanPythonInterpolatedStringBody(
+        string line,
+        ref int index,
+        int quoteLength,
+        List<InterpolatedExpressionSpan> spans)
+    {
+        while (index < line.Length)
+        {
+            if (quoteLength == 3)
+            {
+                if (index + 2 < line.Length
+                    && line[index] == line[index + 1]
+                    && line[index] == line[index + 2])
+                    break;
+            }
+            else if (line[index] is '"' or '\'')
+            {
+                break;
+            }
+
+            if (line[index] == '{')
+            {
+                if (index + 1 < line.Length && line[index + 1] == '{')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                continue;
+            }
+
+            if (line[index] == '\\' && quoteLength == 1)
+            {
+                index += 2;
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void TryCaptureInterpolatedExpressionSpan(
+        string line,
+        ref int index,
+        List<InterpolatedExpressionSpan> spans,
+        char openBrace,
+        char closeBrace)
+    {
+        var start = index + 1;
+        var depth = 1;
+        var i = start;
+        while (i < line.Length)
+        {
+            if (line[i] == '"' || line[i] == '\'')
+            {
+                if (TrySkipQuotedSpan(line, ref i, line[i]))
+                    continue;
+                index = line.Length;
+                return;
+            }
+
+            if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '/')
+            {
+                index = line.Length;
+                return;
+            }
+            if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '*')
+            {
+                if (TrySkipBlockComment(line, ref i))
+                    continue;
+                index = line.Length;
+                return;
+            }
+            if (i + 1 < line.Length && line[i] == '`')
+            {
+                if (TrySkipJsTemplateLiteral(line, ref i))
+                    continue;
+                index = line.Length;
+                return;
+            }
+            if (line[i] == openBrace)
+            {
+                depth++;
+                i++;
+                continue;
+            }
+            if (line[i] == closeBrace)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    spans.Add(new InterpolatedExpressionSpan(start, i - start));
+                    index = i;
+                    return;
+                }
+                i++;
+                continue;
+            }
+
+            if (line[i] == '\\')
+            {
+                i += 2;
+                continue;
+            }
+
+            i++;
+        }
+
+        index = line.Length;
+    }
+
+    private static bool TrySkipQuotedSpan(string line, ref int index, char quote)
+    {
+        if (index >= line.Length || line[index] != quote)
+            return false;
+
+        var i = index + 1;
+        while (i < line.Length)
+        {
+            if (line[i] == '\\')
+            {
+                i += 2;
+                continue;
+            }
+
+            if (line[i] == quote)
+            {
+                index = i + 1;
+                return true;
+            }
+
+            i++;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipBlockComment(string line, ref int index)
+    {
+        if (index + 1 >= line.Length || line[index] != '/' || line[index + 1] != '*')
+            return false;
+
+        var end = line.IndexOf("*/", index + 2, StringComparison.Ordinal);
+        if (end < 0)
+            return false;
+
+        index = end + 2;
+        return true;
+    }
+
+    private static bool TrySkipJsTemplateLiteral(string line, ref int index)
+    {
+        if (index >= line.Length || line[index] != '`')
+            return false;
+
+        index++;
+        while (index < line.Length)
+        {
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '`')
+            {
+                index++;
+                return true;
+            }
+
+            if (line[index] == '$' && index + 1 < line.Length && line[index + 1] == '{')
+            {
+                index += 2;
+                var nestedSpans = new List<InterpolatedExpressionSpan>();
+                TryCaptureInterpolatedExpressionSpan(line, ref index, nestedSpans, '{', '}');
+                continue;
+            }
+
+            index++;
+        }
+
+        return false;
     }
 
     private static bool IsIgnoredCallName(string language, string name)

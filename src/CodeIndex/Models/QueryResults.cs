@@ -449,6 +449,7 @@ public class OutlineSymbol
     public int Line { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
+    public int Depth { get; set; }
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }
     public string? Signature { get; set; }
