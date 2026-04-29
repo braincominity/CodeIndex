@@ -6799,6 +6799,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("call", result.ReferenceKind);
         Assert.Equal(callReferenceLine, result.Line);
         Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("Red", lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
     }
 
     [Fact]
