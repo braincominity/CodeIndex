@@ -12519,6 +12519,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_ModuleInfoDirectives_EmitModuleDependencyReferences()
+    {
+        // JPMS directives are dependency edges, not calls. `requires`, `uses`, and
+        // `provides ... with ...` should all surface as `type_reference` rows so graph
+        // queries can answer module-level dependency questions.
+        // JPMS の directive は call ではなく dependency edge であり、`requires` / `uses` /
+        // `provides ... with ...` が `type_reference` として見える必要がある。
+        const string content = """
+            module com.example.app {
+                requires java.base;
+                requires transitive java.logging;
+                uses com.example.spi.MyService;
+                provides com.example.spi.MyService with com.example.impl.DefaultService;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Equal(5, references.Count);
+        Assert.All(references, reference => Assert.Equal("type_reference", reference.ReferenceKind));
+        Assert.All(references, reference => Assert.Equal("com.example.app", reference.ContainerName));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "java.base"
+            && reference.ContainerKind == "namespace");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "java.logging"
+            && reference.ContainerKind == "namespace");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "com.example.spi.MyService"));
+        Assert.Single(references, reference =>
+            reference.SymbolName == "com.example.impl.DefaultService");
+    }
+
+    [Fact]
     public void Extract_SqlExecNoParens_CapturesStoredProcedureCall()
     {
         // issue #232: T-SQL `EXEC <proc>;` (no parentheses) is the dominant stored-procedure

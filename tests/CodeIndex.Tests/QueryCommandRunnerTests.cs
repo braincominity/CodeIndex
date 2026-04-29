@@ -24129,6 +24129,92 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_JavaModuleInfoDirectivesReturnModuleEdges()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_java_module_references");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app {
+                    requires java.base;
+                    requires transitive java.logging;
+                    uses com.example.spi.MyService;
+                    provides com.example.spi.MyService with com.example.impl.DefaultService;
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            var (javaBaseExitCode, javaBaseStdout, javaBaseStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["java.base", "--db", dbPath, "--json", "--lang", "java", "--exact-name"],
+                _jsonOptions));
+            var javaBaseRows = ParseJsonLines(javaBaseStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            var (javaLoggingExitCode, javaLoggingStdout, javaLoggingStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["java.logging", "--db", dbPath, "--json", "--lang", "java", "--exact-name"],
+                _jsonOptions));
+            var javaLoggingRows = ParseJsonLines(javaLoggingStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            var (serviceExitCode, serviceStdout, serviceStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["com.example.spi.MyService", "--db", dbPath, "--json", "--lang", "java", "--exact-name"],
+                _jsonOptions));
+            var serviceRows = ParseJsonLines(serviceStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            var (implementationExitCode, implementationStdout, implementationStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["com.example.impl.DefaultService", "--db", dbPath, "--json", "--lang", "java", "--exact-name"],
+                _jsonOptions));
+            var implementationRows = ParseJsonLines(implementationStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, javaBaseExitCode);
+            Assert.Equal(string.Empty, javaBaseStderr);
+            var javaBaseRow = Assert.Single(javaBaseRows);
+            Assert.Equal("type_reference", javaBaseRow.GetProperty("reference_kind").GetString());
+            Assert.Equal("com.example.app", javaBaseRow.GetProperty("container_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, javaLoggingExitCode);
+            Assert.Equal(string.Empty, javaLoggingStderr);
+            var javaLoggingRow = Assert.Single(javaLoggingRows);
+            Assert.Equal("type_reference", javaLoggingRow.GetProperty("reference_kind").GetString());
+            Assert.Equal("com.example.app", javaLoggingRow.GetProperty("container_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, serviceExitCode);
+            Assert.Equal(string.Empty, serviceStderr);
+            Assert.Equal(2, serviceRows.Count);
+            Assert.All(serviceRows, row =>
+            {
+                Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+                Assert.Equal("com.example.app", row.GetProperty("container_name").GetString());
+            });
+
+            Assert.Equal(CommandExitCodes.Success, implementationExitCode);
+            Assert.Equal(string.Empty, implementationStderr);
+            var implementationRow = Assert.Single(implementationRows);
+            Assert.Equal("type_reference", implementationRow.GetProperty("reference_kind").GetString());
+            Assert.Equal("com.example.app", implementationRow.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");
