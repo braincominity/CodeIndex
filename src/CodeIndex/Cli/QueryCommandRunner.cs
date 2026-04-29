@@ -163,12 +163,27 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(options.Json
+                ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                : "0");
+            return CommandExitCodes.Success;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "definition requires a symbol query argument",
                 GetUsageLineOrThrow("definition"),
                 "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "definition requires a symbol query argument",
+                GetUsageLineOrThrow("definition"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("definition", options))
@@ -300,6 +315,14 @@ public static class QueryCommandRunner
                 "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "references requires a symbol query argument",
+                GetUsageLineOrThrow("references"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("references", options))
             return CommandExitCodes.UsageError;
 
@@ -414,6 +437,14 @@ public static class QueryCommandRunner
                 "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callers requires a symbol query argument",
+                GetUsageLineOrThrow("callers"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("callers", options))
             return CommandExitCodes.UsageError;
 
@@ -524,6 +555,14 @@ public static class QueryCommandRunner
                 "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callees requires a caller query argument",
+                GetUsageLineOrThrow("callees"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("callees", options))
             return CommandExitCodes.UsageError;
 
@@ -623,6 +662,8 @@ public static class QueryCommandRunner
         if (!hadExplicitInput)
             return (null, false);
         var deduped = raw.Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        if (deduped.Any(IsBareVerbatimQueryToken))
+            return (null, hadExplicitInput);
         return (deduped.Count == 0 ? null : deduped, hadExplicitInput);
     }
 
@@ -644,13 +685,24 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        var exactBareVerbatimOnly = exact && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase) && (
+            (options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.ExtraNames.Count == 0) ||
+            (options.Query is null && options.ExtraNames.Count > 0 && options.ExtraNames.All(IsBareVerbatimQueryToken)));
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
         {
-            // Fail closed: an explicit name/query was provided but normalized to empty (e.g. "|",
-            // --name ""). Returning null here would broaden into an unfiltered symbol dump. /
-            // 明示入力が正規化で空になった場合、null のまま検索すると全件検索に化けるので必ず拒否する。
-            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values or bare '|' separators. / シンボル名リストが正規化の結果空です。--name の空値や単独の '|' を確認してください。");
+            if (exactBareVerbatimOnly && options.CountOnly)
+            {
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                    : "0");
+                return CommandExitCodes.Success;
+            }
+            // Fail closed: an explicit name/query was provided but normalized to empty or a bare
+            // verbatim prefix (e.g. `|`, `@`, `--name ""`). Returning null here would broaden into
+            // an unfiltered symbol dump. /
+            // 明示入力が正規化で空、または verbatim 接頭辞単独（`|`、`@`、`--name ""` など）になった場合は必ず拒否する。
+            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values, bare verbatim prefixes like `@`, or bare `|` separators. / シンボル名リストが正規化の結果空です。--name の空値、`@` のような verbatim 接頭辞単独、単独の `|` を確認してください。");
             return CommandExitCodes.UsageError;
         }
         if (symbolQueries != null && symbolQueries.Count > MaxSymbolQueryNames)
@@ -1263,6 +1315,14 @@ public static class QueryCommandRunner
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "inspect requires a symbol query argument",
+                GetUsageLineOrThrow("inspect"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
 
@@ -1658,6 +1718,14 @@ public static class QueryCommandRunner
                 "impact requires a symbol query argument",
                 GetUsageLineOrThrow("impact"),
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "impact requires a symbol query argument",
+                GetUsageLineOrThrow("impact"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("impact", options))
@@ -3937,6 +4005,12 @@ public static class QueryCommandRunner
 
     private static bool IsRecognizedOptionToken(string value) =>
         ValueTakingOptions.Contains(value) || FlagOnlyOptions.Contains(value);
+
+    private static bool IsBareVerbatimQueryToken(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
+    }
 
     private static bool TrySplitInlineOptionValue(string token, out string? optionName)
     {

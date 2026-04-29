@@ -23,6 +23,23 @@ public class DbContext : IDisposable
     public bool IsReadOnly => _isReadOnly;
 
     public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+        => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = openTarget,
+                Mode = SqliteOpenMode.ReadWrite,
+            };
+            return new SqliteConnection(builder.ConnectionString);
+        }, static connection => connection.Open(), static milliseconds => System.Threading.Thread.Sleep(milliseconds), out message, out isNotFound);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        out string message,
+        out bool isNotFound)
     {
         message = string.Empty;
         isNotFound = false;
@@ -58,13 +75,10 @@ public class DbContext : IDisposable
 
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = openTarget,
-                Mode = SqliteOpenMode.ReadWrite,
-            };
-            using var connection = new SqliteConnection(builder.ConnectionString);
-            connection.Open();
+            using var connection = OpenSqliteConnectionWithRetry(
+                () => createConnection(openTarget),
+                openConnection,
+                sleep);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
@@ -133,30 +147,11 @@ public class DbContext : IDisposable
 
         try
         {
-            const int maxOpenAttempts = 5;
-            SqliteConnection? connection = null;
-            for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
-            {
-                connection?.Dispose();
-                connection = new SqliteConnection(builder.ConnectionString);
-                try
-                {
-                    connection.Open();
-                    RegisterConnectionFunctions(connection);
-                    break;
-                }
-                catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxOpenAttempts)
-                {
-                    Thread.Sleep(50 * attempt);
-                }
-                catch
-                {
-                    connection.Dispose();
-                    throw;
-                }
-            }
-
-            _connection = connection ?? throw new InvalidOperationException("Failed to open SQLite connection.");
+            _connection = OpenSqliteConnectionWithRetry(
+                () => new SqliteConnection(builder.ConnectionString),
+                static connection => connection.Open(),
+                static milliseconds => System.Threading.Thread.Sleep(milliseconds));
+            RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -200,6 +195,36 @@ public class DbContext : IDisposable
 
     private static bool IsTransientBusyError(SqliteException ex) =>
         ex.SqliteErrorCode is 5 or 6;
+
+    internal static SqliteConnection OpenSqliteConnectionWithRetry(
+        Func<SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep = null,
+        int maxOpenAttempts = 5)
+    {
+        SqliteConnection? connection = null;
+        for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
+        {
+            connection?.Dispose();
+            connection = createConnection();
+            try
+            {
+                openConnection(connection);
+                return connection;
+            }
+            catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxOpenAttempts)
+            {
+                sleep?.Invoke(50 * attempt);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+        }
+
+        throw new InvalidOperationException("Failed to open SQLite connection.");
+    }
 
     // Detect whether a SQLite URI explicitly requests read-only semantics. Only URIs that
     // set `immutable=1` or `mode=ro` take the read-only escape hatch — plain `file:`
