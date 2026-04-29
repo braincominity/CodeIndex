@@ -26,6 +26,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_PreservesInterpolationCalls()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                return f"value = {run()}"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "run"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "use");
+    }
+
+    [Fact]
+    public void Extract_PythonFString_FormatSpecifier_PreservesFollowingCalls()
+    {
+        const string content = """
+            def real_call():
+                return 1
+
+            def caller(value):
+                msg = f"{value:#x} {real_call()}"
+                return msg
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "real_call"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
@@ -702,6 +743,78 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
+    {
+        // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
+        // indented raw string. Otherwise the scanner stays in raw-string mode, misses the
+        // following ordinary block comment, and treats its `/**` opener as XML doc.
+        // 回帰: BuildCSharpBlockCommentLines はインデント付き raw string の閉じ記号を認識する必要がある。
+        // さもないと raw-string mode に居座って後続の通常 block comment を見失い、その `/**` を XML doc と
+        // 誤認してしまう。
+        var content =
+            "namespace App;\n"
+            + "\n"
+            + "public class Demo\n"
+            + "{\n"
+            + "    public void M()\n"
+            + "    {\n"
+            + "        var raw = \"\"\"\n"
+            + "            ignored content\n"
+            + "            \"\"\";\n"
+            + "\n"
+            + "        /*\n"
+            + "         * /**\n"
+            + "         * <see cref=\"PhantomCall\"/>\n"
+            + "         */\n"
+            + "\n"
+            + "        RealCall();\n"
+            + "    }\n"
+            + "\n"
+            + "    private void RealCall() { }\n"
+            + "    private void PhantomCall() { }\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpRawStringCloseWithSemicolon_DoesNotMaskFollowingComment()
+    {
+        // Regression for issue #988: a raw string close line with a trailing semicolon
+        // must still end raw-string tracking so the following comment line is not
+        // treated as part of the raw-string body.
+        // issue #988 回帰: 末尾にセミコロンが付く raw string の閉じ行でも raw-string tracking を
+        // 終了し、その次のコメント行が raw-string 本体として扱われないこと。
+        var lines = new[]
+        {
+            "public class Demo",
+            "{",
+            "    public string Raw() => \"\"\"",
+            "        ignored content",
+            "        \"\"\";   ",
+            "",
+            "    /// <summary><see cref=\"Helper\"/></summary>",
+            "    public void Run() { }",
+            "}",
+        };
+
+        var buildMethod = typeof(ReferenceExtractor).GetMethod(
+            "BuildCSharpMultilineStringContentLines",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(buildMethod);
+
+        var insideStringContent = (bool[])buildMethod!.Invoke(null, new object[] { lines })!;
+
+        Assert.True(insideStringContent[3]);
+        Assert.True(insideStringContent[4]);
+        Assert.False(insideStringContent[6]);
     }
 
     [Fact]
@@ -9555,6 +9668,10 @@ public class ReferenceExtractorTests
             {
                 void Run(object value)
                 {
+                    if (value is Point(var x, var y))
+                    {
+                    }
+
                     switch (value)
                     {
                         case Point { X: 0, Y: 0 }:
@@ -9570,8 +9687,53 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #969: multiline positional `case` / `is` heads must behave the same as
+        // the same-line forms and keep the real `type_reference` without phantom calls.
+        // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
+        // 本物の `type_reference` を残し、phantom な call を出してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    if (value is
+                        Point(var x, var y))
+                    {
+                    }
+
+                    switch (value)
+                    {
+                        case
+                            Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
         Assert.Equal(2, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -9974,6 +10136,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /** <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /// <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideFieldInitializerLambdaAsDocComment()
     {
         const string content = """
@@ -10136,6 +10344,56 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /// <summary><see cref="Foo"/></summary>
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /** <summary><see cref="Foo"/></summary> */
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
     {
         const string content = """
@@ -10151,8 +10409,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10171,8 +10428,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10191,8 +10447,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
