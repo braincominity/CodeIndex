@@ -8940,8 +8940,96 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.False(json.TryGetProperty("reference_kind", out _));
+            // #501: the scalar `reference_kind` is retained for back-compat, and for
+            // single-kind rows it matches the only kind in `reference_kinds`.
+            // #501: scalar な `reference_kind` は後方互換のため残しており、single-kind
+            // 行では `reference_kinds` の唯一の kind と一致する。
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            // #501: every grouped caller row carries `reference_kinds` +
+            // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
+            // clients never have to guess whether the field was omitted vs empty.
+            // #501: グループ化された caller 行は single-kind でも必ず `reference_kinds` /
+            // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
+            // 「空配列」を判別せずに済む。
+            var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(new[] { "subscribe" }, kinds);
+            Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_SurfacesMixedReferenceKindsWhenContainerMixesCallAndSubscribe()
+    {
+        // #501: a single container that reaches the same callee via both `call` and
+        // `subscribe` must not collapse to a lone summary label. The grouped row
+        // must expose every distinct kind in JSON (`reference_kinds` /
+        // `has_mixed_reference_kinds`) and the human renderer must join them with
+        // `+` so operators see the mixed semantics at a glance.
+        // #501: 同一コンテナが同じ callee に対して `call` と `subscribe` の両方を持つ場合、
+        // グループ化された caller 行は要約ラベル 1 つに潰さず、JSON では `reference_kinds`
+        // と `has_mixed_reference_kinds` で distinct kind をすべて返し、人間向け出力は
+        // `+` で連結して混在していることが一目で分かるようにする。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_mixed_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/MixedOwner.cs", "csharp",
+                """
+                using System;
+
+                public class MixedOwner
+                {
+                    public event EventHandler? Changed;
+
+                    public void SetupAndFire()
+                    {
+                        Changed += OnChanged;
+                        Changed(this, EventArgs.Empty);
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal("SetupAndFire", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+            var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(new[] { "call", "subscribe" }, kinds);
+            // #501: the scalar `reference_kind` is kept for back-compat and reports the
+            // preferred summary kind (`instantiate` > `subscribe` > `MIN(call)`);
+            // callers who need the full picture read `reference_kinds` +
+            // `has_mixed_reference_kinds` instead.
+            // #501: scalar `reference_kind` は後方互換で残し、preferred 順
+            // （`instantiate` > `subscribe` > `MIN(call)`）の要約 kind を返す。混在時の
+            // 全容は `reference_kinds` / `has_mixed_reference_kinds` を参照する。
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("call+subscribe", humanStdout);
+            Assert.Contains("SetupAndFire", humanStdout);
+            Assert.Contains("-> Changed (2 refs)", humanStdout);
+            Assert.Contains("(1 callers in 1 files)", humanStderr);
         }
         finally
         {

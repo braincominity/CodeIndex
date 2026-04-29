@@ -153,8 +153,16 @@ public class CallerResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
-    [JsonIgnore]
+    // Summary preferred reference_kind for the grouped row. Grouped caller rows can
+    // collapse multiple underlying kinds into one label, so JSON/MCP consumers that
+    // need the full picture should read ReferenceKinds + HasMixedReferenceKinds as
+    // well (issue #501). The scalar is kept for back-compat with existing consumers.
+    // グループ化された行は複数の reference_kind を 1 ラベルに畳むため、
+    // JSON/MCP で全体を把握するには ReferenceKinds と HasMixedReferenceKinds を
+    // 併読する（issue #501）。scalar は既存 consumer の後方互換のため残す。
     public string ReferenceKind { get; set; } = string.Empty;
+    public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
+    public bool HasMixedReferenceKinds { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -167,6 +175,8 @@ public class CalleeResult
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
     public string ReferenceKind { get; set; } = string.Empty;
+    public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
+    public bool HasMixedReferenceKinds { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }

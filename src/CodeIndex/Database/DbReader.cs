@@ -185,6 +185,39 @@ public partial class DbReader
     private static string GetPathBucketOrderSql(string pathSql)
         => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
 
+    // Parse a GROUP_CONCAT(DISTINCT reference_kind) string into a sorted, deduplicated
+    // list. Falls back to the primary/summary kind if the aggregate column is null or
+    // empty so downstream consumers always see at least one entry (issue #501).
+    // GROUP_CONCAT(DISTINCT reference_kind) を安定ソート済みの重複排除済みリストに
+    // パースする。aggregate 列が null / 空の場合は代表 kind をフォールバックとして
+    // 返し、消費側が常に 1 要素以上を得られるようにする (issue #501)。
+    private static IReadOnlyList<string> ParseDistinctReferenceKinds(string? aggregate, string primaryKind)
+    {
+        if (string.IsNullOrEmpty(aggregate))
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        // Fast path: a single-kind row (the overwhelming common case) has no
+        // comma in the aggregate, so skip the SortedSet / split allocation.
+        // Fast path: 単一 kind の行（大多数）では aggregate にカンマが無いため、
+        // SortedSet / split のアロケーションを省略する。
+        if (aggregate.IndexOf(',') < 0)
+        {
+            var only = aggregate.Trim();
+            if (only.Length > 0)
+                return new[] { only };
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        }
+        var set = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var raw in aggregate.Split(','))
+        {
+            var trimmed = raw.Trim();
+            if (trimmed.Length > 0)
+                set.Add(trimmed);
+        }
+        if (set.Count == 0)
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        return set.ToArray();
+    }
+
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
@@ -3116,7 +3149,8 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE " + BuildCallerContainerPredicate("f", "r");
@@ -3157,7 +3191,8 @@ public partial class DbReader
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count
+                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -3192,6 +3227,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -3199,7 +3236,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                ReferenceKind = reader.GetString(5),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -3361,7 +3400,8 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
@@ -3397,7 +3437,8 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         }
@@ -3435,6 +3476,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -3442,7 +3485,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                ReferenceKind = reader.GetString(5),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
