@@ -7812,6 +7812,7 @@ public class SymbolExtractorTests
             {
                 public System.Threading.Tasks.Task<(int, string)> MultiAsync() => System.Threading.Tasks.Task.FromResult((1, "x"));
                 public System.Collections.Generic.Dictionary<string, (int x, int y)> Coords() => new();
+                public System.Collections.Generic.Dictionary<string, (int x, int y)> CoordsProperty { get; } = new();
                 public System.Collections.Generic.IEnumerable<(string Key, int Value)> Items() => [];
                 System.Collections.Generic.List<(int, int)> IFoo.GetList() => [];
                 public System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
@@ -7826,10 +7827,13 @@ public class SymbolExtractorTests
         Assert.Equal("System.Threading.Tasks.Task<(int,string)>", multiAsync.ReturnType);
 
         var coords = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Coords"));
-        Assert.Equal("System.Collections.Generic.Dictionary<string,(intx,inty)>", coords.ReturnType);
+        Assert.Equal("System.Collections.Generic.Dictionary<string,(int x,int y)>", coords.ReturnType);
+
+        var coordsProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "CoordsProperty"));
+        Assert.Equal("System.Collections.Generic.Dictionary<string,(int x,int y)>", coordsProperty.ReturnType);
 
         var items = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Items"));
-        Assert.Equal("System.Collections.Generic.IEnumerable<(stringKey,intValue)>", items.ReturnType);
+        Assert.Equal("System.Collections.Generic.IEnumerable<(string Key,int Value)>", items.ReturnType);
 
         var getListDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "GetList").ToList();
         Assert.Equal(2, getListDeclarations.Count);
@@ -7837,22 +7841,22 @@ public class SymbolExtractorTests
         Assert.Contains(getListDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
 
         var nestedAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NestedAsync"));
-        Assert.Equal("System.Threading.Tasks.Task<((intA,intB),stringName)>", nestedAsync.ReturnType);
+        Assert.Equal("System.Threading.Tasks.Task<((int A,int B),string Name)>", nestedAsync.ReturnType);
         Assert.Contains("System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync()", nestedAsync.Signature);
 
         var nestedDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "Nested").ToList();
         Assert.Equal(2, nestedDeclarations.Count);
-        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
-        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<((int A,int B),string Name)>");
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<((int A,int B),string Name)>");
 
         var tooDeepAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "TooDeepAsync"));
-        Assert.Equal("System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>", tooDeepAsync.ReturnType);
+        Assert.Equal("System.Threading.Tasks.Task<(((int A,int B),int C),string Name)>", tooDeepAsync.ReturnType);
         Assert.Contains("System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeepAsync()", tooDeepAsync.Signature);
 
         var tooDeepDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "TooDeep").ToList();
         Assert.Equal(2, tooDeepDeclarations.Count);
-        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
-        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<(((int A,int B),int C),string Name)>");
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<(((int A,int B),int C),string Name)>");
     }
 
     [Fact]
