@@ -16928,6 +16928,8 @@ public static class SymbolExtractor
                     i++;
                     continue;
                 }
+                if (tagHeadConsumed && depth <= 0 && (c == '<' || c == '>'))
+                    return true;
                 if (c == '(' || c == '[' || c == '<' || c == '{')
                 {
                     depth++;
@@ -16961,7 +16963,7 @@ public static class SymbolExtractor
 
     private static bool IsJsTsStyledTagHeadBreakingOperator(char c) => c switch
     {
-        '+' or '-' or '*' or '%' or '?' or '!' or '&' or '|' or '^' or '=' or ',' or ':' => true,
+        '+' or '-' or '*' or '%' or '?' or '!' or '&' or '|' or '^' or '=' or ',' or ':' or '<' or '>' or '/' => true,
         _ => false,
     };
 
