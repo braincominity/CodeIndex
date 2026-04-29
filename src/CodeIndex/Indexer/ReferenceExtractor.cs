@@ -1050,6 +1050,17 @@ public static class ReferenceExtractor
             var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
                 ? namesOnLine
                 : null;
+            Dictionary<string, int>? definitionNameIndices = null;
+            if (definitionNames != null && language != "sql")
+            {
+                definitionNameIndices = new Dictionary<string, int>(definitionNamesComparer);
+                foreach (var definitionName in definitionNames)
+                {
+                    var definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
+                    if (definitionIndex >= 0)
+                        definitionNameIndices[definitionName] = definitionIndex;
+                }
+            }
             List<SqlDefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
@@ -1152,7 +1163,9 @@ public static class ReferenceExtractor
                   }
 
                   if (language != "sql")
-                      return definitionNames.Contains(resolvedName);
+                      return definitionNameIndices != null
+                          && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
+                          && callIndex == definitionIndex;
 
                 if (sqlDefinitionLeafSpans == null)
                     return false;
