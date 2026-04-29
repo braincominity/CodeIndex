@@ -16101,6 +16101,63 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpNestedLambdaScopedDeclarationPatternVariableDoesNotLeakIntoOuterIfBody()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_nested_lambda_scoped_declaration_pattern_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace RealNs;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public RealNs.Status Read(object[] values)
+                    {
+                        if (values.Any(value => value is Holder RealNs && values.Any(other => other is Holder Other)))
+                        {
+                            return RealNs.Status.Ready;
+                        }
+
+                        return RealNs.Status.Ready;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var first = ParseJsonOutput(stdout);
+            var lines = ParseJsonLines(stdout)
+                .Select(document => document.RootElement.GetProperty("line").GetInt32())
+                .OrderBy(line => line)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", first.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal([19, 22], lines);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpSwitchCaseDeclarationPatternVariableDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_case_declaration_pattern_collision");

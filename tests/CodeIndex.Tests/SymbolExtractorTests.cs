@@ -10745,6 +10745,53 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsEnumEntries()
+    {
+        var content = """
+            enum class Direction {
+                NORTH,
+                SOUTH,
+                EAST,
+                WEST
+            }
+
+            enum class HttpStatus(val code: Int) {
+                OK(200),
+                NOT_FOUND(404),
+                SERVER_ERROR(500);
+
+                fun isError(): Boolean = code >= 400
+            }
+
+            enum class Color(val rgb: Int) {
+                RED(0xFF0000) {
+                    override fun display() = "red"
+                },
+                GREEN(0x00FF00) {
+                    override fun display() = "green"
+                };
+
+                abstract fun display(): String
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NORTH");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SOUTH");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "EAST");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WEST");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "OK");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NOT_FOUND");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SERVER_ERROR");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "RED");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isError" && s.ContainerKind == "enum" && s.ContainerName == "HttpStatus");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display" && s.Line == 18);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display" && s.Line == 21);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display" && s.Line == 24 && s.ReturnType == "String");
+    }
+
+    [Fact]
     public void Extract_Kotlin_AnonymousCompanionDefaultsToCompanionName()
     {
         var content = """
