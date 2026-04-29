@@ -934,11 +934,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
         return WithDb(options.DbPath, reader =>
         {
             if (options.FocusLine.HasValue)
             {
-                var file = reader.GetFileByPath(options.Query);
+                var file = reader.GetFileByPath(filePath);
                 if (file != null)
                 {
                     var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
@@ -953,7 +954,7 @@ public static class QueryCommandRunner
             if (options.FocusColumn.HasValue)
             {
                 var focusLineLength = reader.GetExcerptFocusLineLength(
-                    options.Query,
+                    filePath,
                     options.StartLine.Value,
                     endLine,
                     options.ContextBefore,
@@ -967,7 +968,7 @@ public static class QueryCommandRunner
             }
 
             var excerpt = reader.GetExcerpt(
-                options.Query,
+                filePath,
                 options.StartLine.Value,
                 endLine,
                 options.ContextBefore,
@@ -1418,7 +1419,6 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = FileIndexer.NormalizePathSeparators(cmdArgs[0]);
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -1433,6 +1433,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
 
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
         return WithDb(options.DbPath, reader =>
         {
             var outline = reader.GetOutline(filePath);

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -46,6 +47,34 @@ public static class DbPathResolver
             return Path.GetFullPath(indexedProjectRoot);
 
         return null;
+    }
+
+    /// <summary>
+    /// Normalize a file query path against the indexed project root when the DB exposes one.
+    /// If the caller supplied an absolute path under the indexed root, convert it to the
+    /// stored index-relative path before lookup. Relative paths pass through unchanged.
+    /// DB が indexed project root を持つとき、ファイル query path をその root に合わせて正規化する。
+    /// 絶対パスが indexed root 配下なら、lookup 前に保存済みの相対パスへ変換する。
+    /// </summary>
+    public static string ResolveQueryFilePath(string dbPath, string filePath, bool dbPathExplicit = false)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return filePath;
+
+        var normalizedFilePath = FileIndexer.NormalizePathSeparators(filePath);
+        if (!Path.IsPathRooted(filePath))
+            return normalizedFilePath;
+
+        var projectRoot = ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return normalizedFilePath;
+
+        var fullProjectRoot = Path.GetFullPath(projectRoot);
+        var fullFilePath = Path.GetFullPath(filePath);
+        if (!IsUnderDirectory(fullProjectRoot, fullFilePath))
+            return normalizedFilePath;
+
+        return FileIndexer.NormalizePathSeparators(Path.GetRelativePath(fullProjectRoot, fullFilePath));
     }
 
     /// <summary>
@@ -223,6 +252,23 @@ public static class DbPathResolver
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         return string.Equals(left, right, comparison);
+    }
+
+    private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
+    {
+        if (PathsEqual(parentDirectory, candidatePath))
+            return true;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var trimmedParent = parentDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parentWithSeparator = trimmedParent
+            + Path.DirectorySeparatorChar;
+        var parentWithAltSeparator = trimmedParent
+            + Path.AltDirectorySeparatorChar;
+        return candidatePath.StartsWith(parentWithSeparator, comparison)
+            || candidatePath.StartsWith(parentWithAltSeparator, comparison);
     }
 
     private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
