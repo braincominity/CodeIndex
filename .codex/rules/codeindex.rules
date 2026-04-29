@@ -34,6 +34,13 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["fdfind"],
+    decision = "forbidden",
+    justification = "Use the locally built cdidx.dll instead of fd for repository discovery.",
+    match = ["fdfind SymbolExtractor"],
+)
+
+prefix_rule(
     pattern = ["locate"],
     decision = "forbidden",
     justification = "Use the locally built cdidx.dll instead of locate for repository discovery.",
@@ -41,10 +48,80 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["mlocate"],
+    decision = "forbidden",
+    justification = "Use the locally built cdidx.dll instead of locate for repository discovery.",
+    match = ["mlocate SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["mdfind"],
+    decision = "forbidden",
+    justification = "Use the locally built cdidx.dll instead of locate for repository discovery.",
+    match = ["mdfind SymbolExtractor"],
+)
+
+prefix_rule(
     pattern = ["cdidx"],
     decision = "forbidden",
     justification = "Global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll.",
     match = ["cdidx search Foo"],
+)
+
+prefix_rule(
+    pattern = ["egrep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["egrep SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["fgrep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["fgrep SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["zgrep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["zgrep SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["rgrep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["rgrep SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["ripgrep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["ripgrep SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["ag"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["ag SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["ack"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["ack SymbolExtractor"],
+)
+
+prefix_rule(
+    pattern = ["ack-grep"],
+    decision = "forbidden",
+    justification = "Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead of grep-like tools for CodeIndex dogfooding.",
+    match = ["ack-grep SymbolExtractor"],
 )
 
 prefix_rule(
@@ -97,6 +174,27 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["scp"],
+    decision = "forbidden",
+    justification = "Remote shell and file transfer commands are blocked.",
+    match = ["scp file example.com:/tmp/"],
+)
+
+prefix_rule(
+    pattern = ["rsync"],
+    decision = "forbidden",
+    justification = "Remote shell and file transfer commands are blocked.",
+    match = ["rsync -av . example.com:/tmp/"],
+)
+
+prefix_rule(
+    pattern = ["rclone"],
+    decision = "forbidden",
+    justification = "Remote shell and file transfer commands are blocked.",
+    match = ["rclone copy . remote:bucket"],
+)
+
+prefix_rule(
     pattern = ["git", "reset", "--hard"],
     decision = "forbidden",
     justification = "History-rewriting Git operations are blocked.",
@@ -146,6 +244,76 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["npm", "exec"],
+    decision = "forbidden",
+    justification = "Ephemeral package execution is blocked.",
+    match = ["npm exec create-vite@latest"],
+)
+
+prefix_rule(
+    pattern = ["yarn", "dlx"],
+    decision = "forbidden",
+    justification = "Ephemeral package execution is blocked.",
+    match = ["yarn dlx create-vite"],
+)
+
+prefix_rule(
+    pattern = ["pnpm", "dlx"],
+    decision = "forbidden",
+    justification = "Ephemeral package execution is blocked.",
+    match = ["pnpm dlx create-vite"],
+)
+
+prefix_rule(
+    pattern = ["npm", "publish"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["npm publish"],
+)
+
+prefix_rule(
+    pattern = ["yarn", "publish"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["yarn publish"],
+)
+
+prefix_rule(
+    pattern = ["pnpm", "publish"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["pnpm publish"],
+)
+
+prefix_rule(
+    pattern = ["dotnet", "nuget", "push"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["dotnet nuget push pkg.nupkg --source nuget.org"],
+)
+
+prefix_rule(
+    pattern = ["nuget", "push"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["nuget push pkg.nupkg"],
+)
+
+prefix_rule(
+    pattern = ["npm", "login"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["npm login"],
+)
+
+prefix_rule(
+    pattern = ["npm", "adduser"],
+    decision = "forbidden",
+    justification = "Package publishing and registry login are blocked.",
+    match = ["npm adduser"],
+)
+
+prefix_rule(
     pattern = ["terraform", "apply"],
     decision = "forbidden",
     justification = "Terraform mutation commands are blocked.",
@@ -171,6 +339,27 @@ prefix_rule(
     decision = "forbidden",
     justification = "Kubernetes mutation commands are blocked.",
     match = ["kubectl delete pod demo"],
+)
+
+prefix_rule(
+    pattern = ["helm", "install"],
+    decision = "forbidden",
+    justification = "Infrastructure mutation commands are blocked.",
+    match = ["helm install demo chart"],
+)
+
+prefix_rule(
+    pattern = ["helm", "upgrade"],
+    decision = "forbidden",
+    justification = "Infrastructure mutation commands are blocked.",
+    match = ["helm upgrade demo chart"],
+)
+
+prefix_rule(
+    pattern = ["helm", "uninstall"],
+    decision = "forbidden",
+    justification = "Infrastructure mutation commands are blocked.",
+    match = ["helm uninstall demo"],
 )
 
 prefix_rule(
@@ -269,4 +458,25 @@ prefix_rule(
     decision = "forbidden",
     justification = "High-risk GitHub CLI operations are blocked.",
     match = ["gh pr merge 123"],
+)
+
+prefix_rule(
+    pattern = ["aws"],
+    decision = "forbidden",
+    justification = "Cloud CLI operations are blocked.",
+    match = ["aws s3 ls"],
+)
+
+prefix_rule(
+    pattern = ["gcloud"],
+    decision = "forbidden",
+    justification = "Cloud CLI operations are blocked.",
+    match = ["gcloud compute instances list"],
+)
+
+prefix_rule(
+    pattern = ["az"],
+    decision = "forbidden",
+    justification = "Cloud CLI operations are blocked.",
+    match = ["az account show"],
 )
