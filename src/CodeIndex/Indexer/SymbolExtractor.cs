@@ -15496,6 +15496,11 @@ public static class SymbolExtractor
 
     // Collapse only the whitespace that sits between generic type-argument angle brackets
     // so patterns like `Dictionary<string, int>` normalize to `Dictionary<string,int>`.
+    // Preserve the separator space between a tuple element type and its element name so
+    // `Dictionary<string, (int x, int y)>` still normalizes to a readable tuple shape
+    // instead of merging the tokens into `intx` / `inty`.
+    // tuple 要素の型と要素名の間にある区切り空白だけは残し、
+    // `Dictionary<string, (int x, int y)>` が `intx` / `inty` に潰れないようにする。
     // Also emits a column-mapping array so callers can translate a column in the collapsed
     // string back to the corresponding column in the raw source. `collapsedToRaw[c]` is
     // the raw index of the character at collapsed column `c`; the final element
@@ -15519,6 +15524,7 @@ public static class SymbolExtractor
 
         var builder = new StringBuilder(line.Length);
         var angleDepth = 0;
+        var tupleDepth = 0;
         var map = new int[line.Length + 1];
         var mapLength = 0;
         var collapsed = false;
@@ -15542,9 +15548,39 @@ public static class SymbolExtractor
                 continue;
             }
 
+            if (angleDepth > 0 && ch == '(')
+            {
+                tupleDepth++;
+                map[mapLength++] = i;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (angleDepth > 0 && ch == ')' && tupleDepth > 0)
+            {
+                tupleDepth--;
+                map[mapLength++] = i;
+                builder.Append(ch);
+                continue;
+            }
+
             if (angleDepth > 0 && char.IsWhiteSpace(ch))
             {
                 collapsed = true;
+                int whitespaceEnd = i + 1;
+                while (whitespaceEnd < line.Length && char.IsWhiteSpace(line[whitespaceEnd]))
+                    whitespaceEnd++;
+
+                if (tupleDepth > 0 && ShouldPreserveCSharpTupleElementWhitespace(line, i, whitespaceEnd))
+                {
+                    if (builder.Length == 0 || builder[builder.Length - 1] != ' ')
+                    {
+                        map[mapLength++] = i;
+                        builder.Append(' ');
+                    }
+                }
+
+                i = whitespaceEnd - 1;
                 continue;
             }
 
@@ -15563,6 +15599,37 @@ public static class SymbolExtractor
             Array.Resize(ref map, mapLength + 1);
         collapsedToRaw = map;
         return builder.ToString();
+    }
+
+    private static bool ShouldPreserveCSharpTupleElementWhitespace(string line, int whitespaceStart, int whitespaceEnd)
+    {
+        int previous = whitespaceStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+            previous--;
+
+        if (previous < 0)
+            return false;
+
+        int next = whitespaceEnd;
+        while (next < line.Length && char.IsWhiteSpace(line[next]))
+            next++;
+
+        if (next >= line.Length || !IsCSharpIdentifierStart(line[next]))
+            return false;
+
+        return IsCSharpTupleElementTypeTokenEnd(line[previous]);
+    }
+
+    private static bool IsCSharpTupleElementTypeTokenEnd(char ch)
+    {
+        return char.IsLetterOrDigit(ch)
+            || ch == '_'
+            || ch == '@'
+            || ch == ')'
+            || ch == ']'
+            || ch == '>'
+            || ch == '?'
+            || ch == '*';
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
