@@ -446,7 +446,6 @@ public class OutlineSymbol
 {
     public string Kind { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public int Depth { get; set; }
     public int Line { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }

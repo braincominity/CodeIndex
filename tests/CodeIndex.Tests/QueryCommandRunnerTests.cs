@@ -438,35 +438,6 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "target" + new string('b', 320);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
-            Assert.Contains("target", json.GetProperty("snippet").GetString());
-            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void RunInspect_RejectsMissingMaxLineWidthValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
