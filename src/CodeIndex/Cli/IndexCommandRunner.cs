@@ -1532,6 +1532,7 @@ public static class IndexCommandRunner
 
         var interactiveIndexSpinner = !options.Json && !Console.IsOutputRedirected;
         var redirectedIndexingMessagePrinted = false;
+        var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         void StartIndexSpinnerIfNeeded()
@@ -1553,7 +1554,7 @@ public static class IndexCommandRunner
 
         void ResumeIndexSpinnerAfterConsoleWrite()
         {
-            if (!interactiveIndexSpinner || processed >= files.Count)
+            if (!interactiveIndexSpinner || processed >= files.Count || indexProgressVisible)
                 return;
 
             StartIndexSpinnerIfNeeded();
@@ -1562,6 +1563,9 @@ public static class IndexCommandRunner
         void EnsureIndexingActivityVisible()
         {
             if (options.Json)
+                return;
+
+            if (indexProgressVisible)
                 return;
 
             if (interactiveIndexSpinner)
@@ -1578,6 +1582,13 @@ public static class IndexCommandRunner
         }
 
         EnsureIndexingActivityVisible();
+
+        if (!options.Json)
+        {
+            PauseIndexSpinnerForConsoleWrite();
+            indexProgressVisible = true;
+            ConsoleUi.PrintProgress(0, files.Count);
+        }
 
         foreach (var filePath in files)
         {
