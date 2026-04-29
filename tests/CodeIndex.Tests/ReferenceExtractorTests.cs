@@ -67,6 +67,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
+    {
+        const string content = """
+            :root {
+                --primary-color: #336699;
+                --spacing-unit: 8px;
+            }
+
+            .card {
+                color: var(--primary-color);
+                padding: var(--spacing-unit);
+                background: url('images/bg.png');
+            }
+
+            .btn-primary {
+                background: var(--primary-color);
+            }
+
+            .container .card {
+                margin: calc(var(--spacing-unit) * 2);
+            }
+
+            @media screen { .inline-media { color: red; } }
+
+            @keyframes fade-in {
+                from { opacity: 0; }
+                to   { opacity: 1; }
+            }
+
+            .modal {
+                animation-name: fade-in;
+                animation-duration: 0.3s;
+                animation: fade-in 0.3s ease-in;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary-color"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == ".card"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "fade-in"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
@@ -230,6 +284,51 @@ public class ReferenceExtractorTests
             reference.SymbolName == "class"
             && reference.ReferenceKind == "instantiate"));
         Assert.DoesNotContain(references, reference => reference.SymbolName.StartsWith("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSS_ScssVariableAndExtendReferences_AreIndexed()
+    {
+        const string content = """
+            $primary: #3366cc;
+            $spacing-base: 8px;
+
+            @mixin rounded($radius) {
+              border-radius: $radius;
+            }
+
+            %button-base {
+              padding: 4px;
+            }
+
+            .button {
+              color: $primary;
+              padding: $spacing-base * 2;
+              @include rounded(4px);
+            }
+
+            .card {
+              @extend %button-base;
+              border: 1px solid $primary;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "%button-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "radius"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "rounded"));
     }
 
     [Fact]
@@ -660,9 +759,10 @@ public class ReferenceExtractorTests
     public void Extract_CsharpMultiLineVerbatimString_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #288: call-looking identifiers inside a multi-line
-        // @"..." verbatim string body must not be captured as references.
-        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子は
-        // 参照として抽出してはならない。
+        // @"..." verbatim string body must not be captured as references, including
+        // constructor-style initializer text that would otherwise look like instantiate.
+        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子や
+        // instantiate っぽい構文は参照として抽出してはならない。
         const string content = """
             public class FixtureHost
             {
@@ -670,6 +770,7 @@ public class ReferenceExtractorTests
                 {
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 };
                         WHERE x = BadCall()
                     ";
                     RealCall();
@@ -677,6 +778,7 @@ public class ReferenceExtractorTests
 
                 private void RealCall() { }
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """;
 
@@ -684,6 +786,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
@@ -777,6 +880,7 @@ public class ReferenceExtractorTests
 
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 }
                         WHERE x = BadCall()
                     ";
 
@@ -788,6 +892,7 @@ public class ReferenceExtractorTests
                 private string AnotherCall(string s) => s;
                 private int PhantomCall(int x) => x;
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """";
 
@@ -798,6 +903,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "AnotherCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
@@ -14896,6 +15002,128 @@ public class ReferenceExtractorTests
         var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
         Assert.Equal("call", html.ReferenceKind);
         Assert.Equal("render", html.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptJsxComponentOpenTags_CaptureCapitalizedElementUsages()
+    {
+        const string content = """
+            function MyButton({ label }: { label: string }) {
+                return <button>{label}</button>;
+            }
+
+            function Header() {
+                return <h1>hi</h1>;
+            }
+
+            const UI = { Card: ({ children }: any) => <div>{children}</div> };
+
+            export default function App() {
+                const n = 0;
+                return (
+                    <div>
+                        <Header />
+                        <MyButton label="click" />
+                        <MyButton label={`n=${n}`} />
+                        <UI.Card>
+                            <MyButton label="nested" />
+                        </UI.Card>
+                        <MyButton
+                            label="multiline"
+                        />
+                        <MyButton label={String(n)} />
+                    </div>
+                );
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "typescript",
+            content,
+            Array.Empty<CodeIndex.Models.SymbolRecord>(),
+            path: "App.tsx");
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "MyButton"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<MyButton", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "Header"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<Header", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "UI"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<UI.Card", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "Card"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<UI.Card", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "String"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("String(n)", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName is "button" or "div" or "h1");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptJsxComponentOpenTags_AreIgnoredOutsideJsxFiles()
+    {
+        const string content = """
+            function MyButton({ label }: { label: string }) {
+                return <button>{label}</button>;
+            }
+
+            function Header() {
+                return <h1>hi</h1>;
+            }
+
+            const UI = { Card: ({ children }: any) => <div>{children}</div> };
+
+            export default function App() {
+                const n = 0;
+                return (
+                    <div>
+                        <Header />
+                        <MyButton label="click" />
+                        <MyButton label={`n=${n}`} />
+                        <UI.Card>
+                            <MyButton label="nested" />
+                        </UI.Card>
+                        <MyButton
+                            label="multiline"
+                        />
+                        <MyButton label={String(n)} />
+                    </div>
+                );
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "typescript",
+            content,
+            Array.Empty<CodeIndex.Models.SymbolRecord>(),
+            path: "App.ts");
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "MyButton"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Header"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "UI"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Card"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "call");
     }
 
     [Fact]

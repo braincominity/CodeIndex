@@ -1655,7 +1655,7 @@ public partial class McpServer
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
