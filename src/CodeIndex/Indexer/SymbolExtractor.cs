@@ -1849,7 +1849,14 @@ public static class SymbolExtractor
                     }
 
                     if (lang == "csharp"
-                        && pattern.BodyStyle == BodyStyle.None
+                        && pattern.Kind == "function"
+                        && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
+                    {
+                        lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                        continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.BodyStyle == BodyStyle.None
                         && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
                         && csharpInsideTypeBody != null
                         && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
@@ -1891,16 +1898,23 @@ public static class SymbolExtractor
                         continue;
                     }
                     var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
-                    if (lang == "csharp"
-                        && pattern.ReturnTypeGroup != null
-                        && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
-                    {
-                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
-                        continue;
-                    }
-                    if (lang == "csharp"
-                        && pattern.Kind == "property"
-                        && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
+                      if (lang == "csharp"
+                          && pattern.ReturnTypeGroup != null
+                          && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
+                      {
+                          lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                          continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.Kind == "function"
+                          && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
+                      {
+                          lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                          continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.Kind == "property"
+                          && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
                     {
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
@@ -14453,15 +14467,41 @@ public static class SymbolExtractor
         return StartsWithCSharpEventAccessorKeyword(text, cursor);
     }
 
-    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
-    {
-        if (startColumn < 0 || startColumn >= matchLine.Length)
+      private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+      {
+          if (startColumn < 0 || startColumn >= matchLine.Length)
+              return false;
+
+          var remaining = matchLine[startColumn..];
+          return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
+              && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                  || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+      }
+
+      private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
+      {
+          return false;
+        if (string.IsNullOrEmpty(token) || exclusiveEnd <= 0)
             return false;
 
-        var remaining = matchLine[startColumn..];
-        return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
-                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+        var searchStart = 0;
+        while (searchStart < exclusiveEnd)
+        {
+            var tokenIndex = text.IndexOf(token, searchStart, exclusiveEnd - searchStart, StringComparison.Ordinal);
+            if (tokenIndex < 0)
+                return false;
+
+            var tokenEnd = tokenIndex + token.Length;
+            if ((tokenIndex == 0 || !char.IsLetterOrDigit(text[tokenIndex - 1]) && text[tokenIndex - 1] != '_')
+                && (tokenEnd >= text.Length || !char.IsLetterOrDigit(text[tokenEnd]) && text[tokenEnd] != '_'))
+            {
+                return true;
+            }
+
+            searchStart = tokenIndex + 1;
+        }
+
+        return false;
     }
 
     private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)
