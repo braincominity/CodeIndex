@@ -640,7 +640,7 @@ The database reflects the working tree at the time of the last index. After swit
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | -- |
-| PowerShell | `.ps1`, `.psm1`, `.psd1` | function/filter (scope prefixes), configuration, workflow, class, enum, Import-Module, using module/namespace/assembly |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` | function/filter (scope prefixes), configuration, workflow, class constructors/methods/properties, enum values, Import-Module, using module/namespace/assembly |
 | Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |

@@ -542,6 +542,7 @@ public static class SymbolExtractor
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
@@ -603,7 +604,7 @@ public static class SymbolExtractor
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -956,7 +957,7 @@ public static class SymbolExtractor
             new("struct",   new Regex(@"^type\s+(?<name>\w+)\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^type\s+(?<name>\w+)\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
             // Type alias (type Name = OtherType or type Name OtherType) / 型エイリアス
-            new("class",    new Regex(@"^type\s+(?<name>\w+)\s+[=\w]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^type\s+(?<name>\w+)\s+[=\w]", RegexOptions.Compiled), BodyStyle.None),
             // Const declaration inside const block / const ブロック内の定数宣言
             new("function", new Regex(@"^\s+(?<name>[A-Z]\w*)\s*=\s*", RegexOptions.Compiled), BodyStyle.None),
             // Package-level var / パッケージレベル変数
@@ -978,7 +979,7 @@ public static class SymbolExtractor
             // mod / モジュール
             new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // type alias / 型エイリアス
-            new("class",    new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["java"] =
@@ -1087,7 +1088,7 @@ public static class SymbolExtractor
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*typealias\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*typealias\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["objc"] =
@@ -1102,7 +1103,11 @@ public static class SymbolExtractor
         ["fsharp"] =
         [
             new("function", new Regex(@"^\s*let\s+(?:rec\s+)?(?:(?:private|internal)\s+)?(?<name>\w+)\s+(?:\w|\()", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
+            new("struct",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*(?!\{)(?!\|)(?!class\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*module\s+(?:(?:private|internal)\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*open\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -1124,6 +1129,7 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?<visibility>private|protected)?\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["haskell"] =
@@ -1345,10 +1351,26 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*workflow\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Function/filter declarations with optional scope prefixes / scope プレフィックス付き関数・フィルタ宣言
             new("function", new Regex(@"^\s*(?:function|filter)\s+(?:(?:script|global|local|private):)?(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // PowerShell class members / PowerShell クラスメンバー
+            // Return-typed methods and modifiers such as `static` / `hidden` / `static hidden`
+            // stay on the function path.
+            // 戻り値付き method と `static` / `hidden` / `static hidden` のような修飾子は
+            // function パスで扱う。
+            new("function", new Regex(@"^\s*(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s+)+(?<name>[\w-]+)\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Constructors are bare class-name declarations inside a class body, so the
+            // PascalCase gate keeps most cmdlet-style calls out while still catching the
+            // canonical PS5+ shape.
+            // コンストラクタは class 本体内に置かれる bare な class-name 宣言なので、
+            // PascalCase の条件で cmdlet 風の呼び出しを大半弾きつつ、PS5+ の標準形を拾う。
+            new("function", new Regex(@"^\s*(?<name>[A-Z]\w*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            // Attributes and typed properties / 属性付きプロパティと型付きプロパティ
+            new("property", new Regex(@"^\s*(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s*)+\$(?<name>\w+)\s*(?:=|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Class (PowerShell 5+) / クラス (PowerShell 5+)
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Enum (PowerShell 5+) / enum (PowerShell 5+)
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Enum values / enum 値
+            new("enum",     new Regex(@"^\s{2,}(?<name>[\w-]+)\s*(?:=\s*[^#\r\n]+)?\s*$", RegexOptions.Compiled), BodyStyle.None),
             // Import-Module / using module / using namespace / using assembly / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+(?:module|namespace|assembly))\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
@@ -2000,7 +2022,11 @@ public static class SymbolExtractor
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
                         : structuralLines;
-                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                    var (endLine, bodyStartLine, bodyEndLine) = lang is "kotlin" or "scala"
+                        && pattern.Kind == "function"
+                        && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
+                            ? (i + 1, null, null)
+                            : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     var startLine = i + 1;
                     if (lang == "csharp"
                         && pattern.Kind == "property"
@@ -10644,6 +10670,156 @@ public static class SymbolExtractor
             BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
+    }
+
+    private static bool TryFindKotlinScalaExpressionBodyEndLine(string line, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+
+        for (var i = Math.Max(0, startColumn); i < line.Length; i++)
+        {
+            var c = line[i];
+
+            if (inBlockComment)
+            {
+                if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '\'')
+                    inChar = false;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length)
+            {
+                if (line[i + 1] == '/')
+                    break;
+
+                if (line[i + 1] == '*')
+                {
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inChar = true;
+                continue;
+            }
+
+            if (c == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (c == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (c == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (c == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (c == '}' && braceDepth > 0)
+            {
+                braceDepth--;
+                continue;
+            }
+
+            if (c != '=' || parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+                continue;
+
+            if (i + 1 < line.Length && (line[i + 1] == '=' || line[i + 1] == '>'))
+                continue;
+
+            var next = i + 1;
+            while (next < line.Length)
+            {
+                if (char.IsWhiteSpace(line[next]))
+                {
+                    next++;
+                    continue;
+                }
+
+                if (line[next] == '/' && next + 1 < line.Length)
+                {
+                    if (line[next + 1] == '/')
+                        return false;
+
+                    if (line[next + 1] == '*')
+                    {
+                        var commentEnd = line.IndexOf("*/", next + 2, StringComparison.Ordinal);
+                        if (commentEnd < 0)
+                            return false;
+
+                        next = commentEnd + 2;
+                        continue;
+                    }
+                }
+
+                return line[next] != '{';
+            }
+
+            return false;
+        }
+
+        return false;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang, int startColumn = 0)
