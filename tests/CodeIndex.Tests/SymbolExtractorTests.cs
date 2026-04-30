@@ -285,6 +285,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsInterfaceAbstractMembersAndTypedArrowAssignments()
+    {
+        var content = """
+            interface User {
+              id: string;
+              name: string;
+              readonly age: number;
+              login(password: string): Promise<boolean>;
+              logout(): void;
+            }
+
+            interface Callback<T> {
+              (data: T): void;
+              timeout?: number;
+            }
+
+            abstract class Base {
+              abstract compute(): number;
+              abstract readonly count: number;
+              protected ready(): boolean { return true; }
+            }
+
+            interface Props { title: string; }
+            const Header: React.FC<Props> = ({ title }) => <h1>{title}</h1>;
+            const add: (a: number, b: number) => number = (a, b) => a + b;
+            const handler: MouseEventHandler = (e) => { e.preventDefault(); };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "logout" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
+    }
+
+    [Fact]
     public void Extract_TypeScript_CollapsesFunctionOverloadsIntoImplementationRow()
     {
         var content = """
