@@ -6181,6 +6181,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ElixirNestedBlocks_AssignsCorrectCallerContainers()
+    {
+        // Elixir: nested body ranges must keep downstream calls inside the right container / ネストした本体範囲でも呼び出しを正しいコンテナに帰属させる
+        var content = "defmodule MyApp do\n  def process(items) do\n    Enum.each(items, fn item ->\n      IO.puts(\"item=#{item}\")\n    end)\n\n    Enum.map items, fn x -> x * 2 end\n\n    case items do\n      [] -> :empty\n      [h | _] -> h\n    end\n\n    with {:ok, data} <- fetch(),\n         {:ok, parsed} <- parse(data) do\n      IO.puts(parsed)\n    end\n  end\n\n  def fetch do\n    if true do\n      {:ok, \"data\"}\n    else\n      :error\n    end\n  end\n\n  def parse(data), do: {:ok, data}\n\n  def quick_check, do: helper()\n\n  def helper, do: :ok\nend";
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "puts" && r.ContainerName == "process"));
+        Assert.Contains(references, r => r.SymbolName == "fetch" && r.ContainerName == "process");
+        Assert.Contains(references, r => r.SymbolName == "parse" && r.ContainerName == "process");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ContainerName == "quick_check");
+    }
+
+    [Fact]
     public void Extract_CsharpUsingDeclaration_NotExtractedAsReference()
     {
         // 'using var x = ...' should not generate a reference for 'using'
