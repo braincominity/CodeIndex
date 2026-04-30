@@ -285,6 +285,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
+    {
+        const string content = """
+            FROM golang:1.21 AS builder
+
+            FROM builder AS build2
+
+            FROM alpine:3.20
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "alpine:3.20");
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IndexStageDependencies()
+    {
+        const string content = """
+            FROM golang:1.21 AS builder
+
+            FROM debian:bookworm-slim AS runner
+
+            COPY --from=builder /src/app /usr/local/bin/app
+            COPY --from=builder /src/assets /opt/assets
+
+            FROM runner AS final
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "runner"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
