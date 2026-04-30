@@ -1109,6 +1109,7 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^\s*trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*case\s+(?<name>\w+)(?:\s*=\s*(?<returnType>[^;]+?))?\s*;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             // Namespace / 名前空間
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace),
         ],
