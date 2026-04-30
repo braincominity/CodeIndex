@@ -11446,14 +11446,47 @@ public class SymbolExtractorTests
         var content = "module MyApp.Domain\n\nopen System\n\ntype UserId = int\ntype User = { Name: string; Age: int }\ntype Color = Red | Green | Blue\ntype Person(name: string) =\n    member _.Name = name\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsNamespacesModulesAndMembers()
+    {
+        // F#: namespace rec, module private, member forms / F#: namespace rec、module private、member形
+        var content = """
+            namespace rec MyApp.Domain
+
+            type Person(name: string) =
+                member this.Name = name
+                member _.Age = 0
+                static member Create(name: string) = Person(name)
+                override this.ToString() = this.Name
+
+            type IVisitor =
+                abstract member Visit : unit -> unit
+
+            let validate user =
+                user.Age > 0
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
     }
 
     [Fact]
