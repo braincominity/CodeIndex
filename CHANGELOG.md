@@ -572,6 +572,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [1.4.1] - 2026-04-12
 
 ### Fixed
+
 - Fix broken code blocks in `README.md`.
 
 ### [1.4.0] - 2026-04-12
@@ -1579,6 +1580,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [1.4.1] - 2026-04-12
 
 ### 修正
+
 - `README.md` のコードブロック崩れを修正。
 
 ### [1.4.0] - 2026-04-12
