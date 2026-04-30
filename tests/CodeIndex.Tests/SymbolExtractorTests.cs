@@ -34,6 +34,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsGenericFunctionsAndTypeAliases()
+    {
+        var content = """
+            type Vector = list[float]
+            type Connection = str | int
+
+            def first[T](items: list[T]) -> T:
+                return items[0]
+
+            async def fetch_all[T](items: list[T]) -> list[T]:
+                return items
+
+            class Stack[T]:
+                def push(self, value: T) -> None:
+                    pass
+
+            class Config:
+                type Theme = str
+                type = 5
+                type(x)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch_all");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Vector");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Connection");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
+        Assert.DoesNotContain(symbols, s => s.Name == "type");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsDecoratedAndDunderMethods()
     {
         var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";
