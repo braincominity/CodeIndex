@@ -14364,6 +14364,10 @@ public class ReferenceExtractorTests
                     Try {
                         "result"
                     }
+                    items.headOption match {
+                        case Some(value) => println(value)
+                        case None => ()
+                    }
                     synchronized {
                         println("locked")
                     }
@@ -14394,6 +14398,9 @@ public class ReferenceExtractorTests
             reference.SymbolName == "synchronized"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "process");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "match"
+            && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "Foo"
             && reference.ReferenceKind == "call");
