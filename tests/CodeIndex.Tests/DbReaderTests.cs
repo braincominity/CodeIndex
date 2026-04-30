@@ -41,6 +41,17 @@ public class DbReaderTests : IDisposable
         _reader = new DbReader(_db.Connection);
     }
 
+    [Theory]
+    [InlineData("plain", "%plain%")]
+    [InlineData("src/Services", "%src/Services%")]
+    [InlineData("*.py", "%.py")]
+    [InlineData("src/*.py", "src/%.py")]
+    [InlineData("foo?bar", "foo_bar")]
+    public void BuildPathLikePattern_TreatsGlobTokensAsWildcards(string input, string expected)
+    {
+        Assert.Equal(expected, DbReader.BuildPathLikePattern(input));
+    }
+
     private void SeedData()
     {
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";

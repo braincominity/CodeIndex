@@ -61,7 +61,7 @@ public static class QueryCommandRunner
         "-V",
         "--group-by-name",
     ];
-    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -1031,7 +1031,7 @@ public static class QueryCommandRunner
 
         if (options.PathPatterns.Count == 0)
         {
-            Console.Error.WriteLine("Error: find requires at least one --path <pattern> to scope the search to known files");
+            Console.Error.WriteLine("Error: find requires at least one --path <glob> to scope the search to known files");
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
