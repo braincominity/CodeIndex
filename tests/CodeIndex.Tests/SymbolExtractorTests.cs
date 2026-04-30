@@ -14676,6 +14676,15 @@ public class SymbolExtractorTests
               final int y;
             }
 
+            class Token {
+              const Token();
+              const Token.named();
+
+              void demo() {
+                const Widget(key: k);
+              }
+            }
+
             class _EmptyAnimal extends Animal {
               _EmptyAnimal() : super('', 0);
             }
@@ -14693,10 +14702,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.fromJson");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.constant");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Token");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Token.named");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "_EmptyAnimal");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IntCallback");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StringMap");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyCallback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Widget");
     }
 
     [Fact]
