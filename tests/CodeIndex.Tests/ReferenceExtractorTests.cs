@@ -198,6 +198,93 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMethodGroups_TrackDelegateHandoffs()
+    {
+        // issue #239: method groups and callback handoffs should survive without a trailing `(`.
+        // issue #239: method group / callback の handoff も末尾 `(` がなくても拾うこと。
+        const string content = """
+            namespace Demo;
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public class Worker
+            {
+                public void Fire() { }
+                public int Compute(int x) => x;
+                public bool IsValid(int x) => x > 0;
+
+                public void Wire(IEnumerable<int> xs)
+                {
+                    Action a = Fire;
+                    Func<int, int> f = Compute;
+                    var g = this.Compute;
+                    var h = new Func<int, int>(Compute);
+                    var filtered = xs.Where(IsValid);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "Fire" && r.ReferenceKind == "call"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Compute" && r.ReferenceKind == "call"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "IsValid" && r.ReferenceKind == "call"));
+        Assert.All(references.Where(r => r.SymbolName is "Fire" or "Compute" or "IsValid"), reference =>
+        {
+            Assert.Equal("function", reference.ContainerKind);
+            Assert.Equal("Wire", reference.ContainerName);
+        });
+    }
+
+    [Fact]
+    public void Extract_JavaMethodReferences_TrackMethodReferencesAndConstructors()
+    {
+        // issue #239: Java / Kotlin / Scala `::` references should index as handoff edges.
+        // issue #239: Java / Kotlin / Scala の `::` 参照も handoff edge として索引化すること。
+        const string content = """
+            package demo;
+
+            import java.util.List;
+            import java.util.function.Supplier;
+            import java.util.stream.Collectors;
+
+            public class J {
+                public int sum(List<Integer> xs) {
+                    return xs.stream().mapToInt(Integer::intValue).sum();
+                }
+
+                public String names(List<String> xs) {
+                    return xs.stream()
+                        .map(String::toUpperCase)
+                        .collect(Collectors.joining(","));
+                }
+
+                public Supplier<J> make() {
+                    return J::new;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "intValue"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "sum");
+        Assert.Contains(references, r =>
+            r.SymbolName == "toUpperCase"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "names");
+        Assert.Contains(references, r =>
+            r.SymbolName == "J"
+            && r.ReferenceKind == "instantiate"
+            && r.ContainerName == "make");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)

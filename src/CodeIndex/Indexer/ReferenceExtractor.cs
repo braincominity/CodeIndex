@@ -50,6 +50,12 @@ public static class ReferenceExtractor
         "def", "function", "func",
     };
     private static readonly HashSet<string> SharedIgnoredCallNamesCaseInsensitive = new(SharedIgnoredCallNames, StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> MethodGroupContextTargetIgnoreNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "if", "else", "for", "foreach", "while", "switch", "catch", "lock", "do", "try", "nameof",
+        "typeof", "sizeof", "using", "return", "throw", "checked", "unchecked", "default", "stackalloc",
+        "fixed", "await", "yield", "when",
+    };
 
     private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
     {
@@ -219,6 +225,7 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
     private const string CSharpTypeExpressionPattern =
         @"(?:global::)?(?:"
         + CSharpIdentifierPattern
@@ -241,6 +248,17 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // Method-group / method-reference handoffs do not have a trailing `(`, so the shared
+    // CallRegex cannot see them. C# / JS / TS use a context gate plus a callable-name allowlist,
+    // while Java / Kotlin / Scala use the unique `::` sigil.
+    // `(` を持たない method-group / method-reference handoff は共通 CallRegex では拾えないため、
+    // C# / JS / TS は文脈ゲート＋ callable-name allowlist、Java / Kotlin / Scala は `::` sigil で拾う。
+    private static readonly Regex MethodGroupReferenceRegex = new(
+        $@"(?<![\w$])(?:(?:[=,]\s*|return\s+|=>\s+|(?<contextTarget>{FunctionalIdentifierPattern})(?:<[^>\n]+>)?\s*\(\s*))(?:(?:this|base|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*)\s*\.\s*)?(?<name>{FunctionalIdentifierPattern})(?!\s*\()(?!\s*`)(?=\s*(?:[;,)\]]|$))",
+        RegexOptions.Compiled);
+    private static readonly Regex JavaMethodReferenceRegex = new(
+        $@"(?<![\w$])(?:(?<owner>(?:this|super|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*))\s*)?::\s*(?<name>{FunctionalIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
+        RegexOptions.Compiled);
     // JSX / TSX component element open tags. Capitalized tag names are treated as component
     // call sites, while lowercase intrinsic HTML tags stay excluded by design.
     // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
@@ -940,6 +958,7 @@ public static class ReferenceExtractor
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -1984,6 +2003,31 @@ public static class ReferenceExtractor
                 // `call` / `instantiate` を発行する。issue #263 参照。
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
                     AddCallLikeReference(candidate.Name, candidate.NameIndex);
+            }
+
+            if (language == "csharp")
+            {
+                EmitMethodGroupReferences(
+                    language,
+                    preparedLine,
+                    callableDefinitionNames,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language is "java" or "kotlin" or "scala")
+            {
+                EmitJavaMethodReferenceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
@@ -5517,6 +5561,27 @@ public static class ReferenceExtractor
                     : null;
             if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
                 names.Add(qualifiedContainer + "." + normalizedName);
+        }
+
+        return names;
+    }
+
+    private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language != "csharp")
+            return null;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var name = language == "csharp"
+                ? NormalizeCSharpIdentifier(symbol.Name)
+                : symbol.Name;
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name);
         }
 
         return names;
@@ -11593,6 +11658,73 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void EmitMethodGroupReferences(
+        string language,
+        string preparedLine,
+        HashSet<string>? callableDefinitionNames,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (callableDefinitionNames == null || callableDefinitionNames.Count == 0)
+            return;
+
+        foreach (Match match in MethodGroupReferenceRegex.Matches(preparedLine))
+        {
+            var contextTargetGroup = match.Groups["contextTarget"];
+            if (contextTargetGroup.Success && MethodGroupContextTargetIgnoreNames.Contains(contextTargetGroup.Value))
+                continue;
+            if (!contextTargetGroup.Success)
+            {
+                var prefix = preparedLine.AsSpan(0, match.Groups["name"].Index).TrimEnd();
+                if (prefix.EndsWith("+=", StringComparison.Ordinal) || prefix.EndsWith("-=", StringComparison.Ordinal))
+                    continue;
+            }
+
+            var nameGroup = match.Groups["name"];
+            var rawName = nameGroup.Value;
+            var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
+            if (!callableDefinitionNames.Contains(name))
+                continue;
+
+            var container = resolveContainerForColumn(nameGroup.Index);
+            AddChainReference(references, seen, fileId, name, nameGroup.Index, "call", context, lineNumber, container);
+        }
+    }
+
+    private static void EmitJavaMethodReferenceReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in JavaMethodReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var container = resolveContainerForColumn(nameGroup.Index);
+
+            if (string.Equals(nameGroup.Value, "new", StringComparison.Ordinal))
+            {
+                var ownerGroup = match.Groups["owner"];
+                if (!ownerGroup.Success || ownerGroup.Value.Length == 0)
+                    continue;
+                if (ownerGroup.Value is "this" or "super")
+                    continue;
+
+                AddReference(references, seen, fileId, ownerGroup.Value, ownerGroup.Index, "instantiate", context, lineNumber, container);
+                continue;
+            }
+
+            AddChainReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "call", context, lineNumber, container);
+        }
     }
 
     /// <summary>
