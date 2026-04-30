@@ -403,6 +403,8 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
 | Makefile | targets | -- | -- | -- | -- | -- | -- | -- | -- |
+Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
+Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 | Dockerfile | named stages (AS) | base images (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
@@ -1536,6 +1538,8 @@ LIMIT 20;
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
 | Makefile | ターゲット | -- | -- | -- | -- | -- | -- | -- | -- |
+Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
+Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
