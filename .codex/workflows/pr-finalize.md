@@ -5,9 +5,14 @@ Use this after implementation, commit, and review are complete.
 ## Push and PR
 
 1. Push the branch with upstream tracking.
-2. Create a PR against the default branch.
-3. The PR title must be concise and in English.
-4. The PR body must include:
+2. Draft the PR body as real Markdown before creating the PR.
+   - Use actual newlines, blank lines, and bullet lists instead of escaped `\n` sequences in prose.
+   - Prefer `--body-file` or an equivalent multiline draft when the body is not trivial.
+   - Re-read the draft and confirm headings, lists, and fenced code blocks still make sense as rendered Markdown.
+   - Reject any body that still contains literal control-escape text such as `\n`, `\t`, or `\r` outside code fences.
+3. Create a PR against the default branch.
+4. The PR title must be concise and in English.
+5. The PR body must include:
    - summary;
    - validation;
    - documentation/changelog updates, or a clear rationale if none were required;

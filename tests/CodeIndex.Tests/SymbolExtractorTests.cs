@@ -10845,11 +10845,20 @@ public class SymbolExtractorTests
     public void Extract_Kotlin_DetectsFunctionsAndClasses()
     {
         // Kotlin: class, fun / Kotlin: クラス、関数
-        var content = "data class Config(val name: String)\nfun process(input: String): String {\n}";
+        var content = """
+            data class Config(val name: String)
+            fun one() = 1
+            fun process(input: String): String {
+                return input.trim()
+            }
+            fun three() = 3
+            """;
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
     }
 
     [Fact]
@@ -13994,11 +14003,23 @@ public class SymbolExtractorTests
     public void Extract_Scala_DetectsObjectTraitAndDef()
     {
         // Scala: object, trait, def, case class / Scala: オブジェクト、トレイト、def、ケースクラス
-        var content = "object Main {\n  def run(): Unit = {\n  }\n}\nsealed trait Message\ncase class Ping(id: Int) extends Message";
+        var content = """
+            object Main {
+              def one() = 1
+              def run(): Unit = {
+                2
+              }
+              def three() = 3
+            }
+            sealed trait Message
+            case class Ping(id: Int) extends Message
+            """;
         var symbols = SymbolExtractor.Extract(1, "scala", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
     }
@@ -14446,7 +14467,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
     }
 
     [Fact]
@@ -14550,6 +14571,40 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
         Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesCommaSeparatedSelectorListsAndNamedAtRules()
+    {
+        var content = """
+            .btn, .link { color: red; }
+            #nav, #header { display: flex; }
+
+            @counter-style circled {
+              system: fixed;
+              symbols: \2460 \2461;
+            }
+
+            @layer reset, base, theme;
+            @namespace svg url("http://www.w3.org/2000/svg");
+
+            @page :first {
+              margin: 2cm;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".link");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#nav");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "circled");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "reset");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "base");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "theme");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "svg");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":first");
     }
 
     [Fact]
@@ -14671,7 +14726,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#root");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#root");
     }
 
     [Fact]

@@ -1288,6 +1288,8 @@ public static class SymbolExtractor
         [
             // @import / @use (SCSS) / インポート
             new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            // @counter-style / カウンタースタイル
+            new("function", new Regex(@"^\s*@counter-style\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @function (SCSS) / 関数
             new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @mixin (SCSS) / ミックスイン
@@ -1296,6 +1298,12 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @page / ページ規則
+            new("namespace", new Regex(@"^\s*@page(?:\s+(?<name>:[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @namespace / 名前空間
+            new("namespace", new Regex(@"^\s*@namespace(?:\s+(?<name>[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // @layer reset, base, theme; / レイヤー順序宣言
+            new("namespace", new Regex(@"^\s*@layer\s+(?<name>[\w-]+)(?:\s*,\s*[\w-]+)*\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Grouping at-rules / grouping at-rule
             new("namespace", new Regex(@"^\s*@(?<name>layer|container|supports|media)\b[^{]*\{", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
@@ -1307,7 +1315,7 @@ public static class SymbolExtractor
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
             new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)(?=[\s\.,:>+~\[\{])", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
-            new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Native CSS nesting selectors / ネイティブ CSS nesting セレクタ
             new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
@@ -2008,7 +2016,11 @@ public static class SymbolExtractor
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
                         : structuralLines;
-                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                    var (endLine, bodyStartLine, bodyEndLine) = lang is "kotlin" or "scala"
+                        && pattern.Kind == "function"
+                        && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
+                            ? (i + 1, null, null)
+                            : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     var startLine = i + 1;
                     if (lang == "csharp"
                         && pattern.Kind == "property"
@@ -2412,6 +2424,27 @@ public static class SymbolExtractor
                                 ReturnType = NormalizeMetadata(rawReturnType),
                             },
                             line);
+                    }
+
+                    if (lang == "css"
+                        && pattern.Kind == "class"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && cssScannerLines != null)
+                    {
+                        var openingBraceIndex = cssScannerLines[i].IndexOf('{', absoluteStartColumn);
+                        if (openingBraceIndex > absoluteStartColumn)
+                        {
+                            TryAddCssSelectorListSegments(
+                                fileId,
+                                line[absoluteStartColumn..openingBraceIndex],
+                                cssScannerLines[i][absoluteStartColumn..openingBraceIndex],
+                                cssScannerLines,
+                                i,
+                                openingBraceIndex,
+                                patterns,
+                                symbols,
+                                cssSeenSymbols);
+                        }
                     }
 
                     if (lang == "csharp"
@@ -10411,6 +10444,9 @@ public static class SymbolExtractor
             var ch = maskedLine[i];
             if (ch == ';')
             {
+                if (groupingDepth == 0 && qualifiedDepth == 0)
+                    TryAddCssLayerListSymbols(fileId, rawLine[segmentStart..i], maskedLine[segmentStart..i], lineIndex, symbols, cssSeenSymbols);
+
                 segmentStart = i + 1;
                 continue;
             }
@@ -10420,9 +10456,6 @@ public static class SymbolExtractor
                 var maskedSegment = maskedLine[segmentStart..i].Trim();
                 var rawSegment = rawLine[segmentStart..i].Trim();
                 var isGroupingAtRule = maskedSegment.StartsWith('@');
-
-                if (groupingDepth > 0 && qualifiedDepth == 0 && !isGroupingAtRule)
-                    TryAddCssInlineSelectorSegment(fileId, rawSegment, maskedSegment, cssScannerLines, lineIndex, i, patterns, symbols, cssSeenSymbols);
 
                 if (isGroupingAtRule)
                     groupingDepth++;
@@ -10497,6 +10530,123 @@ public static class SymbolExtractor
         }
     }
 
+    private static void TryAddCssSelectorListSegments(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        string[] cssScannerLines,
+        int lineIndex,
+        int openingBraceIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        foreach (var (rawPart, maskedPart) in EnumerateCssCommaSeparatedSegments(rawSegment, maskedSegment))
+        {
+            TryAddCssInlineSelectorSegment(
+                fileId,
+                rawPart,
+                maskedPart,
+                cssScannerLines,
+                lineIndex,
+                openingBraceIndex,
+                patterns,
+                symbols,
+                cssSeenSymbols);
+        }
+    }
+
+    private static void TryAddCssLayerListSymbols(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        var trimmedMaskedSegment = maskedSegment.TrimStart();
+        if (!trimmedMaskedSegment.StartsWith("@layer", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var trimmedRawSegment = rawSegment.Trim();
+        if (trimmedRawSegment.Length == 0)
+            return;
+
+        const string atLayerPrefix = "@layer";
+        if (trimmedRawSegment.Length <= atLayerPrefix.Length)
+            return;
+
+        var rawNames = trimmedRawSegment[atLayerPrefix.Length..].Trim();
+        var maskedNames = trimmedMaskedSegment[atLayerPrefix.Length..].Trim();
+        if (rawNames.Length == 0 || maskedNames.Length == 0)
+            return;
+
+        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames, maskedNames))
+        {
+            var name = rawName.Trim();
+            if (name.Length == 0 || maskedName.Length == 0)
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols,
+                lineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "namespace",
+                    Name = name,
+                    Line = lineIndex + 1,
+                    StartLine = lineIndex + 1,
+                    EndLine = lineIndex + 1,
+                    Signature = trimmedRawSegment,
+                });
+        }
+    }
+
+    private static IEnumerable<(string Raw, string Masked)> EnumerateCssCommaSeparatedSegments(string rawText, string maskedText)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        for (var index = 0; index < maskedText.Length; index++)
+        {
+            var ch = maskedText[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
+            {
+                yield return (rawText[segmentStart..index].Trim(), maskedText[segmentStart..index].Trim());
+                segmentStart = index + 1;
+            }
+        }
+
+        yield return (rawText[segmentStart..].Trim(), maskedText[segmentStart..].Trim());
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
         ResolveRange(lines, startIndex, bodyStyle, null, 0);
 
@@ -10514,6 +10664,156 @@ public static class SymbolExtractor
             BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
+    }
+
+    private static bool TryFindKotlinScalaExpressionBodyEndLine(string line, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+
+        for (var i = Math.Max(0, startColumn); i < line.Length; i++)
+        {
+            var c = line[i];
+
+            if (inBlockComment)
+            {
+                if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '\'')
+                    inChar = false;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length)
+            {
+                if (line[i + 1] == '/')
+                    break;
+
+                if (line[i + 1] == '*')
+                {
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inChar = true;
+                continue;
+            }
+
+            if (c == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (c == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (c == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (c == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (c == '}' && braceDepth > 0)
+            {
+                braceDepth--;
+                continue;
+            }
+
+            if (c != '=' || parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+                continue;
+
+            if (i + 1 < line.Length && (line[i + 1] == '=' || line[i + 1] == '>'))
+                continue;
+
+            var next = i + 1;
+            while (next < line.Length)
+            {
+                if (char.IsWhiteSpace(line[next]))
+                {
+                    next++;
+                    continue;
+                }
+
+                if (line[next] == '/' && next + 1 < line.Length)
+                {
+                    if (line[next + 1] == '/')
+                        return false;
+
+                    if (line[next + 1] == '*')
+                    {
+                        var commentEnd = line.IndexOf("*/", next + 2, StringComparison.Ordinal);
+                        if (commentEnd < 0)
+                            return false;
+
+                        next = commentEnd + 2;
+                        continue;
+                    }
+                }
+
+                return line[next] != '{';
+            }
+
+            return false;
+        }
+
+        return false;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang, int startColumn = 0)
