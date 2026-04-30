@@ -841,10 +841,14 @@ public static class ReferenceExtractor
         "field", "get", "set", "param", "setparam", "property", "receiver", "file", "delegate", "all",
     };
 
-    public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
+    public static IReadOnlyCollection<string> GetSupportedLanguages()
+        => SupportedLanguages.Concat(new[] { "vue", "svelte" }).ToArray();
+
+    private static string? NormalizeLanguage(string? lang)
+        => lang is "vue" or "svelte" ? "typescript" : lang;
 
     public static bool SupportsLanguage(string? lang) =>
-        lang != null && SupportedLanguages.Contains(lang);
+        NormalizeLanguage(lang) is string normalized && SupportedLanguages.Contains(normalized);
 
     public static bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
     {
@@ -915,6 +919,7 @@ public static class ReferenceExtractor
         if (!SupportsLanguage(lang))
             return [];
 
+        lang = NormalizeLanguage(lang);
         var language = lang!;
         var isJsxFile = IsJsxFilePath(path);
 

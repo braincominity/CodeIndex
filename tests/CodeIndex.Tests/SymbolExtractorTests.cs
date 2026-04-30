@@ -136,6 +136,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VueScriptSetup_DetectsTypeScriptSymbols()
+    {
+        const string content = """
+            <script setup lang="ts">
+            import { computed, ref } from "vue";
+
+            const count = ref(0);
+            const doubled = computed(() => count.value * 2);
+
+            function increment() {
+                count.value++;
+            }
+            </script>
+
+            <template>
+                <button @click="increment">{{ count }} / {{ doubled }}</button>
+            </template>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vue", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "increment");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name.Contains("computed", StringComparison.Ordinal));
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "vue");
+    }
+
+    [Fact]
+    public void Extract_SvelteScript_DetectsTypeScriptSymbolsAndReactiveProperty()
+    {
+        const string content = """
+            <script lang="ts">
+                let count = 0;
+                $: doubled = count * 2;
+
+                function increment() {
+                    count++;
+                }
+            </script>
+
+            <button on:click={increment}>{count} / {doubled}</button>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "svelte", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "increment");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "doubled");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "svelte");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsSingleLineAndGroupedImports()
     {
         var content = """

@@ -162,6 +162,57 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VueScriptSetup_DetectsJavaScriptTypeScriptCalls()
+    {
+        const string content = """
+            <script setup lang="ts">
+            import { computed, ref } from "vue";
+
+            const count = ref(0);
+            const doubled = computed(() => count.value * 2);
+
+            function increment() {
+                count.value++;
+            }
+            </script>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vue", content);
+        var references = ReferenceExtractor.Extract(1, "vue", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ref"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "computed"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "vue");
+    }
+
+    [Fact]
+    public void Extract_SvelteScript_DetectsJavaScriptTypeScriptCalls()
+    {
+        const string content = """
+            <script lang="ts">
+                function increment() {}
+
+                function trigger() {
+                    increment();
+                }
+            </script>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "svelte", content);
+        var references = ReferenceExtractor.Extract(1, "svelte", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "increment"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "trigger");
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "svelte");
+    }
+
+    [Fact]
     public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
     {
         const string content = """
