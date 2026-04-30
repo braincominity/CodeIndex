@@ -1056,8 +1056,8 @@ public static class SymbolExtractor
             // attr_accessor/attr_reader/attr_writer as property declarations / プロパティ宣言
             new("property", new Regex(@"^\s*attr_(?:accessor|reader|writer)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             // alias_method / alias — capture the introduced method name for navigation
-            new("function", new Regex(@"^\s*alias_method\b\s+:?(?<name>\w+)\s*,\s*:?\w+", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+)\s+:?\w+", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*alias_method\b\s+:?(?<name>\w+[?!=]?)\s*,\s*:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+[?!=]?)\s+:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*def\s+(?:self\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),

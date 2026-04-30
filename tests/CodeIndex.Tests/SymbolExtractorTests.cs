@@ -10285,7 +10285,9 @@ public class SymbolExtractorTests
               end
 
               alias_method :full_name, :name
+              alias_method :profile!, :name
               alias greet_alias greet
+              alias shout! greet
               alias :display_name :name
             end
             """;
@@ -10302,7 +10304,9 @@ public class SymbolExtractorTests
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "nickname"));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "full_name"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "profile!"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "greet_alias"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "shout!"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "display_name"));
     }
 
