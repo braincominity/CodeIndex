@@ -1466,8 +1466,14 @@ public class ReferenceExtractorTests
             module Shared
             end
 
+            module ModName
+            end
+
             class Worker
-              include(Shared)
+              include Shared
+              extend ModName
+              before_action :authenticate
+              attr_accessor :name
 
               def run(x)
                 super(x)
@@ -1482,7 +1488,48 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
+    {
+        const string content = """
+            def greet(name)
+              puts "hi"
+            end
+
+            def no_parens_def x, y
+              x + y
+            end
+
+            def caller
+              greet "bob"
+              puts "hello"
+              no_parens_def 1, 2
+              require 'json'
+              define_method :dynamic do
+              end
+              raise ArgumentError, "bad"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "greet");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "no_parens_def" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "json" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "define_method" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "dynamic" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "ArgumentError" && reference.ContainerName == "caller");
     }
 
     [Fact]
