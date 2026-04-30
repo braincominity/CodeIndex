@@ -8787,7 +8787,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_AreClassifiedAsSuspect()
+    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_KeyAndRequired_AreClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
@@ -8829,7 +8829,6 @@ public class DbReaderTests : IDisposable
                     [Inject]
                     public IServiceProvider? Services { get; set; }
 
-                    [Obsolete]
                     public string? LegacyName { get; set; }
 
                     [BindNever]
@@ -8950,8 +8949,217 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Target").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Id").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Name").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_BindPropertyAndParameter_AreClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_property_fixture.cs",
+            Lang = "csharp",
+            Size = 900,
+            Lines = 29,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 29,
+                Content = """
+                using System;
+                using System.ComponentModel.DataAnnotations;
+                using Microsoft.AspNetCore.Components;
+                using Microsoft.AspNetCore.Mvc;
+                using Microsoft.AspNetCore.Mvc.ModelBinding;
+
+                public class Target
+                {
+                    [Key]
+                    public int Id { get; set; }
+
+                    [Required]
+                    public string Name { get; set; } = string.Empty;
+
+                    [BindProperty]
+                    public string? BoundValue { get; set; }
+
+                    [Parameter]
+                    public string? Title { get; set; }
+
+                    [Inject]
+                    public IServiceProvider? Services { get; set; }
+
+                    [Obsolete]
+                    public string? LegacyName { get; set; }
+
+                    [BindNever]
+                    public string? IgnoredValue { get; set; }
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 29,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BoundValue",
+                Line = 16,
+                StartLine = 16,
+                EndLine = 16,
+                Signature = "public string? BoundValue { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Title",
+                Line = 19,
+                StartLine = 19,
+                EndLine = 19,
+                Signature = "public string? Title { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "BoundValue").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Title").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_InjectObsoleteAndBindNever_AreClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_property_fixture.cs",
+            Lang = "csharp",
+            Size = 900,
+            Lines = 29,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 29,
+                Content = """
+                using System;
+                using System.ComponentModel.DataAnnotations;
+                using Microsoft.AspNetCore.Components;
+                using Microsoft.AspNetCore.Mvc;
+                using Microsoft.AspNetCore.Mvc.ModelBinding;
+
+                public class Target
+                {
+                    [Key]
+                    public int Id { get; set; }
+
+                    [Required]
+                    public string Name { get; set; } = string.Empty;
+
+                    [BindProperty]
+                    public string? BoundValue { get; set; }
+
+                    [Parameter]
+                    public string? Title { get; set; }
+
+                    [Inject]
+                    public IServiceProvider? Services { get; set; }
+
+                    [Obsolete]
+                    public string? LegacyName { get; set; }
+
+                    [BindNever]
+                    public string? IgnoredValue { get; set; }
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 29,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Services",
+                Line = 22,
+                StartLine = 22,
+                EndLine = 22,
+                Signature = "public IServiceProvider? Services { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "LegacyName",
+                Line = 25,
+                StartLine = 25,
+                EndLine = 25,
+                Signature = "public string? LegacyName { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "IgnoredValue",
+                Line = 28,
+                StartLine = 28,
+                EndLine = 28,
+                Signature = "public string? IgnoredValue { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Services").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "LegacyName").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "IgnoredValue").UnusedBucket);
@@ -9260,11 +9468,11 @@ public class DbReaderTests : IDisposable
             pathPatterns: ["reflection_standalone_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
         // A sits under a real reflection attribute → suspect.
-        // B sits under [Obsolete("]")], which is NOT a reflection attribute, so B
-        // must not inherit A's reflection attribute through the bracket-leak path.
+        // B is a plain property and must not inherit A's reflection attribute through
+        // the bracket-leak path.
         // A は本物の reflection 属性の下なので suspect。
-        // B は reflection 属性ではない `[Obsolete("]")]` の下なので、bracket leak で
-        // A の reflection 属性を継承してはならない。
+        // B は plain property なので、bracket leak で A の reflection 属性を
+        // 継承してはならない。
         var a = Assert.Single(unused, symbol => symbol.Name == "A");
         Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
 

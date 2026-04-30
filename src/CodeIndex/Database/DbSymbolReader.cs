@@ -30,7 +30,6 @@ public partial class DbReader
         "bindproperty",
         "parameter",
         "inject",
-        "obsolete",
         "bindnever",
     };
     private static readonly HashSet<string> ReflectionTypeAttributeNames = new(StringComparer.Ordinal)
@@ -2239,7 +2238,7 @@ public partial class DbReader
         // これにより属性行末尾の `// コメント`（例: `[JsonPropertyName("ok")] // note`）が
         // 宣言末尾と誤判定されることも防ぐ。#409 を修正。
         if (attributeBottom != anchorIndex
-            && (LineContainsInlineAttributeAndDeclaration(sanitizedLines[attributeBottom])
+            && (LineContainsInlineAttributeAndDeclaration(lines[attributeBottom])
                 || SanitizedLineHasInlineDeclarationTail(sanitizedLines[attributeBottom])))
             return [];
 
@@ -2355,7 +2354,15 @@ public partial class DbReader
         if (index >= line.Length || line[index] != '[')
             return false;
 
-        return !string.IsNullOrWhiteSpace(StripLeadingCSharpAttributeLists(line));
+        var remainder = StripLeadingCSharpAttributeLists(line);
+        if (string.IsNullOrWhiteSpace(remainder))
+            return false;
+
+        remainder = remainder.TrimStart();
+        return remainder.Length > 0
+            && remainder[0] != '/'
+            && remainder[0] != '*'
+            && remainder[0] != '#';
     }
 
     // Detect that the cross-line-sanitized line ends an attribute run with
