@@ -60,6 +60,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsQualifiedDefinitionsConceptsAndModules()
+    {
+        var content = """
+            export module my_module;
+
+            inline namespace v2 {}
+
+            template <typename T>
+            concept Addable = requires(T a, T b) { a + b; };
+
+            class Foo {
+            public:
+                Foo();
+                ~Foo();
+                void bar();
+                Foo& operator=(const Foo&);
+                operator int() const;
+                static int counter;
+            };
+
+            Foo::Foo() {}
+            Foo::~Foo() {}
+            void Foo::bar() {}
+            Foo& Foo::operator=(const Foo&) { return *this; }
+            Foo::operator int() const { return 0; }
+            int Foo::counter = 0;
+
+            template <typename T>
+            T add(T a, T b) { return a + b; }
+
+            template <>
+            int add<int>(int a, int b) { return a + b + 1; }
+
+            class Outer {
+            public:
+                class Inner {
+                public:
+                    void method();
+                };
+            };
+
+            void Outer::Inner::method() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "my_module");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "v2");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Addable");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator=");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "counter");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
     {
         var content = """
