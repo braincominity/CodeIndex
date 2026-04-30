@@ -87,6 +87,9 @@ public static class SymbolExtractor
     private const string CppFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof|using|namespace)\s*[\(\{;<])";
     private const string CppTemplatePrefixPattern = @"(?:template\s*<[^>]*>\s*)*";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GoImportSpecRegex = new(
+        @"^(?<name>(?:(?:[._]|[\p{L}_][\p{L}\p{Nd}_]*)\s+)?""(?:\\.|[^""\\])*"")(?:\s*;)?(?:\s*(?://.*|/\*.*\*/))?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -964,7 +967,6 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s+(?<name>[A-Z]\w*)\s*=\s*", RegexOptions.Compiled), BodyStyle.None),
             // Package-level var / パッケージレベル変数
             new("function", new Regex(@"^var\s+(?<name>\w+)\s", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["rust"] =
         [
@@ -1452,6 +1454,114 @@ public static class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages() => PatternCache.Keys;
 
+    private static bool TryHandleGoImportLine(
+        long fileId,
+        string line,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        ref bool inImportBlock)
+    {
+        var trimmed = line.TrimStart();
+
+        if (inImportBlock)
+        {
+            if (trimmed.Length == 0
+                || trimmed.StartsWith("//", StringComparison.Ordinal)
+                || trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (trimmed.StartsWith(")", StringComparison.Ordinal))
+            {
+                inImportBlock = false;
+                return true;
+            }
+
+            var closingParenIndex = trimmed.IndexOf(')');
+            if (closingParenIndex >= 0)
+            {
+                var blockImportText = trimmed[..closingParenIndex].TrimEnd();
+                if (blockImportText.Length > 0)
+                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
+
+                inImportBlock = false;
+                return true;
+            }
+
+            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, trimmed);
+        }
+
+        if (!trimmed.StartsWith("import", StringComparison.Ordinal)
+            || (trimmed.Length > "import".Length
+                && !char.IsWhiteSpace(trimmed["import".Length])
+                && trimmed["import".Length] != '('))
+            return false;
+
+        var afterImport = trimmed["import".Length..].TrimStart();
+        if (afterImport.StartsWith("(", StringComparison.Ordinal))
+        {
+            var blockRemainder = afterImport[1..].TrimStart();
+            if (blockRemainder.Length > 0)
+            {
+                var closingParenIndex = blockRemainder.IndexOf(')');
+                if (closingParenIndex >= 0)
+                {
+                    var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
+                    if (blockImportText.Length > 0)
+                        TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
+
+                    inImportBlock = false;
+                    return true;
+                }
+
+                TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockRemainder);
+            }
+
+            inImportBlock = true;
+            return true;
+        }
+
+        return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, afterImport);
+    }
+
+    private static bool TryAddGoImportSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string importText)
+    {
+        var match = GoImportSpecRegex.Match(importText);
+        if (!match.Success)
+            return true;
+
+        var name = match.Groups["name"].Value.Trim();
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.IndexOf(importText, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = name,
+            },
+            rawLine);
+        return true;
+    }
+
     private static readonly HashSet<string> ContainerKinds =
     [
         "class", "struct", "interface", "namespace", "enum"
@@ -1619,6 +1729,7 @@ public static class SymbolExtractor
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
         var csharpSuppressedContinuationUntil = -1;
+        var goImportBlock = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1626,6 +1737,11 @@ public static class SymbolExtractor
                 continue;
 
             var line = lines[i];
+            if (lang == "go"
+                && TryHandleGoImportLine(fileId, line, i, symbols, ref goImportBlock))
+            {
+                continue;
+            }
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
             var matchLine = structuralLine;

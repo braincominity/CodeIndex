@@ -95,6 +95,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsSingleLineAndGroupedImports()
+    {
+        var content = """
+            package demo
+
+            import "bytes" // ERROR "invalid import path (empty string)"
+            import alias "fmt" // trailing comment
+
+            import (
+                "io"
+                . "strings"
+                _ "net/http/pprof"
+                alias2 "example.com/project"
+                // ignored comment
+            )
+
+            func main() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+
+        Assert.Equal(6, imports.Count);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.Contains(imports, s => s.Name == "\"bytes\"");
+        Assert.Contains(imports, s => s.Name == "alias \"fmt\"");
+        Assert.Contains(imports, s => s.Name == "\"io\"");
+        Assert.Contains(imports, s => s.Name == ". \"strings\"");
+        Assert.Contains(imports, s => s.Name == "_ \"net/http/pprof\"");
+        Assert.Contains(imports, s => s.Name == "alias2 \"example.com/project\"");
+        Assert.DoesNotContain(imports, s => s.Name == "(");
+        Assert.DoesNotContain(imports, s => s.Name.Contains("ERROR", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsQualifiedDefinitionsConceptsAndModules()
     {
         var content = """

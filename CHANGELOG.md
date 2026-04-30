@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Go import extraction now handles grouped `import (...)` blocks, alias forms, and trailing comments (#155)** — `SymbolExtractor` now skips the `import (` opener, extracts each import spec inside grouped blocks, and trims `//` / `/* ... */` suffixes so names no longer leak comments or the literal `(`. Added a regression that covers single-line imports, alias / dot / underscore forms, grouped blocks, and commented lines. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Fixes #155.
+
 ### [1.17.0] - 2026-04-30
 
 #### Changed
@@ -1043,6 +1046,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### Fixed
+- **Go の import 抽出が `import (...)` ブロック、エイリアス形式、末尾コメントを正しく扱うようになりました (#155)** — `SymbolExtractor` は `import (` の opener をシンボル化せず、grouped block 内の各 import spec を抽出し、`//` / `/* ... */` の接尾コメントを切り落とすため、名前にコメントや `(` が漏れなくなります。単一行 import、alias / dot / underscore 形式、grouped block、コメント行をまとめて踏む regression を追加しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Fixes #155.
 
 ### [1.17.0] - 2026-04-30
 
