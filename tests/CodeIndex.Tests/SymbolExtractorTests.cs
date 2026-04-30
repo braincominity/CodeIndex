@@ -60,6 +60,46 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
+    {
+        var content = """
+            function Vehicle(make) { this.make = make; }
+            Vehicle.prototype.start = function start() { return this.make; };
+            Vehicle.factory = function factory() { return new Vehicle("default"); };
+            Vehicle.VERSION = "1.0";
+
+            var Foo = {};
+            Foo.Bar = class {
+                method() { return 1; }
+            };
+
+            var MyNS = { utils: {} };
+            MyNS.utils.parse = function parse(s) { return s; };
+
+            var add = function add(a, b) { return a + b; };
+
+            const handlers = {
+                onClick() { return true; },
+                onSubmit: function submitHandler() { return true; },
+                onClose: () => { return true; }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.prototype.start");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.factory");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Vehicle.VERSION");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyNS.utils.parse");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClick" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onSubmit" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClose" && s.ContainerName == "handlers");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsHocWrappedComponentBindings()
     {
         // HOC-wrapped / call-result / tagged-template component bindings must not be
@@ -282,6 +322,51 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadExt" && s.ContainerName == "ext");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Api");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.ContainerName == "Api");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInterfaceAbstractMembersAndTypedArrowAssignments()
+    {
+        var content = """
+            interface User {
+              id: string;
+              name: string;
+              readonly age: number;
+              login(password: string): Promise<boolean>;
+              logout(): void;
+            }
+
+            interface Callback<T> {
+              (data: T): void;
+              timeout?: number;
+            }
+
+            abstract class Base {
+              abstract compute(): number;
+              abstract readonly count: number;
+              protected ready(): boolean { return true; }
+            }
+
+            interface Props { title: string; }
+            const Header: React.FC<Props> = ({ title }) => <h1>{title}</h1>;
+            const add: (a: number, b: number) => number = (a, b) => a + b;
+            const handler: MouseEventHandler = (e) => { e.preventDefault(); };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "logout" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
     }
 
     [Fact]
@@ -11013,6 +11098,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
+    {
+        // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            typedef int (*t_ptr_func_int_of_float_complex)(float complex);
+            typedef int (*t_ptr_func_int_of_double_complex)(double complex);
+            static int add(int a, int b) {
+                return a + b;
+            }
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "int" || s.Name == "void"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -11021,6 +11130,32 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DoesNotCapturePrimitiveTypesForFunctionReturningPointerDeclarations()
+    {
+        // C++: function-returning-pointer declarations / C++: 関数が関数ポインタを返す宣言
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            extern int (*XSynchronize(
+                Display* display,
+                Bool onoff
+            ))(
+                Display* display
+            );
+
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
     }
 
     [Fact]
@@ -14311,7 +14446,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
     }
 
     [Fact]
@@ -14415,6 +14550,40 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
         Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesCommaSeparatedSelectorListsAndNamedAtRules()
+    {
+        var content = """
+            .btn, .link { color: red; }
+            #nav, #header { display: flex; }
+
+            @counter-style circled {
+              system: fixed;
+              symbols: \2460 \2461;
+            }
+
+            @layer reset, base, theme;
+            @namespace svg url("http://www.w3.org/2000/svg");
+
+            @page :first {
+              margin: 2cm;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".link");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#nav");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "circled");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "reset");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "base");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "theme");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "svg");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":first");
     }
 
     [Fact]
@@ -14536,7 +14705,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#root");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#root");
     }
 
     [Fact]
