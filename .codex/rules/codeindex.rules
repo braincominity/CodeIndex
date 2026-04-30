@@ -204,7 +204,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["git", "clean"],
     decision = "forbidden",
-    justification = "History-rewriting Git operations are blocked.",
+    justification = "Destructive Git operations are blocked.",
     match = ["git clean -fdx"],
 )
 
