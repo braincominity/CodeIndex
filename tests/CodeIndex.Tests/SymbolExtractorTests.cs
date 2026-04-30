@@ -325,6 +325,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsInterfaceAbstractMembersAndTypedArrowAssignments()
+    {
+        var content = """
+            interface User {
+              id: string;
+              name: string;
+              readonly age: number;
+              login(password: string): Promise<boolean>;
+              logout(): void;
+            }
+
+            interface Callback<T> {
+              (data: T): void;
+              timeout?: number;
+            }
+
+            abstract class Base {
+              abstract compute(): number;
+              abstract readonly count: number;
+              protected ready(): boolean { return true; }
+            }
+
+            interface Props { title: string; }
+            const Header: React.FC<Props> = ({ title }) => <h1>{title}</h1>;
+            const add: (a: number, b: number) => number = (a, b) => a + b;
+            const handler: MouseEventHandler = (e) => { e.preventDefault(); };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "logout" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Base");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
+    }
+
+    [Fact]
     public void Extract_TypeScript_CollapsesFunctionOverloadsIntoImplementationRow()
     {
         var content = """
@@ -10824,11 +10869,20 @@ public class SymbolExtractorTests
     public void Extract_Kotlin_DetectsFunctionsAndClasses()
     {
         // Kotlin: class, fun / Kotlin: クラス、関数
-        var content = "data class Config(val name: String)\nfun process(input: String): String {\n}";
+        var content = """
+            data class Config(val name: String)
+            fun one() = 1
+            fun process(input: String): String {
+                return input.trim()
+            }
+            fun three() = 3
+            """;
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
     }
 
     [Fact]
@@ -13976,11 +14030,25 @@ public class SymbolExtractorTests
     public void Extract_Scala_DetectsObjectTraitAndDef()
     {
         // Scala: object, trait, def, case class / Scala: オブジェクト、トレイト、def、ケースクラス
-        var content = "object Main {\n  def run(): Unit = {\n  }\n}\ntype Callback = Int => Int\ntype UserID = Int\nsealed trait Message\ncase class Ping(id: Int) extends Message";
+        var content = """
+            object Main {
+              def one() = 1
+              def run(): Unit = {
+                2
+              }
+              def three() = 3
+              type Callback = Int => Int
+              type UserID = Int
+            }
+            sealed trait Message
+            case class Ping(id: Int) extends Message
+            """;
         var symbols = SymbolExtractor.Extract(1, "scala", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
@@ -14430,7 +14498,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
     }
 
     [Fact]
@@ -14534,6 +14602,40 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
         Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesCommaSeparatedSelectorListsAndNamedAtRules()
+    {
+        var content = """
+            .btn, .link { color: red; }
+            #nav, #header { display: flex; }
+
+            @counter-style circled {
+              system: fixed;
+              symbols: \2460 \2461;
+            }
+
+            @layer reset, base, theme;
+            @namespace svg url("http://www.w3.org/2000/svg");
+
+            @page :first {
+              margin: 2cm;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".link");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#nav");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "circled");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "reset");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "base");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "theme");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "svg");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":first");
     }
 
     [Fact]
@@ -14655,7 +14757,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#root");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#root");
     }
 
     [Fact]
@@ -14721,6 +14823,64 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "global");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "local");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
+    }
+
+    [Fact]
+    public void Extract_PowerShell_DetectsClassMembersAndEnumValues()
+    {
+        var content = """
+            class Vehicle {
+                [DscProperty(Key)] [string]$Name
+                hidden [string]$Secret
+
+                Vehicle([string]$make) {
+                    $this.Name = $make
+                }
+
+                [string] ToString() {
+                    return "$($this.Name)"
+                }
+
+                static [Vehicle] CreateDefault() {
+                    return [Vehicle]::new("Unknown")
+                }
+
+                hidden [void] InternalMethod() {
+                }
+            }
+
+            enum LogLevel {
+                Debug
+                Info = 1
+                Warning
+                Error
+            }
+
+            class MyDscResource {
+                [DscProperty(Key)] [string]$Name
+
+                [MyDscResource] Get() {
+                    return $this
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Vehicle");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secret");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateDefault");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InternalMethod");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "LogLevel");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Debug");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Info");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Warning");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Error");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyDscResource");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
     }
 
     [Fact]
