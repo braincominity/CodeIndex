@@ -4258,7 +4258,7 @@ public class McpServerTests : IDisposable
             var structured = hotspotsResponse["result"]!["structuredContent"]!;
             Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal(2, structured["count"]!.GetValue<int>());
             if (structured["degraded"] is JsonNode degradedNode)
                 Assert.False(degradedNode.GetValue<bool>());
         }
@@ -4296,7 +4296,7 @@ public class McpServerTests : IDisposable
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
@@ -4387,7 +4387,7 @@ public class McpServerTests : IDisposable
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
