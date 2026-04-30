@@ -95,6 +95,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsQualifiedDefinitionsConceptsAndModules()
+    {
+        var content = """
+            export module my_module;
+
+            inline namespace v2 {}
+
+            template <typename T>
+            concept Addable = requires(T a, T b) { a + b; };
+
+            class Foo {
+            public:
+                Foo();
+                ~Foo();
+                void bar();
+                Foo& operator=(const Foo&);
+                operator int() const;
+                static int counter;
+            };
+
+            Foo::Foo() {}
+            Foo::~Foo() {}
+            void Foo::bar() {}
+            Foo& Foo::operator=(const Foo&) { return *this; }
+            Foo::operator int() const { return 0; }
+            int Foo::counter = 0;
+
+            template <typename T>
+            T add(T a, T b) { return a + b; }
+
+            template <>
+            int add<int>(int a, int b) { return a + b + 1; }
+
+            class Outer {
+            public:
+                class Inner {
+                public:
+                    void method();
+                };
+            };
+
+            void Outer::Inner::method() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "my_module");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "v2");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Addable");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator=");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "counter");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
     {
         var content = """
@@ -11190,6 +11252,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsFunctionLikeAndObjectLikeMacros()
+    {
+        // C: function-like and object-like #define macros / C: 関数風・オブジェクト風 #define マクロ
+        var content = """
+            #include <stdio.h>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+            #define MAX_BUFFER 4096
+
+            void work(void) {
+                int a = MAX(1, 2);
+                printf("v=%s buf=%d\n", VERSION, MAX_BUFFER);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_BUFFER");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -11198,6 +11284,30 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsFunctionLikeAndObjectLikeMacros()
+    {
+        // C++: function-like and object-like #define macros / C++: 関数風・オブジェクト風 #define マクロ
+        var content = """
+            #include <cstdio>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+            #define MAX_BUFFER 4096
+
+            void work() {
+                auto a = MAX(1, 2);
+                std::printf("v=%s buf=%d\n", VERSION, MAX_BUFFER);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_BUFFER");
     }
 
     [Fact]

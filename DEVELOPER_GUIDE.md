@@ -36,7 +36,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
+    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
     ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
@@ -131,7 +131,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- referenced symbol name
-    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "type_reference"
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "decorator", "type_reference"
     line            INTEGER,                 -- 1-based line number
     column_number   INTEGER,                 -- 1-based column number
     context         TEXT,                    -- trimmed source line
@@ -388,8 +388,8 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Java | methods (including same-line leading annotations, lexer-aware annotation arguments such as `@Label(")")` and `@SuppressWarnings({"unchecked"})`, same-line `@interface` members with later same-line siblings such as `value(); int age();`, compact constructors in both same-line and Allman-style brace layouts even when the record header contains annotation-array arguments, same-line brace-bodied siblings, and same-line enum-constant-body methods), static final, enum members (body-scoped scanner that tracks strings/chars/comments/text blocks and stops at the first top-level `;`, so method calls like `\tRED();` outside the enum body are not captured; enum constants with anonymous bodies retain body ranges so nested overrides, helper methods, and same-line body-local methods attach to the enum-member container) | class, record, sealed, @interface, `module-info.java` module declarations | -- | interface | enum | record primary components | -- | import (including `requires`, `exports`, `opens`, `uses`, `provides` in `module-info.java`) | yes |
 | Kotlin | fun, extension fun, secondary constructor (`constructor(...)`), typealias, modifier-heavy forms (`abstract`, `override`, `open`, `final`, `suspend`) | class, object, companion (anonymous companions normalize to `Companion`), data/sealed/value class | -- | interface | enum class, enum entries | val/var | -- | import, typealias | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
-| C | functions | -- | struct | -- | enum | -- | -- | #include | yes |
-| C++ | functions | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| C | functions, `#define` macros | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | functions, `#define` macros | class | struct | -- | enum, enum class | -- | -- | #include | yes |
 | PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | functions | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
@@ -414,7 +414,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Makefile | targets | -- | -- | -- | -- | -- | -- | -- | -- |
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
-| Dockerfile | named stages (AS) | base images (FROM) | -- | -- | -- | -- | -- | -- | -- |
+| Dockerfile | named stages (AS) | base images (FROM), stage dependencies (FROM \<stage\> AS \<new\>, COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, instance | -- | class (typeclass) | -- | -- | -- | import | -- |
@@ -1177,11 +1177,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-<<<<<<< HEAD
-    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property、CSS の grouping/nesting セレクタと selector list / named at-rule、same-line restart の重複抑止用のファイル単位ハッシュ管理、scope filtering、range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
-=======
-    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property・CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
->>>>>>> d4c8df2acf8bb06c2373cd8e5ca6ab1947bbc897
+    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property、C/C++ のクラス外 member 定義・operator・concept・inline namespace・module、CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出（型位置の `type_reference` エッジと nested generic 呼び出し向け depth-aware fallback を含む）
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -1276,7 +1272,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- 参照先シンボル名
-    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "type_reference"
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "decorator", "type_reference"
     line            INTEGER,                 -- 1始まりの行番号
     column_number   INTEGER,                 -- 1始まりの列番号
     context         TEXT,                    -- trim済みソース行
@@ -1533,8 +1529,8 @@ LIMIT 20;
 | Java | メソッド（同一行の先頭アノテーション付き、`@Label(")")` や `@SuppressWarnings({"unchecked"})` のような annotation 引数、`value(); int age();` のような同一行 `@interface` メンバーの後続 sibling、annotation-array 引数を含む record header や opening brace が次行へ送られた形も含む compact constructor、同一行 brace-body sibling、same-line enum 定数 body 内メソッドを含む）, static final, enum メンバー（文字列・char・コメント・text block を追跡する body-scoped scanner で抽出し、最初の top-level `;` で停止するため、enum 本体外の `\tRED();` のようなメソッド呼び出しを誤検出しない。匿名 body を持つ enum 定数は body range も保持し、入れ子の override / helper メソッドと same-line body-local method が enum 定数コンテナにぶら下がる） | class, record, sealed, @interface, `module-info.java` の module 宣言 | -- | interface | enum | record primary component | -- | import（`module-info.java` 内の `requires` / `exports` / `opens` / `uses` / `provides` を含む） | yes |
 | Kotlin | fun, 拡張関数, セカンダリコンストラクタ（`constructor(...)`）, 修飾子が多い形（`abstract`, `override`, `open`, `final`, `suspend`） | class, object, companion（無名 companion は `Companion` に正規化）, data/sealed/value class | -- | interface | enum class, enum エントリ | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
-| C | 関数 | -- | struct | -- | enum | -- | -- | #include | yes |
-| C++ | 関数 | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| C | 関数, `#define` マクロ | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | 関数, `#define` マクロ | class | struct | -- | enum, enum class | -- | -- | #include | yes |
 | PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | 関数 | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
@@ -1559,7 +1555,7 @@ LIMIT 20;
 | Makefile | ターゲット | -- | -- | -- | -- | -- | -- | -- | -- |
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
-| Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- | -- | -- | -- | -- | -- |
+| Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM)、ステージ依存 (FROM \<stage\> AS \<new\>、COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, instance | -- | class (型クラス) | -- | -- | -- | import | -- |

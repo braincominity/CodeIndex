@@ -67,6 +67,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDecorators_CaptureBareAndQualifiedNames()
+    {
+        const string content = """
+            def bare_decorator(f):
+                return f
+
+            def parametrized(arg):
+                def wrap(f):
+                    return f
+                return wrap
+
+            @bare_decorator
+            @parametrized("value")
+            def wrapped():
+                pass
+
+            @staticmethod
+            def method():
+                pass
+
+            @pytest.fixture
+            def fixture():
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "bare_decorator"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "staticmethod"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "pytest.fixture"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "parametrized"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
     {
         const string content = """
@@ -282,6 +326,52 @@ public class ReferenceExtractorTests
             r.SymbolName == "J"
             && r.ReferenceKind == "instantiate"
             && r.ContainerName == "make");
+    }
+
+    [Fact]
+    public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
+    {
+        const string content = """
+            FROM golang:1.21 AS builder
+
+            FROM builder AS build2
+
+            FROM alpine:3.20
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "alpine:3.20");
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IndexStageDependencies()
+    {
+        const string content = """
+            FROM golang:1.21 AS builder
+
+            FROM debian:bookworm-slim AS runner
+
+            COPY --from=builder /src/app /usr/local/bin/app
+            COPY --from=builder /src/assets /opt/assets
+
+            FROM runner AS final
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "runner"
+            && reference.ReferenceKind == "call"));
     }
 
     [Fact]
@@ -610,6 +700,31 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.Empty(references);
+    }
+
+    [Fact]
+    public void Extract_CppDefineLine_DoesNotBecomeReference()
+    {
+        const string content = """
+            #include <cstdio>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+
+            void work() {
+                auto value = MAX(1, 2);
+                (void)VERSION;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        var maxRefs = references.Where(r => r.SymbolName == "MAX").ToList();
+        Assert.Single(maxRefs);
+        Assert.Equal("call", maxRefs[0].ReferenceKind);
+        Assert.Equal("work", maxRefs[0].ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "MAX" && r.Line == 3);
     }
 
     [Fact]
