@@ -7054,6 +7054,79 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphQueries_CountTotalsPreserveScssAliasScope()
+    {
+        var cssFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "styles/theme.scss",
+            Lang = "css",
+            Size = 128,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = cssFileId,
+                SymbolName = "primary",
+                ReferenceKind = "call",
+                Line = 4,
+                Column = 10,
+                Context = "color: $primary;",
+                ContainerKind = "rule",
+                ContainerName = ".button",
+            },
+            new ReferenceRecord
+            {
+                FileId = cssFileId,
+                SymbolName = "radius",
+                ReferenceKind = "call",
+                Line = 6,
+                Column = 12,
+                Context = "@include rounded(4px);",
+                ContainerKind = "function",
+                ContainerName = "rounded",
+            },
+        ]);
+
+        var jsFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "scripts/theme.js",
+            Lang = "javascript",
+            Size = 128,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = jsFileId,
+                SymbolName = "primary",
+                ReferenceKind = "call",
+                Line = 4,
+                Column = 10,
+                Context = "color: $primary;",
+                ContainerKind = "rule",
+                ContainerName = ".button",
+            },
+            new ReferenceRecord
+            {
+                FileId = jsFileId,
+                SymbolName = "radius",
+                ReferenceKind = "call",
+                Line = 6,
+                Column = 12,
+                Context = "@include rounded(4px);",
+                ContainerKind = "function",
+                ContainerName = "rounded",
+            },
+        ]);
+
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("$primary", exact: true));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("$rounded", exact: true));
+    }
+
+    [Fact]
     public void GetCallers_ExposesDistinctReferenceKindsForMixedGroups()
     {
         // Regression for #501: when a single container reaches the same callee via
