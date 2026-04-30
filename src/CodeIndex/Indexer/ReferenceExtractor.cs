@@ -255,7 +255,7 @@ public static class ReferenceExtractor
     // `Foo<Bar<int>>()` や `new Dict<K, List<V>>()` のようなネスト generic 呼び出しは、
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
-    private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:::)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
     // omit the trailing `(` that the shared CallRegex requires.
     // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
