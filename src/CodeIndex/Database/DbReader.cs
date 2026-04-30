@@ -3137,6 +3137,10 @@ public partial class DbReader
         var totalAliasScope = totalSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        var totalCssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var totalCssScssVariableAliasScope = totalCssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         const string sqlLeafTotalScope = " AND f.lang = 'sql'";
         if (query != null)
         {
@@ -3161,19 +3165,25 @@ public partial class DbReader
             else if (exact && _foldReady)
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
-                    : allowSqlLeafFallback
+                    : totalCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{totalCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                        : allowSqlLeafFallback
                         ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
                         : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
-                    : allowSqlLeafFallback
+                    : totalCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{totalCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
+                        : allowSqlLeafFallback
                         ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
                         : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
-                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
+                    : totalCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{totalCssScssVariableAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                        : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -3201,6 +3211,13 @@ public partial class DbReader
                     ? NameFold.Fold(totalSuffixAlias) ?? totalSuffixAlias
                     : totalSuffixAlias;
                 cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
+            if (totalCssScssVariableAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(totalCssScssVariableAlias) ?? totalCssScssVariableAlias
+                    : totalCssScssVariableAlias;
+                cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
             }
         }
         if (referenceKind != null)
@@ -3255,6 +3272,10 @@ public partial class DbReader
             sql += NonInvocationReferenceKindsExclusion;
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         if (useSqlQualifiedContextMatch && exact && _foldReady)
             sql += $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
         else if (useSqlQualifiedContextMatch && exact)
@@ -3265,14 +3286,20 @@ public partial class DbReader
             sql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
         else if (exact && _foldReady)
             sql += allowSqlLeafFallback
-                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                    : " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
                 : " AND r.symbol_name_folded = @query";
         else if (exact)
             sql += allowSqlLeafFallback
-                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
                 : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            sql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            sql += cssScssVariableAlias != null
+                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3305,6 +3332,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -3363,6 +3397,10 @@ public partial class DbReader
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         if (useSqlQualifiedContextMatch && exact && _foldReady)
             groupedSql += $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
         else if (useSqlQualifiedContextMatch && exact)
@@ -3373,14 +3411,20 @@ public partial class DbReader
             groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                    : " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
                 : " AND r.symbol_name_folded = @query";
         else if (exact)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
                 : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += cssScssVariableAlias != null
+                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3397,6 +3441,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -3413,9 +3464,16 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
+        if (query.Length > 0 && query[0] == '$')
+            query = query[1..];
+
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         var groupedSql = @"
             SELECT path, lang
             FROM (
@@ -3442,14 +3500,20 @@ public partial class DbReader
             groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                    : " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
                 : " AND r.symbol_name_folded = @query";
         else if (exact)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
                 : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += cssScssVariableAlias != null
+                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3466,6 +3530,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -3514,20 +3585,30 @@ public partial class DbReader
             sql += NonInvocationReferenceKindsExclusion;
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
             sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
         else if (exact && useSqlQualifiedContainerMatch)
             sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
         else if (exact && _foldReady)
             sql += allowSqlLeafFallback
-                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name_folded = @query OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                    : " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
         else if (exact)
             sql += allowSqlLeafFallback
-                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
                 : " AND r.container_name = @query COLLATE NOCASE";
         else
-            sql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            sql += cssScssVariableAlias != null
+                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3562,6 +3643,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -3621,20 +3709,30 @@ public partial class DbReader
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
             groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
         else if (exact && useSqlQualifiedContainerMatch)
             groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name_folded = @query OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                    : " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
         else if (exact)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
                 : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += cssScssVariableAlias != null
+                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3654,6 +3752,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -3669,6 +3774,9 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
+
+        if (query.Length > 0 && query[0] == '$')
+            query = query[1..];
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3690,20 +3798,30 @@ public partial class DbReader
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var cssScssVariableAliasScope = cssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
             groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
         else if (exact && useSqlQualifiedContainerMatch)
             groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name_folded = @query OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                    : " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
         else if (exact)
             groupedSql += allowSqlLeafFallback
-                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                ? cssScssVariableAlias != null
+                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
                 : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += cssScssVariableAlias != null
+                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3723,6 +3841,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        if (cssScssVariableAlias != null)
+        {
+            var aliasParam = exact && _foldReady
+                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
+                : cssScssVariableAlias;
+            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+        }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)

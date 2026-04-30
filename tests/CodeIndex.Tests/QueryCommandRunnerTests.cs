@@ -13357,6 +13357,92 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunGraphCounts_ExactJson_CssScssVariableAliasAppliesToCallersAndCallees()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_css_scss_variable_alias_counts");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "styles"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "styles", "theme.scss"),
+                """
+                $primary: #3366cc;
+                $spacing-base: 8px;
+
+                @mixin rounded($radius) {
+                  border-radius: $radius;
+                }
+
+                %button-base {
+                  padding: 4px;
+                }
+
+                .button {
+                  color: $primary;
+                  padding: $spacing-base * 2;
+                  @include rounded(4px);
+                }
+
+                .card {
+                  @extend %button-base;
+                  border: 1px solid $primary;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (calleesExitCode, calleesStdout, calleesStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+
+            using var referencesCountDocument = ParseJsonOutput(referencesCountStdout);
+            using var callersCountDocument = ParseJsonOutput(callersCountStdout);
+            using var calleesCountDocument = ParseJsonOutput(calleesCountStdout);
+
+            var callersRows = ParseJsonLines(callersStdout);
+            var calleesRows = ParseJsonLines(calleesStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, referencesCountExitCode);
+            Assert.Equal(string.Empty, referencesCountStderr);
+            Assert.Equal(2, referencesCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, referencesCountDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal(2, callersRows.Count);
+            Assert.All(callersRows, row => Assert.Contains(row.RootElement.GetProperty("caller_name").GetString(), [".button", ".card"]));
+            Assert.All(callersRows, row => Assert.Equal("primary", row.RootElement.GetProperty("callee_name").GetString()));
+            Assert.All(callersRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, callersCountExitCode);
+            Assert.Equal(string.Empty, callersCountStderr);
+            Assert.Equal(2, callersCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, callersCountDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, calleesStderr);
+            var calleesRow = Assert.Single(calleesRows);
+            Assert.Equal("rounded", calleesRow.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("radius", calleesRow.RootElement.GetProperty("callee_name").GetString());
+            Assert.Equal("call", calleesRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, calleesCountExitCode);
+            Assert.Equal(string.Empty, calleesCountStderr);
+            Assert.Equal(1, calleesCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, calleesCountDocument.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlModifierPrefixedObjectsResolveRealNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_modifier_prefixed_objects");
