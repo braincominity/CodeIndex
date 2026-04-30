@@ -10067,11 +10067,29 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Terraform_DetectsResources()
     {
-        var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
+        var content =
+            "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\n" +
+            "provider \"aws\" {\n  region = \"us-east-1\"\n}\n\n" +
+            "terraform {\n  required_version = \">= 1.0\"\n}\n\n" +
+            "import {\n  id = \"bucket-123\"\n}\n\n" +
+            "moved {\n  from = aws_s3_bucket.old_bucket\n  to = aws_s3_bucket.my_bucket\n}\n\n" +
+            "removed {\n  from = aws_s3_bucket.deprecated_bucket\n}\n\n" +
+            "check \"health\" {\n  assert {\n    condition = true\n  }\n}\n\n" +
+            "locals {\n  region = \"us-east-1\"\n}\n\n" +
+            "variable \"region\" {\n  default = \"us-east-1\"\n}\n\n" +
+            "output \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\n" +
+            "module \"vpc\" {\n  source = \"./modules/vpc\"\n}";
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
 
         // resource captures logical name (second quoted token), not provider type
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my_bucket");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "aws");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "terraform");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "import");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "moved");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "removed");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "health");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "locals");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "region");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bucket_arn");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vpc");

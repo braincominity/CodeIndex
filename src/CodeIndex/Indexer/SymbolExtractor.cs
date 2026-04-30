@@ -1308,9 +1308,13 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*resource\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*data\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*module\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*provider\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>terraform)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>import|moved|removed)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*check\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*variable\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*locals\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>locals)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["css"] =
         [
