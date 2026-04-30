@@ -14864,15 +14864,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Makefile_DetectsTargets()
+    public void Extract_Makefile_DetectsTargetsAndAssignments()
     {
-        var content = "all: build test\n\nbuild:\n\tgcc -o main main.c\n\ntest:\n\t./run_tests\n\nclean:\n\trm -f main\n";
+        var content = """
+            CC := gcc
+            CFLAGS ::= -O2 -Wall
+            OBJ = foo.o bar.o
+            DEBUG ?= 1
+            EXTRA += -pipe
+
+            all: program
+            program: $(OBJ)
+            	$(CC) -o $@ $^
+
+            foo.o: foo.c foo.h
+            	$(CC) $(CFLAGS) -c foo.c
+
+            .PHONY: clean install
+
+            clean:
+            	rm -f *.o program
+
+            install: all
+            	cp program /usr/local/bin
+
+            %.o: %.c
+            	$(CC) $(CFLAGS) -c $< -o $@
+
+            $(OBJ): %.o: %.c
+            	$(CC) -c $< -o $@
+            """;
         var symbols = SymbolExtractor.Extract(1, "makefile", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "all");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "program");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo.o");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "clean");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "install");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "%.o");
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CC");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CFLAGS");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "OBJ");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "DEBUG");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "EXTRA");
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "CC");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "CFLAGS");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "OBJ");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEBUG");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "EXTRA");
     }
 
     [Fact]

@@ -1174,7 +1174,8 @@ public static class SymbolExtractor
         ],
         ["makefile"] =
         [
-            new("function", new Regex(@"^(?<name>[\w.-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット
+            new("property", new Regex(@"^(?<name>[\w.-]+)\s*(?::=|::=|=|\?=|\+=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile variable assignments / Makefile変数代入
+            new("function", new Regex(@"^(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット
         ],
         ["dockerfile"] =
         [
