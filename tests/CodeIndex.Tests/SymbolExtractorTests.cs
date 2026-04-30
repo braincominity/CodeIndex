@@ -10154,7 +10154,46 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_PHP_DetectsExpandedFeatures()
     {
-        var content = "<?php\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nreadonly class Config {\n    public const VERSION = '1.0';\n    public function getName(): string { return ''; }\n}\n\nenum Status: string {\n    case Active = 'active';\n}";
+        var content = """
+            <?php
+            namespace App\Models;
+
+            use Illuminate\Database\Eloquent\Model;
+
+            readonly class Config {
+                public const VERSION = '1.0';
+                public function getName(): string { return ''; }
+            }
+
+            enum Status: string {
+                case Active = 'active';
+                case Pending = 'pending';
+            }
+
+            enum OrderStatus {
+                case Draft;
+                case Published;
+            }
+
+            enum Priority: int {
+                case Low = 1;
+
+                public function label(): string {
+                    return match ($this) {
+                        Priority::Low => 'low',
+                    };
+                }
+            }
+
+            function inspectState(int $state): void {
+                switch ($state) {
+                    case 1:
+                        break;
+                    case 'x':
+                        break;
+                }
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "php", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name.Contains("App"));
@@ -10163,6 +10202,14 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "OrderStatus");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Priority");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Active" && s.ContainerName == "Status" && s.ReturnType == "'active'");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pending" && s.ContainerName == "Status" && s.ReturnType == "'pending'");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Draft" && s.ContainerName == "OrderStatus" && s.ReturnType == null);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Published" && s.ContainerName == "OrderStatus" && s.ReturnType == null);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Low" && s.ContainerName == "Priority" && s.ReturnType == "1");
+        Assert.Equal(5, symbols.Count(s => s.Kind == "property"));
     }
 
     [Fact]

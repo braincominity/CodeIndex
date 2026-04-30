@@ -390,7 +390,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Ruby | def, Rails DSL, block-call `name { ... }` / `name do ... end` | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | functions, `#define` macros | -- | struct | -- | enum | -- | -- | #include | yes |
 | C++ | functions, `#define` macros | class | struct | -- | enum, enum class | -- | -- | #include | yes |
-| PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
+| PHP | function, const, enum cases | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | functions | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
@@ -1531,7 +1531,7 @@ LIMIT 20;
 | Ruby | def, Rails DSL, ブロック呼び出し `name { ... }` / `name do ... end` | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | 関数, `#define` マクロ | -- | struct | -- | enum | -- | -- | #include | yes |
 | C++ | 関数, `#define` マクロ | class | struct | -- | enum, enum class | -- | -- | #include | yes |
-| PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
+| PHP | function, const, enum cases | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | 関数 | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
