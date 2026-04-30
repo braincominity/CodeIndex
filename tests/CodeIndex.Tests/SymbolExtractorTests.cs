@@ -14540,15 +14540,15 @@ public class SymbolExtractorTests
     public void Extract_Elixir_NestedBlocks_AndDoShorthand_HaveMatchingBodyRanges()
     {
         // Elixir: nested fn/case/if/with bodies and `, do:` shorthand / ネストした fn/case/if/with と `, do:` 短縮形
-        var content = "defmodule MyApp do\n  def process(items) do\n    Enum.each(items, fn item ->\n      IO.puts(\"item=#{item}\")\n    end)\n\n    Enum.map items, fn x -> x * 2 end\n\n    case items do\n      [] -> :empty\n      [h | _] -> h\n    end\n\n    with {:ok, data} <- fetch(),\n         {:ok, parsed} <- parse(data) do\n      IO.puts(parsed)\n    end\n  end\n\n  def fetch do\n    if true do\n      {:ok, \"data\"}\n    else\n      :error\n    end\n  end\n\n  def parse(data), do: {:ok, data}\n\n  def quick_check, do: helper()\n\n  def helper, do: :ok\nend";
+        var content = "defmodule MyApp do\n  def process(items) do\n    Enum.each(items, fn item ->\n      IO.puts(\"item=#{item}\")\n    end)\n\n    Enum.map items, fn x -> x * 2 end\n    sigil = ~s(end)\n\n    case items do\n      [] -> :empty\n      [h | _] -> h\n    end\n\n    with {:ok, data} <- fetch(),\n         {:ok, parsed} <- parse(data) do\n      IO.puts(parsed)\n    end\n  end\n\n  def fetch do\n    if true do\n      {:ok, \"data\"}\n    else\n      :error\n    end\n  end\n\n  def parse(data), do: {:ok, data}\n\n  def quick_check, do: helper()\n\n  def helper, do: :ok\nend";
         var symbols = SymbolExtractor.Extract(1, "elixir", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp" && s.StartLine == 1 && s.EndLine == 33);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 2 && s.EndLine == 18 && s.BodyStartLine == 3 && s.BodyEndLine == 18);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.StartLine == 20 && s.EndLine == 26 && s.BodyStartLine == 21 && s.BodyEndLine == 26);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.StartLine == 28 && s.EndLine == 28 && s.BodyStartLine == 28 && s.BodyEndLine == 28);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "quick_check" && s.StartLine == 30 && s.EndLine == 30 && s.BodyStartLine == 30 && s.BodyEndLine == 30);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper" && s.StartLine == 32 && s.EndLine == 32 && s.BodyStartLine == 32 && s.BodyEndLine == 32);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp" && s.StartLine == 1 && s.EndLine == 34);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 2 && s.EndLine == 19 && s.BodyStartLine == 3 && s.BodyEndLine == 19);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.StartLine == 21 && s.EndLine == 27 && s.BodyStartLine == 22 && s.BodyEndLine == 27);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.StartLine == 29 && s.EndLine == 29 && s.BodyStartLine == 29 && s.BodyEndLine == 29);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "quick_check" && s.StartLine == 31 && s.EndLine == 31 && s.BodyStartLine == 31 && s.BodyEndLine == 31);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper" && s.StartLine == 33 && s.EndLine == 33 && s.BodyStartLine == 33 && s.BodyEndLine == 33);
     }
 
     [Fact]

@@ -14139,7 +14139,7 @@ public static class SymbolExtractor
         if (!ElixirBlockStartRegex.IsMatch(firstLine))
             return (startIndex + 1, null, null);
 
-        var scanState = ElixirMaskState.Normal;
+        var scanState = default(ElixirMaskState);
         var maskedFirstLine = MaskElixirLineForBodyScan(firstLine, ref scanState);
         if (ElixirDoShorthandRegex.IsMatch(maskedFirstLine))
             return (startIndex + 1, startIndex + 1, startIndex + 1);
@@ -14191,13 +14191,22 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private enum ElixirMaskState
+    private enum ElixirMaskMode
     {
         Normal,
         DoubleQuote,
         SingleQuote,
         TripleDoubleQuote,
         TripleSingleQuote,
+        Sigil,
+    }
+
+    private struct ElixirMaskState
+    {
+        public ElixirMaskMode Mode;
+        public char SigilOpen;
+        public char SigilClose;
+        public int SigilDepth;
     }
 
     private static string MaskElixirLineForBodyScan(string line, ref ElixirMaskState state)
@@ -14211,9 +14220,9 @@ public static class SymbolExtractor
         {
             var current = chars[i];
 
-            switch (state)
+            switch (state.Mode)
             {
-                case ElixirMaskState.Normal:
+                case ElixirMaskMode.Normal:
                     if (current == '#')
                     {
                         for (int j = i; j < chars.Length; j++)
@@ -14227,18 +14236,33 @@ public static class SymbolExtractor
                         if (triple)
                         {
                             chars[i] = chars[i + 1] = chars[i + 2] = ' ';
-                            state = current == '"' ? ElixirMaskState.TripleDoubleQuote : ElixirMaskState.TripleSingleQuote;
+                            state.Mode = current == '"' ? ElixirMaskMode.TripleDoubleQuote : ElixirMaskMode.TripleSingleQuote;
                             i += 2;
                         }
                         else
                         {
                             chars[i] = ' ';
-                            state = current == '"' ? ElixirMaskState.DoubleQuote : ElixirMaskState.SingleQuote;
+                            state.Mode = current == '"' ? ElixirMaskMode.DoubleQuote : ElixirMaskMode.SingleQuote;
+                        }
+                        break;
+                    }
+
+                    if (current == '~' && i + 2 < chars.Length && char.IsLetter(chars[i + 1]))
+                    {
+                        var sigilOpen = chars[i + 2];
+                        if (TryGetElixirSigilClose(sigilOpen, out var sigilClose, out var nested))
+                        {
+                            chars[i] = chars[i + 1] = chars[i + 2] = ' ';
+                            state.Mode = ElixirMaskMode.Sigil;
+                            state.SigilOpen = sigilOpen;
+                            state.SigilClose = sigilClose;
+                            state.SigilDepth = nested ? 1 : 0;
+                            i += 2;
                         }
                     }
                     break;
 
-                case ElixirMaskState.DoubleQuote:
+                case ElixirMaskMode.DoubleQuote:
                     chars[i] = ' ';
                     if (current == '\\' && i + 1 < chars.Length)
                     {
@@ -14247,10 +14271,10 @@ public static class SymbolExtractor
                     }
 
                     if (current == '"')
-                        state = ElixirMaskState.Normal;
+                        state.Mode = ElixirMaskMode.Normal;
                     break;
 
-                case ElixirMaskState.SingleQuote:
+                case ElixirMaskMode.SingleQuote:
                     chars[i] = ' ';
                     if (current == '\\' && i + 1 < chars.Length)
                     {
@@ -14259,32 +14283,82 @@ public static class SymbolExtractor
                     }
 
                     if (current == '\'')
-                        state = ElixirMaskState.Normal;
+                        state.Mode = ElixirMaskMode.Normal;
                     break;
 
-                case ElixirMaskState.TripleDoubleQuote:
+                case ElixirMaskMode.TripleDoubleQuote:
                     chars[i] = ' ';
                     if (current == '"' && i + 2 < chars.Length && chars[i + 1] == '"' && chars[i + 2] == '"')
                     {
                         chars[i] = chars[i + 1] = chars[i + 2] = ' ';
-                        state = ElixirMaskState.Normal;
+                        state.Mode = ElixirMaskMode.Normal;
                         i += 2;
                     }
                     break;
 
-                case ElixirMaskState.TripleSingleQuote:
+                case ElixirMaskMode.TripleSingleQuote:
                     chars[i] = ' ';
                     if (current == '\'' && i + 2 < chars.Length && chars[i + 1] == '\'' && chars[i + 2] == '\'')
                     {
                         chars[i] = chars[i + 1] = chars[i + 2] = ' ';
-                        state = ElixirMaskState.Normal;
+                        state.Mode = ElixirMaskMode.Normal;
                         i += 2;
+                    }
+                    break;
+
+                case ElixirMaskMode.Sigil:
+                    chars[i] = ' ';
+                    if (current == '\\' && i + 1 < chars.Length)
+                    {
+                        chars[++i] = ' ';
+                        continue;
+                    }
+
+                    if (state.SigilDepth > 0)
+                    {
+                        if (current == state.SigilOpen)
+                            state.SigilDepth++;
+                        else if (current == state.SigilClose)
+                        {
+                            state.SigilDepth--;
+                            if (state.SigilDepth == 0)
+                                state.Mode = ElixirMaskMode.Normal;
+                        }
+                    }
+                    else if (current == state.SigilClose)
+                    {
+                        state.Mode = ElixirMaskMode.Normal;
                     }
                     break;
             }
         }
 
         return new string(chars);
+    }
+
+    private static bool TryGetElixirSigilClose(char open, out char close, out bool nested)
+    {
+        nested = true;
+        close = open;
+        return open switch
+        {
+            '(' => SetSigilClose(')', true, out close, out nested),
+            '[' => SetSigilClose(']', true, out close, out nested),
+            '{' => SetSigilClose('}', true, out close, out nested),
+            '<' => SetSigilClose('>', true, out close, out nested),
+            '/' => SetSigilClose('/', false, out close, out nested),
+            '|' => SetSigilClose('|', false, out close, out nested),
+            '"' => SetSigilClose('"', false, out close, out nested),
+            '\'' => SetSigilClose('\'', false, out close, out nested),
+            _ => false,
+        };
+    }
+
+    private static bool SetSigilClose(char sigilClose, bool isNested, out char close, out bool nested)
+    {
+        close = sigilClose;
+        nested = isNested;
+        return true;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindVisualBasicRange(string[] lines, int startIndex)
