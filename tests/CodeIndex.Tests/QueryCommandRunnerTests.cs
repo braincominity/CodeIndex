@@ -23838,6 +23838,61 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_PathGlobsMatchExpectedFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_path_glob");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.py",
+                "python",
+                """
+                def hello():
+                    return "hello"
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/app.py",
+                "python",
+                """
+                def hello():
+                    return "hello"
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.txt",
+                "text",
+                "greetings\n");
+
+            var (suffixExitCode, suffixStdout, suffixStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["hello", "--db", dbPath, "--path", "*.py"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, suffixExitCode);
+            Assert.Contains("4 matches in 2 files", suffixStderr);
+            Assert.Contains("src/app.py", suffixStdout);
+            Assert.Contains("tests/app.py", suffixStdout);
+            Assert.DoesNotContain("src/app.txt", suffixStdout);
+
+            var (prefixedExitCode, prefixedStdout, prefixedStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["hello", "--db", dbPath, "--path", "src/*.py"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, prefixedExitCode);
+            Assert.Contains("2 matches in 1 file", prefixedStderr);
+            Assert.Contains("src/app.py", prefixedStdout);
+            Assert.DoesNotContain("tests/app.py", prefixedStdout);
+            Assert.DoesNotContain("src/app.txt", prefixedStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_RejectsUnsupportedFlags()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(

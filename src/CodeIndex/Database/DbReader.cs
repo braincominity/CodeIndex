@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
@@ -732,6 +733,42 @@ public partial class DbReader
     internal static string EscapeLikeQuery(string input)
     {
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    }
+
+    internal static string BuildPathLikePattern(string input)
+    {
+        var hasWildcard = false;
+        var builder = new StringBuilder(input.Length + 2);
+
+        foreach (var ch in input)
+        {
+            switch (ch)
+            {
+                case '*':
+                    builder.Append('%');
+                    hasWildcard = true;
+                    break;
+                case '?':
+                    builder.Append('_');
+                    hasWildcard = true;
+                    break;
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '%':
+                    builder.Append("\\%");
+                    break;
+                case '_':
+                    builder.Append("\\_");
+                    break;
+                default:
+                    builder.Append(ch);
+                    break;
+            }
+        }
+
+        var pattern = builder.ToString();
+        return hasWildcard ? pattern : $"%{pattern}%";
     }
 
     internal static bool IsSqlLanguage(string? lang)
@@ -4451,26 +4488,24 @@ public partial class DbReader
             sql += " AND f.lang = @metadataAmbigLangFilter";
             cmd.Parameters.AddWithValue("@metadataAmbigLangFilter", lang);
         }
-        // Path / exclude-path parameters must be wrapped with `%...%` and escaped
-        // through EscapeLikeQuery so the LIKE semantics match the rest of the
-        // reader (search / references / callers / deps etc.). Passing the raw
-        // CLI value would require an anchored path like `%src/A/%` to match, so
-        // normal `--path src/A/` invocations would see zero in-scope definitions,
-        // the ambiguity count would underflow to 1, and the metadata bypass
-        // would falsely fire on what are actually ambiguous targets.
-        // path / exclude-path のパラメータは他の読み取り経路 (search / references /
-        // callers / deps 等) と同じ LIKE セマンティクスに合わせるため、
-        // EscapeLikeQuery でエスケープした上で `%...%` で包んでバインドする。生値の
-        // まま渡すと、通常の `--path src/A/` のような呼び出しでは LIKE が一致せず、
-        // 曖昧性カウントが 1 に過小化され、本来抑止すべき metadata bypass が
-        // 誤って発動してしまう。
+        // Path / exclude-path parameters share the same glob-aware LIKE
+        // translation as the rest of the reader. Plain text keeps substring
+        // behavior, while `*` / `?` become wildcards. Passing the raw CLI
+        // value here would let `--path src/A/*.cs` stay literal and undercount
+        // ambiguous targets, so centralize the conversion in
+        // BuildPathLikePattern.
+        // path / exclude-path のパラメータは reader 全体で共通の glob 対応
+        // LIKE 変換を使う。ワイルドカードを含まない文字列は従来どおり部分文字列、
+        // `*` / `?` はワイルドカードとして扱う。CLI の生値をそのまま渡すと
+        // `--path src/A/*.cs` がリテラル扱いのままになり、曖昧性の件数を誤って
+        // 数え込むため、変換は BuildPathLikePattern に集約する。
         if (pathPatterns is { Count: > 0 })
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
             {
                 ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
-                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", BuildPathLikePattern(pathPatterns[i]));
             }
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
@@ -4479,7 +4514,7 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
             {
                 sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
-                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
             }
         }
         if (excludeTests)
@@ -5566,12 +5601,12 @@ public partial class DbReader
         if (pathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
         }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@excludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -5594,7 +5629,9 @@ public partial class DbReader
     {
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
-            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。
+            // Plain text keeps the old substring behavior, while glob tokens
+            // (`*` / `?`) are translated to SQL LIKE wildcards.
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
                 ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
@@ -5616,13 +5653,13 @@ public partial class DbReader
         if (pathPatterns != null)
         {
             for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
         }
 
         if (excludePathPatterns != null)
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@excludePathPattern{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
     }
 
@@ -5631,7 +5668,9 @@ public partial class DbReader
         var sql = string.Empty;
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
-            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。
+            // Plain text keeps the old substring behavior, while glob tokens
+            // (`*` / `?`) are translated to SQL LIKE wildcards.
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
                 ors.Add($"{fileAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
@@ -5713,7 +5752,7 @@ public partial class DbReader
         if (pathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
         }
 
         var results = new List<Models.FileIssue>();
