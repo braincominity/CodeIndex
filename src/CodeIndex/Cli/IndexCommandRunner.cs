@@ -344,16 +344,14 @@ public static class IndexCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
+                Console.WriteLine(JsonSerializer.Serialize(new BackfillFoldJsonResult(
                     symbols,
-                    symbol_references = symbolReferences,
-                    rewrite_all = rewriteAll,
+                    symbolReferences,
+                    rewriteAll,
                     verified,
-                    user_version_before = userVersionBefore,
-                    user_version_after = userVersionAfter,
-                    fold_ready = true,
-                }, jsonOptions));
+                    userVersionBefore,
+                    userVersionAfter,
+                    true), CliJsonSerializerContext.Default.BackfillFoldJsonResult));
             }
             else
             {
@@ -1387,7 +1385,7 @@ public static class IndexCommandRunner
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message, hint }, jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult("error", message, hint), CliJsonSerializerContext.Default.CommandErrorJsonResult));
         else
         {
             Console.Error.WriteLine($"Error: {message}");

@@ -39,6 +39,14 @@ public static class ReferenceExtractor
         @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex DockerfileStageReferenceRegex = new(
+        @"^\s*FROM\s+(?<name>\w+)\s+AS\s+\w+\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DockerfileCopyFromReferenceRegex = new(
+        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -968,6 +976,7 @@ public static class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
+        var dockerfileStageNames = BuildDockerfileStageNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -1387,6 +1396,19 @@ public static class ReferenceExtractor
                     seen,
                     fileId,
                     definitionNames,
+                    container);
+            }
+
+            if (language == "dockerfile")
+            {
+                EmitDockerfileStageReferences(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    dockerfileStageNames,
                     container);
             }
 
@@ -2295,6 +2317,37 @@ public static class ReferenceExtractor
             fileId,
             definitionNames,
             container);
+    }
+
+    private static void EmitDockerfileStageReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? stageNames,
+        SymbolRecord? container)
+    {
+        if (stageNames == null || stageNames.Count == 0)
+            return;
+
+        var fromMatch = DockerfileStageReferenceRegex.Match(preparedLine);
+        if (fromMatch.Success)
+        {
+            var name = fromMatch.Groups["name"].Value;
+            if (stageNames.Contains(name))
+                AddReference(references, seen, fileId, name, fromMatch.Groups["name"].Index, "call", context, lineNumber, container);
+        }
+
+        foreach (Match match in DockerfileCopyFromReferenceRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (!stageNames.Contains(name))
+                continue;
+
+            AddReference(references, seen, fileId, name, match.Groups["name"].Index, "call", context, lineNumber, container);
+        }
     }
 
     private static bool IsJsxFilePath(string? path)
@@ -5604,6 +5657,23 @@ public static class ReferenceExtractor
                 : symbol.Name;
             if (!string.IsNullOrWhiteSpace(name))
                 names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static HashSet<string>? BuildDockerfileStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language != "dockerfile")
+            return null;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            names.Add(symbol.Name);
         }
 
         return names;

@@ -610,6 +610,16 @@ The database reflects the working tree at the time of the last index. After swit
 | Elixir | `.ex`, `.exs` | yes |
 | Lua | `.lua` | yes |
 | Groovy | `.groovy`, `.gvy`, `.gy`, `.gsh` | -- |
+| Crystal | `.cr` | -- |
+| Clojure | `.clj`, `.cljs`, `.cljc`, `.edn` | -- |
+| D | `.d` | -- |
+| Erlang | `.erl`, `.hrl` | -- |
+| Julia | `.jl` | -- |
+| Nim | `.nim`, `.nims` | -- |
+| OCaml | `.ml`, `.mli` | -- |
+| Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
+| Solidity | `.sol` | -- |
+| Tcl | `.tcl`, `.tk` | -- |
 | R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
