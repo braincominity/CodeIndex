@@ -111,6 +111,57 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
+    {
+        // issue #258: Rust macro invocations need to surface as call-like references so
+        // callers / callees / impact can follow both std macros and user-defined macros.
+        // issue #258: Rust の macro 呼び出しは call 相当の reference として出し、
+        // std macro と user 定義 macro の両方を callers / callees / impact から辿れるようにする。
+        const string content = """
+            macro_rules! my_macro {
+                ($x:expr) => { $x + 1 };
+            }
+
+            fn helper(x: i32) -> i32 { x }
+
+            fn main() {
+                std::println!("hello");
+                let v = vec![1, 2, 3];
+                let msg = format!("x={}", 42);
+                let y = my_macro!(42);
+                let z = helper(1);
+                dbg!(y + z);
+                let _ = msg;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
+        Assert.Equal(6, callReferences.Count);
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "std::println"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "vec"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "format"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "my_macro"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "dbg"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "helper"
+            && reference.ContainerName == "main");
+        Assert.DoesNotContain(callReferences, reference => reference.SymbolName == "macro_rules");
+    }
+
+    [Fact]
     public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
     {
         const string content = """

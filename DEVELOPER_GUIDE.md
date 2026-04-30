@@ -37,7 +37,7 @@ src/CodeIndex/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
-    ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+    ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, Rust macro invocations (`name!(...)` / `name![...]` / `name!{...}`), type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
@@ -415,7 +415,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 | Dockerfile | named stages (AS) | base images (FROM), stage dependencies (FROM \<stage\> AS \<new\>, COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
-| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| Lua | function, local function, `local x = function`, `M.x = function`, `M:x = function` | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, instance | -- | class (typeclass) | -- | -- | -- | import | -- |
 | F# | let, let rec, let mutable, let inline, let private/internal/public, quoted identifiers | type, module | -- | -- | -- | -- | -- | open | yes |
@@ -1556,7 +1556,7 @@ LIMIT 20;
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM)、ステージ依存 (FROM \<stage\> AS \<new\>、COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
-| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| Lua | function, local function, `local x = function`, `M.x = function`, `M:x = function` | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, instance | -- | class (型クラス) | -- | -- | -- | import | -- |
 | F# | let, let rec, let mutable, let inline, let private/internal/public, quoted identifiers | type, module | -- | -- | -- | -- | -- | open | yes |

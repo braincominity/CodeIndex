@@ -96,6 +96,9 @@ public static class SymbolExtractor
     private const string CppFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof|using|namespace)\s*[\(\{;<])";
     private const string CppTemplatePrefixPattern = @"(?:template\s*<[^>]*>\s*)*";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GoImportSpecRegex = new(
+        @"^(?<name>(?:(?:[._]|[\p{L}_][\p{L}\p{Nd}_]*)\s+)?""(?:\\.|[^""\\])*"")(?:\s*;)?(?:\s*(?://.*|/\*.*\*/))?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -973,7 +976,6 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s+(?<name>[A-Z]\w*)\s*=\s*", RegexOptions.Compiled), BodyStyle.None),
             // Package-level var / パッケージレベル変数
             new("function", new Regex(@"^var\s+(?<name>\w+)\s", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["rust"] =
         [
@@ -1129,7 +1131,10 @@ public static class SymbolExtractor
             new("struct",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*(?!\{)(?!\|)(?!class\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*module\s+(?:(?:private|internal)\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*namespace\s+(?:(?:rec|global)\s+)*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>\w+)\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*open\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["vb"] =
@@ -1168,6 +1173,8 @@ public static class SymbolExtractor
         ["lua"] =
         [
             new("function", new Regex(@"^\s*(?:local\s+)?function\s+(?<name>[\w.:]+)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*local\s+(?<name>[\w]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[\w]+(?:[.:][\w]+)+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:local\s+\w+\s*=\s*)?require\s*\(?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["elixir"] =
@@ -1179,7 +1186,7 @@ public static class SymbolExtractor
         ],
         ["dart"] =
         [
-            new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|for\b|while\b|switch\b|catch\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
+            new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:abstract\s+)?(?:class|mixin)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace),
@@ -1191,7 +1198,10 @@ public static class SymbolExtractor
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:type|union|scalar|input)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?:query|mutation|subscription)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?:extend\s+type)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*fragment\s+(?<name>\w+)\s+on\s+\w+", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*directive\s+@(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*extend\s+(?:type|interface|input|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*extend\s+(?:union|scalar)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*schema\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["gradle"] =
@@ -1212,7 +1222,10 @@ public static class SymbolExtractor
         ["protobuf"] =
         [
             new("class",    new Regex(@"^\s*message\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*oneof\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*extend\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*service\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*rpc\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+""(?<name>[^""]+)"";", RegexOptions.Compiled), BodyStyle.None),
@@ -1308,9 +1321,13 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*resource\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*data\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*module\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*provider\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>terraform)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>import|moved|removed)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*check\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*variable\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*locals\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>locals)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["css"] =
         [
@@ -1457,6 +1474,114 @@ public static class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages() => PatternCache.Keys;
+
+    private static bool TryHandleGoImportLine(
+        long fileId,
+        string line,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        ref bool inImportBlock)
+    {
+        var trimmed = line.TrimStart();
+
+        if (inImportBlock)
+        {
+            if (trimmed.Length == 0
+                || trimmed.StartsWith("//", StringComparison.Ordinal)
+                || trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (trimmed.StartsWith(")", StringComparison.Ordinal))
+            {
+                inImportBlock = false;
+                return true;
+            }
+
+            var closingParenIndex = trimmed.IndexOf(')');
+            if (closingParenIndex >= 0)
+            {
+                var blockImportText = trimmed[..closingParenIndex].TrimEnd();
+                if (blockImportText.Length > 0)
+                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
+
+                inImportBlock = false;
+                return true;
+            }
+
+            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, trimmed);
+        }
+
+        if (!trimmed.StartsWith("import", StringComparison.Ordinal)
+            || (trimmed.Length > "import".Length
+                && !char.IsWhiteSpace(trimmed["import".Length])
+                && trimmed["import".Length] != '('))
+            return false;
+
+        var afterImport = trimmed["import".Length..].TrimStart();
+        if (afterImport.StartsWith("(", StringComparison.Ordinal))
+        {
+            var blockRemainder = afterImport[1..].TrimStart();
+            if (blockRemainder.Length > 0)
+            {
+                var closingParenIndex = blockRemainder.IndexOf(')');
+                if (closingParenIndex >= 0)
+                {
+                    var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
+                    if (blockImportText.Length > 0)
+                        TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
+
+                    inImportBlock = false;
+                    return true;
+                }
+
+                TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockRemainder);
+            }
+
+            inImportBlock = true;
+            return true;
+        }
+
+        return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, afterImport);
+    }
+
+    private static bool TryAddGoImportSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string importText)
+    {
+        var match = GoImportSpecRegex.Match(importText);
+        if (!match.Success)
+            return true;
+
+        var name = match.Groups["name"].Value.Trim();
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.IndexOf(importText, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = name,
+            },
+            rawLine);
+        return true;
+    }
 
     private static readonly HashSet<string> ContainerKinds =
     [
@@ -1625,6 +1750,7 @@ public static class SymbolExtractor
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
         var csharpSuppressedContinuationUntil = -1;
+        var goImportBlock = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1632,6 +1758,11 @@ public static class SymbolExtractor
                 continue;
 
             var line = lines[i];
+            if (lang == "go"
+                && TryHandleGoImportLine(fileId, line, i, symbols, ref goImportBlock))
+            {
+                continue;
+            }
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
             var matchLine = structuralLine;

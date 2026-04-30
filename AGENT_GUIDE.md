@@ -61,8 +61,8 @@ When editing changelog content, verify that both English and Japanese entries ar
 - Treat documentation as part of the feature contract, not as optional cleanup.
 - If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `DEVELOPER_GUIDE.md`, `TESTING_GUIDE.md`, `SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `CLAUDE.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file.
 - Do not open or merge a PR with a user-visible change unless the required docs and changelog updates are present, or the PR body explicitly explains why no docs/changelog change is needed.
-- Changelog entries are required for user-visible or behavior-changing work. For ordinary implementation PRs, the changelog entry is normally a bilingual fragment under `changelog.d/unreleased/`, not a direct edit to `CHANGELOG.md`.
-- Ordinary implementation PRs must not edit `CHANGELOG.md`; reserve direct `CHANGELOG.md` edits for release-preparation PRs that aggregate fragments. If `CHANGELOG.md` is edited, update both English and Japanese sections in the same commit.
+- Changelog entries are required for user-visible or behavior-changing work. For ordinary implementation PRs, write the changelog entry as a bilingual fragment under `changelog.d/unreleased/`; do not update `CHANGELOG.md` directly as the default path.
+- Ordinary implementation PRs must not edit `CHANGELOG.md`. Reserve direct `CHANGELOG.md` edits for release-preparation PRs that aggregate fragments into a release note. If `CHANGELOG.md` is edited, update both English and Japanese sections in the same commit, and only after confirming the work is a release-preparation change.
 
 ## Repository Rules
 
