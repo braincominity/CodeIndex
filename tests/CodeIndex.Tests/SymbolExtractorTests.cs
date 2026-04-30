@@ -82,6 +82,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Protobuf_DetectsEnumPackageOneofExtendAndService()
+    {
+        var content = """
+            syntax = "proto3";
+
+            package google.api;
+
+            message IssueDetails {
+              enum Severity {
+                SEVERITY_UNSPECIFIED = 0;
+                DEPRECATION = 1;
+              }
+
+              oneof kind {
+                string name = 1;
+                int32 code = 2;
+              }
+            }
+
+            extend google.protobuf.FieldOptions {
+              string custom = 50001;
+            }
+
+            service Greeter {
+              rpc SayHello (HelloRequest) returns (HelloReply);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "protobuf", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "google.api");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IssueDetails");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Severity" && s.ContainerName == "IssueDetails");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "kind" && s.ContainerName == "IssueDetails");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "google.protobuf.FieldOptions");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Greeter");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "SayHello");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Severity" && s.ContainerName == "IssueDetails");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsFunctionsAndClasses()
     {
         // Should detect exported and non-exported functions and classes
@@ -15331,7 +15372,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "google/protobuf/timestamp.proto");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ListUsers");
