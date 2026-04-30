@@ -9,9 +9,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
-#### 修正
-- **F# の symbol extraction が namespace / module / member 宣言を索引するようになった (#165)** — `SymbolExtractor` がトップレベルの `namespace` / `module` 宣言を `namespace` シンボルとして扱い、`member this.Name`、`member _.Age`、`static member Create`、`abstract member Visit`、`override this.ToString()` のような `member` 宣言も拾うようになったため、F# の API が `symbols`、`definition`、`outline` から見えるようになった。namespace、再帰 namespace、private module、member 宣言の回帰テストを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`、`README.md`。Fixes #165.
-
 #### Fixed
 - **F# symbol extraction now indexes namespaces, modules, and member declarations (#165)** — `SymbolExtractor` now classifies top-level `namespace` / `module` declarations as `namespace` symbols and captures `member` declarations such as `member this.Name`, `member _.Age`, `static member Create`, `abstract member Visit`, and `override this.ToString()` so F# APIs are visible in `symbols`, `definition`, and `outline`. Added regressions for namespaces, recursive namespaces, private modules, and member declarations. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `README.md`. Fixes #165.
 
