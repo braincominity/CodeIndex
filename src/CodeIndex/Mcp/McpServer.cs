@@ -116,11 +116,12 @@ public partial class McpServer
         if (method == "notifications/initialized" || method == "notifications/cancelled")
             return null;
 
+        if (!hasId)
+            return null;
+
         if (method == null)
         {
-            if (hasId)
-                return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method");
-            return null;
+            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method");
         }
 
         return method switch

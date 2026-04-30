@@ -144,6 +144,15 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_NoId_ReturnsNull()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    [Fact]
     public void Initialize_BooleanId_ReturnsInvalidRequestWithNullId()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":true,"method":"initialize","params":{}}""")!;
