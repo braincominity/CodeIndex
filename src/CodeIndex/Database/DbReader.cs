@@ -3464,9 +3464,6 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
-        if (query.Length > 0 && query[0] == '$')
-            query = query[1..];
-
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
@@ -3774,9 +3771,6 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
-
-        if (query.Length > 0 && query[0] == '$')
-            query = query[1..];
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
