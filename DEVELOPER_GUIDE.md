@@ -418,7 +418,7 @@ Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# 
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, instance | -- | class (typeclass) | -- | -- | -- | import | -- |
-| F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
+| F# | let, let rec, let mutable, let inline, let private/internal/public, quoted identifiers | type, module | -- | -- | -- | -- | -- | open | yes |
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | configuration, workflow, function, filter (scope prefixes), class constructors/methods | class | -- | -- | enum values | class properties | -- | Import-Module, using module/namespace/assembly | -- |
@@ -1559,7 +1559,7 @@ Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` とし�
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, instance | -- | class (型クラス) | -- | -- | -- | import | -- |
-| F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
+| F# | let, let rec, let mutable, let inline, let private/internal/public, quoted identifiers | type, module | -- | -- | -- | -- | -- | open | yes |
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | configuration, workflow, function, filter (scope prefixes) | class | -- | -- | enum | -- | -- | Import-Module, using module/namespace/assembly | -- |

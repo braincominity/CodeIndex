@@ -11478,7 +11478,30 @@ public class SymbolExtractorTests
     public void Extract_FSharp_DetectsLetTypeModuleOpen()
     {
         // F#: let, type, module, open / F#: let束縛、型、モジュール、open
-        var content = "module MyApp.Domain\n\nopen System\n\ntype UserId = int\ntype User = { Name: string; Age: int }\ntype Color = Red | Green | Blue\ntype Person(name: string) =\n    member _.Name = name\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
+        var content = """
+            module MyApp.Domain
+
+            open System
+
+            type UserId = int
+            type User = { Name: string; Age: int }
+            type Color = Red | Green | Blue
+            type Person(name: string) =
+                member _.Name = name
+
+            let x = 1
+            let mutable counter = 0
+            let inline add x y = x + y
+            let private secret = 42
+            let internal hidden = "x"
+            let ``spaced name`` = 1
+
+            let validate user =
+                user.Age > 0
+
+            let rec factorial n =
+                if n <= 1 then 1 else n * factorial (n - 1)
+            """;
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
@@ -11487,18 +11510,27 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "x");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "counter");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "secret");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "hidden");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spaced name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
     }
 
     [Fact]
-    public void Extract_FSharp_DoesNotMatchValueBindings()
+    public void Extract_FSharp_DetectsValueBindings()
     {
-        // Value bindings should not be detected as functions / 値束縛は関数として検出されないこと
+        // F# value bindings should be indexed by their binding names / F# の値束縛は
+        // 束縛名で索引される。
         var content = "let x = 5\nlet name = \"hello\"\nlet list = [1; 2; 3]";
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
-        Assert.DoesNotContain(symbols, s => s.Kind == "function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "x");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "list");
     }
 
     [Fact]

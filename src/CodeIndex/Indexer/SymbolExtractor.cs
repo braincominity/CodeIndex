@@ -1123,7 +1123,7 @@ public static class SymbolExtractor
         ],
         ["fsharp"] =
         [
-            new("function", new Regex(@"^\s*let\s+(?:rec\s+)?(?:(?:private|internal)\s+)?(?<name>\w+)\s+(?:\w|\()", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
@@ -20173,10 +20173,19 @@ public static class SymbolExtractor
         return lang switch
         {
             "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
+            "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
             "sql" => NormalizeSqlSymbolName(name),
             _ => name,
         };
+    }
+
+    private static string NormalizeFSharpSymbolName(string name)
+    {
+        if (name.Length >= 4 && name.StartsWith("``", StringComparison.Ordinal) && name.EndsWith("``", StringComparison.Ordinal))
+            return name[2..^2];
+
+        return name;
     }
 
     private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
