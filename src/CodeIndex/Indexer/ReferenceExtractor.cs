@@ -358,6 +358,20 @@ public static class ReferenceExtractor
     {
         "match", "catch", "else", "finally",
     };
+    // Gradle/Groovy block and command-style DSL calls such as `plugins { ... }`,
+    // `task buildJar(type: Jar) { ... }`, `apply plugin: 'java'`, and `println 'x'`
+    // do not use the shared `foo(...)` shape. Keep the matcher narrow to known DSL
+    // call forms so ordinary assignment lines stay out of the graph.
+    // Gradle/Groovy の block / command 型 DSL 呼び出し (`plugins { ... }`、
+    // `task buildJar(type: Jar) { ... }`、`apply plugin: 'java'`、`println 'x'`) は
+    // 共通の `foo(...)` 形では拾えない。代わりに、既知の DSL 呼び出し形に絞った
+    // 専用 matcher で取り込む。
+    private static readonly Regex GradleBlockCallRegex = new(
+        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\b(?:\s+[^\r\n{]+?)?\s*\{",
+        RegexOptions.Compiled);
+    private static readonly Regex GradleCommandCallRegex = new(
+        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\s+(?=(?:['""]|[_\p{L}]|\d|\.|:))",
+        RegexOptions.Compiled);
     // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
     // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
     // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
@@ -2204,6 +2218,29 @@ public static class ReferenceExtractor
                         if (ScalaIgnoredBlockCallNames.Contains(name))
                             continue;
                         AddCallLikeReference(name, callIndex);
+                    }
+                }
+                else if (language == "gradle")
+                {
+                    void AddGradleDslReference(string name, int callIndex)
+                    {
+                        var normalizedName = NormalizeAtPrefixedIdentifier(name);
+                        var callContainer = ResolveContainerForCall(callIndex);
+                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                    }
+
+                    foreach (Match match in GradleBlockCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        AddGradleDslReference(name, callIndex);
+                    }
+
+                    foreach (Match match in GradleCommandCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        AddGradleDslReference(name, callIndex);
                     }
                 }
 

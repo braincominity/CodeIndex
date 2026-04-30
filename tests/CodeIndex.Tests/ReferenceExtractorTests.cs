@@ -14584,6 +14584,97 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GradleDslBlockAndCommandForms_AreCapturedAsCalls()
+    {
+        // issue #280: Gradle/Groovy block DSL (`plugins {}` / `dependencies {}` / `repositories {}`)
+        // and command-style calls (`implementation '...'` / `println 'x'` / `apply plugin: 'java'`)
+        // must surface as reference rows instead of disappearing behind the shared `foo(...)` regex.
+        // issue #280: Gradle/Groovy の block DSL (`plugins {}` / `dependencies {}` / `repositories {}`)
+        // と command-style 呼び出し (`implementation '...'` / `println 'x'` / `apply plugin: 'java'`)
+        // は、共通の `foo(...)` regex に落ちず reference row として残る必要がある。
+        const string content = """
+            plugins {
+                id 'java'
+                id 'application'
+            }
+
+            dependencies {
+                implementation 'com.google.guava:guava:32.0.0-jre'
+                testImplementation 'junit:junit:4.13'
+                api project(':shared')
+            }
+
+            repositories {
+                mavenCentral()
+            }
+
+            application {
+                mainClass = 'com.example.Main'
+            }
+
+            task buildJar(type: Jar) {
+                from sourceSets.main.output
+                manifest {
+                    attributes 'Main-Class': 'com.example.Main'
+                }
+            }
+
+            subprojects {
+                apply plugin: 'java'
+            }
+
+            doLast {
+                println 'hello'
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "gradle", content);
+        var references = ReferenceExtractor.Extract(1, "gradle", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "plugins"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "dependencies"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "repositories"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "application"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "task"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "implementation"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "testImplementation"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "api"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "apply"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "from"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "attributes"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "println"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "doLast"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "mainClass");
+    }
+
+    [Fact]
     public void Extract_JavaMethodBodyCall_StaysCall()
     {
         // Regression guard: ordinary Java method call remains `call`, not `annotation`.
