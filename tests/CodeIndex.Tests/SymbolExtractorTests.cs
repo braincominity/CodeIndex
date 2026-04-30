@@ -14653,6 +14653,53 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dart_DetectsConstructorsAndTypedefAliases()
+    {
+        // Dart: constructors, typedef aliases / Dart: コンストラクタ、typedef エイリアス
+        var content = """
+            abstract class Animal {
+              String name;
+              int age;
+
+              Animal(this.name, this.age);
+              Animal.named({required this.name, this.age = 0});
+              factory Animal.empty() => _EmptyAnimal();
+              factory Animal.fromJson(Map<String, dynamic> json) =>
+                  Animal(json['name'] as String, json['age'] as int);
+              const Animal.constant(this.name, this.age);
+            }
+
+            class Point {
+              const Point(this.x, this.y);
+
+              final int x;
+              final int y;
+            }
+
+            class _EmptyAnimal extends Animal {
+              _EmptyAnimal() : super('', 0);
+            }
+
+            typedef IntCallback = int Function(int value);
+            typedef StringMap = Map<String, String>;
+            typedef int LegacyCallback(int value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.named");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.empty");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.fromJson");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Animal.constant");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "_EmptyAnimal");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IntCallback");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StringMap");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyCallback");
+    }
+
+    [Fact]
     public void Extract_Dart_DoesNotTreatKeywordLookalikesAsFunctions()
     {
         var content = """

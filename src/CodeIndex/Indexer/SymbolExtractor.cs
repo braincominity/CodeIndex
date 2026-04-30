@@ -1191,6 +1191,11 @@ public static class SymbolExtractor
         ["dart"] =
         [
             new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
+            new("function", new Regex(@"^\s*factory\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\((?=[^)]*(?:\bthis\b|\bsuper\b))", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*typedef\s+(?<name>\w+)(?:<[^>]*>)?\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*typedef\s+(?:[\w<>,\[\]\?\.\s]+\s+)+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:abstract\s+)?(?:class|mixin)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace),
