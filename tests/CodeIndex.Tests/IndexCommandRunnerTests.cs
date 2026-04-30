@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -850,6 +851,112 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
             }
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
+    {
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_backfill_{Guid.NewGuid():N}.db");
+        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_missing_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "CAFÉ_INIT",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "CAFÉ_INIT()",
+                        ContainerKind = "function",
+                        ContainerName = "bootstrap",
+                    },
+                ]);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+            }
+
+            var publishedDll = PublishTrimmedCli(publishDir);
+
+            JsonElement successJson;
+            int successExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedDll, publishDir, "backfill-fold", "--db", dbPath, "--json");
+                    successExitCode = exitCode;
+                    Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold produced no stdout. stderr={stderrText}");
+                    using var document = JsonDocument.Parse(stdoutText);
+                    successJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, successExitCode);
+            Assert.Equal(2, successJson.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, successJson.GetProperty("symbol_references").GetInt32());
+            Assert.True(successJson.GetProperty("fold_ready").GetBoolean());
+
+            JsonElement errorJson;
+            int errorExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedDll, publishDir, "backfill-fold", "--db", missingDbPath, "--json");
+                    errorExitCode = exitCode;
+                    Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold error path produced no stdout. stderr={stderrText}");
+                    using var document = JsonDocument.Parse(stdoutText);
+                    errorJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.NotFound, errorExitCode);
+            Assert.Equal("error", errorJson.GetProperty("status").GetString());
+            Assert.Contains("database not found", errorJson.GetProperty("message").GetString());
+            Assert.Contains("Point `--db` at an existing `codeindex.db`", errorJson.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(publishDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(missingDbPath))
+                File.Delete(missingDbPath);
         }
     }
 
@@ -4799,6 +4906,69 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
+    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedDll, string workingDirectory, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(publishedDll);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static string PublishTrimmedCli(string outputDir)
+    {
+        Directory.CreateDirectory(outputDir);
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = GetRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("publish");
+        psi.ArgumentList.Add(Path.Combine("src", "CodeIndex", "CodeIndex.csproj"));
+        psi.ArgumentList.Add("--configuration");
+        psi.ArgumentList.Add("Debug");
+        psi.ArgumentList.Add("--runtime");
+        psi.ArgumentList.Add(RuntimeInformation.RuntimeIdentifier);
+        psi.ArgumentList.Add("--output");
+        psi.ArgumentList.Add(outputDir);
+        psi.ArgumentList.Add("-p:PublishTrimmed=true");
+        psi.ArgumentList.Add("-p:SelfContained=true");
+        psi.ArgumentList.Add("-p:PublishSingleFile=false");
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (!File.Exists(publishedDll))
+            throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
+
+        return publishedDll;
+    }
+
     private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
@@ -4847,6 +5017,19 @@ public class IndexCommandRunnerTests
         }
 
         throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || Directory.Exists(Path.Combine(dir.FullName, "src", "CodeIndex")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
     }
 
     private static SqliteConnection OpenNonPoolingConnection(string dbPath)
