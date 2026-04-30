@@ -3376,6 +3376,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_MaxDepthZero_ReturnsResolvedDefinitionsWithoutCallers()
+    {
+        InsertIndexedFile("src/depth_zero.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run()
+                {
+                    Leaf();
+                }
+
+                public void Leaf() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 0, limit: 10, lang: "csharp");
+
+        Assert.Equal("Leaf", analysis.Query);
+        Assert.Equal("Leaf", analysis.ResolvedName);
+        Assert.Equal(1, analysis.DefinitionCount);
+        Assert.Single(analysis.Definitions);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Contains("depth 1", analysis.Suggestion, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_DoubleQuotedCallsResolveFromUnquotedQualifiedQueries()
     {
         InsertIndexedFile("src/sql_double_quoted_target.sql", "sql",

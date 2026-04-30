@@ -44,7 +44,7 @@ public partial class McpServer
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
-            + "Use 'impact_analysis' to compute transitive callers of a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
+            + "Use 'impact_analysis' to compute transitive callers of a symbol. Pass maxDepth=0 when you only want symbol resolution without traversing callers. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -1261,7 +1261,7 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
-        var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
+        var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 0, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
@@ -1655,7 +1655,7 @@ public partial class McpServer
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。

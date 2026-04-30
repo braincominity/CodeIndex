@@ -77,6 +77,16 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunImpact", options.Query);
+        Assert.Equal(0, options.ContextAfter);
+        Assert.True(options.ContextAfterExplicit);
+    }
+
+    [Fact]
     public void ParseArgs_CountFlagParsed()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
@@ -1935,6 +1945,40 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_Json_AcceptsAbsolutePathWithExplicitDbOutsideProjectRoot()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_absolute_path");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Sample.cs", "csharp", "namespace Demo;\npublic class Svc { }\n");
+            var absolutePath = Path.Combine(projectRoot, "src", "Sample.cs");
+
+            var (relativeExitCode, relativeStdout, relativeStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--start", "1", "--end", "2", "--json"],
+                _jsonOptions));
+            var (absoluteExitCode, absoluteStdout, absoluteStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                [absolutePath, "--db", dbPath, "--start", "1", "--end", "2", "--json"],
+                _jsonOptions));
+
+            using var relativeDocument = ParseJsonOutput(relativeStdout);
+            using var absoluteDocument = ParseJsonOutput(absoluteStdout);
+
+            Assert.Equal(CommandExitCodes.Success, relativeExitCode);
+            Assert.Equal(CommandExitCodes.Success, absoluteExitCode);
+            Assert.Equal(string.Empty, relativeStderr);
+            Assert.Equal(string.Empty, absoluteStderr);
+            Assert.Equal("src/Sample.cs", relativeDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal(relativeDocument.RootElement.GetProperty("path").GetString(), absoluteDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal(relativeDocument.RootElement.GetProperty("content").GetString(), absoluteDocument.RootElement.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_JsonClampsLongSingleLineContentWithoutFocus()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_focus");
@@ -2286,6 +2330,40 @@ public class QueryCommandRunnerTests
             Assert.Equal("src/program.cs", json.GetProperty("path").GetString());
             Assert.Equal("csharp", json.GetProperty("lang").GetString());
             Assert.True(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_AcceptsAbsolutePathWithExplicitDbOutsideProjectRoot()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_absolute_path");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Sample.cs", "csharp", "namespace Demo;\npublic class Svc { }\n");
+            var absolutePath = Path.Combine(projectRoot, "src", "Sample.cs");
+
+            var (relativeExitCode, relativeStdout, relativeStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Sample.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (absoluteExitCode, absoluteStdout, absoluteStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                [absolutePath, "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var relativeDocument = ParseJsonOutput(relativeStdout);
+            using var absoluteDocument = ParseJsonOutput(absoluteStdout);
+
+            Assert.Equal(CommandExitCodes.Success, relativeExitCode);
+            Assert.Equal(CommandExitCodes.Success, absoluteExitCode);
+            Assert.Equal(string.Empty, relativeStderr);
+            Assert.Equal(string.Empty, absoluteStderr);
+            Assert.Equal("src/Sample.cs", relativeDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal(relativeDocument.RootElement.GetProperty("path").GetString(), absoluteDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal(relativeDocument.RootElement.GetProperty("symbol_count").GetInt32(), absoluteDocument.RootElement.GetProperty("symbol_count").GetInt32());
         }
         finally
         {
@@ -8554,6 +8632,37 @@ public class QueryCommandRunnerTests
             Assert.Equal(3, json.GetProperty("max_depth").GetInt32());
             Assert.False(json.GetProperty("truncated").GetBoolean());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ZeroDepthJson_ResolvesSymbolWithoutTraversingCallers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_depth_impact");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["HandleRequest", "--db", dbPath, "--json", "--depth", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("HandleRequest", json.GetProperty("query").GetString());
+            Assert.Equal(0, json.GetProperty("max_depth").GetInt32());
+            Assert.Equal(0, json.GetProperty("actual_depth").GetInt32());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("depth_zero", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", json.GetProperty("suggestion").GetString());
+            Assert.Empty(json.GetProperty("callers").EnumerateArray());
         }
         finally
         {

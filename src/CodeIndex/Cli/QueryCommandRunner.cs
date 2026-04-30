@@ -934,11 +934,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
         return WithDb(options.DbPath, reader =>
         {
             if (options.FocusLine.HasValue)
             {
-                var file = reader.GetFileByPath(options.Query);
+                var file = reader.GetFileByPath(filePath);
                 if (file != null)
                 {
                     var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
@@ -953,7 +954,7 @@ public static class QueryCommandRunner
             if (options.FocusColumn.HasValue)
             {
                 var focusLineLength = reader.GetExcerptFocusLineLength(
-                    options.Query,
+                    filePath,
                     options.StartLine.Value,
                     endLine,
                     options.ContextBefore,
@@ -967,7 +968,7 @@ public static class QueryCommandRunner
             }
 
             var excerpt = reader.GetExcerpt(
-                options.Query,
+                filePath,
                 options.StartLine.Value,
                 endLine,
                 options.ContextBefore,
@@ -1418,7 +1419,6 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = FileIndexer.NormalizePathSeparators(cmdArgs[0]);
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -1433,6 +1433,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
 
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
         return WithDb(options.DbPath, reader =>
         {
             var outline = reader.GetOutline(filePath);
@@ -1738,7 +1739,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
+            var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --depth is parsed into ContextAfter; 0 means resolve-only
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -1753,11 +1754,60 @@ public static class QueryCommandRunner
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
             var visibleCount = hasHeuristicHints ? hintCount : confirmedCount;
             var visibleFileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
+            var depthZeroResolved = maxDepth == 0 && analysis.DefinitionCount > 0;
 
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
 
             if (confirmedCount == 0 && !hasHeuristicHints)
             {
+                if (!options.CountOnly && depthZeroResolved)
+                {
+                    if (options.Json)
+                    {
+                        var payload = BuildJsonZeroResultPayload(
+                            reader,
+                            jsonOptions,
+                            resultsKey: "callers",
+                            graphTableAvailable: analysis.GraphTableAvailable,
+                            degraded: false,
+                            extraFields: zeroPayload =>
+                            {
+                                zeroPayload["query"] = options.Query;
+                                zeroPayload["resolved_name"] = analysis.ResolvedName;
+                                zeroPayload["file_count"] = 0;
+                                zeroPayload["confirmed_count"] = 0;
+                                zeroPayload["confirmed_file_count"] = 0;
+                                zeroPayload["hint_count"] = 0;
+                                zeroPayload["hint_file_count"] = 0;
+                                zeroPayload["max_depth"] = maxDepth;
+                                zeroPayload["actual_depth"] = 0;
+                                zeroPayload["truncated"] = analysis.Truncated;
+                                zeroPayload["impact_mode"] = analysis.ImpactMode;
+                                zeroPayload["heuristic"] = analysis.Heuristic;
+                                zeroPayload["file_impacts"] = new JsonArray();
+                                zeroPayload["definition_count"] = analysis.DefinitionCount;
+                                zeroPayload["definition_file_count"] = analysis.DefinitionFileCount;
+                                zeroPayload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
+                                zeroPayload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
+                                zeroPayload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
+                                zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, jsonOptions);
+                                if (analysis.ZeroResultReason != null)
+                                    zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
+                                if (analysis.Suggestion != null)
+                                    zeroPayload["suggestion"] = analysis.Suggestion;
+                                AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
+                            });
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("Depth 0 requested: resolved the symbol only; callers were not traversed.");
+                        WriteImpactResolutionHint(analysis);
+                        WriteGraphSupportHint(options.Lang);
+                    }
+                    return CommandExitCodes.Success;
+                }
+
                 if (options.CountOnly)
                 {
                     if (options.Json)
@@ -2570,6 +2620,7 @@ public static class QueryCommandRunner
         int focusLength = 1;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+        bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
         var excludePaths = new List<string>();
         bool excludeTests = false;
@@ -2720,6 +2771,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--depth", depthValue!);
                         contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
+                        contextAfterExplicit = true;
                     }
                     else
                         AddParseError(depthError!);
@@ -2899,6 +2951,7 @@ public static class QueryCommandRunner
             EndLine = endLine,
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
+            ContextAfterExplicit = contextAfterExplicit,
             FocusLine = focusLine,
             FocusColumn = focusColumn,
             FocusLength = focusLength,
@@ -4104,6 +4157,7 @@ public sealed class QueryCommandOptions
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
+    public bool ContextAfterExplicit { get; init; }
     public int? FocusLine { get; init; }
     public int? FocusColumn { get; init; }
     public int FocusLength { get; init; } = 1;
