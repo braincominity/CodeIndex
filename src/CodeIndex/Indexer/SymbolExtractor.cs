@@ -8901,6 +8901,52 @@ public static class SymbolExtractor
                 }
 
                 if (nestedBraceDepth == 0
+                    && classScanTarget.ContainerKind is "interface" or "class"
+                    && StartsJavaScriptTypeScriptClassMemberAt(sanitizedLine, column))
+                {
+                    var requireAbstractModifier = classScanTarget.ContainerKind == "class";
+                    if (TryParseJavaScriptTypeScriptMemberPropertyHeader(
+                        sanitizedLine,
+                        column,
+                        lang,
+                        requireAbstractModifier,
+                        out var propertyName,
+                        out var propertyVisibility,
+                        out var propertyTypeStartColumn,
+                        out var propertyTypeEndColumn,
+                        out var propertyHeaderEndColumn))
+                    {
+                        var propertyStartLine = i + 1;
+                        if (seenMethodStarts.Add((propertyStartLine, column)))
+                        {
+                            var propertySignatureEnd = propertyHeaderEndColumn < line.Length
+                                ? propertyHeaderEndColumn + 1
+                                : line.Length;
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "property",
+                                Name = propertyName,
+                                Line = propertyStartLine,
+                                StartLine = propertyStartLine,
+                                EndLine = propertyStartLine,
+                                BodyStartLine = null,
+                                BodyEndLine = null,
+                                Signature = line[column..propertySignatureEnd].Trim(),
+                                ContainerKind = classScanTarget.ContainerKind,
+                                ContainerName = classScanTarget.ContainerName,
+                                Visibility = propertyVisibility,
+                                ReturnType = NormalizeMetadata(
+                                    line[(propertyTypeStartColumn + 1)..(propertyTypeEndColumn + 1)]),
+                            });
+                        }
+
+                        column = propertyHeaderEndColumn + 1;
+                        continue;
+                    }
+                }
+
+                if (nestedBraceDepth == 0
                     && IsJavaScriptTypeScriptMethodCandidateStart(sanitizedLine, column)
                     && !IsJavaScriptTypeScriptControlFlowHeader(sanitizedLine, column))
                 {
@@ -11959,6 +12005,63 @@ public static class SymbolExtractor
         return false;
     }
 
+    // Walks a TypeScript member-property type annotation from `:` to the terminating `;`.
+    // Arrow types inside nested parens / angles / brackets are skipped as two-char tokens so
+    // `=>` in function types does not terminate the walk early.
+    // TypeScript の member-property 型注釈を `:` から終端 `;` まで歩く。入れ子の
+    // 括弧 / 山括弧 / 角括弧内の arrow type は 2 文字トークンとして読み飛ばし、
+    // function type 内の `=>` で早期終了しないようにする。
+    private static bool TrySkipJavaScriptTypeScriptTypeAnnotationUntilSemicolon(string sanitizedHeader, ref int index, out int typeEndColumn)
+    {
+        typeEndColumn = -1;
+        if (index >= sanitizedHeader.Length || sanitizedHeader[index] != ':')
+            return false;
+        var lastNonWs = index;
+        index++;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        while (index < sanitizedHeader.Length)
+        {
+            var ch = sanitizedHeader[index];
+
+            if (ch == '=' && index + 1 < sanitizedHeader.Length && sanitizedHeader[index + 1] == '>')
+            {
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                    lastNonWs = index + 1;
+                index += 2;
+                continue;
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+            {
+                if (ch == ';')
+                {
+                    typeEndColumn = lastNonWs;
+                    return true;
+                }
+                if (!char.IsWhiteSpace(ch))
+                    lastNonWs = index;
+            }
+
+            if (ch == '(') parenDepth++;
+            else if (ch == ')' && parenDepth > 0) parenDepth--;
+            else if (ch == '[') bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0) bracketDepth--;
+            else if (ch == '{') braceDepth++;
+            else if (ch == '}' && braceDepth > 0) braceDepth--;
+            else if (ch == '<') angleDepth++;
+            else if (ch == '>' && angleDepth > 0) angleDepth--;
+
+            index++;
+        }
+
+        return false;
+    }
+
     // Walks a TypeScript return-type annotation from ':' to the terminating '=>'. Inner arrow
     // types inside parens/angles/brackets are skipped as two-char tokens without decrementing
     // depth. Returns the inclusive column of the last non-whitespace character of the type.
@@ -12017,6 +12120,99 @@ public static class SymbolExtractor
     {
         return ParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out methodHeader)
             == JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
+    }
+
+    private static bool TryParseJavaScriptTypeScriptMemberPropertyHeader(
+        string sanitizedLine,
+        int startColumn,
+        string? lang,
+        bool requireAbstractModifier,
+        out string name,
+        out string? visibility,
+        out int typeStartColumn,
+        out int typeEndColumn,
+        out int headerEndColumn)
+    {
+        name = string.Empty;
+        visibility = null;
+        typeStartColumn = -1;
+        typeEndColumn = -1;
+        headerEndColumn = -1;
+
+        if (lang != "typescript")
+            return false;
+
+        var index = Math.Max(0, startColumn);
+        var sawAbstract = false;
+        var sawName = false;
+
+        while (index < sanitizedLine.Length)
+        {
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+
+            if (index >= sanitizedLine.Length)
+                return false;
+
+            if (!TryReadJavaScriptTypeScriptSourceMethodName(sanitizedLine, ref index, out var token))
+                return false;
+
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+
+            if (token is "public" or "private" or "protected")
+            {
+                visibility = token;
+                continue;
+            }
+
+            if (token is "static" or "readonly" or "override" or "declare")
+            {
+                continue;
+            }
+
+            if (token == "abstract")
+            {
+                sawAbstract = true;
+                continue;
+            }
+
+            if (!IsJavaScriptTypeScriptIdentifierStart(token[0]))
+                return false;
+
+            name = token;
+            sawName = true;
+            break;
+        }
+
+        if (!sawName)
+            return false;
+
+        if (requireAbstractModifier && !sawAbstract)
+            return false;
+
+        if (index < sanitizedLine.Length && sanitizedLine[index] == '?')
+        {
+            index++;
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+        }
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
+            return false;
+
+        typeStartColumn = index;
+        if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilSemicolon(sanitizedLine, ref index, out typeEndColumn))
+            return false;
+
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ';')
+            return false;
+
+        headerEndColumn = index;
+        return true;
     }
 
     private static JavaScriptTypeScriptMethodHeaderParseStatus ParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
