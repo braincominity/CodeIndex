@@ -79,6 +79,15 @@ public static class SymbolExtractor
         @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
     private const string CSharpMethodTypeParameterListPattern =
         @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
+    private static readonly Regex PhpGroupUseRegex = new(
+        @"^\s*use\s+(?:(?<type>function|const)\s+)?(?<prefix>[\w\\]+\\)\{\s*(?<items>[^{}]+?)\s*\}\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex PhpUseRegex = new(
+        @"^\s*use\s+(?:(?<type>function|const)\s+)?(?<name>[\w\\]+)(?:\s+as\s+(?<alias>\w+))?\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex PhpRequireIncludeRegex = new(
+        @"^\s*(?:require|include)(?:_once)?\s*\(?\s*(?:'(?<singleName>[^']+)'|""(?<doubleName>[^""]+)"")\s*\)?\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -1090,9 +1099,6 @@ public static class SymbolExtractor
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             // Namespace / 名前空間
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace),
-            // use (import) / use（インポート）
-            new("import",   new Regex(@"^\s*use\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?:require|include)(?:_once)?\s*\(?\s*(?<name>.+?)\s*\)?;", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["swift"] =
         [
@@ -1642,6 +1648,9 @@ public static class SymbolExtractor
             {
                 matchLine = csharpMatchLines![i];
             }
+
+            if (lang == "php")
+                ExtractPhpImportSymbols(symbols, line, i + 1);
 
             // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
             // `do` boundary tokens that the property regex now accepts for inline `set`
@@ -10394,6 +10403,104 @@ public static class SymbolExtractor
         symbols.Add(symbol);
     }
 
+    private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+
+        var groupUseMatch = PhpGroupUseRegex.Match(line);
+        if (groupUseMatch.Success)
+        {
+            var prefix = groupUseMatch.Groups["prefix"].Value;
+            var signature = line.Trim();
+            foreach (var rawItem in groupUseMatch.Groups["items"].Value.Split(','))
+            {
+                var item = rawItem.Trim();
+                if (item.Length == 0)
+                    continue;
+
+                var importedName = item;
+                var alias = string.Empty;
+                var aliasIndex = item.IndexOf(" as ", StringComparison.OrdinalIgnoreCase);
+                if (aliasIndex >= 0)
+                {
+                    importedName = item[..aliasIndex].Trim();
+                    alias = item[(aliasIndex + 4)..].Trim();
+                }
+
+                var symbolName = alias.Length > 0 ? alias : prefix + importedName;
+                if (symbolName.Length == 0)
+                    continue;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        Kind = "import",
+                        Name = symbolName,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = signature
+                    });
+            }
+
+            return;
+        }
+
+        var useMatch = PhpUseRegex.Match(line);
+        if (useMatch.Success)
+        {
+            var symbolName = useMatch.Groups["alias"].Success
+                ? useMatch.Groups["alias"].Value.Trim()
+                : useMatch.Groups["name"].Value.Trim();
+            if (symbolName.Length > 0)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        Kind = "import",
+                        Name = symbolName,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = line.Trim()
+                    });
+            }
+
+            return;
+        }
+
+        var requireMatch = PhpRequireIncludeRegex.Match(line);
+        if (!requireMatch.Success)
+            return;
+
+        var importedPath = requireMatch.Groups["singleName"].Success
+            ? requireMatch.Groups["singleName"].Value.Trim()
+            : requireMatch.Groups["doubleName"].Value.Trim();
+        if (importedPath.Length == 0)
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                Kind = "import",
+                Name = importedPath,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line.Trim()
+            });
+    }
+
     private static void RemoveTrailingSameNameDeclarationOnlyFunctions(List<SymbolRecord> symbols, SymbolRecord symbol)
     {
         for (var index = symbols.Count - 1; index >= 0; index--)
@@ -15413,20 +15520,19 @@ public static class SymbolExtractor
         return StartsWithCSharpEventAccessorKeyword(text, cursor);
     }
 
-      private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
-      {
-          if (startColumn < 0 || startColumn >= matchLine.Length)
-              return false;
+    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+    {
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
 
-          var remaining = matchLine[startColumn..];
-          return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-              && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
-                  || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
-      }
+        var remaining = matchLine[startColumn..];
+        return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
+            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+    }
 
-      private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
-      {
-          return false;
+    private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
+    {
         if (string.IsNullOrEmpty(token) || exclusiveEnd <= 0)
             return false;
 
