@@ -14333,6 +14333,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dart_DoesNotTreatKeywordLookalikesAsFunctions()
+    {
+        var content = """
+            abstract class Widget {}
+
+            String bar() => 'bar';
+
+            void sample(bool first, bool secondReady) {
+              if (first) {
+              }
+              else if (secondReady) {
+              }
+            }
+
+            void handle(Object value) {
+              switch (value) {
+                case const Class():
+                  break;
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "sample");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handle");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Class");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "class");
+    }
+
+    [Fact]
     public void Extract_Dart_DetectsImportAndEnum()
     {
         // Dart: import, enum / Dart: インポート、列挙型
