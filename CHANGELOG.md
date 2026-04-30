@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **`.kts` files now index as Kotlin instead of being silently skipped (#170)** — `FileIndexer` now maps Kotlin Script files to the existing Kotlin language bucket, so `build.gradle.kts`, `settings.gradle.kts`, and standalone `.kts` scripts are no longer dropped at scan time. Added regression coverage for direct language detection and a `build.gradle.kts` fixture that verifies both file indexing and Kotlin symbol extraction. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`, `README.md`. Fixes #170.
+
 ### [1.17.0] - 2026-04-30
 
 #### Changed
@@ -1041,8 +1043,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ---
 
 ## 日本語
-
+ 
 ### [Unreleased]
+
+- **`.kts` ファイルを Kotlin として index し、黙ってスキップしないようにした (#170)** — `FileIndexer` が Kotlin Script を既存の Kotlin バケットへマップするようになり、`build.gradle.kts`、`settings.gradle.kts`、単独の `.kts` スクリプトが scan 時に落ちなくなりました。直接の言語判定と、`build.gradle.kts` フィクスチャでのファイル index / Kotlin シンボル抽出を確認する regression を追加しました。対象: `src/CodeIndex/Indexer/FileIndexer.cs`、`tests/CodeIndex.Tests/FileIndexerTests.cs`、`README.md`。Fixes #170。
 
 ### [1.17.0] - 2026-04-30
 
