@@ -4782,7 +4782,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, idStderr);
             Assert.Single(idRows);
             Assert.Equal("#root", idRows[0].RootElement.GetProperty("name").GetString());
-            Assert.Equal("function", idRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("class", idRows[0].RootElement.GetProperty("kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, pseudoExitCode);
             Assert.Equal(string.Empty, pseudoStderr);

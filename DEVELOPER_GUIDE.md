@@ -36,7 +36,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, CSS grouping/nesting selectors, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
+    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
     ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
@@ -410,7 +410,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | configuration, workflow, function, filter (scope prefixes) | class | -- | -- | enum | -- | -- | Import-Module, using module/namespace/assembly | -- |
-| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| CSS/SCSS | @mixin, @keyframes, @counter-style, `@font-face` (`font-family`), `@page` | `.class`, `#id`, selector lists, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@namespace`, `@layer reset, base, theme;`, `@import`, `@use` | -- |
 | Batch | labels (`:name`, `:name.sub`), goto/call targets (reserved `:EOF` excluded) | -- | -- | -- | -- | `set VAR=`, `set /a VAR=` (also `VAR+=`, `VAR-=`, `VAR*=`, `VAR/=`, `VAR%=`, `VAR&=`, `VAR^=`, `VAR\|=`, `VAR<<=`, `VAR>>=`), `set /p VAR=`, `set "VAR=..."`, `@set VAR=`, `if ... set VAR=`, same-line multi-statement forms `set A=1 & set B=2`, `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set VAR=` (`rem` / `::` comment lines still excluded) | -- | -- | -- |
 | HTML | -- | custom Web Component tag names from a dedicated tag-structure state machine (opening tags containing a hyphen, e.g. `<my-button>` / `<app-sidebar>`; reserved SVG/MathML hyphenated tags like `font-face` / `color-profile` / `annotation-xml` are excluded) | -- | -- | -- | `id="..."` / `id='...'` attributes (state machine walks tag openers, quoted/unquoted values, multi-line quoted values, and only accepts the `id` attribute — so `data-id=` / `aria-*id=` / `xml:id=` are ignored structurally rather than by regex lookbehind) | -- | external `<script src="...">` and `<link href="...">` (raw-text bodies of `<script>` / `<style>` / `<textarea>` / `<title>` and `<!-- ... -->` comments are masked so attribute-lookalike strings inside them do not leak phantom symbols) | -- |
 
@@ -1165,7 +1165,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
+    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・CSS の grouping/nesting セレクタと selector list / named at-rule・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出（型位置の `type_reference` エッジと nested generic 呼び出し向け depth-aware fallback を含む）
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -1539,7 +1539,7 @@ LIMIT 20;
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | configuration, workflow, function, filter (scope prefixes) | class | -- | -- | enum | -- | -- | Import-Module, using module/namespace/assembly | -- |
-| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `%placeholder`, `@extend`, `--custom-property` | -- | `@import`, `@use` | -- |
+| CSS/SCSS | @mixin, @keyframes, @counter-style, `@font-face` (`font-family`), `@page` | `.class`, `#id`, selector lists, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `%placeholder`, `@extend`, `--custom-property` | -- | `@namespace`, `@layer reset, base, theme;`, `@import`, `@use` | -- |
 | Batch | ラベル (`:name`、`:name.sub`)、goto/call の着地点 (予約 `:EOF` は除外) | -- | -- | -- | -- | `set VAR=`、`set /a VAR=` (`VAR+=`、`VAR-=`、`VAR*=`、`VAR/=`、`VAR%=`、`VAR&=`、`VAR^=`、`VAR\|=`、`VAR<<=`、`VAR>>=` も)、`set /p VAR=`、`set "VAR=..."`、`@set VAR=`、`if ... set VAR=`、同一行複数ステートメント形 `set A=1 & set B=2` / `( set X=1 )` / `if ... ( set P=1 ) else set Q=2` / `for ... do set VAR=` (`rem` / `::` コメント行は引き続き除外) | -- | -- | -- |
 | HTML | -- | 専用のタグ構造 state machine で抽出するカスタム Web Component のタグ名（ハイフンを含む開始タグ、例: `<my-button>` / `<app-sidebar>`。`font-face` / `color-profile` / `annotation-xml` のような予約済み SVG / MathML のハイフン入りタグは除外） | -- | -- | -- | `id="..."` / `id='...'` 属性（state machine がタグの開始、引用符付き/なし値、複数行の引用符付き値を走査し、`id` 属性のみ採用するため、`data-id=` / `aria-*id=` / `xml:id=` は正規表現の lookbehind ではなく構造的に除外される） | -- | 外部 `<script src="...">` と `<link href="...">`（`<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体と `<!-- ... -->` コメントはマスクされ、本体内の属性名に似た文字列から phantom シンボルが漏れない） | -- |
 

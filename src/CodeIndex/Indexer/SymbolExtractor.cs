@@ -1280,6 +1280,8 @@ public static class SymbolExtractor
         [
             // @import / @use (SCSS) / インポート
             new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            // @counter-style / カウンタースタイル
+            new("function", new Regex(@"^\s*@counter-style\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @function (SCSS) / 関数
             new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @mixin (SCSS) / ミックスイン
@@ -1288,6 +1290,12 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @page / ページ規則
+            new("namespace", new Regex(@"^\s*@page(?:\s+(?<name>:[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @namespace / 名前空間
+            new("namespace", new Regex(@"^\s*@namespace(?:\s+(?<name>[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // @layer reset, base, theme; / レイヤー順序宣言
+            new("namespace", new Regex(@"^\s*@layer\s+(?<name>[\w-]+)(?:\s*,\s*[\w-]+)*\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Grouping at-rules / grouping at-rule
             new("namespace", new Regex(@"^\s*@(?<name>layer|container|supports|media)\b[^{]*\{", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
@@ -1299,7 +1307,7 @@ public static class SymbolExtractor
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
             new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)(?=[\s\.,:>+~\[\{])", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
-            new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Native CSS nesting selectors / ネイティブ CSS nesting セレクタ
             new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
@@ -2388,6 +2396,27 @@ public static class SymbolExtractor
                                 ReturnType = NormalizeMetadata(rawReturnType),
                             },
                             line);
+                    }
+
+                    if (lang == "css"
+                        && pattern.Kind == "class"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && cssScannerLines != null)
+                    {
+                        var openingBraceIndex = cssScannerLines[i].IndexOf('{', absoluteStartColumn);
+                        if (openingBraceIndex > absoluteStartColumn)
+                        {
+                            TryAddCssSelectorListSegments(
+                                fileId,
+                                line[absoluteStartColumn..openingBraceIndex],
+                                cssScannerLines[i][absoluteStartColumn..openingBraceIndex],
+                                cssScannerLines,
+                                i,
+                                openingBraceIndex,
+                                patterns,
+                                symbols,
+                                cssSeenSymbols);
+                        }
                     }
 
                     if (lang == "csharp"
@@ -10078,6 +10107,9 @@ public static class SymbolExtractor
             var ch = maskedLine[i];
             if (ch == ';')
             {
+                if (groupingDepth == 0 && qualifiedDepth == 0)
+                    TryAddCssLayerListSymbols(fileId, rawLine[segmentStart..i], maskedLine[segmentStart..i], lineIndex, symbols, cssSeenSymbols);
+
                 segmentStart = i + 1;
                 continue;
             }
@@ -10087,9 +10119,6 @@ public static class SymbolExtractor
                 var maskedSegment = maskedLine[segmentStart..i].Trim();
                 var rawSegment = rawLine[segmentStart..i].Trim();
                 var isGroupingAtRule = maskedSegment.StartsWith('@');
-
-                if (groupingDepth > 0 && qualifiedDepth == 0 && !isGroupingAtRule)
-                    TryAddCssInlineSelectorSegment(fileId, rawSegment, maskedSegment, cssScannerLines, lineIndex, i, patterns, symbols, cssSeenSymbols);
 
                 if (isGroupingAtRule)
                     groupingDepth++;
@@ -10162,6 +10191,123 @@ public static class SymbolExtractor
                 });
             return;
         }
+    }
+
+    private static void TryAddCssSelectorListSegments(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        string[] cssScannerLines,
+        int lineIndex,
+        int openingBraceIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        foreach (var (rawPart, maskedPart) in EnumerateCssCommaSeparatedSegments(rawSegment, maskedSegment))
+        {
+            TryAddCssInlineSelectorSegment(
+                fileId,
+                rawPart,
+                maskedPart,
+                cssScannerLines,
+                lineIndex,
+                openingBraceIndex,
+                patterns,
+                symbols,
+                cssSeenSymbols);
+        }
+    }
+
+    private static void TryAddCssLayerListSymbols(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        var trimmedMaskedSegment = maskedSegment.TrimStart();
+        if (!trimmedMaskedSegment.StartsWith("@layer", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var trimmedRawSegment = rawSegment.Trim();
+        if (trimmedRawSegment.Length == 0)
+            return;
+
+        const string atLayerPrefix = "@layer";
+        if (trimmedRawSegment.Length <= atLayerPrefix.Length)
+            return;
+
+        var rawNames = trimmedRawSegment[atLayerPrefix.Length..].Trim();
+        var maskedNames = trimmedMaskedSegment[atLayerPrefix.Length..].Trim();
+        if (rawNames.Length == 0 || maskedNames.Length == 0)
+            return;
+
+        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames, maskedNames))
+        {
+            var name = rawName.Trim();
+            if (name.Length == 0 || maskedName.Length == 0)
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols,
+                lineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "namespace",
+                    Name = name,
+                    Line = lineIndex + 1,
+                    StartLine = lineIndex + 1,
+                    EndLine = lineIndex + 1,
+                    Signature = trimmedRawSegment,
+                });
+        }
+    }
+
+    private static IEnumerable<(string Raw, string Masked)> EnumerateCssCommaSeparatedSegments(string rawText, string maskedText)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        for (var index = 0; index < maskedText.Length; index++)
+        {
+            var ch = maskedText[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
+            {
+                yield return (rawText[segmentStart..index].Trim(), maskedText[segmentStart..index].Trim());
+                segmentStart = index + 1;
+            }
+        }
+
+        yield return (rawText[segmentStart..].Trim(), maskedText[segmentStart..].Trim());
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
