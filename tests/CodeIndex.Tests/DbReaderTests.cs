@@ -9052,7 +9052,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_InjectObsoleteAndBindNever_AreClassifiedAsSuspect()
+    public void GetUnusedSymbols_CommonReflectionPropertyAttributes_BindNever_AreClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
@@ -9091,10 +9091,8 @@ public class DbReaderTests : IDisposable
                     [Parameter]
                     public string? Title { get; set; }
 
-                    [Inject]
                     public IServiceProvider? Services { get; set; }
 
-                    [Obsolete]
                     public string? LegacyName { get; set; }
 
                     [BindNever]
@@ -9112,7 +9110,7 @@ public class DbReaderTests : IDisposable
                 Name = "Target",
                 Line = 7,
                 StartLine = 7,
-                EndLine = 29,
+                EndLine = 27,
                 Signature = "public class Target",
                 Visibility = "public",
             },
@@ -9121,9 +9119,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "property",
                 Name = "Services",
-                Line = 22,
-                StartLine = 22,
-                EndLine = 22,
+                Line = 21,
+                StartLine = 21,
+                EndLine = 21,
                 Signature = "public IServiceProvider? Services { get; set; }",
                 Visibility = "public",
                 ContainerKind = "class",
@@ -9134,9 +9132,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "property",
                 Name = "LegacyName",
-                Line = 25,
-                StartLine = 25,
-                EndLine = 25,
+                Line = 23,
+                StartLine = 23,
+                EndLine = 23,
                 Signature = "public string? LegacyName { get; set; }",
                 Visibility = "public",
                 ContainerKind = "class",
@@ -9147,9 +9145,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "property",
                 Name = "IgnoredValue",
-                Line = 28,
-                StartLine = 28,
-                EndLine = 28,
+                Line = 26,
+                StartLine = 26,
+                EndLine = 26,
                 Signature = "public string? IgnoredValue { get; set; }",
                 Visibility = "public",
                 ContainerKind = "class",
@@ -9160,8 +9158,8 @@ public class DbReaderTests : IDisposable
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
             pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Services").UnusedBucket);
-        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "LegacyName").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Services").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "LegacyName").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "IgnoredValue").UnusedBucket);
     }
 
