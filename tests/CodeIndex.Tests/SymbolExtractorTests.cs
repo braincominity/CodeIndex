@@ -10092,6 +10092,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsImportAliasesGroupUseAndLiteralRequires()
+    {
+        var content = """
+            <?php
+
+            use Closure;
+            use Illuminate\Auth\Middleware\Authenticate;
+            use Illuminate\Support\Arr as A;
+            use function Laravel\Prompts\text;
+            use const Foo\Bar\BAZ;
+            use X\Y\{A, B as C, D};
+
+            require 'static/path.php';
+            require __DIR__ . '/bootstrap.php';
+            require $variable;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+
+        Assert.Equal(9, imports.Count);
+        Assert.Contains(imports, s => s.Name == "Closure");
+        Assert.Contains(imports, s => s.Name == "Illuminate\\Auth\\Middleware\\Authenticate");
+        Assert.Contains(imports, s => s.Name == "A");
+        Assert.Contains(imports, s => s.Name == "Laravel\\Prompts\\text");
+        Assert.Contains(imports, s => s.Name == "Foo\\Bar\\BAZ");
+        Assert.Contains(imports, s => s.Name == "X\\Y\\A");
+        Assert.Contains(imports, s => s.Name == "C");
+        Assert.Contains(imports, s => s.Name == "X\\Y\\D");
+        Assert.Contains(imports, s => s.Name == "static/path.php");
+        Assert.DoesNotContain(imports, s => s.Name.Contains("__DIR__", StringComparison.Ordinal));
+        Assert.DoesNotContain(imports, s => s.Name.Contains("$variable", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
