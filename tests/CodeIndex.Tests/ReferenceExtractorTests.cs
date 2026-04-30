@@ -13874,6 +13874,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinTrailingLambdaCallSites_AreReferenced()
+    {
+        // issue #265: Kotlin trailing-lambda call sites do not end with `(`, so the
+        // reference extractor must still index them as `call` edges.
+        // issue #265: Kotlin の trailing-lambda 呼び出しは末尾に `(` を持たないため、
+        // それでも `call` edge として index されること。
+        const string content = """
+            interface Box
+
+            fun run() {
+                val items = listOf(1, 2, 3)
+                items.forEach { }
+                items.filter { it > 0 }
+                items.map { it * 2 }
+                items.fold(0) { acc, x -> acc + x }
+                val boxed = object : Box {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "forEach"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "filter"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "map"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "fold"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Box"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SwiftAttributeWithArgs_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Swift `@available(...)` / `@objc` / `@MainActor` are
@@ -13908,6 +13952,48 @@ public class ReferenceExtractorTests
 
         var mainActor = Assert.Single(references.Where(r => r.SymbolName == "MainActor"));
         Assert.Equal("annotation", mainActor.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_SwiftTrailingClosureCallSites_AreReferenced()
+    {
+        // issue #265: Swift trailing-closure call sites do not end with `(`, so the
+        // reference extractor must still index them as `call` edges.
+        // issue #265: Swift の trailing-closure 呼び出しは末尾に `(` を持たないため、
+        // それでも `call` edge として index されること。
+        const string content = """
+            class Base {}
+
+            class Derived: Base {}
+
+            func run() {
+                let items = [1, 2, 3]
+                items.forEach { }
+                items.filter { $0 > 0 }
+                animate { } completion: { }
+            }
+
+            func animate(animations: () -> Void, completion: () -> Void) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "forEach"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "filter"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "animate"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Base"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]
