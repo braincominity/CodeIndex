@@ -599,7 +599,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Go | `.go` | yes |
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
-  | Kotlin | `.kt`, `.kts` | yes |
+| Kotlin | `.kt`, `.kts` | yes |
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
@@ -1603,7 +1603,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Go | `.go` | yes |
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
-  | Kotlin | `.kt`, `.kts` | yes |
+| Kotlin | `.kt`, `.kts` | yes |
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
