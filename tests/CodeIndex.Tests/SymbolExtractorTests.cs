@@ -10139,6 +10139,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_MapsImplBlocksToImplementingType()
+    {
+        var content = """
+            struct Widget;
+            struct Task<T> { value: T }
+            struct Empty<T> { value: T }
+
+            impl Widget {}
+            impl Debug for Widget {}
+            impl<T> Future for Task<T> {}
+            unsafe impl<T> Send for Empty<T> {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Task");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Empty");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Task");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Empty");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Debug");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Future");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Send");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
         var content = "type Handler struct {\n}\ntype ID = string\ntype Callback func(int) int\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
