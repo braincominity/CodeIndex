@@ -26,6 +26,7 @@ public class FileIndexerTests
     [InlineData("mod.rs", "rust")]
     [InlineData("App.java", "java")]
     [InlineData("Service.cs", "csharp")]
+    [InlineData("Script.kts", "kotlin")]
     [InlineData("style.css", "css")]
     [InlineData("style.scss", "css")]
     [InlineData("page.vue", "vue")]
@@ -436,6 +437,40 @@ public class FileIndexerTests
 
             var expected = files.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList();
             Assert.Equal(expected, scanned);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IndexesKotlinScriptAndExtractsSymbols()
+    {
+        // Gradle Kotlin DSL files must be indexed as Kotlin, not silently skipped.
+        // Gradle Kotlin DSL ファイルは Kotlin として index され、黙って落ちてはいけない。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "build.gradle.kts");
+            var content = """
+                plugins {
+                    kotlin("jvm") version "1.9.23"
+                }
+
+                val answer = 42
+                """;
+            File.WriteAllText(path, content);
+
+            var scanned = new FileIndexer(tempDir).ScanFiles().ToList();
+
+            Assert.Single(scanned);
+            Assert.Equal(path, scanned[0]);
+            Assert.Equal("kotlin", FileIndexer.DetectLanguage(path));
+
+            var symbols = SymbolExtractor.Extract(1, "kotlin", content).ToList();
+            Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "answer");
         }
         finally
         {

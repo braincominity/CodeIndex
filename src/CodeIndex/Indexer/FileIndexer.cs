@@ -101,6 +101,7 @@ public class FileIndexer
         [".rs"]     = "rust",
         [".java"]   = "java",
         [".kt"]     = "kotlin",
+        [".kts"]    = "kotlin",  // Kotlin Script / Kotlin スクリプト (Gradle Kotlin DSL など)
         [".swift"]  = "swift",
         [".cu"]     = "cuda",
         [".cuh"]    = "cuda",
