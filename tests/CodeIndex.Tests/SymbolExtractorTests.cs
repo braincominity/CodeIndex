@@ -11590,6 +11590,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Haskell_DoesNotTreatInstancesAsClasses()
+    {
+        // Haskell instance declarations should not be indexed as phantom type definitions.
+        // Haskell の instance 宣言は phantom な型定義としてはインデックスしない。
+        var content = """
+            class Greeter a where
+                greet :: a -> String
+
+            data Person = Person
+
+            instance Greeter Person where
+                greet _ = "Hello"
+
+            instance Greeter Int where
+                greet _ = "Hi"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Greeter");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Greeter");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsLetTypeModuleOpen()
     {
         // F#: let, type, module, open / F#: let束縛、型、モジュール、open
