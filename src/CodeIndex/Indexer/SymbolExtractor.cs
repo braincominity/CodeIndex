@@ -464,6 +464,10 @@ public static class SymbolExtractor
         $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*(?:(?=,)|(?=}})|$)",
         RegexOptions.Compiled);
 
+    private static readonly Regex SvelteReactivePropertyRegex = new(
+        @"^\s*\$:\s*(?<name>\w+)\s*=",
+        RegexOptions.Compiled);
+
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
     private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
@@ -1473,7 +1477,11 @@ public static class SymbolExtractor
     /// Return the set of languages that have symbol-extraction patterns.
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
-    public static IReadOnlyCollection<string> GetSupportedLanguages() => PatternCache.Keys;
+    public static IReadOnlyCollection<string> GetSupportedLanguages()
+        => PatternCache.Keys.Concat(new[] { "vue", "svelte" }).ToArray();
+
+    private static string? NormalizeLanguage(string? lang)
+        => lang is "vue" or "svelte" ? "typescript" : lang;
 
     private static bool TryHandleGoImportLine(
         long fileId,
@@ -1675,6 +1683,8 @@ public static class SymbolExtractor
     /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
     public static List<SymbolRecord> Extract(long fileId, string? lang, string content)
     {
+        var originalLang = lang;
+        lang = NormalizeLanguage(lang);
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
@@ -3019,11 +3029,39 @@ public static class SymbolExtractor
             ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols);
         }
 
+        if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
+            ExtractSvelteReactiveSymbols(fileId, lines, symbols);
+
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void ExtractSvelteReactiveSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = SvelteReactivePropertyRegex.Match(lines[i]);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Value;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = name,
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = lines[i].Trim(),
+            });
+        }
     }
 
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
