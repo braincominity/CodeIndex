@@ -235,6 +235,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void UnknownNotification_ReturnsNullAndLogsToStderr()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
+
+            try
+            {
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/bogus","params":{"x":1}}""")!;
+                var response = _server.HandleMessage(request);
+
+                Assert.Null(response);
+                Assert.Contains(
+                    McpServer.BuildUnknownNotificationLog("notifications/bogus"),
+                    errorWriter.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void Ping_ReturnsEmptyResult()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":99,"method":"ping"}""")!;
