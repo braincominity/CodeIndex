@@ -25,7 +25,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-46 languages supported. 24 MCP tools. Incremental updates. Zero config.
+63 languages supported. 24 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, AI response details, and release workflow
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -609,6 +609,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Scala | `.scala`, `.sc` | yes |
 | Elixir | `.ex`, `.exs` | yes |
 | Lua | `.lua` | yes |
+| Groovy | `.groovy`, `.gvy`, `.gy`, `.gsh` | -- |
 | R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
@@ -619,6 +620,22 @@ The database reflects the working tree at the time of the last index. After swit
 | Gradle | `.gradle` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
+| Assembly | `.s`, `.S`, `.asm`, `.nasm` | -- |
+| CUDA | `.cu`, `.cuh` | -- |
+| GLSL | `.glsl`, `.vert`, `.frag` | -- |
+| HLSL | `.hlsl` | -- |
+| WGSL | `.wgsl` | -- |
+| Metal | `.metal` | -- |
+| Verilog | `.v` | -- |
+| SystemVerilog | `.sv`, `.svh` | -- |
+| VHDL | `.vhd`, `.vhdl` | -- |
+| Common Lisp | `.lisp`, `.lsp`, `.cl` | -- |
+| Racket | `.rkt` | -- |
+| Pascal | `.pas`, `.pp`, `.dpr` | -- |
+| Ada | `.ada`, `.adb`, `.ads` | -- |
+| Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
+| Raku | `.raku`, `.rakumod`, `.rakutest` | -- |
+| Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |

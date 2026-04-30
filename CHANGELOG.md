@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Groovy, assembly, CUDA, shader, HDL, Lisp, Pascal, Ada, Fortran, Raku, and Perl test extensions now index instead of being silently dropped (#205)** — Added `LangMap` coverage for the missing mainstream extensions so `cdidx languages`, `files`, and `search` can see them instead of producing an empty index on those repositories. Added regression coverage for direct detection and scan-time indexing. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`, `README.md`. Fixes #205.
 - **CSS selector lists now keep every selector, ID selectors use the class kind, and named at-rules are indexed (#235)** — `SymbolExtractor` now expands comma-separated CSS selector lists on the same line, classifies `#id` selectors with the same `class` kind as `.class`, and adds coverage for `@counter-style`, `@page`, `@namespace`, and semicolon-form `@layer` names. Added regressions for selector lists, named at-rules, and the query/definition contract. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `DEVELOPER_GUIDE.md`. Fixes #235.
 - **TypeScript interface member properties and abstract class properties now index as `property` symbols (#218)** — Added a `property` extraction row so semicolon-terminated members such as `id: string;`, `readonly age: number;`, `timeout?: number;`, and `abstract readonly count: number;` are visible again inside TypeScript interface and abstract class bodies. Existing method and typed-arrow extraction paths stay unchanged. Added regression coverage in `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Fixes #218.
 - **Claude entry point now points at the current status trust contract** — `CLAUDE.md` now mirrors the `status --json` trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including the SQL graph readiness and degradation fields plus the fold-specific remediation fields, so the agent entry point stays synchronized with the shipped payload contract.
@@ -1914,6 +1915,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 
+- **Groovy、assembly、CUDA、shader、HDL、Lisp、Pascal、Ada、Fortran、Raku、Perl test 拡張子を黙って落とさず index するように修正 (#205)** — 不足していた主流拡張子に `LangMap` の対応を追加し、`cdidx languages`、`files`、`search` から見えるようにしました。対象リポジトリで空の index になる問題を避けるため、直接の検出と scan 時の index 化の regression も追加しています。対象: `src/CodeIndex/Indexer/FileIndexer.cs`、`tests/CodeIndex.Tests/FileIndexerTests.cs`、`README.md`。Fixes #205.
 - **CLAUDE.mdテンプレート: インストール失敗と更新失敗の案内を分離** — 更新失敗時は既存バージョンがそのまま使える旨を明記。インストール失敗時はDBが構築済みの場合のみ `sqlite3` フォールバックを案内。対象: `README.md`。
 
 ### [1.0.1] - 2026-04-08

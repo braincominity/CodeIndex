@@ -88,6 +88,10 @@ public class FileIndexerTests
     [InlineData("tasks.rake", "ruby")]
     [InlineData("mygem.gemspec", "ruby")]
     [InlineData("MyPod.podspec", "ruby")]
+    [InlineData("build.groovy", "groovy")]
+    [InlineData("build.gvy", "groovy")]
+    [InlineData("build.gy", "groovy")]
+    [InlineData("build.gsh", "groovy")]
     [InlineData("common.mk", "makefile")]
     [InlineData("page.htm", "html")]
     [InlineData("style.less", "css")]
@@ -111,6 +115,45 @@ public class FileIndexerTests
     [InlineData("Makefile.in", "makefile")]
     [InlineData("Makefile.common", "makefile")]
     [InlineData("GNUmakefile.am", "makefile")]
+    [InlineData("kernel.cu", "cuda")]
+    [InlineData("kernel.cuh", "cuda")]
+    [InlineData("shader.glsl", "glsl")]
+    [InlineData("shader.vert", "glsl")]
+    [InlineData("shader.frag", "glsl")]
+    [InlineData("shader.hlsl", "hlsl")]
+    [InlineData("shader.wgsl", "wgsl")]
+    [InlineData("shader.metal", "metal")]
+    [InlineData("cpu.s", "assembly")]
+    [InlineData("cpu.S", "assembly")]
+    [InlineData("cpu.asm", "assembly")]
+    [InlineData("cpu.nasm", "assembly")]
+    [InlineData("cpu.v", "verilog")]
+    [InlineData("cpu.sv", "systemverilog")]
+    [InlineData("cpu.svh", "systemverilog")]
+    [InlineData("cpu.vhd", "vhdl")]
+    [InlineData("cpu.vhdl", "vhdl")]
+    [InlineData("demo.lisp", "commonlisp")]
+    [InlineData("demo.lsp", "commonlisp")]
+    [InlineData("demo.cl", "commonlisp")]
+    [InlineData("demo.rkt", "racket")]
+    [InlineData("demo.pas", "pascal")]
+    [InlineData("demo.pp", "pascal")]
+    [InlineData("demo.dpr", "pascal")]
+    [InlineData("demo.ada", "ada")]
+    [InlineData("demo.adb", "ada")]
+    [InlineData("demo.ads", "ada")]
+    [InlineData("demo.f", "fortran")]
+    [InlineData("demo.f77", "fortran")]
+    [InlineData("demo.f90", "fortran")]
+    [InlineData("demo.f95", "fortran")]
+    [InlineData("demo.f03", "fortran")]
+    [InlineData("demo.f08", "fortran")]
+    [InlineData("demo.for", "fortran")]
+    [InlineData("demo.ftn", "fortran")]
+    [InlineData("demo.raku", "raku")]
+    [InlineData("demo.rakumod", "raku")]
+    [InlineData("demo.rakutest", "raku")]
+    [InlineData("test.t", "perl")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
@@ -301,10 +344,81 @@ public class FileIndexerTests
         Assert.Equal("python", map[".py"]);
         Assert.Equal("python", map[".pyi"]);
 
+        // Issue #205 additions should also surface in the language list.
+        // Issue #205 の追加分も言語一覧に露出する。
+        Assert.Equal("groovy", map[".groovy"]);
+        Assert.Equal("cuda", map[".cu"]);
+        Assert.Equal("glsl", map[".glsl"]);
+        Assert.Equal("hlsl", map[".hlsl"]);
+        Assert.Equal("wgsl", map[".wgsl"]);
+        Assert.Equal("metal", map[".metal"]);
+        Assert.Equal("assembly", map[".asm"]);
+        Assert.Equal("verilog", map[".v"]);
+        Assert.Equal("systemverilog", map[".sv"]);
+        Assert.Equal("vhdl", map[".vhd"]);
+        Assert.Equal("commonlisp", map[".lisp"]);
+        Assert.Equal("racket", map[".rkt"]);
+        Assert.Equal("pascal", map[".pas"]);
+        Assert.Equal("ada", map[".ada"]);
+        Assert.Equal("fortran", map[".f90"]);
+        Assert.Equal("raku", map[".raku"]);
+        Assert.Equal("perl", map[".t"]);
+
         // Objective-C lives in its own bucket so `.m` / `.mm` are indexed instead of being skipped.
         // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
         Assert.Equal("objc", map[".m"]);
         Assert.Equal("objc", map[".mm"]);
+    }
+
+    [Fact]
+    public void ScanFiles_IndexesIssue205AdditionalExtensionCoverage()
+    {
+        // Locks in the Issue #205 extensions that were silently dropped before:
+        // Groovy, assembly, CUDA, GPU shaders, HDL, Common Lisp, Racket, Pascal, Ada,
+        // Fortran, Raku, and Perl test scripts all need to survive scan-time filtering.
+        // Issue #205 で黙って落ちていた拡張子を固定する。
+        // Groovy / assembly / CUDA / GPU shaders / HDL / Common Lisp / Racket / Pascal / Ada /
+        // Fortran / Raku / Perl test scripts が scan 時のフィルタを通過することを確認する。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["build.groovy"] = "println 'hello'\n",
+                ["kernel.cu"] = "__global__ void add() {}\n",
+                ["shader.glsl"] = "void main() {}\n",
+                ["shader.hlsl"] = "float4 main() : SV_Target { return 0; }\n",
+                ["shader.wgsl"] = "@vertex fn main() -> @builtin(position) vec4<f32> { return vec4<f32>(); }\n",
+                ["shader.metal"] = "kernel void main() {}\n",
+                ["boot.s"] = "mov %eax, %eax\n",
+                ["cpu.v"] = "module cpu(); endmodule\n",
+                ["cpu.sv"] = "module cpu(); endmodule\n",
+                ["cpu.vhd"] = "entity cpu is end entity;\n",
+                ["demo.lisp"] = "(defun hello ())\n",
+                ["demo.rkt"] = "#lang racket\n(displayln \"hi\")\n",
+                ["demo.pas"] = "program demo;\nbegin\nend.\n",
+                ["demo.ada"] = "procedure Demo is begin null; end Demo;\n",
+                ["demo.f90"] = "program demo\nend program demo\n",
+                ["demo.raku"] = "say \"hi\";\n",
+                ["test.t"] = "use Test::More;\n",
+            };
+
+            foreach (var (name, content) in files)
+                File.WriteAllText(Path.Combine(tempDir, name), content);
+
+            var scanned = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            var expected = files.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList();
+            Assert.Equal(expected, scanned);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
