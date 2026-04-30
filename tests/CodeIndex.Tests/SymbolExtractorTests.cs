@@ -60,6 +60,46 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
+    {
+        var content = """
+            function Vehicle(make) { this.make = make; }
+            Vehicle.prototype.start = function start() { return this.make; };
+            Vehicle.factory = function factory() { return new Vehicle("default"); };
+            Vehicle.VERSION = "1.0";
+
+            var Foo = {};
+            Foo.Bar = class {
+                method() { return 1; }
+            };
+
+            var MyNS = { utils: {} };
+            MyNS.utils.parse = function parse(s) { return s; };
+
+            var add = function add(a, b) { return a + b; };
+
+            const handlers = {
+                onClick() { return true; },
+                onSubmit: function submitHandler() { return true; },
+                onClose: () => { return true; }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.prototype.start");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.factory");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Vehicle.VERSION");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyNS.utils.parse");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClick" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onSubmit" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClose" && s.ContainerName == "handlers");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsHocWrappedComponentBindings()
     {
         // HOC-wrapped / call-result / tagged-template component bindings must not be
@@ -11058,6 +11098,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
+    {
+        // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            typedef int (*t_ptr_func_int_of_float_complex)(float complex);
+            typedef int (*t_ptr_func_int_of_double_complex)(double complex);
+            static int add(int a, int b) {
+                return a + b;
+            }
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "int" || s.Name == "void"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -11066,6 +11130,32 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DoesNotCapturePrimitiveTypesForFunctionReturningPointerDeclarations()
+    {
+        // C++: function-returning-pointer declarations / C++: 関数が関数ポインタを返す宣言
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            extern int (*XSynchronize(
+                Display* display,
+                Bool onoff
+            ))(
+                Display* display
+            );
+
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
     }
 
     [Fact]

@@ -4155,7 +4155,7 @@ public class IndexCommandRunnerTests
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
             Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
-            Assert.Equal(1, hotspotsJson.GetProperty("count").GetInt32());
+            Assert.Equal(2, hotspotsJson.GetProperty("count").GetInt32());
             if (hotspotsJson.TryGetProperty("degraded", out var degraded))
                 Assert.False(degraded.GetBoolean());
         }
