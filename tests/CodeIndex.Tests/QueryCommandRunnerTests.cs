@@ -812,11 +812,13 @@ public class QueryCommandRunnerTests
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside the Python / CSS extractors
-        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl) must advertise
+        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl, and the newly added extension-only
+        // languages) must advertise
         // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
         // between "indexed with symbols" and "indexed for search only".
         // 意図的に Python / CSS 抽出器の対象外になっている search-only 言語
-        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl）は、
+        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl、そして新規追加の
+        // 拡張子ベース言語）は、
         // symbol_extraction=false / graph_queries=false で広告しなければならない。
         // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
@@ -828,6 +830,16 @@ public class QueryCommandRunnerTests
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
         foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        {
+            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
+            var entry = languages[searchOnly];
+            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{searchOnly} must advertise graph_queries=false");
+        }
+
+        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "perl", "solidity", "tcl" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -850,6 +862,25 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain(".pxd", pythonExts);
         Assert.Contains(".py", pythonExts);
         Assert.Contains(".pyi", pythonExts);
+
+        var ocamlExts = languages["ocaml"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".ml", ocamlExts);
+        Assert.Contains(".mli", ocamlExts);
+
+        var clojureExts = languages["clojure"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".clj", clojureExts);
+        Assert.Contains(".cljs", clojureExts);
+        Assert.Contains(".cljc", clojureExts);
+        Assert.Contains(".edn", clojureExts);
+
+        var perlExts = languages["perl"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".pl", perlExts);
+        Assert.Contains(".pm", perlExts);
+        Assert.Contains(".pod", perlExts);
+        Assert.Contains(".t", perlExts);
     }
 
     [Fact]
