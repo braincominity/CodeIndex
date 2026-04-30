@@ -320,6 +320,12 @@ public static class SymbolExtractor
     private static readonly Regex JavaCompactConstructorRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DartClassDeclarationRegex = new(
+        @"^\s*(?:(?:abstract|base|final|interface|sealed)\s+)*(?:mixin\s+)?class\s+\w+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DartBareConstConstructorRegex = new(
+        @"^\s*const\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1202,6 +1208,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
             new("function", new Regex(@"^\s*factory\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\((?=[^)]*(?:\bthis\b|\bsuper\b))", RegexOptions.Compiled), BodyStyle.None),
+            new("function", DartBareConstConstructorRegex, BodyStyle.None),
             new("function", new Regex(@"^\s*(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*typedef\s+(?<name>\w+)(?:<[^>]*>)?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*typedef\s+(?:[\w<>,\[\]\?\.\s]+\s+)+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.None),
@@ -1759,6 +1766,9 @@ public static class SymbolExtractor
         var csharpLineStartStates = lang == "csharp"
             ? BuildCSharpLineStartStates(lines)
             : null;
+        var dartInsideClassBody = lang == "dart"
+            ? BuildDartClassBodyScope(structuralLines)
+            : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
@@ -2065,6 +2075,18 @@ public static class SymbolExtractor
                             i,
                             csharpNormalizedStartColumn,
                             line.Length);
+                    }
+
+                    if (lang == "dart"
+                        && ReferenceEquals(pattern.Regex, DartBareConstConstructorRegex)
+                        && !dartInsideClassBody!.IsInsideClassBodyAt(i))
+                    {
+                        // Bare `const` constructors need class-body context; otherwise
+                        // `const Widget(key: k)` expressions become phantom symbols.
+                        // bare な `const` コンストラクタは class 本体内でのみ許可する。
+                        // そうしないと `const Widget(key: k)` の式を phantom symbol にしてしまう。
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
                     }
 
                     // C# candidates that only become visible after string-literal content is
@@ -18102,6 +18124,59 @@ public static class SymbolExtractor
         }
 
         return new CSharpTypeBodyScope(lineStartInsideTypeBody, transitions);
+    }
+
+    private sealed class DartClassBodyScope
+    {
+        private readonly bool[] _lineStartInsideClassBody;
+
+        public DartClassBodyScope(bool[] lineStartInsideClassBody)
+        {
+            _lineStartInsideClassBody = lineStartInsideClassBody;
+        }
+
+        public bool IsInsideClassBodyAt(int lineIndex) => _lineStartInsideClassBody[lineIndex];
+    }
+
+    private static DartClassBodyScope BuildDartClassBodyScope(string[] structuralLines)
+    {
+        var lineStartInsideClassBody = new bool[structuralLines.Length];
+        var scopeStack = new Stack<bool>();
+        scopeStack.Push(false);
+        var declBuffer = new StringBuilder();
+
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            lineStartInsideClassBody[lineIndex] = scopeStack.Peek();
+
+            var line = structuralLines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (ch == '{')
+                {
+                    var isClassBody = DartClassDeclarationRegex.IsMatch(declBuffer.ToString());
+                    scopeStack.Push(isClassBody);
+                    declBuffer.Clear();
+                }
+                else if (ch == '}')
+                {
+                    if (scopeStack.Count > 1)
+                        scopeStack.Pop();
+                    declBuffer.Clear();
+                }
+                else if (ch == ';')
+                {
+                    declBuffer.Clear();
+                }
+                else
+                {
+                    declBuffer.Append(ch);
+                }
+            }
+        }
+
+        return new DartClassBodyScope(lineStartInsideClassBody);
     }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
