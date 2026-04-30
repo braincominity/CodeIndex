@@ -2570,6 +2570,19 @@ internal static class StructuralLineMasker
                 var holeDepth = 0;
                 while (q < line.Length)
                 {
+                    // Nested single-line raw string inside the hole. Recurse so the
+                    // nested `\<hashes>(...)` bodies remain visible too.
+                    // ホール内に入れ子の単行 raw 文字列があれば再帰処理し、
+                    // 内側の `\<hashes>(...)` 本文も見えるままにする。
+                    var nestedHashCount = CountRun(line, q, '#');
+                    if (nestedHashCount > 0
+                        && q + nestedHashCount < line.Length
+                        && line[q + nestedHashCount] == '"')
+                    {
+                        q = MaskSwiftSingleLineRawString(line, q, nestedHashCount, masked);
+                        continue;
+                    }
+
                     if (line[q] == '"' || line[q] == '\'')
                     {
                         q = SkipJsSingleLineString(line, q);
