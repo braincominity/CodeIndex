@@ -14795,6 +14795,64 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PowerShell_DetectsClassMembersAndEnumValues()
+    {
+        var content = """
+            class Vehicle {
+                [DscProperty(Key)] [string]$Name
+                hidden [string]$Secret
+
+                Vehicle([string]$make) {
+                    $this.Name = $make
+                }
+
+                [string] ToString() {
+                    return "$($this.Name)"
+                }
+
+                static [Vehicle] CreateDefault() {
+                    return [Vehicle]::new("Unknown")
+                }
+
+                hidden [void] InternalMethod() {
+                }
+            }
+
+            enum LogLevel {
+                Debug
+                Info = 1
+                Warning
+                Error
+            }
+
+            class MyDscResource {
+                [DscProperty(Key)] [string]$Name
+
+                [MyDscResource] Get() {
+                    return $this
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Vehicle");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secret");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateDefault");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InternalMethod");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "LogLevel");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Debug");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Info");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Warning");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Error");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyDscResource");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
+    }
+
+    [Fact]
     public void Extract_Batch_DetectsLabelsAndSetAssignments()
     {
         // Covers issue #217: batch (.bat / .cmd) labels are the only navigation anchors
