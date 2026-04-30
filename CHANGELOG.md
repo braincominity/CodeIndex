@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.17.0] - 2026-04-30
+
 #### Changed
 - **Ordinary changelog updates now flow through `changelog.d/unreleased/` fragments** — ordinary implementation PRs no longer edit `CHANGELOG.md` directly; release preparation aggregates bilingual fragments, preserves any legacy unreleased content, and updates the compare footer. Affected: `.codex/workflows/changelog-fragment.md`, `.codex/workflows/release-changelog.md`, `AGENT_GUIDE.md`, `changelog.d/README.md`, `tools/CodeIndex.Changelog/Program.cs`.
 
@@ -1042,6 +1044,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.17.0] - 2026-04-30
+
 #### 変更
 - **通常の changelog 更新は `changelog.d/unreleased/` の fragment 経由になりました** — 通常の実装 PR は `CHANGELOG.md` を直接編集せず、release preparation が英日 bilingual fragment を集約し、既存の未リリース内容を保持し、compare footer を更新します。対象: `.codex/workflows/changelog-fragment.md`、`.codex/workflows/release-changelog.md`、`AGENT_GUIDE.md`、`changelog.d/README.md`、`tools/CodeIndex.Changelog/Program.cs`。
 
@@ -2051,7 +2055,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...HEAD
+[1.17.0]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/Widthdom/CodeIndex/compare/v1.15.3...v1.16.0
 [1.15.3]: https://github.com/Widthdom/CodeIndex/compare/v1.15.2...v1.15.3
 [1.15.2]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...v1.15.2
