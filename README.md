@@ -156,7 +156,7 @@ If `cdidx` is already installed in a healthy state and you rerun the one-liner w
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
-Note: the self-contained binaries installed by `install.sh` are currently built with `PublishTrimmed=true`. Their CLI `--json` mode is not available yet; commands fail fast with exit code `4` and a dedicated hint instead of emitting machine-readable JSON. Use `cdidx mcp`, omit `--json`, or use the NuGet/global-tool build if you need structured CLI output today.
+Note: the self-contained binaries installed by `install.sh` are currently built with `PublishTrimmed=true`. Their CLI `--json` mode is not available yet; commands fail fast with exit code `4` and a dedicated hint instead of emitting machine-readable JSON. `cdidx mcp` still provides structured MCP output, and unexpected serializer failures now return JSON-RPC errors instead of hanging. Use `cdidx mcp`, omit `--json`, or use the NuGet/global-tool build if you need structured CLI output today.
 
 **Dockerfile example:**
 
@@ -1139,7 +1139,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
-注意: `install.sh` で入る自己完結バイナリは現状 `PublishTrimmed=true` でビルドされています。この配布物では CLI の `--json` はまだ使えず、機械可読 JSON の代わりに終了コード `4` と専用ヒントで即時失敗します。構造化出力が必要な場合は `cdidx mcp` を使うか、`--json` を外すか、NuGet グローバルツール版を使ってください。
+注意: `install.sh` で入る自己完結バイナリは現状 `PublishTrimmed=true` でビルドされています。この配布物では CLI の `--json` はまだ使えず、機械可読 JSON の代わりに終了コード `4` と専用ヒントで即時失敗します。`cdidx mcp` は引き続き構造化 MCP 出力を返し、予期しないシリアライズ失敗もハングではなく JSON-RPC エラーとして返すようになりました。構造化出力が必要な場合は `cdidx mcp` を使うか、`--json` を外すか、NuGet グローバルツール版を使ってください。
 
 **Dockerfile の例:**
 
