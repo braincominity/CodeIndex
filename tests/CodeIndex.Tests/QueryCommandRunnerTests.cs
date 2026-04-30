@@ -162,6 +162,73 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_publish_{Guid.NewGuid():N}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "TrimmedPublishNeedle_1a2b3c";
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", $"class App {{ void Run() {{ var {queryToken} = 1; }} }}\n");
+
+            var publishedDll = PublishTrimmedCli(publishDir);
+
+            var (searchExitCode, searchStdOut, searchStdErr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(string.Empty, searchStdErr);
+            using (var searchJson = JsonDocument.Parse(searchStdOut))
+            {
+                Assert.True(searchJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, searchJson.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (findExitCode, findStdOut, findStdErr) = RunPublishedCli(publishedDll, publishDir, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStdErr);
+            using (var findJson = JsonDocument.Parse(findStdOut))
+            {
+                Assert.True(findJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, findJson.RootElement.GetProperty("files").GetInt32());
+                Assert.Equal(1, findJson.RootElement.GetProperty("file_count").GetInt32());
+            }
+
+            var (symbolsExitCode, symbolsStdOut, symbolsStdErr) = RunPublishedCli(publishedDll, publishDir, "symbols", "@", "--db", dbPath, "--lang", "csharp", "--exact", "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStdErr);
+            using (var symbolsJson = JsonDocument.Parse(symbolsStdOut))
+            {
+                Assert.Equal(0, symbolsJson.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(0, symbolsJson.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (validateExitCode, validateStdOut, validateStdErr) = RunPublishedCli(publishedDll, publishDir, "validate", "--db", dbPath, "--json");
+            Assert.Equal(CommandExitCodes.Success, validateExitCode);
+            Assert.Equal(string.Empty, validateStdErr);
+            using (var validateJson = JsonDocument.Parse(validateStdOut))
+            {
+                Assert.Equal(0, validateJson.RootElement.GetProperty("count").GetInt32());
+                Assert.True(validateJson.RootElement.GetProperty("issues").ValueKind is JsonValueKind.Array);
+            }
+
+            var (outlineExitCode, outlineStdOut, outlineStdErr) = RunPublishedCli(publishedDll, publishDir, "outline", "src/missing.cs", "--db", dbPath, "--json");
+            Assert.Equal(CommandExitCodes.NotFound, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStdErr);
+            using (var outlineJson = JsonDocument.Parse(outlineStdOut))
+            {
+                Assert.Equal("src/missing.cs", outlineJson.RootElement.GetProperty("path").GetString());
+                Assert.Equal("file not found in index", outlineJson.RootElement.GetProperty("error").GetString());
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(publishDir);
+        }
+    }
+
     [Theory]
     [InlineData("definition", "--focus-column", "10")]
     [InlineData("definition", "--max-line-width", "10")]
@@ -1522,56 +1589,6 @@ public class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
-        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_publish_{Guid.NewGuid():N}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = "TrimmedPublishNeedle_1a2b3c";
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", $"class App {{ void Run() {{ var {queryToken} = 1; }} }}\n");
-
-            var publishedDll = PublishTrimmedCli(publishDir);
-
-            var (searchExitCode, searchStdOut, searchStdErr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--count", "--json");
-            Assert.Equal(CommandExitCodes.Success, searchExitCode);
-            Assert.Equal(string.Empty, searchStdErr);
-            using (var searchJson = JsonDocument.Parse(searchStdOut))
-            {
-                Assert.True(searchJson.RootElement.GetProperty("count").GetInt32() >= 1);
-                Assert.Equal(1, searchJson.RootElement.GetProperty("files").GetInt32());
-            }
-
-            var (findExitCode, findStdOut, findStdErr) = RunPublishedCli(publishedDll, publishDir, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
-            Assert.Equal(CommandExitCodes.Success, findExitCode);
-            Assert.Equal(string.Empty, findStdErr);
-            using (var findJson = JsonDocument.Parse(findStdOut))
-            {
-                Assert.True(findJson.RootElement.GetProperty("count").GetInt32() >= 1);
-                Assert.Equal(1, findJson.RootElement.GetProperty("files").GetInt32());
-                Assert.Equal(1, findJson.RootElement.GetProperty("file_count").GetInt32());
-            }
-
-            var (validateExitCode, validateStdOut, validateStdErr) = RunPublishedCli(publishedDll, publishDir, "validate", "--db", dbPath, "--json");
-            Assert.Equal(CommandExitCodes.Success, validateExitCode);
-            Assert.Equal(string.Empty, validateStdErr);
-            using (var validateJson = JsonDocument.Parse(validateStdOut))
-            {
-                Assert.Equal(0, validateJson.RootElement.GetProperty("count").GetInt32());
-                Assert.True(validateJson.RootElement.GetProperty("issues").ValueKind is JsonValueKind.Array);
-            }
-
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(publishDir);
         }
     }
 

@@ -17,17 +17,6 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("hint")] string? Hint);
 
-[JsonSerializable(typeof(QueryCountJsonResult))]
-[JsonSerializable(typeof(QueryCountFilesJsonResult))]
-[JsonSerializable(typeof(QueryFindCountJsonResult))]
-[JsonSerializable(typeof(LanguageEntryJsonResult))]
-[JsonSerializable(typeof(LanguagesJsonResult))]
-[JsonSerializable(typeof(QueryPathErrorJsonResult))]
-[JsonSerializable(typeof(CommandErrorJsonResult))]
-[JsonSourceGenerationOptions(WriteIndented = false)]
-[JsonSerializable(typeof(BackfillFoldJsonResult))]
-internal partial class CliJsonSerializerContext : JsonSerializerContext;
-
 internal sealed record QueryCountJsonResult(
     [property: JsonPropertyName("count")] int Count);
 
@@ -52,3 +41,14 @@ internal sealed record LanguageEntryJsonResult(
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);
+
+[JsonSourceGenerationOptions(WriteIndented = false)]
+[JsonSerializable(typeof(BackfillFoldJsonResult))]
+[JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguagesJsonResult))]
+[JsonSerializable(typeof(QueryCountJsonResult))]
+[JsonSerializable(typeof(QueryCountFilesJsonResult))]
+[JsonSerializable(typeof(QueryFindCountJsonResult))]
+[JsonSerializable(typeof(QueryPathErrorJsonResult))]
+internal partial class CliJsonSerializerContext : JsonSerializerContext;
