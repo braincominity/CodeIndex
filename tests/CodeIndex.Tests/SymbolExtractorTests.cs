@@ -9439,6 +9439,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsGenericTypeDeclarations()
+    {
+        var content = """
+            type Stack[T any] struct {
+                items []T
+            }
+
+            type Container[T comparable, U any] interface {
+                Get() U
+            }
+
+            type Alias[T any] string
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsFunctions()
     {
         var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";
@@ -10102,11 +10123,29 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Terraform_DetectsResources()
     {
-        var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
+        var content =
+            "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\n" +
+            "provider \"aws\" {\n  region = \"us-east-1\"\n}\n\n" +
+            "terraform {\n  required_version = \">= 1.0\"\n}\n\n" +
+            "import {\n  id = \"bucket-123\"\n}\n\n" +
+            "moved {\n  from = aws_s3_bucket.old_bucket\n  to = aws_s3_bucket.my_bucket\n}\n\n" +
+            "removed {\n  from = aws_s3_bucket.deprecated_bucket\n}\n\n" +
+            "check \"health\" {\n  assert {\n    condition = true\n  }\n}\n\n" +
+            "locals {\n  region = \"us-east-1\"\n}\n\n" +
+            "variable \"region\" {\n  default = \"us-east-1\"\n}\n\n" +
+            "output \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\n" +
+            "module \"vpc\" {\n  source = \"./modules/vpc\"\n}";
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
 
         // resource captures logical name (second quoted token), not provider type
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my_bucket");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "aws");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "terraform");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "import");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "moved");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "removed");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "health");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "locals");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "region");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bucket_arn");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vpc");
@@ -11557,14 +11596,47 @@ public class SymbolExtractorTests
         var content = "module MyApp.Domain\n\nopen System\n\ntype UserId = int\ntype User = { Name: string; Age: int }\ntype Color = Red | Green | Blue\ntype Person(name: string) =\n    member _.Name = name\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsNamespacesModulesAndMembers()
+    {
+        // F#: namespace rec, module private, member forms / F#: namespace rec、module private、member形
+        var content = """
+            namespace rec MyApp.Domain
+
+            type Person(name: string) =
+                member this.Name = name
+                member _.Age = 0
+                static member Create(name: string) = Person(name)
+                override this.ToString() = this.Name
+
+            type IVisitor =
+                abstract member Visit : unit -> unit
+
+            let validate user =
+                user.Age > 0
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
     }
 
     [Fact]
@@ -14381,13 +14453,43 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Lua_DetectsFunctionsAndRequire()
     {
-        // Lua: function, local function, require / Lua: 関数、ローカル関数、require
-        var content = "local http = require('socket.http')\n\nfunction greet(name)\n  print(name)\nend\n\nlocal function helper(x)\n  return x\nend";
+        // Lua: function, local function, assignment forms, require / Lua: 関数、ローカル関数、代入形式、require
+        var content = """
+            local http = require('socket.http')
+
+            local helper = function(x)
+              return x
+            end
+
+            M.named = function(name)
+              return "hello " .. name
+            end
+
+            function M:method_form(arg)
+              return arg
+            end
+
+            function M.dot_form(arg)
+              return arg
+            end
+
+            local function top_local(x)
+              return x
+            end
+
+            function plain_function(a)
+              return a
+            end
+            """;
         var symbols = SymbolExtractor.Extract(1, "lua", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "socket.http");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M.named");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M:method_form");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M.dot_form");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "top_local");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plain_function");
     }
 
     [Fact]

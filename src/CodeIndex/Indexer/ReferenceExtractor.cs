@@ -82,6 +82,15 @@ public static class ReferenceExtractor
         {
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
+        // Rust macro declaration keywords / Rust マクロ宣言キーワード
+        // `macro_rules!` declarations will be seen by the Rust macro-call regex below, but they are
+        // declaration sites rather than call sites, so suppress the keyword itself.
+        // `macro_rules!` 宣言は下の Rust macro-call regex でも見えてしまうが、これは呼び出しではなく
+        // 宣言なのでキーワード自体を抑止する。
+        ["rust"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "macro_rules",
+        },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -256,6 +265,14 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:::)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
+    // Capture the full path-qualified macro name so `std::println!`, `log::info!`, and
+    // `my_macro!` all surface as references. The `macro_rules` declaration keyword is filtered
+    // by the Rust ignore list above.
+    // Rust の macro 呼び出しは共通の末尾 `(` ではなく `!` の後に `()` / `[]` / `{}` を取る。
+    // `std::println!` / `log::info!` / `my_macro!` のような path-qualified 名も含めて拾い、
+    // `macro_rules` 宣言キーワードは上の Rust ignore list で除外する。
+    private static readonly Regex RustMacroCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern}(?:::{FunctionalIdentifierPattern})*)(?:<[^>\n]+>)?!\s*[\(\[\{{]", RegexOptions.Compiled);
     // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
     // omit the trailing `(` that the shared CallRegex requires.
     // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
@@ -2144,6 +2161,16 @@ public static class ReferenceExtractor
                 // `call` / `instantiate` を発行する。issue #263 参照。
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
                     AddCallLikeReference(candidate.Name, candidate.NameIndex);
+            }
+
+            if (language == "rust")
+            {
+                foreach (Match match in RustMacroCallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    AddCallLikeReference(name, callIndex);
+                }
             }
 
             if (language == "csharp")
