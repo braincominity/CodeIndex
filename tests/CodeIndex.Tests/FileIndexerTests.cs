@@ -363,6 +363,28 @@ public class FileIndexerTests
         Assert.Equal("fortran", map[".f90"]);
         Assert.Equal("raku", map[".raku"]);
         Assert.Equal("perl", map[".t"]);
+        // Mainstream extension-only languages should now be recognized for search/indexing.
+        // 主要な拡張子ベース言語も search/indexing 用に認識されるべき。
+        Assert.Equal("ocaml", map[".ml"]);
+        Assert.Equal("ocaml", map[".mli"]);
+        Assert.Equal("crystal", map[".cr"]);
+        Assert.Equal("clojure", map[".clj"]);
+        Assert.Equal("clojure", map[".cljs"]);
+        Assert.Equal("clojure", map[".cljc"]);
+        Assert.Equal("clojure", map[".edn"]);
+        Assert.Equal("d", map[".d"]);
+        Assert.Equal("erlang", map[".erl"]);
+        Assert.Equal("erlang", map[".hrl"]);
+        Assert.Equal("julia", map[".jl"]);
+        Assert.Equal("nim", map[".nim"]);
+        Assert.Equal("nim", map[".nims"]);
+        Assert.Equal("perl", map[".pl"]);
+        Assert.Equal("perl", map[".pm"]);
+        Assert.Equal("perl", map[".pod"]);
+        Assert.Equal("perl", map[".t"]);
+        Assert.Equal("solidity", map[".sol"]);
+        Assert.Equal("tcl", map[".tcl"]);
+        Assert.Equal("tcl", map[".tk"]);
 
         // Objective-C lives in its own bucket so `.m` / `.mm` are indexed instead of being skipped.
         // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
