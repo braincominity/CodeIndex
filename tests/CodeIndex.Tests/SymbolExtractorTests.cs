@@ -12668,6 +12668,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_BodylessMembersWithTrailingCommentsStopAtSemicolon()
+    {
+        // Semicolon-terminated C# members must stop at the semicolon even when a trailing
+        // line or block comment follows it. Otherwise the range scan walks into the next
+        // brace body and corrupts `end_line` / `body_end_line` for the last body-less member
+        // in a block. Closes #245.
+        // `;` で終わる C# の body-less member は、その後ろに行コメント / ブロックコメントが
+        // 続いても semicolon で範囲を止める必要がある。そうしないと range scan が次の
+        // brace body まで進み、block 内の最後の body-less member の `end_line` / `body_end_line`
+        // が壊れる。Closes #245.
+        var content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                int A();                     // trailing line comment
+                int B(int x); // another trailing line comment
+                int C();                     // no real body here either
+                int D(int y); /* trailing block comment */
+            }
+
+            public class X
+            {
+                public int DoIt() => 42;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var d = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "D"));
+        Assert.Equal(8, d.StartLine);
+        Assert.Equal(8, d.EndLine);
+        Assert.Null(d.BodyStartLine);
+        Assert.Null(d.BodyEndLine);
+
+        var x = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "X"));
+        Assert.Equal(11, x.StartLine);
+        Assert.Equal(14, x.EndLine);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAccessorEventsStillExposeSiblingMembers()
     {
         // Accessor-based same-line events must clamp their signature at the accessor body

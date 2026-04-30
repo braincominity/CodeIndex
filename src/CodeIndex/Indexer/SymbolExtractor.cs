@@ -11221,6 +11221,8 @@ public static class SymbolExtractor
                     bracketDepth++;
                 else if (c == ']' && bracketDepth > 0)
                     bracketDepth--;
+                else if (c == ';' && !opened)
+                    return (startIndex + 1, null, null);
                 else if (c == '{')
                 {
                     if (parenDepth > 0 || bracketDepth > 0)
@@ -11247,9 +11249,6 @@ public static class SymbolExtractor
 
             if (sawTerminator >= 0)
                 return (i + 1, bodyStartLine, i + 1);
-
-            if (!opened && !inBlockComment && !inString && scanLine.TrimEnd().EndsWith(';'))
-                return (startIndex + 1, null, null);
             // Line comments reset at end of line (handled by the break above).
         }
 
