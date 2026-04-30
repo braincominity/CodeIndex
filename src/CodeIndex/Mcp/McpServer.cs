@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -18,6 +19,7 @@ public partial class McpServer
     private readonly bool _dbPathExplicit;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly Func<JsonNode, string> _serializeResponse;
     private bool _running = true;
 
     private const string ProtocolVersion = "2025-03-26";
@@ -26,6 +28,11 @@ public partial class McpServer
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
+        : this(dbPath, version, dbPathExplicit, null)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
     {
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
@@ -34,7 +41,9 @@ public partial class McpServer
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             WriteIndented = false,
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
+        _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
     }
 
     /// <summary>
@@ -58,45 +67,61 @@ public partial class McpServer
             if (line == null)
                 break; // stdin closed / stdinが閉じられた
 
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
-
-            // Reject oversized messages to prevent memory exhaustion
-            // メモリ枯渇を防ぐため巨大メッセージを拒否
-            if (line.Length > MaxLineLength)
-            {
-                Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
-                var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
-                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
-                continue;
-            }
-
-            try
-            {
-                var request = JsonNode.Parse(line);
-                if (request == null)
-                    continue;
-
-                var response = HandleMessage(request);
-                if (response != null)
-                {
-                    await writer.WriteLineAsync(response.ToJsonString(_jsonOptions));
-                }
-            }
-            catch (JsonException ex)
-            {
-                // Parse error / パースエラー
-                Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
-                var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
-                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
-            }
+            await ProcessLineAsync(line, writer);
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    /// <summary>
+    /// Process one MCP JSON-RPC line and write any response to the provided writer.
+    /// 1行分のMCP JSON-RPCを処理し、必要ならwriterにレスポンスを書き込む。
+    /// </summary>
+    internal async Task ProcessLineAsync(string line, TextWriter writer)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+
+        // Reject oversized messages to prevent memory exhaustion
+        // メモリ枯渇を防ぐため巨大メッセージを拒否
+        if (line.Length > MaxLineLength)
+        {
+            Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
+            var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
+            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+            return;
+        }
+
+        JsonNode? request = null;
+        try
+        {
+            request = JsonNode.Parse(line);
+            if (request == null)
+                return;
+
+            var response = HandleMessage(request);
+            if (response != null)
+            {
+                await writer.WriteLineAsync(_serializeResponse(response));
+            }
+        }
+        catch (JsonException ex)
+        {
+            // Parse error / パースエラー
+            Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
+            var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
+            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
+            var requestId = request?["id"];
+            if (requestId != null)
+            {
+                var errorResponse = CreateErrorResponse(requestId, -32603, ex.Message);
+                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+            }
+        }
     }
 
     /// <summary>
@@ -108,16 +133,20 @@ public partial class McpServer
         var method = request["method"]?.GetValue<string>();
         var id = request["id"];
 
-        // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
-        if (method == "notifications/initialized" || method == "notifications/cancelled")
-            return null;
-
-        if (method == null)
+        // Notifications (no id) never get a response / 通知（idなし）には絶対にレスポンスを返さない
+        if (id == null)
         {
-            if (id != null)
-                return CreateErrorResponse(id, -32600, "Invalid request: missing method");
+            if (method == "notifications/initialized" || method == "notifications/cancelled")
+                return null;
+
+            if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
+                Console.Error.WriteLine(BuildUnknownNotificationLog(method));
+
             return null;
         }
+
+        if (method == null)
+            return CreateErrorResponse(id, -32600, "Invalid request: missing method");
 
         return method switch
         {
@@ -227,6 +256,9 @@ public partial class McpServer
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildUnknownNotificationLog(string method) =>
+        $"[cdidx-mcp] Ignoring unknown notification: {method}";
 
     // Tool implementations are in McpToolHandlers.cs / ツール実装は McpToolHandlers.cs に分離
 
