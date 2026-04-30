@@ -10271,6 +10271,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_DetectsAttrListsAndAliases()
+    {
+        var content = """
+            class Person
+              attr_accessor :name, :age, :email
+              attr_reader :id, :created_at
+              attr_writer :internal_flag, :debug_count
+              attr_accessor :nickname
+
+              def greet(greeting = "Hello")
+                "#{greeting}, #{name}"
+              end
+
+              alias_method :full_name, :name
+              alias greet_alias greet
+              alias :display_name :name
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "age"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "email"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "id"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "created_at"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "internal_flag"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "debug_count"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "nickname"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "full_name"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "greet_alias"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "display_name"));
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsExpandedFeatures()
     {
         var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\ntrait Iter {\n    type Item;\n    fn next(&mut self) -> Option<Self::Item>;\n}\ntype Callback = fn(i32) -> i32;\npub union MyUnion { f: f32 }";

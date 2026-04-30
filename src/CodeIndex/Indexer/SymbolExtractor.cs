@@ -1055,6 +1055,9 @@ public static class SymbolExtractor
         [
             // attr_accessor/attr_reader/attr_writer as property declarations / プロパティ宣言
             new("property", new Regex(@"^\s*attr_(?:accessor|reader|writer)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            // alias_method / alias — capture the introduced method name for navigation
+            new("function", new Regex(@"^\s*alias_method\b\s+:?(?<name>\w+)\s*,\s*:?\w+", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+)\s+:?\w+", RegexOptions.Compiled), BodyStyle.None),
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*def\s+(?:self\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
@@ -2174,6 +2177,10 @@ public static class SymbolExtractor
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
                     name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
+                    var rubyAttrNames = lang == "ruby"
+                        && pattern.Kind == "property"
+                        ? TryExpandRubyAttrDeclaratorList(patternMatchLine, absoluteStartColumn, match, name)
+                        : null;
 
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
@@ -2572,6 +2579,43 @@ public static class SymbolExtractor
                                         ReturnType = NormalizeMetadata(entry.ReturnType),
                                     },
                                     line);
+                            }
+                        }
+                        else if (rubyAttrNames != null)
+                        {
+                            var rubyAttrSearchStart = absoluteStartColumn;
+                            foreach (var rubyAttrName in rubyAttrNames)
+                            {
+                                var rubyAttrStartColumn = rubyAttrSearchStart;
+                                if (!string.Equals(rubyAttrName, name, StringComparison.Ordinal))
+                                {
+                                    var foundRubyAttrStart = patternMatchLine.IndexOf(rubyAttrName, rubyAttrSearchStart, StringComparison.Ordinal);
+                                    if (foundRubyAttrStart >= 0)
+                                        rubyAttrStartColumn = foundRubyAttrStart;
+                                }
+
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = rubyAttrName,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = rubyAttrStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
+                                    },
+                                    line);
+
+                                rubyAttrSearchStart = rubyAttrStartColumn + Math.Max(1, rubyAttrName.Length);
                             }
                         }
                         else
@@ -17303,6 +17347,78 @@ public static class SymbolExtractor
         }
 
         return results.Count > 1 ? results : null;
+    }
+
+    // Ruby attr_accessor / attr_reader / attr_writer declarations can list multiple
+    // names on one line (`attr_accessor :a, :b, :c`). The primary regex only captures
+    // the first entry, so scan the tail for additional `:name` tokens and return the
+    // complete declarator list when there is real fan-out.
+    // Ruby の attr_accessor / attr_reader / attr_writer は 1 行に複数名を並べられる
+    // (`attr_accessor :a, :b, :c`)。primary regex は先頭の 1 件しか捕まえないため、
+    // tail を走査して残りの `:name` トークンを拾い、実際に fan-out があるときだけ
+    // 完全な declarator list を返す。
+    private static List<string>? TryExpandRubyAttrDeclaratorList(
+        string patternMatchLine,
+        int absoluteStartColumn,
+        Match match,
+        string firstName)
+    {
+        if (string.IsNullOrWhiteSpace(firstName))
+            return null;
+
+        var results = new List<string> { firstName };
+        var tailStart = absoluteStartColumn + match.Length;
+        if (tailStart >= patternMatchLine.Length)
+            return null;
+
+        var tail = patternMatchLine[tailStart..];
+        var i = 0;
+        while (i < tail.Length)
+        {
+            while (i < tail.Length && char.IsWhiteSpace(tail[i]))
+                i++;
+            if (i >= tail.Length)
+                break;
+            if (tail[i] != ',')
+                break;
+
+            i++;
+            while (i < tail.Length && char.IsWhiteSpace(tail[i]))
+                i++;
+            if (i >= tail.Length || tail[i] != ':')
+                return null;
+
+            i++;
+            var nameStart = i;
+            while (i < tail.Length && (tail[i] == '_' || char.IsLetterOrDigit(tail[i])))
+                i++;
+
+            var name = tail[nameStart..i];
+            if (name.Length == 0 || !IsRubyIdentifier(name))
+                return null;
+
+            results.Add(name);
+        }
+
+        return results.Count > 1 ? results : null;
+    }
+
+    private static bool IsRubyIdentifier(string value)
+    {
+        if (value.Length == 0)
+            return false;
+
+        if (value[0] != '_' && !char.IsLetter(value[0]))
+            return false;
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch != '_' && !char.IsLetterOrDigit(ch))
+                return false;
+        }
+
+        return true;
     }
 
     private static List<string> ScanCSharpTailDeclaratorNames(string tail, bool matchEndedAtEquals)
