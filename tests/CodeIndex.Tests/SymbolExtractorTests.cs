@@ -11155,6 +11155,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsFunctionLikeAndObjectLikeMacros()
+    {
+        // C: function-like and object-like #define macros / C: 関数風・オブジェクト風 #define マクロ
+        var content = """
+            #include <stdio.h>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+            #define MAX_BUFFER 4096
+
+            void work(void) {
+                int a = MAX(1, 2);
+                printf("v=%s buf=%d\n", VERSION, MAX_BUFFER);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_BUFFER");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -11163,6 +11187,30 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsFunctionLikeAndObjectLikeMacros()
+    {
+        // C++: function-like and object-like #define macros / C++: 関数風・オブジェクト風 #define マクロ
+        var content = """
+            #include <cstdio>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+            #define MAX_BUFFER 4096
+
+            void work() {
+                auto a = MAX(1, 2);
+                std::printf("v=%s buf=%d\n", VERSION, MAX_BUFFER);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_BUFFER");
     }
 
     [Fact]

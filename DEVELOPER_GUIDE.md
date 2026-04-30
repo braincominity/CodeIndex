@@ -389,8 +389,8 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Java | methods (including same-line leading annotations, lexer-aware annotation arguments such as `@Label(")")` and `@SuppressWarnings({"unchecked"})`, same-line `@interface` members with later same-line siblings such as `value(); int age();`, compact constructors in both same-line and Allman-style brace layouts even when the record header contains annotation-array arguments, same-line brace-bodied siblings, and same-line enum-constant-body methods), static final, enum members (body-scoped scanner that tracks strings/chars/comments/text blocks and stops at the first top-level `;`, so method calls like `\tRED();` outside the enum body are not captured; enum constants with anonymous bodies retain body ranges so nested overrides, helper methods, and same-line body-local methods attach to the enum-member container) | class, record, sealed, @interface, `module-info.java` module declarations | -- | interface | enum | record primary components | -- | import (including `requires`, `exports`, `opens`, `uses`, `provides` in `module-info.java`) | yes |
 | Kotlin | fun, extension fun, secondary constructor (`constructor(...)`), typealias, modifier-heavy forms (`abstract`, `override`, `open`, `final`, `suspend`) | class, object, companion (anonymous companions normalize to `Companion`), data/sealed/value class | -- | interface | enum class, enum entries | val/var | -- | import, typealias | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
-| C | functions | -- | struct | -- | enum | -- | -- | #include | yes |
-| C++ | functions | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| C | functions, `#define` macros | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | functions, `#define` macros | class | struct | -- | enum, enum class | -- | -- | #include | yes |
 | PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | functions | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
@@ -1524,8 +1524,8 @@ LIMIT 20;
 | Java | メソッド（同一行の先頭アノテーション付き、`@Label(")")` や `@SuppressWarnings({"unchecked"})` のような annotation 引数、`value(); int age();` のような同一行 `@interface` メンバーの後続 sibling、annotation-array 引数を含む record header や opening brace が次行へ送られた形も含む compact constructor、同一行 brace-body sibling、same-line enum 定数 body 内メソッドを含む）, static final, enum メンバー（文字列・char・コメント・text block を追跡する body-scoped scanner で抽出し、最初の top-level `;` で停止するため、enum 本体外の `\tRED();` のようなメソッド呼び出しを誤検出しない。匿名 body を持つ enum 定数は body range も保持し、入れ子の override / helper メソッドと same-line body-local method が enum 定数コンテナにぶら下がる） | class, record, sealed, @interface, `module-info.java` の module 宣言 | -- | interface | enum | record primary component | -- | import（`module-info.java` 内の `requires` / `exports` / `opens` / `uses` / `provides` を含む） | yes |
 | Kotlin | fun, 拡張関数, セカンダリコンストラクタ（`constructor(...)`）, 修飾子が多い形（`abstract`, `override`, `open`, `final`, `suspend`） | class, object, companion（無名 companion は `Companion` に正規化）, data/sealed/value class | -- | interface | enum class, enum エントリ | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
-| C | 関数 | -- | struct | -- | enum | -- | -- | #include | yes |
-| C++ | 関数 | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| C | 関数, `#define` マクロ | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | 関数, `#define` マクロ | class | struct | -- | enum, enum class | -- | -- | #include | yes |
 | PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
 | Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
 | Dart | 関数 | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
