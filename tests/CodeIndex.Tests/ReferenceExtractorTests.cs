@@ -1584,6 +1584,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyBlockCall_DetectsBraceAndDoEndForms()
+    {
+        const string content = """
+            def count_items(items)
+              options = { key: value }
+              items.each { |x| log(x) }
+              items.each_with_index do |x, i|
+                log(x)
+              end
+              with_transaction do
+                log("saving")
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "each" && reference.ContainerName == "count_items");
+        Assert.Contains(references, reference => reference.SymbolName == "each_with_index" && reference.ContainerName == "count_items");
+        Assert.Contains(references, reference => reference.SymbolName == "with_transaction" && reference.ContainerName == "count_items");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "options" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpRunCall_IsNotDroppedByMakefileKeywordList()
     {
         const string content = """

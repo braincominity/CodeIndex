@@ -109,6 +109,7 @@ public static class ReferenceExtractor
         ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "raise", "yield", "super", "include", "extend",
+            "unless", "case", "begin", "until", "module", "rescue", "ensure",
         },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
@@ -279,6 +280,15 @@ public static class ReferenceExtractor
     // は末尾 `(` を省略できるため、共通 CallRegex では拾えない。
     private static readonly Regex RubyCommandCallRegex = new(
         @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)\s+(?![=<>!~+\-*/%&|^]|do\b|end\b|then\b|\()(?:[:'""\w])",
+        RegexOptions.Compiled);
+    // Ruby block-call forms such as `xs.each { |x| ... }`, `xs.each do |x| ... end`, and
+    // `with_transaction do ... end` do not have a trailing `(`, so the shared CallRegex misses
+    // them. The optional paren segment keeps `foo(bar) do`-style DSLs visible too.
+    // Ruby の block-call 形 (`xs.each { |x| ... }` / `xs.each do |x| ... end` /
+    // `with_transaction do ... end`) は末尾 `(` がないため、共通 CallRegex では拾えない。
+    // 任意の括弧 segment を許すことで `foo(bar) do` のような DSL 形も拾う。
+    private static readonly Regex RubyBlockCallRegex = new(
+        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)(?:\s*\([^\)\r\n]*\))?\s*(?:\{|do\b)",
         RegexOptions.Compiled);
     // Ruby DSL target arguments such as `include Shared`, `raise ArgumentError, ""bad""`,
     // `attr_accessor :name`, and `before_action :authenticate` should become references even when
@@ -2138,6 +2148,13 @@ public static class ReferenceExtractor
                         matchedCallIndices.Add(callIndex);
                         AddCallLikeReference(name, callIndex);
                         EmitRubyCommandTargetReferences(name, callIndex);
+                    }
+
+                    foreach (Match match in RubyBlockCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        AddCallLikeReference(name, callIndex);
                     }
                 }
 
