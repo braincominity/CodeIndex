@@ -13,7 +13,7 @@ public partial class DbReader
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
     private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
-    private static readonly HashSet<string> ReflectionAttributeNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> ReflectionPropertyAttributeNames = new(StringComparer.Ordinal)
     {
         "jsonpropertyname",
         "jsonproperty",
@@ -25,6 +25,27 @@ public partial class DbReader
         "xmlattribute",
         "yamlmember",
         "column",
+        "key",
+        "required",
+        "bindproperty",
+        "parameter",
+        "inject",
+        "obsolete",
+        "bindnever",
+    };
+    private static readonly HashSet<string> ReflectionTypeAttributeNames = new(StringComparer.Ordinal)
+    {
+        "serializable",
+        "jsonserializable",
+        "datacontract",
+        "xmlroot",
+        "protocontract",
+        "messagepackobject",
+        "table",
+        "complextype",
+        "owned",
+        "keyless",
+        "attributeusage",
     };
     private static readonly HashSet<string> ReflectionIgnoreAttributeNames = new(StringComparer.Ordinal)
     {
@@ -1920,8 +1941,8 @@ public partial class DbReader
             var startLine = GetInt32OrFallback(reader, 5, 4);
             var isPublicOrExported = reader.GetInt32(12) != 0;
             var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
-            if (!isReflectionOrConfigSuspect && isPublicOrExported && kindValue == "property")
-                isReflectionOrConfigSuspect = HasReflectionAttributeContext(path, startLine);
+            if (!isReflectionOrConfigSuspect && isPublicOrExported)
+                isReflectionOrConfigSuspect = HasReflectionAttributeContext(kindValue, path, startLine);
 
             var visibility = GetNullableString(reader, 8);
             var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
@@ -2076,9 +2097,13 @@ public partial class DbReader
         return cmd.ExecuteScalar() != null;
     }
 
-    private bool HasReflectionAttributeContext(string path, int startLine)
+    private bool HasReflectionAttributeContext(string kind, string path, int startLine)
     {
         if (!_hasChunksTable || startLine <= 1)
+            return false;
+
+        var reflectionAttributeNames = GetReflectionAttributeNamesForKind(kind);
+        if (reflectionAttributeNames == null)
             return false;
 
         var excerptStart = Math.Max(1, startLine - UnusedAttributeContextWindow);
@@ -2116,7 +2141,18 @@ public partial class DbReader
         if (attributeNames.Overlaps(ReflectionIgnoreAttributeNames))
             return false;
 
-        return attributeNames.Overlaps(ReflectionAttributeNames);
+        return attributeNames.Overlaps(reflectionAttributeNames);
+    }
+
+    private static HashSet<string>? GetReflectionAttributeNamesForKind(string kind)
+    {
+        if (kind == "property")
+            return ReflectionPropertyAttributeNames;
+
+        if (kind is "class" or "struct" or "interface" or "enum")
+            return ReflectionTypeAttributeNames;
+
+        return null;
     }
 
     private static bool IsMissingChunksTableError(SqliteException ex) =>
@@ -2905,7 +2941,7 @@ public partial class DbReader
             return (
                 UnusedBucketReflectionOrConfig,
                 "low",
-                "public/exported property with config or attribute-driven reflection surface and no indexed references");
+                "public/exported symbol with config or attribute-driven reflection surface and no indexed references");
         }
 
         if (isPublicOrExported)
