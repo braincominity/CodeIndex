@@ -415,7 +415,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 | Dockerfile | named stages (AS) | base images (FROM), stage dependencies (FROM \<stage\> AS \<new\>, COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
-| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| Lua | function, local function, `local x = function`, `M.x = function`, `M:x = function` | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, instance | -- | class (typeclass) | -- | -- | -- | import | -- |
 | F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
@@ -1556,7 +1556,7 @@ LIMIT 20;
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM)、ステージ依存 (FROM \<stage\> AS \<new\>、COPY --from=\<stage\>) | -- | -- | -- | -- | -- | -- | -- |
-| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| Lua | function, local function, `local x = function`, `M.x = function`, `M:x = function` | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, instance | -- | class (型クラス) | -- | -- | -- | import | -- |
 | F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
