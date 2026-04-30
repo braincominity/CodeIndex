@@ -345,6 +345,19 @@ public static class ReferenceExtractor
     // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
     // issue #265 参照。
     private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
+    // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
+    // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
+    // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
+    // Scala の `name { ... }` / `name { x => ... }` 形式は末尾 `(` を持たないため共通 CallRegex では拾えない。
+    // `foreach {}` / `Try {}` / `synchronized {}` のような慣用的なブロック呼び出しも `call` edge として出すため専用パスを使う。
+    private static readonly Regex ScalaTrailingBlockCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern})(?:\[[^\]\n]+\])?\s*\{{", RegexOptions.Compiled);
+    // Scala block-call syntax must not treat control-flow keywords such as `match {` or
+    // `catch {` as invocations.
+    // Scala の block-call 構文では `match {` / `catch {` のような制御フローキーワードを呼び出し扱いしない。
+    private static readonly HashSet<string> ScalaIgnoredBlockCallNames = new(StringComparer.Ordinal)
+    {
+        "match", "catch", "else", "finally",
+    };
     // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
     // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
     // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
@@ -2040,7 +2053,10 @@ public static class ReferenceExtractor
                     return;
                 }
                 if (IsIgnoredCallName(language, name))
-                    return;
+                {
+                    if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
+                        return;
+                }
                 if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
                     return;
 
@@ -2174,6 +2190,18 @@ public static class ReferenceExtractor
                         var name = match.Groups["name"].Value;
                         var callIndex = match.Groups["name"].Index;
                         if (IsTrailingLambdaInheritanceClause(preparedLine, callIndex))
+                            continue;
+                        AddCallLikeReference(name, callIndex);
+                    }
+                }
+
+                if (language == "scala")
+                {
+                    foreach (Match match in ScalaTrailingBlockCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        if (ScalaIgnoredBlockCallNames.Contains(name))
                             continue;
                         AddCallLikeReference(name, callIndex);
                     }

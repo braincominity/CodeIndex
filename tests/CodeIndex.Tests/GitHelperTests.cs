@@ -168,13 +168,14 @@ public class GitHelperTests : IDisposable
         File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n");
         RunGit(repoDir, "add", "base.txt");
         RunGit(repoDir, "commit", "-m", "base");
+        var baseBranch = RunGit(repoDir, "branch", "--show-current").Trim();
 
         RunGit(repoDir, "switch", "-c", "feature");
         File.WriteAllText(Path.Combine(repoDir, "feature.txt"), "feature\n");
         RunGit(repoDir, "add", "feature.txt");
         RunGit(repoDir, "commit", "-m", "feature change");
 
-        RunGit(repoDir, "switch", "master");
+        RunGit(repoDir, "switch", baseBranch);
         File.WriteAllText(Path.Combine(repoDir, "main.txt"), "main\n");
         RunGit(repoDir, "add", "main.txt");
         RunGit(repoDir, "commit", "-m", "main change");

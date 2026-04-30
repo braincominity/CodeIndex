@@ -1526,6 +1526,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_publish_{Guid.NewGuid():N}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "TrimmedPublishNeedle_1a2b3c";
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", $"class App {{ void Run() {{ var {queryToken} = 1; }} }}\n");
+
+            var publishedDll = PublishTrimmedCli(publishDir);
+
+            var (searchExitCode, searchStdOut, searchStdErr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(string.Empty, searchStdErr);
+            using (var searchJson = JsonDocument.Parse(searchStdOut))
+            {
+                Assert.True(searchJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, searchJson.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (findExitCode, findStdOut, findStdErr) = RunPublishedCli(publishedDll, publishDir, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStdErr);
+            using (var findJson = JsonDocument.Parse(findStdOut))
+            {
+                Assert.True(findJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, findJson.RootElement.GetProperty("files").GetInt32());
+                Assert.Equal(1, findJson.RootElement.GetProperty("file_count").GetInt32());
+            }
+
+            var (validateExitCode, validateStdOut, validateStdErr) = RunPublishedCli(publishedDll, publishDir, "validate", "--db", dbPath, "--json");
+            Assert.Equal(CommandExitCodes.Success, validateExitCode);
+            Assert.Equal(string.Empty, validateStdErr);
+            using (var validateJson = JsonDocument.Parse(validateStdOut))
+            {
+                Assert.Equal(0, validateJson.RootElement.GetProperty("count").GetInt32());
+                Assert.True(validateJson.RootElement.GetProperty("issues").ValueKind is JsonValueKind.Array);
+            }
+
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(publishDir);
+        }
+    }
+
+    [Fact]
     public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
     {
         // `|` is a legitimate character in operator symbols (C# `operator |`, etc.); it must not
@@ -13282,6 +13332,92 @@ public class QueryCommandRunnerTests
             var radiusRow = Assert.Single(radiusRows);
             Assert.Equal("radius", radiusRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal("call", radiusRow.RootElement.GetProperty("reference_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunGraphCounts_ExactJson_CssScssVariableAliasAppliesToCallersAndCallees()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_css_scss_variable_alias_counts");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "styles"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "styles", "theme.scss"),
+                """
+                $primary: #3366cc;
+                $spacing-base: 8px;
+
+                @mixin rounded($radius) {
+                  border-radius: $radius;
+                }
+
+                %button-base {
+                  padding: 4px;
+                }
+
+                .button {
+                  color: $primary;
+                  padding: $spacing-base * 2;
+                  @include rounded(4px);
+                }
+
+                .card {
+                  @extend %button-base;
+                  border: 1px solid $primary;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (calleesExitCode, calleesStdout, calleesStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+
+            using var referencesCountDocument = ParseJsonOutput(referencesCountStdout);
+            using var callersCountDocument = ParseJsonOutput(callersCountStdout);
+            using var calleesCountDocument = ParseJsonOutput(calleesCountStdout);
+
+            var callersRows = ParseJsonLines(callersStdout);
+            var calleesRows = ParseJsonLines(calleesStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, referencesCountExitCode);
+            Assert.Equal(string.Empty, referencesCountStderr);
+            Assert.Equal(2, referencesCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, referencesCountDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal(2, callersRows.Count);
+            Assert.All(callersRows, row => Assert.Contains(row.RootElement.GetProperty("caller_name").GetString(), [".button", ".card"]));
+            Assert.All(callersRows, row => Assert.Equal("primary", row.RootElement.GetProperty("callee_name").GetString()));
+            Assert.All(callersRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, callersCountExitCode);
+            Assert.Equal(string.Empty, callersCountStderr);
+            Assert.Equal(2, callersCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, callersCountDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, calleesStderr);
+            var calleesRow = Assert.Single(calleesRows);
+            Assert.Equal("rounded", calleesRow.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("radius", calleesRow.RootElement.GetProperty("callee_name").GetString());
+            Assert.Equal("call", calleesRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, calleesCountExitCode);
+            Assert.Equal(string.Empty, calleesCountStderr);
+            Assert.Equal(1, calleesCountDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, calleesCountDocument.RootElement.GetProperty("files").GetInt32());
         }
         finally
         {
@@ -26169,6 +26305,69 @@ public class QueryCommandRunnerTests
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedDll, string workingDirectory, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(publishedDll);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
+        process.StandardInput.Close();
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static string PublishTrimmedCli(string outputDir)
+    {
+        Directory.CreateDirectory(outputDir);
+
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = GetRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("publish");
+        psi.ArgumentList.Add(Path.Combine("src", "CodeIndex", "CodeIndex.csproj"));
+        psi.ArgumentList.Add("--configuration");
+        psi.ArgumentList.Add("Debug");
+        psi.ArgumentList.Add("--runtime");
+        psi.ArgumentList.Add(System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier);
+        psi.ArgumentList.Add("--output");
+        psi.ArgumentList.Add(outputDir);
+        psi.ArgumentList.Add("-p:PublishTrimmed=true");
+        psi.ArgumentList.Add("-p:SelfContained=true");
+        psi.ArgumentList.Add("-p:PublishSingleFile=false");
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (!File.Exists(publishedDll))
+            throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
+
+        return publishedDll;
     }
 
     private static string GetBuiltCliDllPath()
