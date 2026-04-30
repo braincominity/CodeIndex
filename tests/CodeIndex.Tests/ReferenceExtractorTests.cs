@@ -151,6 +151,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
+    {
+        // issue #252: same-line definition suppression must drop only the declarator token,
+        // not later recursive calls or delegated calls that happen to share the same name.
+        // issue #252: 同一行の定義抑制は宣言子トークンだけを落とし、同じ名前を共有する
+        // 後続の再帰呼び出しや委譲呼び出しまで消してはいけない。
+        const string content = """
+            namespace Demo;
+
+            public class R
+            {
+                public int Fib(int n) => Fib(n - 1);
+                public void DoLog(ILog log) => log.DoLog();
+
+                public int FibBlock(int n)
+                {
+                    if (n < 2) return n;
+                    return FibBlock(n - 1) + FibBlock(n - 2);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fibRefs = references.Where(r => r.SymbolName == "Fib").ToList();
+        Assert.Single(fibRefs);
+        Assert.All(fibRefs, reference =>
+        {
+            Assert.Equal("function", reference.ContainerKind);
+            Assert.Equal("Fib", reference.ContainerName);
+        });
+
+        var doLogRef = Assert.Single(references.Where(r => r.SymbolName == "DoLog"));
+        Assert.Equal("function", doLogRef.ContainerKind);
+        Assert.Equal("DoLog", doLogRef.ContainerName);
+
+        var fibBlockRefs = references.Where(r => r.SymbolName == "FibBlock").ToList();
+        Assert.Equal(2, fibBlockRefs.Count);
+        Assert.All(fibBlockRefs, reference =>
+        {
+            Assert.Equal("function", reference.ContainerKind);
+            Assert.Equal("FibBlock", reference.ContainerName);
+        });
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
