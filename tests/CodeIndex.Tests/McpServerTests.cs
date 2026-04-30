@@ -195,6 +195,28 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_WhenResponseSerializationFails_ReturnsJsonRpcError()
+    {
+        var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            false,
+            _ => throw new InvalidOperationException("serialize boom"));
+        using var stdout = new StringWriter();
+
+        await server.ProcessLineAsync("""{"jsonrpc":"2.0","id":7,"method":"tools/list"}""", stdout);
+
+        using var document = JsonDocument.Parse(stdout.ToString());
+        var root = document.RootElement;
+
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        Assert.Equal(7, root.GetProperty("id").GetInt32());
+        var error = root.GetProperty("error");
+        Assert.Equal(-32603, error.GetProperty("code").GetInt32());
+        Assert.Contains("serialize boom", error.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Notification_Initialized_ReturnsNull()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;
