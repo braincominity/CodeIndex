@@ -10254,6 +10254,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsGenericMethodsWithTypeParameterPrefix()
+    {
+        var content = """
+            package com.example;
+
+            public class GenericService {
+                public <T> T first(java.util.List<T> items) { return items.get(0); }
+                public <K, V> V get(java.util.Map<K, V> map, K key) { return map.get(key); }
+                public <T extends Comparable<T>> T max(T a, T b) { return a.compareTo(b) >= 0 ? a : b; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "GenericService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "GenericService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get" && s.ContainerName == "GenericService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "max" && s.ContainerName == "GenericService");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "return");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsRecordAndSealedClass()
     {
         // Java 16+ record, Java 17+ sealed class / Java 16 の record、Java 17 の sealed class
@@ -10467,6 +10489,37 @@ public class SymbolExtractorTests
         Assert.NotNull(compactCtor.BodyStartLine);
         Assert.NotNull(compactCtor.BodyEndLine);
         Assert.True(compactCtor.BodyStartLine >= compactCtor.StartLine);
+    }
+
+    [Fact]
+    public void Extract_Java_SwitchExpressionsDoNotEmitPhantomMethods()
+    {
+        var content = """
+            package com.example;
+
+            sealed interface Shape permits Circle, Square {}
+            record Circle(double r) implements Shape {}
+            record Square(double side) implements Shape {}
+
+            public class Matcher {
+                public double area(Shape shape) {
+                    return switch (shape) {
+                        case Circle(double r) -> Math.PI * r * r;
+                        case Square(double side) -> side * side;
+                        default -> 0.0;
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Circle");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Square");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "area" && s.ContainerName == "Matcher");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "switch");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Circle");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Square");
     }
 
     [Fact]
