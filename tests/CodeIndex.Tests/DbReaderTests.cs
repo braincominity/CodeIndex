@@ -1486,6 +1486,39 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_And_Search_ExcludeTests_KeepMidWordFilenames()
+    {
+        InsertIndexedFile("src/latest.py", "python", "def marker():\n    return 'latest'");
+        InsertIndexedFile("src/request.py", "python", "def marker():\n    return 'request'");
+        InsertIndexedFile("src/contest.py", "python", "def marker():\n    return 'contest'");
+        InsertIndexedFile("src/fastest.py", "python", "def marker():\n    return 'fastest'");
+        InsertIndexedFile("tests/test_foo.py", "python", "def marker():\n    return 'test_foo'");
+        InsertIndexedFile("foo_test.py", "python", "def marker():\n    return 'foo_test'");
+        InsertIndexedFile("test_foo.py", "python", "def marker():\n    return 'root_test_foo'");
+        InsertIndexedFile("src/tests.py", "python", "def marker():\n    return 'tests'");
+
+        var expectedPaths = new[]
+        {
+            "src/contest.py",
+            "src/fastest.py",
+            "src/latest.py",
+            "src/request.py",
+        };
+
+        var symbolPaths = _reader.SearchSymbols(query: "marker", excludeTests: true)
+            .Select(result => result.Path)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expectedPaths, symbolPaths);
+
+        var searchPaths = _reader.Search("marker", excludeTests: true)
+            .Select(result => result.Path)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expectedPaths, searchPaths);
+    }
+
+    [Fact]
     public void Search_ExcludeTests_RemovesLikelyTestPaths()
     {
         var testFileId = _writer.UpsertFile(new FileRecord
