@@ -1007,7 +1007,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b)(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b)(?:<[^>]*>+\s+)?(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -2388,15 +2388,53 @@ public static class SymbolExtractor
                         signature = line[absoluteStartColumn..].Trim();
                     }
 
-                    var declaratorEntries = lang == "csharp"
-                        && pattern.Kind == "property"
-                        && pattern.BodyStyle == BodyStyle.None
-                        ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, absoluteStartColumn, match, pattern.ReturnTypeGroup, name)
-                        : null;
-
-                    if (declaratorEntries != null)
+                    var suppressJavaStatementSymbol = false;
+                    if (lang == "java" && pattern.Kind == "function")
                     {
-                        foreach (var entry in declaratorEntries)
+                        var trimmedSignature = signature.TrimStart();
+                        suppressJavaStatementSymbol = name == "switch"
+                            || trimmedSignature.StartsWith("return ", StringComparison.Ordinal)
+                            || trimmedSignature.StartsWith("switch ", StringComparison.Ordinal)
+                            || trimmedSignature.StartsWith("case ", StringComparison.Ordinal);
+                    }
+
+                    if (!suppressJavaStatementSymbol)
+                    {
+                        var declaratorEntries = lang == "csharp"
+                            && pattern.Kind == "property"
+                            && pattern.BodyStyle == BodyStyle.None
+                            ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, absoluteStartColumn, match, pattern.ReturnTypeGroup, name)
+                            : null;
+
+                        if (declaratorEntries != null)
+                        {
+                            foreach (var entry in declaratorEntries)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = entry.Name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = csharpSingleLineCollapsedMatch
+                                            ? csharpSignatureRawStartColumn
+                                            : absoluteStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(entry.ReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else
                         {
                             AddSymbolRecord(
                                 symbols,
@@ -2406,7 +2444,7 @@ public static class SymbolExtractor
                                 {
                                     FileId = fileId,
                                     Kind = kind,
-                                    Name = entry.Name,
+                                    Name = name,
                                     Line = startLine,
                                     StartLine = startLine,
                                     StartColumn = csharpSingleLineCollapsedMatch
@@ -2417,35 +2455,10 @@ public static class SymbolExtractor
                                     BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                                    ReturnType = NormalizeMetadata(entry.ReturnType),
+                                    ReturnType = NormalizeMetadata(rawReturnType),
                                 },
                                 line);
                         }
-                    }
-                    else
-                    {
-                        AddSymbolRecord(
-                            symbols,
-                            cssSeenSymbols,
-                            startLine,
-                            new SymbolRecord
-                            {
-                                FileId = fileId,
-                                Kind = kind,
-                                Name = name,
-                                Line = startLine,
-                                StartLine = startLine,
-                                StartColumn = csharpSingleLineCollapsedMatch
-                                    ? csharpSignatureRawStartColumn
-                                    : absoluteStartColumn,
-                                EndLine = Math.Max(startLine, endLine),
-                                BodyStartLine = bodyStartLine,
-                                BodyEndLine = bodyEndLine,
-                                Signature = signature,
-                                Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                                ReturnType = NormalizeMetadata(rawReturnType),
-                            },
-                            line);
                     }
 
                     if (lang == "css"
