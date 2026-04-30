@@ -659,6 +659,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppDefineLine_DoesNotBecomeReference()
+    {
+        const string content = """
+            #include <cstdio>
+
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            #define VERSION "1.0"
+
+            void work() {
+                auto value = MAX(1, 2);
+                (void)VERSION;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        var maxRefs = references.Where(r => r.SymbolName == "MAX").ToList();
+        Assert.Single(maxRefs);
+        Assert.Equal("call", maxRefs[0].ReferenceKind);
+        Assert.Equal("work", maxRefs[0].ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "MAX" && r.Line == 3);
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
