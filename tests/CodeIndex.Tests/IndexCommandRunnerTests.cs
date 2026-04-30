@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -4945,11 +4946,12 @@ public class IndexCommandRunnerTests
         psi.ArgumentList.Add(Path.Combine("src", "CodeIndex", "CodeIndex.csproj"));
         psi.ArgumentList.Add("--configuration");
         psi.ArgumentList.Add("Debug");
+        psi.ArgumentList.Add("--runtime");
+        psi.ArgumentList.Add(RuntimeInformation.RuntimeIdentifier);
         psi.ArgumentList.Add("--output");
         psi.ArgumentList.Add(outputDir);
-        psi.ArgumentList.Add("--no-restore");
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
-        psi.ArgumentList.Add("-p:SelfContained=false");
+        psi.ArgumentList.Add("-p:SelfContained=true");
         psi.ArgumentList.Add("-p:PublishSingleFile=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
