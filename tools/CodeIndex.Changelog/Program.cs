@@ -164,6 +164,7 @@ public sealed class ChangelogTool
     private static readonly Regex SlugFragmentNameRegex = new(@"^\+(?<slug>[A-Za-z0-9][A-Za-z0-9-]*)\.(?<category>added|changed|fixed|deprecated|removed|security|docs|internal)\.md$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ReleaseHeadingRegex = new(@"^### \[[^\]]+\](?: - .+)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FooterLinkRegex = new(@"^\[(?<label>[^\]]+)\]: https://github\.com/Widthdom/CodeIndex/compare/v(?<base>\d+\.\d+\.\d+)(?:\.\.\.v(?<target>\d+\.\d+\.\d+)|\.\.\.HEAD)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex FooterTagLinkRegex = new(@"^\[(?<label>[^\]]+)\]: https://github\.com/Widthdom/CodeIndex/releases/tag/v(?<version>\d+\.\d+\.\d+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex BulletRegex = new(@"^\s*-\s+\S", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly string _repositoryRoot;
@@ -591,7 +592,7 @@ public sealed class ChangelogTool
 
     private sealed record VersionBlock(string HeadingLine, IReadOnlyList<string> BodyLines);
 
-    private sealed record FooterEntry(string Label, string BaseVersion, string? TargetVersion);
+    private sealed record FooterEntry(string Label, string BaseVersion, string? TargetVersion, bool IsTagLink = false);
 
     private sealed record ParsedChangelog(
         IReadOnlyList<string> PrefixLines,
@@ -744,13 +745,25 @@ public sealed class ChangelogTool
                     continue;
 
                 var match = FooterLinkRegex.Match(line);
-                if (!match.Success)
-                    throw new ChangelogException($"CHANGELOG.md footer contains invalid line: '{line}'.");
+                if (match.Success)
+                {
+                    var label = match.Groups["label"].Value;
+                    var baseVersion = match.Groups["base"].Value;
+                    var targetVersion = match.Groups["target"].Success ? match.Groups["target"].Value : null;
+                    entries.Add(new FooterEntry(label, baseVersion, targetVersion, IsTagLink: false));
+                    continue;
+                }
 
-                var label = match.Groups["label"].Value;
-                var baseVersion = match.Groups["base"].Value;
-                var targetVersion = match.Groups["target"].Success ? match.Groups["target"].Value : null;
-                entries.Add(new FooterEntry(label, baseVersion, targetVersion));
+                var tagMatch = FooterTagLinkRegex.Match(line);
+                if (tagMatch.Success)
+                {
+                    var label = tagMatch.Groups["label"].Value;
+                    var version = tagMatch.Groups["version"].Value;
+                    entries.Add(new FooterEntry(label, version, version, IsTagLink: true));
+                    continue;
+                }
+
+                throw new ChangelogException($"CHANGELOG.md footer contains invalid line: '{line}'.");
             }
 
             return entries;
@@ -759,9 +772,11 @@ public sealed class ChangelogTool
         private static IReadOnlyList<string> RenderFooter(IReadOnlyList<FooterEntry> entries)
         {
             return entries.Select(entry =>
-                entry.TargetVersion is null
-                    ? $"[{entry.Label}]: https://github.com/Widthdom/CodeIndex/compare/v{entry.BaseVersion}...HEAD"
-                    : $"[{entry.Label}]: https://github.com/Widthdom/CodeIndex/compare/v{entry.BaseVersion}...v{entry.TargetVersion}")
+                entry.IsTagLink
+                    ? $"[{entry.Label}]: https://github.com/Widthdom/CodeIndex/releases/tag/v{entry.TargetVersion}"
+                    : entry.TargetVersion is null
+                        ? $"[{entry.Label}]: https://github.com/Widthdom/CodeIndex/compare/v{entry.BaseVersion}...HEAD"
+                        : $"[{entry.Label}]: https://github.com/Widthdom/CodeIndex/compare/v{entry.BaseVersion}...v{entry.TargetVersion}")
                 .ToList();
         }
     }

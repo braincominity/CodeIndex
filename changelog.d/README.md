@@ -114,6 +114,8 @@ unreleased comparison target:
 - `[Unreleased]` should compare from the current release version to `HEAD`;
 - the new release tag should compare from the previous version to the new tag;
 - older version links stay intact and are not duplicated.
+- legacy `[version]: .../releases/tag/vX.Y.Z` footer lines are tolerated and
+  preserved when present in older changelog files.
 
 ## Examples
 
