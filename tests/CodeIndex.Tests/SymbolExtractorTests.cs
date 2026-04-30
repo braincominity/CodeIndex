@@ -10343,6 +10343,58 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsEnumCasesAndIndirectEnums()
+    {
+        var content = """
+            public enum NetworkError: Error {
+                case timeout
+                case server(code: Int, message: String)
+                case client(Int)
+                case unknown
+            }
+
+            indirect enum Tree<T> {
+                case leaf(T)
+                indirect case node(Tree<T>, Tree<T>)
+            }
+
+            enum Status: String, Codable {
+                case active
+                case inactive = "off"
+                case pending
+            }
+
+            func handle(_ error: NetworkError) {
+                switch error {
+                case .overheated:
+                    break
+                case let .recoverable(code, message):
+                    break
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "NetworkError");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "timeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "server");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "client");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "unknown");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "leaf");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "node");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "active");
+
+        var inactive = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "inactive"));
+        Assert.Equal("\"off\"", inactive.ReturnType);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "pending");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "overheated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "recoverable");
+    }
+
+    [Fact]
     public void Extract_ObjC_DetectsInterfacesPropertiesMethodsAndImports()
     {
         var content = """
