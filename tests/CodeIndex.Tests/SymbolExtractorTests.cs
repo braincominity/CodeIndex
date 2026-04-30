@@ -221,6 +221,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsTopLevelConstsAndVarsAsProperties()
+    {
+        var content = """
+            package demo
+
+            const MaxRetries = 3
+            const Timeout int = 30
+            const (
+                StatusActive = "active"
+            )
+
+            var ErrNotFound = errors.New("not found")
+            var DefaultConfig *Config = &Config{}
+
+            func build() {
+                user := User{Name: "alice"}
+                _ = user
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Timeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusActive");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ErrNotFound");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultConfig");
+        Assert.DoesNotContain(symbols, s => s.Name == "Name");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsQualifiedDefinitionsConceptsAndModules()
     {
         var content = """
@@ -10414,9 +10445,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ID");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Logger");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GlobalConfig");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GlobalConfig");
     }
 
     [Fact]
