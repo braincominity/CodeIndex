@@ -14396,6 +14396,80 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_GraphQL_DetectsFragmentsDirectivesAndExtends()
+    {
+        var content = """
+            type User {
+              id: ID!
+            }
+
+            input CreateUserInput {
+              name: String!
+            }
+
+            interface Node {
+              id: ID!
+            }
+
+            enum Role {
+              ADMIN
+              USER
+            }
+
+            fragment ProcessingTimeoutError on ProcessingTimeoutError {
+              __typename
+              message
+            }
+
+            directive @auth(role: String!) on FIELD_DEFINITION
+
+            extend type ExtendedUser {
+              profile: Profile
+            }
+
+            extend interface ExtendedNode {
+              archived: Boolean
+            }
+
+            extend input ExtendedCreateUserInput {
+              email: String
+            }
+
+            extend enum ExtendedRole {
+              GUEST
+            }
+
+            extend union SearchResult = User | Organization
+
+            extend scalar DateTime
+
+            query GetUser($id: ID!) {
+              user(id: $id) { name }
+            }
+
+            mutation CreateUser($input: CreateUserInput!) {
+              createUser(input: $input) { id }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "graphql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Node");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ProcessingTimeoutError");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "auth");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedNode");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedCreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedRole");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DateTime");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
+    }
+
+    [Fact]
     public void Extract_Gradle_DetectsSymbols()
     {
         // Both legacy apply plugin: and modern plugins { id '...' } forms
