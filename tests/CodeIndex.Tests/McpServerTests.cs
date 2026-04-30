@@ -1811,6 +1811,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_DepthZeroReturnsResolvedSymbolWithoutCallers()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","maxDepth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
+        Assert.Empty(structured["callers"]!.AsArray());
+        Assert.Equal("depth_zero", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", structured["suggestion"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
@@ -4244,7 +4258,7 @@ public class McpServerTests : IDisposable
             var structured = hotspotsResponse["result"]!["structuredContent"]!;
             Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal(2, structured["count"]!.GetValue<int>());
             if (structured["degraded"] is JsonNode degradedNode)
                 Assert.False(degradedNode.GetValue<bool>());
         }
@@ -4282,7 +4296,7 @@ public class McpServerTests : IDisposable
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
@@ -4373,7 +4387,7 @@ public class McpServerTests : IDisposable
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
             Assert.True(structured["degraded"]!.GetValue<bool>());

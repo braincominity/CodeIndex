@@ -151,6 +151,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
+    {
+        // issue #252: same-line definition suppression must drop only the declarator token,
+        // not later recursive calls or delegated calls that happen to share the same name.
+        // issue #252: 同一行の定義抑制は宣言子トークンだけを落とし、同じ名前を共有する
+        // 後続の再帰呼び出しや委譲呼び出しまで消してはいけない。
+        const string content = """
+            namespace Demo;
+
+            public class R
+            {
+                public int Fib(int n) => Fib(n - 1);
+                public void DoLog(ILog log) => log.DoLog();
+
+                public int FibBlock(int n)
+                {
+                    if (n < 2) return n;
+                    return FibBlock(n - 1) + FibBlock(n - 2);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fibRefs = references.Where(r => r.SymbolName == "Fib").ToList();
+        Assert.Single(fibRefs);
+        Assert.All(fibRefs, reference =>
+        {
+            Assert.Equal("function", reference.ContainerKind);
+            Assert.Equal("Fib", reference.ContainerName);
+        });
+
+        var doLogRef = Assert.Single(references.Where(r => r.SymbolName == "DoLog"));
+        Assert.Equal("function", doLogRef.ContainerKind);
+        Assert.Equal("DoLog", doLogRef.ContainerName);
+
+        var fibBlockRefs = references.Where(r => r.SymbolName == "FibBlock").ToList();
+        Assert.Equal(2, fibBlockRefs.Count);
+        Assert.All(fibBlockRefs, reference =>
+        {
+            Assert.Equal("function", reference.ContainerKind);
+            Assert.Equal("FibBlock", reference.ContainerName);
+        });
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
@@ -759,9 +806,10 @@ public class ReferenceExtractorTests
     public void Extract_CsharpMultiLineVerbatimString_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #288: call-looking identifiers inside a multi-line
-        // @"..." verbatim string body must not be captured as references.
-        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子は
-        // 参照として抽出してはならない。
+        // @"..." verbatim string body must not be captured as references, including
+        // constructor-style initializer text that would otherwise look like instantiate.
+        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子や
+        // instantiate っぽい構文は参照として抽出してはならない。
         const string content = """
             public class FixtureHost
             {
@@ -769,6 +817,7 @@ public class ReferenceExtractorTests
                 {
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 };
                         WHERE x = BadCall()
                     ";
                     RealCall();
@@ -776,6 +825,7 @@ public class ReferenceExtractorTests
 
                 private void RealCall() { }
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """;
 
@@ -783,6 +833,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
@@ -876,6 +927,7 @@ public class ReferenceExtractorTests
 
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 }
                         WHERE x = BadCall()
                     ";
 
@@ -887,6 +939,7 @@ public class ReferenceExtractorTests
                 private string AnotherCall(string s) => s;
                 private int PhantomCall(int x) => x;
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """";
 
@@ -897,6 +950,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "AnotherCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
@@ -13867,6 +13921,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinTrailingLambdaCallSites_AreReferenced()
+    {
+        // issue #265: Kotlin trailing-lambda call sites do not end with `(`, so the
+        // reference extractor must still index them as `call` edges.
+        // issue #265: Kotlin の trailing-lambda 呼び出しは末尾に `(` を持たないため、
+        // それでも `call` edge として index されること。
+        const string content = """
+            interface Box
+
+            fun run() {
+                val items = listOf(1, 2, 3)
+                items.forEach { }
+                items.filter { it > 0 }
+                items.map { it * 2 }
+                items.fold(0) { acc, x -> acc + x }
+                val boxed = object : Box {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "forEach"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "filter"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "map"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "fold"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Box"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SwiftAttributeWithArgs_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Swift `@available(...)` / `@objc` / `@MainActor` are
@@ -13901,6 +13999,48 @@ public class ReferenceExtractorTests
 
         var mainActor = Assert.Single(references.Where(r => r.SymbolName == "MainActor"));
         Assert.Equal("annotation", mainActor.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_SwiftTrailingClosureCallSites_AreReferenced()
+    {
+        // issue #265: Swift trailing-closure call sites do not end with `(`, so the
+        // reference extractor must still index them as `call` edges.
+        // issue #265: Swift の trailing-closure 呼び出しは末尾に `(` を持たないため、
+        // それでも `call` edge として index されること。
+        const string content = """
+            class Base {}
+
+            class Derived: Base {}
+
+            func run() {
+                let items = [1, 2, 3]
+                items.forEach { }
+                items.filter { $0 > 0 }
+                animate { } completion: { }
+            }
+
+            func animate(animations: () -> Void, completion: () -> Void) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "forEach"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "filter"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "animate"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Base"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]
