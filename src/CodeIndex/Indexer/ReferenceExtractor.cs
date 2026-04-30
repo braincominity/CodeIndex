@@ -745,6 +745,15 @@ public static class ReferenceExtractor
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
 
+    // Bare Python decorators like `@staticmethod` or `@pytest.fixture` are reference sites even
+    // without trailing parentheses. Keep them distinct from `call` rows so the graph can tell
+    // decoration apart from invocation.
+    // `@staticmethod` や `@pytest.fixture` のような Python の bare decorator は、括弧がなくても
+    // reference site として記録する。`call` とは別 kind にして、装飾と呼び出しを区別できるようにする。
+    private static readonly Regex PythonDecoratorRegex = new(
+        @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
+        RegexOptions.Compiled);
+
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
     // should produce `annotation` reference rows rather than `call` rows (issue #293).
     // Swift uses `@available(...)`, `@objc`, `@MainActor`, etc. as compile-time metadata;
@@ -2270,6 +2279,19 @@ public static class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, match, "annotation", context, lineNumber, container);
+                }
+            }
+
+            if (language == "python")
+            {
+                foreach (Match match in PythonDecoratorRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
                 }
             }
         }
