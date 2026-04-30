@@ -108,16 +108,20 @@ public partial class McpServer
         var method = request["method"]?.GetValue<string>();
         var id = request["id"];
 
-        // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
-        if (method == "notifications/initialized" || method == "notifications/cancelled")
-            return null;
-
-        if (method == null)
+        // Notifications (no id) never get a response / 通知（idなし）には絶対にレスポンスを返さない
+        if (id == null)
         {
-            if (id != null)
-                return CreateErrorResponse(id, -32600, "Invalid request: missing method");
+            if (method == "notifications/initialized" || method == "notifications/cancelled")
+                return null;
+
+            if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
+                Console.Error.WriteLine(BuildUnknownNotificationLog(method));
+
             return null;
         }
+
+        if (method == null)
+            return CreateErrorResponse(id, -32600, "Invalid request: missing method");
 
         return method switch
         {
@@ -227,6 +231,9 @@ public partial class McpServer
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildUnknownNotificationLog(string method) =>
+        $"[cdidx-mcp] Ignoring unknown notification: {method}";
 
     // Tool implementations are in McpToolHandlers.cs / ツール実装は McpToolHandlers.cs に分離
 
