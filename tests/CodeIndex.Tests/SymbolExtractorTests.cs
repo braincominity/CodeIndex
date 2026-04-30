@@ -60,6 +60,46 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
+    {
+        var content = """
+            function Vehicle(make) { this.make = make; }
+            Vehicle.prototype.start = function start() { return this.make; };
+            Vehicle.factory = function factory() { return new Vehicle("default"); };
+            Vehicle.VERSION = "1.0";
+
+            var Foo = {};
+            Foo.Bar = class {
+                method() { return 1; }
+            };
+
+            var MyNS = { utils: {} };
+            MyNS.utils.parse = function parse(s) { return s; };
+
+            var add = function add(a, b) { return a + b; };
+
+            const handlers = {
+                onClick() { return true; },
+                onSubmit: function submitHandler() { return true; },
+                onClose: () => { return true; }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.prototype.start");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Vehicle.factory");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Vehicle.VERSION");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Foo.Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyNS.utils.parse");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClick" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onSubmit" && s.ContainerName == "handlers");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onClose" && s.ContainerName == "handlers");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsHocWrappedComponentBindings()
     {
         // HOC-wrapped / call-result / tagged-template component bindings must not be
