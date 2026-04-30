@@ -115,10 +115,9 @@ public partial class McpServer
         catch (Exception ex)
         {
             Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
-            var requestId = request?["id"];
-            if (requestId != null)
+            if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
             {
-                var errorResponse = CreateErrorResponse(requestId, -32603, ex.Message);
+                var errorResponse = CreateErrorResponse(true, requestId, -32603, ex.Message);
                 await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
             }
         }
@@ -130,31 +129,36 @@ public partial class McpServer
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
     {
-        var method = request["method"]?.GetValue<string>();
-        var id = request["id"];
+        if (request is not JsonObject obj)
+            return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object");
 
-        // Notifications (no id) never get a response / 通知（idなし）には絶対にレスポンスを返さない
-        if (id == null)
+        var method = obj["method"]?.GetValue<string>();
+        if (!TryGetRequestId(obj, out var hasId, out var id))
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null");
+
+        // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
+        if (method == "notifications/initialized" || method == "notifications/cancelled")
+            return null;
+
+        if (!hasId)
         {
-            if (method == "notifications/initialized" || method == "notifications/cancelled")
-                return null;
-
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine(BuildUnknownNotificationLog(method));
-
             return null;
         }
 
         if (method == null)
-            return CreateErrorResponse(id, -32600, "Invalid request: missing method");
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method");
+        }
 
         return method switch
         {
             "initialize" => HandleInitialize(id, request["params"]),
             "tools/list" => HandleToolsList(id),
             "tools/call" => HandleToolsCall(id, request["params"]),
-            "ping" => CreateSuccessResponse(id, new JsonObject()),
-            _ => CreateErrorResponse(id, -32601, $"Method not found: {method}"),
+            "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
+            _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}"),
         };
     }
 
@@ -183,7 +187,7 @@ public partial class McpServer
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
-        return CreateSuccessResponse(id, result);
+        return CreateSuccessResponse(true, id, result);
     }
 
     // Tool definitions are in McpToolDefinitions.cs / ツール定義は McpToolDefinitions.cs に分離
@@ -199,7 +203,7 @@ public partial class McpServer
         var args = callParams?["arguments"];
 
         if (toolName == null)
-            return CreateErrorResponse(id, -32602, "Missing tool name");
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
 
         Database.DbDebug.ResetContext();
         try
@@ -230,14 +234,14 @@ public partial class McpServer
                 "index" => ExecuteIndex(id, args),
                 "backfill_fold" => ExecuteBackfillFold(id),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
-                _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
+                _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}"),
             };
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
-            return CreateToolErrorResponse(id, $"Error executing {toolName}: {ex.Message}");
+            return CreateToolErrorResponse(true, id, $"Error executing {toolName}: {ex.Message}");
         }
         finally
         {
@@ -273,7 +277,7 @@ public partial class McpServer
         // CLI と同じく file: URI を受け付け、サンドボックス用の escape hatch に到達できるようにする。
         var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(_dbPath))
-            return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+            return CreateToolErrorResponse(true, id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
 
         using var db = new DbContext(_dbPath);
         db.TryMigrateForRead();
@@ -283,19 +287,47 @@ public partial class McpServer
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---
 
+    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id)
+    {
+        hasId = request.TryGetPropertyValue("id", out id);
+        if (!hasId)
+            return true;
+
+        if (id is null)
+            return true;
+
+        if (id is JsonValue)
+        {
+            var serialized = id.ToJsonString();
+            if (serialized.Length == 0)
+                return false;
+
+            var first = serialized[0];
+            return first == '"' || first == '-' || char.IsDigit(first) || first == 'n';
+        }
+
+        return false;
+    }
+
     private static JsonObject CreateSuccessResponse(JsonNode? id, JsonNode result)
+        => CreateSuccessResponse(id is not null, id, result);
+
+    private static JsonObject CreateSuccessResponse(bool hasId, JsonNode? id, JsonNode result)
     {
         var response = new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["result"] = result
         };
-        if (id != null)
-            response["id"] = JsonNode.Parse(id.ToJsonString());
+        if (hasId)
+            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
         return response;
     }
 
     private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message)
+        => CreateErrorResponse(id is not null, id, code, message);
+
+    private static JsonObject CreateErrorResponse(bool hasId, JsonNode? id, int code, string message)
     {
         var response = new JsonObject
         {
@@ -306,8 +338,8 @@ public partial class McpServer
                 ["message"] = message
             }
         };
-        if (id != null)
-            response["id"] = JsonNode.Parse(id.ToJsonString());
+        if (hasId)
+            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
         return response;
     }
 
@@ -330,7 +362,7 @@ public partial class McpServer
         };
         if (structuredContent != null)
             result["structuredContent"] = structuredContent;
-        return CreateSuccessResponse(id, result);
+        return CreateSuccessResponse(true, id, result);
     }
 
     /// <summary>
@@ -338,6 +370,9 @@ public partial class McpServer
     /// ツールエラーレスポンスを作成（isErrorフラグ付きMCP形式）。
     /// </summary>
     private static JsonObject CreateToolErrorResponse(JsonNode? id, string message)
+        => CreateToolErrorResponse(id is not null, id, message);
+
+    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message)
     {
         var result = new JsonObject
         {
@@ -351,7 +386,7 @@ public partial class McpServer
             },
             ["isError"] = true
         };
-        return CreateSuccessResponse(id, result);
+        return CreateSuccessResponse(hasId, id, result);
     }
 
     private static JsonObject CreateToolDefinition(string name, string description, JsonObject inputSchema,
