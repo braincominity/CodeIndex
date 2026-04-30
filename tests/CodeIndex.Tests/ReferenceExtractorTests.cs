@@ -67,6 +67,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDecorators_CaptureBareAndQualifiedNames()
+    {
+        const string content = """
+            def bare_decorator(f):
+                return f
+
+            def parametrized(arg):
+                def wrap(f):
+                    return f
+                return wrap
+
+            @bare_decorator
+            @parametrized("value")
+            def wrapped():
+                pass
+
+            @staticmethod
+            def method():
+                pass
+
+            @pytest.fixture
+            def fixture():
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "bare_decorator"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "staticmethod"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "pytest.fixture"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "parametrized"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
     {
         const string content = """
