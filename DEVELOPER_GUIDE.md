@@ -38,10 +38,7 @@ src/CodeIndex/
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
 <<<<<<< HEAD
     SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
-=======
-    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, CSS grouping/nesting selectors, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
->>>>>>> d4c8df2acf8bb06c2373cd8e5ca6ab1947bbc897
-    ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+    ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
@@ -406,6 +403,8 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
 | Makefile | targets | -- | -- | -- | -- | -- | -- | -- | -- |
+Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
+Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 | Dockerfile | named stages (AS) | base images (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
@@ -413,7 +412,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
-| PowerShell | configuration, workflow, function, filter (scope prefixes) | class | -- | -- | enum | -- | -- | Import-Module, using module/namespace/assembly | -- |
+| PowerShell | configuration, workflow, function, filter (scope prefixes), class constructors/methods | class | -- | -- | enum values | class properties | -- | Import-Module, using module/namespace/assembly | -- |
 | CSS/SCSS | @mixin, @keyframes, @counter-style, `@font-face` (`font-family`), `@page` | `.class`, `#id`, selector lists, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@namespace`, `@layer reset, base, theme;`, `@import`, `@use` | -- |
 | Batch | labels (`:name`, `:name.sub`), goto/call targets (reserved `:EOF` excluded) | -- | -- | -- | -- | `set VAR=`, `set /a VAR=` (also `VAR+=`, `VAR-=`, `VAR*=`, `VAR/=`, `VAR%=`, `VAR&=`, `VAR^=`, `VAR\|=`, `VAR<<=`, `VAR>>=`), `set /p VAR=`, `set "VAR=..."`, `@set VAR=`, `if ... set VAR=`, same-line multi-statement forms `set A=1 & set B=2`, `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set VAR=` (`rem` / `::` comment lines still excluded) | -- | -- | -- |
 | HTML | -- | custom Web Component tag names from a dedicated tag-structure state machine (opening tags containing a hyphen, e.g. `<my-button>` / `<app-sidebar>`; reserved SVG/MathML hyphenated tags like `font-face` / `color-profile` / `annotation-xml` are excluded) | -- | -- | -- | `id="..."` / `id='...'` attributes (state machine walks tag openers, quoted/unquoted values, multi-line quoted values, and only accepts the `id` attribute — so `data-id=` / `aria-*id=` / `xml:id=` are ignored structurally rather than by regex lookbehind) | -- | external `<script src="...">` and `<link href="...">` (raw-text bodies of `<script>` / `<style>` / `<textarea>` / `<title>` and `<!-- ... -->` comments are masked so attribute-lookalike strings inside them do not leak phantom symbols) | -- |
@@ -1539,6 +1538,8 @@ LIMIT 20;
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
 | Makefile | ターゲット | -- | -- | -- | -- | -- | -- | -- | -- |
+Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
+Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` としてインデックスされる。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
 | R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
