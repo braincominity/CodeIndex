@@ -14484,6 +14484,72 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ScalaBlockCallSites_AreReferenced()
+    {
+        // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
+        // so the reference extractor must still index them as `call` edges.
+        // issue #277: Scala の block-call は末尾 `(` ではなく `name { ... }` 形なので、
+        // それでも `call` edge として index されること。
+        const string content = """
+            import scala.util.Try
+
+            class Foo {}
+
+            object Main {
+                def process(items: List[Int]): Int = {
+                    items.foreach { item =>
+                        println(s"item=$item")
+                    }
+                    items.map { x => x * 2 }.sum
+                    Try {
+                        "result"
+                    }
+                    items.headOption match {
+                        case Some(value) => println(value)
+                        case None => ()
+                    }
+                    synchronized {
+                        println("locked")
+                    }
+                    if (items.nonEmpty) {
+                        println("non-empty")
+                    }
+                    0
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "foreach"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "process");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "map"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "process");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Try"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "process");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "synchronized"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "process");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "match"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Foo"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "if"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_GradleAnnotation_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Gradle/Groovy `@CompileStatic` / `@TaskAction` and similar
