@@ -315,8 +315,8 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Coord");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Coord");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "globalHelper");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadExt" && s.ContainerName == "ext");
@@ -2753,7 +2753,7 @@ public class SymbolExtractorTests
         // Quoted ambient module declaration / 引用符付きアンビエントモジュール宣言
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ID");
     }
 
     [Fact]
@@ -3001,6 +3001,25 @@ public class SymbolExtractorTests
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
         Assert.Equal("class", run.ContainerKind);
         Assert.Equal("Inline", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsTypeAliasesAsImports()
+    {
+        var content = """
+            export type Pair<T> = [T, T];
+            type Callback = (x: number) => number;
+            declare type User = { name: string; age: number };
+            interface Admin { perms: string[]; }
+            class Person { name: string = ""; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Pair");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Admin");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
     }
 
     [Fact]
@@ -9937,12 +9956,14 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
-        var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ndistributed actor RemoteWorker { }";
+        var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NetworkManager");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RemoteWorker");
     }
 
@@ -10005,7 +10026,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Rust_DetectsExpandedFeatures()
     {
-        var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\npub union MyUnion { f: f32 }";
+        var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\ntrait Iter {\n    type Item;\n    fn next(&mut self) -> Option<Self::Item>;\n}\ntype Callback = fn(i32) -> i32;\npub union MyUnion { f: f32 }";
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_macro");
@@ -10014,18 +10035,21 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "COUNTER");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "default_value");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "raw_ptr");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "MyUnion");
     }
 
     [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
-        var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
+        var content = "type Handler struct {\n}\ntype ID = string\ntype Callback func(int) int\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Logger");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
@@ -11195,12 +11219,15 @@ public class SymbolExtractorTests
     public void Extract_FSharp_DetectsLetTypeModuleOpen()
     {
         // F#: let, type, module, open / F#: let束縛、型、モジュール、open
-        var content = "module MyApp.Domain\n\nopen System\n\ntype User = { Name: string; Age: int }\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
+        var content = "module MyApp.Domain\n\nopen System\n\ntype UserId = int\ntype User = { Name: string; Age: int }\ntype Color = Red | Green | Blue\ntype Person(name: string) =\n    member _.Name = name\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
     }
@@ -14010,6 +14037,8 @@ public class SymbolExtractorTests
                 2
               }
               def three() = 3
+              type Callback = Int => Int
+              type UserID = Int
             }
             sealed trait Message
             case class Ping(id: Int) extends Message
@@ -14020,6 +14049,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
     }
