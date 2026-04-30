@@ -7747,6 +7747,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTurbofishMethodCalls_KeepCallReferences()
+    {
+        // Regression for issue #271: Rust turbofish call sites like `value.parse::<T>()`
+        // must still emit the method reference even when `::` appears between the name
+        // and the generic argument list.
+        // issue #271 回帰: Rust の turbofish 呼び出し `value.parse::<T>()` のように、
+        // 名前と generic 引数の間に `::` が入る形でも method reference を発行する。
+        const string content = """
+            struct Input;
+
+            impl Input {
+                fn parse<T>(&self) -> T {
+                    unreachable!()
+                }
+
+                fn plain(&self) {}
+            }
+
+            fn caller(input: Input) {
+                let _ = input.parse::<i32>();
+                input.plain();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "parse" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "plain" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_RustNestedBlockCommentBody_DoesNotLeakPhantomReferences()
     {
         // Regression for issue #291 follow-up: Rust block comments nest, but the
