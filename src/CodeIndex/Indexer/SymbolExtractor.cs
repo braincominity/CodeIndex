@@ -1337,10 +1337,26 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*workflow\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Function/filter declarations with optional scope prefixes / scope プレフィックス付き関数・フィルタ宣言
             new("function", new Regex(@"^\s*(?:function|filter)\s+(?:(?:script|global|local|private):)?(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // PowerShell class members / PowerShell クラスメンバー
+            // Return-typed methods and modifiers such as `static` / `hidden` / `static hidden`
+            // stay on the function path.
+            // 戻り値付き method と `static` / `hidden` / `static hidden` のような修飾子は
+            // function パスで扱う。
+            new("function", new Regex(@"^\s*(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s+)+(?<name>[\w-]+)\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Constructors are bare class-name declarations inside a class body, so the
+            // PascalCase gate keeps most cmdlet-style calls out while still catching the
+            // canonical PS5+ shape.
+            // コンストラクタは class 本体内に置かれる bare な class-name 宣言なので、
+            // PascalCase の条件で cmdlet 風の呼び出しを大半弾きつつ、PS5+ の標準形を拾う。
+            new("function", new Regex(@"^\s*(?<name>[A-Z]\w*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            // Attributes and typed properties / 属性付きプロパティと型付きプロパティ
+            new("property", new Regex(@"^\s*(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s*)+\$(?<name>\w+)\s*(?:=|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Class (PowerShell 5+) / クラス (PowerShell 5+)
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Enum (PowerShell 5+) / enum (PowerShell 5+)
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Enum values / enum 値
+            new("enum",     new Regex(@"^\s{2,}(?<name>[\w-]+)\s*(?:=\s*[^#\r\n]+)?\s*$", RegexOptions.Compiled), BodyStyle.None),
             // Import-Module / using module / using namespace / using assembly / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+(?:module|namespace|assembly))\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
