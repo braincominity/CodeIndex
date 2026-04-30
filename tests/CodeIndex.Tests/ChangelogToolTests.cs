@@ -33,6 +33,7 @@ public sealed class ChangelogToolTests
         Assert.Contains("### [Unreleased]\n\n### [1.17.0] - 2026-05-01", changelog.Replace("\r\n", "\n"));
         Assert.Contains("[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...HEAD", changelog);
         Assert.Contains("[1.17.0]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0", changelog);
+        Assert.Contains("[1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0", changelog);
         Assert.Equal("""
             {
               "version": "1.17.0"
@@ -220,6 +221,7 @@ public sealed class ChangelogToolTests
 
         [Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...HEAD
         [1.16.0]: https://github.com/Widthdom/CodeIndex/compare/v1.15.3...v1.16.0
+        [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
         """;
 
     private const string SampleFragment = """
