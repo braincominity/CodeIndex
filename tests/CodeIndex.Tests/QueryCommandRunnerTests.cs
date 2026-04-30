@@ -162,6 +162,73 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_publish_{Guid.NewGuid():N}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "TrimmedPublishNeedle_1a2b3c";
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", $"class App {{ void Run() {{ var {queryToken} = 1; }} }}\n");
+
+            var publishedDll = PublishTrimmedCli(publishDir);
+
+            var (searchExitCode, searchStdOut, searchStdErr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(string.Empty, searchStdErr);
+            using (var searchJson = JsonDocument.Parse(searchStdOut))
+            {
+                Assert.True(searchJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, searchJson.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (findExitCode, findStdOut, findStdErr) = RunPublishedCli(publishedDll, publishDir, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStdErr);
+            using (var findJson = JsonDocument.Parse(findStdOut))
+            {
+                Assert.True(findJson.RootElement.GetProperty("count").GetInt32() >= 1);
+                Assert.Equal(1, findJson.RootElement.GetProperty("files").GetInt32());
+                Assert.Equal(1, findJson.RootElement.GetProperty("file_count").GetInt32());
+            }
+
+            var (symbolsExitCode, symbolsStdOut, symbolsStdErr) = RunPublishedCli(publishedDll, publishDir, "symbols", "@", "--db", dbPath, "--lang", "csharp", "--exact", "--count", "--json");
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStdErr);
+            using (var symbolsJson = JsonDocument.Parse(symbolsStdOut))
+            {
+                Assert.Equal(0, symbolsJson.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(0, symbolsJson.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (validateExitCode, validateStdOut, validateStdErr) = RunPublishedCli(publishedDll, publishDir, "validate", "--db", dbPath, "--json");
+            Assert.Equal(CommandExitCodes.Success, validateExitCode);
+            Assert.Equal(string.Empty, validateStdErr);
+            using (var validateJson = JsonDocument.Parse(validateStdOut))
+            {
+                Assert.Equal(0, validateJson.RootElement.GetProperty("count").GetInt32());
+                Assert.True(validateJson.RootElement.GetProperty("issues").ValueKind is JsonValueKind.Array);
+            }
+
+            var (outlineExitCode, outlineStdOut, outlineStdErr) = RunPublishedCli(publishedDll, publishDir, "outline", "src/missing.cs", "--db", dbPath, "--json");
+            Assert.Equal(CommandExitCodes.NotFound, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStdErr);
+            using (var outlineJson = JsonDocument.Parse(outlineStdOut))
+            {
+                Assert.Equal("src/missing.cs", outlineJson.RootElement.GetProperty("path").GetString());
+                Assert.Equal("file not found in index", outlineJson.RootElement.GetProperty("error").GetString());
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(publishDir);
+        }
+    }
+
     [Theory]
     [InlineData("definition", "--focus-column", "10")]
     [InlineData("definition", "--max-line-width", "10")]
@@ -26169,6 +26236,69 @@ public class QueryCommandRunnerTests
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedDll, string workingDirectory, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(publishedDll);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
+        process.StandardInput.Close();
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static string PublishTrimmedCli(string outputDir)
+    {
+        Directory.CreateDirectory(outputDir);
+
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = GetRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("publish");
+        psi.ArgumentList.Add(Path.Combine("src", "CodeIndex", "CodeIndex.csproj"));
+        psi.ArgumentList.Add("--configuration");
+        psi.ArgumentList.Add("Debug");
+        psi.ArgumentList.Add("--runtime");
+        psi.ArgumentList.Add(System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier);
+        psi.ArgumentList.Add("--output");
+        psi.ArgumentList.Add(outputDir);
+        psi.ArgumentList.Add("-p:PublishTrimmed=true");
+        psi.ArgumentList.Add("-p:SelfContained=true");
+        psi.ArgumentList.Add("-p:PublishSingleFile=false");
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (!File.Exists(publishedDll))
+            throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
+
+        return publishedDll;
     }
 
     private static string GetBuiltCliDllPath()
