@@ -24,11 +24,11 @@ dotnet run --project tools/CodeIndex.Changelog -- prepare --version 1.17.0 --dat
 This command must:
 
 - validate `changelog.d/unreleased/*.md`;
-- aggregate fragments into both the English and Japanese sections of
+- aggregate fragments into both the English and 日本語 sections of
   `CHANGELOG.md`;
 - preserve and carry forward any legacy direct content already present under
   `### [Unreleased]`;
-- reset both English and Japanese `### [Unreleased]` sections to empty;
+- reset both English and 日本語 `### [Unreleased]` sections to empty;
 - add `### [1.17.0] - 2026-05-01` release sections;
 - update `version.json` to `1.17.0`;
 - remove consumed fragments from `changelog.d/unreleased/` while keeping

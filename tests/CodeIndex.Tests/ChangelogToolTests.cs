@@ -68,7 +68,7 @@ public sealed class ChangelogToolTests
 
             - **Release changelog workflow documented** — release preparation now has a dedicated workflow.
 
-            ## Japanese
+            ## 日本語
 
             - **Release changelog ワークフローを文書化** — release preparation 用の専用ワークフローを追加しました。
             """);
@@ -112,7 +112,7 @@ public sealed class ChangelogToolTests
 
             - **Bad fragment** — invalid category.
 
-            ## Japanese
+            ## 日本語
 
             - **Bad fragment** — invalid category.
             """);
@@ -144,7 +144,7 @@ public sealed class ChangelogToolTests
 
         var tool = new ChangelogTool(scope.Root);
         var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
-        Assert.Contains("missing '## Japanese' heading", ex.Message);
+        Assert.Contains("missing '## 日本語' heading", ex.Message);
     }
 
     private static int CountOccurrences(string text, string value)
@@ -211,7 +211,7 @@ public sealed class ChangelogToolTests
         #### Fixed
         - Existing English unreleased note.
 
-        ## Japanese
+        ## 日本語
 
         ### [Unreleased]
 
@@ -235,7 +235,7 @@ public sealed class ChangelogToolTests
 
         - **English release note (#195)** — fragment content.
 
-        ## Japanese
+        ## 日本語
 
         - **Japanese release note (#195)** — fragment content.
         """;

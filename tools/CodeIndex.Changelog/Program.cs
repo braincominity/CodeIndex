@@ -384,7 +384,7 @@ public sealed class ChangelogTool
             throw new ChangelogException($"{relativePath}: numeric fragment file names require issues in front matter.");
 
         var englishHeading = FindHeading(lines, index, "## English", relativePath);
-        var japaneseHeading = FindHeading(lines, englishHeading + 1, "## Japanese", relativePath);
+        var japaneseHeading = FindHeading(lines, englishHeading + 1, "## 日本語", relativePath);
 
         var englishLines = ExtractSectionLines(lines, englishHeading + 1, japaneseHeading);
         var japaneseLines = ExtractSectionLines(lines, japaneseHeading + 1, lines.Length);
@@ -603,9 +603,9 @@ public sealed class ChangelogTool
         {
             var lines = text.Split('\n');
             var englishIndex = Array.FindIndex(lines, line => line == "## English");
-            var japaneseIndex = Array.FindIndex(lines, line => line == "## Japanese");
+            var japaneseIndex = Array.FindIndex(lines, line => line == "## 日本語");
             if (englishIndex < 0 || japaneseIndex < 0 || japaneseIndex <= englishIndex)
-                throw new ChangelogException("CHANGELOG.md is missing the English/Japanese section markers.");
+                throw new ChangelogException("CHANGELOG.md is missing the English/日本語 section markers.");
 
             var footerIndex = Array.FindIndex(lines, japaneseIndex + 1, line => FooterLinkRegex.IsMatch(line));
             if (footerIndex < 0)
@@ -647,7 +647,7 @@ public sealed class ChangelogTool
             if (english.Count > 0 && english[^1].BodyLines.Count > 0)
                 output.Add(string.Empty);
 
-            output.Add("## Japanese");
+            output.Add("## 日本語");
             output.Add(string.Empty);
             AppendBlocks(output, japanese);
 
