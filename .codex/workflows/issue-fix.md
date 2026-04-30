@@ -31,7 +31,7 @@ Use this workflow for GitHub issue implementation tasks.
 10. Produce a plan of at most 10 lines. Include only likely changed files or areas, validation commands, and risks.
 11. Implement the smallest correct fix.
 12. Add or update tests for changed behavior.
-13. Update documentation and changelog whenever the issue changes user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or workflow behavior. Skip them only for strictly internal changes, and record the rationale explicitly if you do.
+13. Update matching documentation whenever the issue changes user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or workflow behavior. For user-visible or behavior-changing changes, add a bilingual fragment under `changelog.d/unreleased/` and do not edit `CHANGELOG.md` during the ordinary issue-fix PR.
 14. Run relevant validation commands.
 15. Follow `.codex/workflows/precommit.md` before committing.
 16. Commit with an English commit message that includes relevant issue numbers.

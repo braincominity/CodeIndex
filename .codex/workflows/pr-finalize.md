@@ -16,6 +16,7 @@ Use this after implementation, commit, and review are complete.
    - summary;
    - validation;
    - documentation/changelog updates, or a clear rationale if none were required;
+   - changelog fragment path(s) under `changelog.d/unreleased/` when ordinary changelog fragments were used;
    - `Fixes #...` lines for issues that should auto-close;
    - follow-up candidates, if any.
 

@@ -5,6 +5,8 @@ Read `AGENT_GUIDE.md` first. It is the shared source of truth for CodeIndex agen
 For task-specific procedures, read the relevant workflow in `.codex/workflows/`:
 
 - issue fixing: `.codex/workflows/issue-fix.md`
+- changelog fragments: `.codex/workflows/changelog-fragment.md`
+- release changelog: `.codex/workflows/release-changelog.md`
 - adversarial review: `.codex/workflows/adversarial-review.md`
 - commit checks: `.codex/workflows/precommit.md`
 - PR finalization and CI checks: `.codex/workflows/pr-finalize.md`

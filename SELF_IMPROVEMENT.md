@@ -55,6 +55,7 @@ The loop is not just "suggest ideas". It is:
 - **Dogfooding-driven feature insertion** — During the loop, you may realize "if cdidx had feature X, this search/navigation would be much faster and more accurate." When that happens, insert the feature into your current plan and implement it immediately — as long as it is non-breaking. If the feature risks being a breaking change, note it down and propose it to the user after the current task is complete rather than implementing it silently.
 - Keep docs and tests in sync with behavior.
 - If test code, shared test helpers, test execution flow, or testing conventions change, update `TESTING_GUIDE.md` in the same commit.
+- For workflow or user-visible changes, use bilingual fragments under `changelog.d/unreleased/` instead of editing `CHANGELOG.md` directly; reserve `CHANGELOG.md` edits for release-preparation PRs.
 - Do not push tags or branches unless explicitly asked.
 
 ## Breaking-Change Gate
@@ -194,7 +195,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 Before committing, explicitly review:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md — New entries go under `[Unreleased]` only. Never add to or modify an existing versioned heading. See `AGENT_GUIDE.md` and `.codex/workflows/precommit.md` for the full rules.
+3. CHANGELOG.md — New entries normally go under bilingual fragments in `changelog.d/unreleased/`; only release-preparation PRs edit `CHANGELOG.md` directly. See `AGENT_GUIDE.md` and `.codex/workflows/precommit.md` for the full rules.
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md

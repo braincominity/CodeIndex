@@ -8,6 +8,8 @@ Use these workflows instead of pasting long repeated instructions into every pro
 ## Workflows
 
 - `issue-fix.md` - fix one or more GitHub issues.
+- `changelog-fragment.md` - add bilingual changelog fragments in ordinary PRs.
+- `release-changelog.md` - aggregate fragments into `CHANGELOG.md` for a release.
 - `adversarial-review.md` - review `origin/main..HEAD` for blocking/actionable problems.
 - `precommit.md` - checks to perform before each commit.
 - `issue-scope.md` - rules for related issues, new issues, and scope expansion.

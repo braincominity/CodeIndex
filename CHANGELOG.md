@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **Ordinary changelog updates now flow through `changelog.d/unreleased/` fragments** — ordinary implementation PRs no longer edit `CHANGELOG.md` directly; release preparation aggregates bilingual fragments, preserves any legacy unreleased content, and updates the compare footer. Affected: `.codex/workflows/changelog-fragment.md`, `.codex/workflows/release-changelog.md`, `AGENT_GUIDE.md`, `changelog.d/README.md`, `tools/CodeIndex.Changelog/Program.cs`.
+
 #### Fixed
 - **Body-less C# brace members now stop at `;` even with trailing comments (#245)** — `FindBraceRange` now treats a semicolon as the terminator before any trailing `//` or `/* ... */` comment on the declaration line, so interface and abstract members no longer spill into the next sibling body. Added a regression for the `int D(int y); /* trailing block comment */` shape and the follow-on class body. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Fixes #245.
 - **Ruby command-syntax calls and common DSL targets now appear in `references` / `callers` (#260)** — `ReferenceExtractor` now recognizes Ruby no-parens call forms such as `puts "hi"`, `greet bob`, `require 'json'`, `include Shared`, `attr_accessor :name`, `before_action :authenticate`, and `raise ArgumentError, "bad"`, so the idiomatic command syntax no longer disappears from the graph. Added Ruby regressions for no-parens calls, mixin targets, attribute targets, callback targets, and `raise` exception-class targets. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `README.md`. Fixes #260.
@@ -1038,6 +1041,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **通常の changelog 更新は `changelog.d/unreleased/` の fragment 経由になりました** — 通常の実装 PR は `CHANGELOG.md` を直接編集せず、release preparation が英日 bilingual fragment を集約し、既存の未リリース内容を保持し、compare footer を更新します。対象: `.codex/workflows/changelog-fragment.md`、`.codex/workflows/release-changelog.md`、`AGENT_GUIDE.md`、`changelog.d/README.md`、`tools/CodeIndex.Changelog/Program.cs`。
 
 #### 修正
 - **`;` で終わる C# の body-less member が trailing comment 付きでも `;` で止まるよう修正 (#245)** — `FindBraceRange` が、宣言行上の末尾 `//` / `/* ... */` コメントの前にあるセミコロンを終端として扱うようになり、interface や abstract member が次の sibling body に食い込まなくなりました。`int D(int y); /* trailing block comment */` 形と、その後ろに続く class body を固定する regression を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`、`tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Fixes #245。

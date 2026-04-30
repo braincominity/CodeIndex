@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeIndex\CodeIndex.csproj" />
+    <ProjectReference Include="..\..\tools\CodeIndex.Changelog\CodeIndex.Changelog.csproj" />
   </ItemGroup>
 
 </Project>
