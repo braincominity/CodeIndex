@@ -47,6 +47,28 @@ public static class ReferenceExtractor
         @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
+    // Terraform の dotted reference は括弧を伴わないため、共有 CallRegex では見えない。
+    private static readonly Regex TerraformVarReferenceRegex = new(
+        @"(?<![\w.])var\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TerraformLocalReferenceRegex = new(
+        @"(?<![\w.])local\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TerraformModuleReferenceRegex = new(
+        @"(?<![\w.])module\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TerraformDataReferenceRegex = new(
+        @"(?<![\w.])data\.[A-Za-z_]\w*\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TerraformResourceReferenceRegex = new(
+        @"(?<![\w.])(?<type>[A-Za-z_]\w*_[A-Za-z_]\w*)\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -1464,6 +1486,19 @@ public static class ReferenceExtractor
             else if (language == "css")
             {
                 EmitCssReferences(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
+
+            if (language == "terraform")
+            {
+                EmitTerraformReferences(
                     preparedLine,
                     context,
                     lineNumber,
@@ -7076,6 +7111,83 @@ public static class ReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static void EmitTerraformReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        foreach (Match match in TerraformVarReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in TerraformLocalReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in TerraformModuleReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in TerraformDataReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in TerraformResourceReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            if (IsTerraformSpecialReferencePrefix(preparedLine, match.Index))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+    }
+
+    private static bool IsTerraformSpecialReferencePrefix(string line, int typeStartIndex)
+    {
+        return HasTerraformPrefix(line, typeStartIndex, "var")
+            || HasTerraformPrefix(line, typeStartIndex, "local")
+            || HasTerraformPrefix(line, typeStartIndex, "module")
+            || HasTerraformPrefix(line, typeStartIndex, "data");
+    }
+
+    private static bool HasTerraformPrefix(string line, int typeStartIndex, string prefix)
+    {
+        int prefixStart = typeStartIndex - prefix.Length - 1;
+        if (prefixStart < 0)
+            return false;
+
+        return line.AsSpan(prefixStart, prefix.Length).SequenceEqual(prefix)
+            && line[prefixStart + prefix.Length] == '.';
     }
 
     private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)

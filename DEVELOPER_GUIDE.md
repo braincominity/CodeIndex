@@ -407,7 +407,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Tcl | .tcl, .tk | -- | -- | -- | -- | -- | -- | -- | -- |
 | Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
 | SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
-| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
+| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | `var.*`, `local.*`, `module.*`, `data.*`, same-file resource-like `TYPE.NAME` references such as `aws_instance.web` and `depends_on = [aws_s3_bucket.foo]` | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
@@ -1548,7 +1548,7 @@ LIMIT 20;
 | Tcl | .tcl, .tk | -- | -- | -- | -- | -- | -- | -- | -- |
 | Shell | 関数宣言 | -- | -- | -- | -- | -- | -- | -- | -- |
 | SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
-| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
+| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | `var.*`, `local.*`, `module.*`, `data.*`, 同一ファイル内の resource-like `TYPE.NAME` 参照（`aws_instance.web`、`depends_on = [aws_s3_bucket.foo]` など） | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
