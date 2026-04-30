@@ -15536,10 +15536,17 @@ public static class SymbolExtractor
         if (string.IsNullOrEmpty(token) || exclusiveEnd <= 0)
             return false;
 
+        if (exclusiveEnd > text.Length)
+            exclusiveEnd = text.Length;
+
         var searchStart = 0;
         while (searchStart < exclusiveEnd)
         {
-            var tokenIndex = text.IndexOf(token, searchStart, exclusiveEnd - searchStart, StringComparison.Ordinal);
+            var remaining = exclusiveEnd - searchStart;
+            if (remaining <= 0)
+                return false;
+
+            var tokenIndex = text.IndexOf(token, searchStart, remaining, StringComparison.Ordinal);
             if (tokenIndex < 0)
                 return false;
 
