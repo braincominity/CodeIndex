@@ -130,6 +130,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_NullId_PreservesNullResponseId()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":null,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        using var document = JsonDocument.Parse(response.ToJsonString());
+        var root = document.RootElement;
+
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
+    }
+
+    [Fact]
+    public void Initialize_BooleanId_ReturnsInvalidRequestWithNullId()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":true,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        using var document = JsonDocument.Parse(response.ToJsonString());
+        var root = document.RootElement;
+
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+        Assert.Equal(-32600, root.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Contains("id must be string, number, or null", root.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Initialize_ReturnsToolsCapability()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
