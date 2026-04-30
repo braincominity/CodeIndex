@@ -10,6 +10,7 @@ workflow behavior.
 
 Do not edit `CHANGELOG.md` in ordinary implementation PRs.
 Add one or more bilingual fragments under `changelog.d/unreleased/` instead.
+Treat any request to "update the changelog" as a fragment request unless the task is explicitly a release-preparation PR that aggregates existing fragments into `CHANGELOG.md`.
 
 ## Steps
 
