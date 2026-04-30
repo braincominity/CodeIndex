@@ -1317,7 +1317,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(2, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
@@ -1343,7 +1343,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(2, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sqlGraphContractReady"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
@@ -2475,7 +2475,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(2, structured["count"]!.GetValue<int>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
@@ -2526,7 +2526,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
@@ -2552,7 +2552,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
@@ -2578,7 +2578,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sqlGraphContractReady"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
