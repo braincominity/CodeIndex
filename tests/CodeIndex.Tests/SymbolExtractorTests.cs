@@ -11053,6 +11053,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
+    {
+        // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            typedef int (*t_ptr_func_int_of_float_complex)(float complex);
+            typedef int (*t_ptr_func_int_of_double_complex)(double complex);
+            static int add(int a, int b) {
+                return a + b;
+            }
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "int" || s.Name == "void"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -11061,6 +11085,32 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DoesNotCapturePrimitiveTypesForFunctionReturningPointerDeclarations()
+    {
+        // C++: function-returning-pointer declarations / C++: 関数が関数ポインタを返す宣言
+        var content = """
+            typedef int t_func_int_of_float_double(float, double);
+            typedef int (*t_ptr_func_int_of_float_double)(float, double);
+            extern int (*XSynchronize(
+                Display* display,
+                Bool onoff
+            ))(
+                Display* display
+            );
+
+            void my_callback(int x) {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_callback");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "int");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_func_int_of_float_double");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "t_ptr_func_int_of_float_double");
     }
 
     [Fact]
@@ -14314,11 +14364,40 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSS_DetectsSymbols()
     {
-        var content = "@import 'reset.css';\n\n$primary-color: #333;\n\n@mixin flex-center {\n  display: flex;\n  align-items: center;\n}\n\n@keyframes fade-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n.container {\n  max-width: 1200px;\n}\n\n#header {\n  background: $primary-color;\n}";
+        var content = """
+            @import 'reset.css';
+            @forward 'theme';
+
+            $primary-color: #333;
+
+            @function shade-color($color, $weight) {
+              @return $color;
+            }
+
+            @mixin flex-center {
+              display: flex;
+              align-items: center;
+            }
+
+            @keyframes fade-in {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+
+            .container {
+              max-width: 1200px;
+            }
+
+            #header {
+              background: $primary-color;
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("reset.css"));
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("theme"));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary-color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shade-color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
@@ -14348,6 +14427,14 @@ public class SymbolExtractorTests
               color: red;
             }
 
+            .btn.primary {
+              color: green;
+            }
+
+            .alert .link {
+              color: orange;
+            }
+
             input[type="text"] {
               color: blue;
             }
@@ -14371,6 +14458,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Block Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".alert");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "input[type=\"text\"]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[hidden]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn::before");

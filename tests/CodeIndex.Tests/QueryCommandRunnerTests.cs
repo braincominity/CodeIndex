@@ -77,6 +77,16 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunImpact", options.Query);
+        Assert.Equal(0, options.ContextAfter);
+        Assert.True(options.ContextAfterExplicit);
+    }
+
+    [Fact]
     public void ParseArgs_CountFlagParsed()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
@@ -8622,6 +8632,37 @@ public class QueryCommandRunnerTests
             Assert.Equal(3, json.GetProperty("max_depth").GetInt32());
             Assert.False(json.GetProperty("truncated").GetBoolean());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ZeroDepthJson_ResolvesSymbolWithoutTraversingCallers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_depth_impact");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["HandleRequest", "--db", dbPath, "--json", "--depth", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("HandleRequest", json.GetProperty("query").GetString());
+            Assert.Equal(0, json.GetProperty("max_depth").GetInt32());
+            Assert.Equal(0, json.GetProperty("actual_depth").GetInt32());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("depth_zero", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", json.GetProperty("suggestion").GetString());
+            Assert.Empty(json.GetProperty("callers").EnumerateArray());
         }
         finally
         {

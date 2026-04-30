@@ -82,6 +82,9 @@ public static class SymbolExtractor
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
+    private const string CFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof)\s*[\(\{;])";
+    private const string CFunctionNameBlacklistPattern = @"(?!(?:int|void|char|short|long|float|double|signed|unsigned|bool|_Bool|size_t|ssize_t|intptr_t|uintptr_t|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t)\b)";
+    private const string CppFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof|using|namespace)\s*[\(\{;<])";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
@@ -1044,14 +1047,14 @@ public static class SymbolExtractor
         ],
         ["c"] =
         [
-            new("function", new Regex(@"^(?!\s*(?:if|else|for|while|switch|return|sizeof|typedef)\s*[\(\{;])(?<returnType>(?:\w+[\s*]+)+)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CFunctionStartBlacklistPattern + @"(?<returnType>(?:\w+[\s*]+)+)" + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#include\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cpp"] =
         [
-            new("function", new Regex(@"^(?!\s*(?:if|else|for|while|switch|return|sizeof|typedef|using|namespace)\s*[\(\{;<])(?<returnType>(?:[\w:<>]+[\s*&]+)+)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CppFunctionStartBlacklistPattern + @"(?<returnType>(?:[\w:<>]+[\s*&]+)+)" + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^\s*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
@@ -1284,7 +1287,9 @@ public static class SymbolExtractor
         ["css"] =
         [
             // @import / @use (SCSS) / インポート
-            new("import",   new Regex(@"^\s*@(?:import|use)\s+(?<name>.+?)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            // @function (SCSS) / 関数
+            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @mixin (SCSS) / ミックスイン
             new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @keyframes / キーフレーム
@@ -1300,7 +1305,7 @@ public static class SymbolExtractor
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
             new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
-            new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)(?=[\s\.,:>+~\[\{])", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
             new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Native CSS nesting selectors / ネイティブ CSS nesting セレクタ
