@@ -10508,6 +10508,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsEnumVariants()
+    {
+        var content = """
+            pub enum Shape {
+                Circle { radius: f64 },
+                Rectangle(f64, f64),
+                Point,
+            }
+
+            pub enum Result<T, E> {
+                Ok(T),
+                Err(E),
+            }
+
+            pub enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Circle");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Rectangle");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Ok");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Err");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Blue");
+        Assert.Equal(8, symbols.Count(s => s.Kind == "property"));
+    }
+
+    [Fact]
     public void Extract_Rust_LifetimeAnnotationsDoNotBreakBraceRanges()
     {
         var content = """
