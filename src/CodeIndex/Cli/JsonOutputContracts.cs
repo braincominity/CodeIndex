@@ -17,7 +17,38 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("hint")] string? Hint);
 
+[JsonSerializable(typeof(QueryCountJsonResult))]
+[JsonSerializable(typeof(QueryCountFilesJsonResult))]
+[JsonSerializable(typeof(QueryFindCountJsonResult))]
+[JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguagesJsonResult))]
+[JsonSerializable(typeof(QueryPathErrorJsonResult))]
+[JsonSerializable(typeof(CommandErrorJsonResult))]
 [JsonSourceGenerationOptions(WriteIndented = false)]
 [JsonSerializable(typeof(BackfillFoldJsonResult))]
-[JsonSerializable(typeof(CommandErrorJsonResult))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
+
+internal sealed record QueryCountJsonResult(
+    [property: JsonPropertyName("count")] int Count);
+
+internal sealed record QueryCountFilesJsonResult(
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("files")] int Files);
+
+internal sealed record QueryFindCountJsonResult(
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("file_count")] int FileCount);
+
+internal sealed record QueryPathErrorJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("error")] string Error);
+
+internal sealed record LanguageEntryJsonResult(
+    [property: JsonPropertyName("lang")] string Lang,
+    [property: JsonPropertyName("extensions")] List<string> Extensions,
+    [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
+    [property: JsonPropertyName("graph_queries")] bool GraphQueries);
+
+internal sealed record LanguagesJsonResult(
+    [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);

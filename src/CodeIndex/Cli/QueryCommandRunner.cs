@@ -105,7 +105,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = counts.Count, files = counts.FileCount }, jsonOptions)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -166,7 +166,7 @@ public static class QueryCommandRunner
         if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(options.Json
-                ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                 : "0");
             return CommandExitCodes.Success;
         }
@@ -702,7 +702,7 @@ public static class QueryCommandRunner
             if (exactBareVerbatimOnly && options.CountOnly)
             {
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                     : "0");
                 return CommandExitCodes.Success;
             }
@@ -852,7 +852,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = counts.Count }, jsonOptions)
+                    ? JsonSerializer.Serialize(new QueryCountJsonResult(counts.Count), CliJsonSerializerContext.Default.QueryCountJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -1059,7 +1059,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = counts.Count, files = counts.FileCount, file_count = counts.FileCount }, jsonOptions)
+                    ? JsonSerializer.Serialize(new QueryFindCountJsonResult(counts.Count, counts.FileCount, counts.FileCount), CliJsonSerializerContext.Default.QueryFindCountJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -1440,7 +1440,7 @@ public static class QueryCommandRunner
             if (outline == null)
             {
                 if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(new { path = filePath, error = "file not found in index" }, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContext.Default.QueryPathErrorJsonResult));
                 else
                     Console.Error.WriteLine($"Error: '{filePath}' not found in index.");
                 return CommandExitCodes.NotFound;
@@ -2502,7 +2502,13 @@ public static class QueryCommandRunner
             if (issues.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(new { count = 0, issues = Array.Empty<object>(), issues_table_available = issuesAvailable, degraded = !issuesAvailable }, jsonOptions));
+                    Console.WriteLine(new JsonObject
+                    {
+                        ["count"] = 0,
+                        ["issues"] = new JsonArray(),
+                        ["issues_table_available"] = issuesAvailable,
+                        ["degraded"] = !issuesAvailable,
+                    }.ToJsonString(jsonOptions));
                 else if (!issuesAvailable)
                     Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
@@ -2512,7 +2518,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { count = issues.Count, issues }, jsonOptions));
+                Console.WriteLine(new JsonObject
+                {
+                    ["count"] = issues.Count,
+                    ["issues"] = JsonSerializer.SerializeToNode(issues, jsonOptions),
+                }.ToJsonString(jsonOptions));
             }
             else
             {
@@ -2562,14 +2572,12 @@ public static class QueryCommandRunner
 
         if (json)
         {
-            var entries = sorted.Select(kv => new
-            {
-                lang = kv.Key,
-                extensions = kv.Value.Extensions.OrderBy(e => e).ToList(),
-                symbol_extraction = kv.Value.Symbols,
-                graph_queries = kv.Value.Graph,
-            });
-            Console.WriteLine(JsonSerializer.Serialize(new { languages = entries }, jsonOptions));
+            var entries = sorted.Select(kv => new LanguageEntryJsonResult(
+                kv.Key,
+                kv.Value.Extensions.OrderBy(e => e).ToList(),
+                kv.Value.Symbols,
+                kv.Value.Graph)).ToList();
+            Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContext.Default.LanguagesJsonResult));
         }
         else
         {
