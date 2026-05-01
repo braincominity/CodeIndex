@@ -12379,6 +12379,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsGenericExtensionTargets()
+    {
+        var content = """
+            extension Array<String> where Element == String {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Array<String>");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsInitDeinitSubscriptStoredPropertyAndAssociatedType()
     {
         var content = """

@@ -1229,8 +1229,12 @@ public static class SymbolExtractor
             new("typealias", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?<visibility>(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?)?\s*(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Extension declarations are important search anchors in Swift-heavy codebases.
+            // Generic specializations such as `extension Array<String> where ...` should stay searchable
+            // under the concrete target, not just the base type name.
             // extension 宣言は Swift コード検索における重要なアンカー。
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // `extension Array<String> where ...` のような generic specialization も、
+            // base type 名だけでなく具体的な対象として検索可能にする。
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[\w.]+(?:\s*<[^{}\r\n]+>)?)(?=\s*(?:where\b|\{|\s*$))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス: backtick-escaped names and generic/where clauses.
