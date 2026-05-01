@@ -1237,6 +1237,9 @@ public static class SymbolExtractor
         ["fsharp"] =
         [
             new("function", new Regex(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
+            new("struct", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*(?:\|?\s*[A-Z][\w']*\b(?:\s*\|[^=].*)?)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*(?!(?:class|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),

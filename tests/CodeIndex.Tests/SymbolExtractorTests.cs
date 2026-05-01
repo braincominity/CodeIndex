@@ -12463,7 +12463,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
@@ -12480,11 +12480,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsTypeAbbreviations()
+    {
+        var content = """
+            module MyApp.Types
+
+            type UserId = int
+            type OrderId = string
+            type Names = string list
+            """;
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Names");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsNamespacesModulesAndMembers()
     {
         // F#: namespace rec, module private, member forms / F#: namespace rec、module private、member形
         var content = """
             namespace rec MyApp.Domain
+
+            type UserId = int
+            type OrderId = string
 
             type Person(name: string) =
                 member this.Name = name
@@ -12503,6 +12523,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
