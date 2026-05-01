@@ -14813,6 +14813,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsDelegateDeclarations()
+    {
+        // VB.NET Delegate declarations should be searchable as delegate symbols / VB.NET の
+        // Delegate 宣言は delegate シンボルとして検索できる必要がある。
+        var content = """
+            Public Delegate Sub ProgressHandler(value As Integer)
+            Friend Delegate Function Formatter(input As String) As String
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "ProgressHandler");
+        var formatter = Assert.Single(symbols, s => s.Kind == "delegate" && s.Name == "Formatter");
+        Assert.Equal("Friend", formatter.Visibility);
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """

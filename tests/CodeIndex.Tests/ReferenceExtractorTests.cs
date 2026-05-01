@@ -14270,6 +14270,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_RemCommentedCall_DoesNotEmitReference()
+    {
+        // VB.NET `Rem` comments should be stripped before call extraction so commented-out
+        // helpers do not leak as phantom references / VB.NET の `Rem` コメントは call 抽出前に
+        // 除去し、コメント内の helper が幽霊 reference として出ないことを固定する。
+        var content = """
+            Public Module Program
+                Public Sub Helper()
+                End Sub
+
+                Public Sub Run()
+                    Rem Helper()
+                    Helper()
+                End Sub
+            End Module
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "call" && r.Line == 6);
+        Assert.Contains(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "call" && r.Line == 7);
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickIdentifierContainingHash_IsCaptured()
     {
         // A `#` inside a backtick-quoted identifier is part of the identifier, not a comment marker.
