@@ -11856,12 +11856,33 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_PHP_DetectsFunctionsAndClasses()
     {
-        // PHP: function, class, interface / PHP: 関数、クラス、インターフェース
+        // PHP: function, class, trait / PHP: 関数、クラス、トレイト
         var content = "class AuthService {\n    public function login($user) {\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "php", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AuthService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsTraits()
+    {
+        var content = """
+            <?php
+
+            trait InteractsWithCache {
+                public function remember(): void {}
+            }
+
+            class Example {
+                use InteractsWithCache;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "trait" && s.Name == "InteractsWithCache");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "remember");
     }
 
     [Fact]
@@ -15784,6 +15805,7 @@ public class SymbolExtractorTests
     [InlineData("cpp", "struct Config { };", "struct")]
     [InlineData("cpp", "enum Color { RED };", "enum")]
     [InlineData("php", "interface Foo { }", "interface")]
+    [InlineData("php", "trait Foo { }", "trait")]
     [InlineData("php", "enum Color { }", "enum")]
     [InlineData("scala", "trait Foo", "interface")]
     [InlineData("scala", "enum Color", "enum")]
