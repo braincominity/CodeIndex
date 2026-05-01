@@ -25,7 +25,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql",
+        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol",
         "r", "powershell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css"
@@ -46,6 +46,10 @@ public static class ReferenceExtractor
     private static readonly Regex DockerfileCopyFromReferenceRegex = new(
         @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex CobolCallRegex = new(
+        @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
     // Terraform の dotted reference は括弧を伴わないため、共有 CallRegex では見えない。
@@ -1552,6 +1556,18 @@ public static class ReferenceExtractor
                     container);
             }
 
+            if (language == "cobol")
+            {
+                EmitCobolReferences(
+                    lines[i],
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    container);
+            }
+
             var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
 
             // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
@@ -2636,6 +2652,25 @@ public static class ReferenceExtractor
                 continue;
 
             AddReference(references, seen, fileId, name, match.Groups["name"].Index, "call", context, lineNumber, container);
+        }
+    }
+
+    private static void EmitCobolReferences(
+        string rawLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CobolCallRegex.Matches(rawLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
         }
     }
 
@@ -13390,7 +13425,8 @@ public static class ReferenceExtractor
         var result = lang == "python"
             ? MaskPythonSingleLineFStrings(line)
             : line;
-        result = StringLiteralRegex.Replace(result, "\"\"");
+        if (lang != "cobol")
+            result = StringLiteralRegex.Replace(result, "\"\"");
         result = InlineBlockCommentRegex.Replace(result, " ");
 
         if (UsesHashComments(lang))

@@ -162,6 +162,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolProgramCall_CapturesProgramLevelCallReference()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. hello-world.
+            PROCEDURE DIVISION.
+                CALL "other-program"
+                STOP RUN.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+        var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OTHER-PROGRAM"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "cobol");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsJavaScriptTypeScriptCalls()
     {
         const string content = """

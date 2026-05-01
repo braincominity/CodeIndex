@@ -153,6 +153,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolProgramId_DetectsProgramSymbol()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. hello-world.
+            PROCEDURE DIVISION.
+                STOP RUN.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "HELLO-WORLD");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cobol");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsTypeScriptSymbols()
     {
         const string content = """
