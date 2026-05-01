@@ -2504,6 +2504,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsMultiLineObjectLiteralBinding()
+    {
+        // The `{` may sit on a line after the `=` binding; collector must thread
+        // the lex state across lines to find the open brace.
+        // `{` が `=` バインディングと別行にあっても、collector は lex 状態を
+        // 跨いで open brace を検出できること。
+        var content = """
+            const obj =
+            {
+                foo() { return 1; },
+                *bar() { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotTreatQuotedOrComputedExportedObjectLiteralKeysAsValueSideShorthandProperties()
     {
         var content = """
@@ -17364,6 +17384,27 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportedObjectLiteralAliasProperties()
+    {
+        var content = """
+            const foo = 1;
+            function inner() { return 3; }
+            function named() { return 4; }
+            const answer = 42;
+            module.exports = { foo, alias: inner, named, method() {} };
+            export default { answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "named" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
     [Fact]
