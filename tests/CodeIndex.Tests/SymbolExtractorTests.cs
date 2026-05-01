@@ -15593,15 +15593,21 @@ public class SymbolExtractorTests
     {
         // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
         var content = """
-            setClass("Person", slots = c(name = "character"))
+            setClass(Person, slots = c(name = "character"))
 
-            setClassUnion("Renderable", c("Person", "Widget"))
+            setClassUnion(Renderable, c(Person, Widget))
 
-            setRefClass("Widget", fields = list(value = "numeric"))
+            setRefClass(Widget, fields = list(value = "numeric"))
 
-            R6Class("Thing",
+            R6Class(Thing,
               public = list(
                 print = function() self
+              ),
+              private = list(
+                secret = function() self
+              ),
+              active = list(
+                state = function(value) self
               ))
 
             setGeneric("normalize", function(x) standardGeneric("normalize"))
@@ -15617,6 +15623,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "print");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "secret");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "state");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }
