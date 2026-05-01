@@ -85,6 +85,18 @@ public static class SymbolExtractor
         @"(?:<(?:(?>[^<>]+)|<(?<JavaMethodTypeParameterDepth>)|>(?<-JavaMethodTypeParameterDepth>))*(?(JavaMethodTypeParameterDepth)(?!))>\s+)?";
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
+    private static readonly Regex CobolProgramIdLineRegex = new(
+        @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolProcedureDivisionRegex = new(
+        @"^\s*PROCEDURE\s+DIVISION\.\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolParagraphHeaderRegex = new(
+        @"^\s{0,6}(?<name>[A-Z0-9][A-Z0-9-]*)\.\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolEndProgramRegex = new(
+        @"^\s*END\s+PROGRAM(?:\s+(?<name>[A-Z0-9][A-Z0-9-]*))?\.\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex PhpGroupUseRegex = new(
         @"^\s*use\s+(?:(?<type>function|const)\s+)?(?<prefix>[\w\\]+\\)\{\s*(?<items>[^{}]+?)\s*\}\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -3184,6 +3196,8 @@ public static class SymbolExtractor
         }
         else if (lang == "vb")
             ExtractVisualBasicEnumMembers(fileId, lines, symbols);
+        if (lang == "cobol")
+            ExtractCobolParagraphSymbols(fileId, lines, symbols);
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
@@ -10937,6 +10951,104 @@ public static class SymbolExtractor
                 EndLine = lineNumber,
                 Signature = line.Trim()
             });
+    }
+
+    private static void ExtractCobolParagraphSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        string? programName = null;
+        var inProcedureDivision = false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            var programIdMatch = CobolProgramIdLineRegex.Match(line);
+            if (programIdMatch.Success)
+            {
+                programName = NormalizeCobolSymbolName(programIdMatch.Groups["name"].Value);
+                inProcedureDivision = false;
+                continue;
+            }
+
+            if (CobolProcedureDivisionRegex.IsMatch(line))
+            {
+                inProcedureDivision = true;
+                continue;
+            }
+
+            if (CobolEndProgramRegex.IsMatch(line))
+            {
+                programName = null;
+                inProcedureDivision = false;
+                continue;
+            }
+
+            if (!inProcedureDivision)
+                continue;
+
+            var paragraphMatch = CobolParagraphHeaderRegex.Match(line);
+            if (!paragraphMatch.Success)
+                continue;
+
+            var name = NormalizeCobolSymbolName(paragraphMatch.Groups["name"].Value);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var (endLine, bodyStartLine, bodyEndLine) = FindCobolParagraphRange(lines, i);
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                i + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = name,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    StartColumn = paragraphMatch.Groups["name"].Index,
+                    EndLine = endLine,
+                    BodyStartLine = bodyStartLine,
+                    BodyEndLine = bodyEndLine,
+                    Signature = line.Trim(),
+                    ContainerKind = programName != null ? "class" : null,
+                    ContainerName = programName,
+                    ContainerQualifiedName = programName,
+                },
+                line);
+        }
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCobolParagraphRange(string[] lines, int startIndex)
+    {
+        int? bodyStartLine = null;
+
+        for (int i = startIndex + 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith("*", StringComparison.Ordinal))
+                continue;
+
+            if (CobolProgramIdLineRegex.IsMatch(line)
+                || CobolProcedureDivisionRegex.IsMatch(line)
+                || CobolEndProgramRegex.IsMatch(line)
+                || CobolParagraphHeaderRegex.IsMatch(line))
+            {
+                if (bodyStartLine == null)
+                    return (startIndex + 1, null, null);
+
+                return (i, bodyStartLine, i);
+            }
+
+            bodyStartLine ??= i + 1;
+        }
+
+        return bodyStartLine == null
+            ? (startIndex + 1, null, null)
+            : (lines.Length, bodyStartLine, lines.Length);
     }
 
     private static bool TryAddCppIndentedAlias(

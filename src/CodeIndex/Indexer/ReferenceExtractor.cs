@@ -50,6 +50,9 @@ public static class ReferenceExtractor
     private static readonly Regex CobolCallRegex = new(
         @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolPerformRegex = new(
+        @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
     // Terraform の dotted reference は括弧を伴わないため、共有 CallRegex では見えない。
@@ -2686,6 +2689,15 @@ public static class ReferenceExtractor
         SymbolRecord? container)
     {
         foreach (Match match in CobolCallRegex.Matches(rawLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolPerformRegex.Matches(rawLine))
         {
             var name = match.Groups["name"].Value;
             if (string.IsNullOrWhiteSpace(name))
