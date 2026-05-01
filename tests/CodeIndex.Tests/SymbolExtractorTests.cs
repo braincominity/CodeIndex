@@ -12122,6 +12122,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsTypedefStructAndEnumAliases()
+    {
+        var content = """
+            typedef struct Node Node_t;
+            typedef struct Payload* PayloadRef;
+            typedef enum Mode Mode_t;
+
+            struct Node {
+                int value;
+            };
+
+            enum Mode {
+                ModeIdle,
+                ModeActive,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node_t");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "PayloadRef");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode_t");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+    }
+
+    [Fact]
     public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
     {
         // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
