@@ -942,7 +942,7 @@ public partial class DbReader
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
@@ -2969,7 +2969,7 @@ public partial class DbReader
     {
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
         {
-            var rustNormalized = NormalizeRustMacroQuery(query);
+            var rustNormalized = NormalizeRustSymbolSearchQuery(query);
             return string.IsNullOrWhiteSpace(rustNormalized) ? null : rustNormalized;
         }
 
@@ -3043,7 +3043,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
@@ -3143,7 +3143,7 @@ public partial class DbReader
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
@@ -3268,7 +3268,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
@@ -3408,7 +3408,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
@@ -3584,7 +3584,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3718,7 +3718,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
         lang = NormalizeQueryLanguage(lang);
-        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        query = NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
