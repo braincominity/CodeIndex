@@ -399,7 +399,7 @@ public class SymbolExtractorTests
             template <typename T> using Ptr = std::unique_ptr<T>;
 
             namespace demo {
-                using namespace std;
+                using namespace std; // comment to ignore
             }
             """;
 
@@ -417,7 +417,7 @@ public class SymbolExtractorTests
         var content = """
             namespace demo {
                 using DemoValue = long;
-                using namespace std;
+                using namespace std; /* comment to ignore */
             }
             """;
 
