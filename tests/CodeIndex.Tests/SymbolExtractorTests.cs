@@ -12053,6 +12053,7 @@ public class SymbolExtractorTests
             type UserId = int
             type User = { Name: string; Age: int }
             type Color = Red | Green | Blue
+            exception ``domain error`` of string
             type Person(name: string) =
                 member _.Name = name
 
@@ -12077,6 +12078,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "exception" && s.Name == "domain error");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "x");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "counter");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
