@@ -12676,6 +12676,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsActivePatternDefinitions()
+    {
+        var content = """
+            module MyApp.Patterns
+
+            let (|Even|Odd|) n =
+                if n % 2 = 0 then Even else Odd
+
+            let private (|ParseInt|_|) (value: string) =
+                match System.Int32.TryParse(value) with
+                | true, parsed -> Some parsed
+                | false, _ -> None
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Even");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Odd");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ParseInt");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "_");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsValueBindings()
     {
         // F# value bindings should be indexed by their binding names / F# の値束縛は
