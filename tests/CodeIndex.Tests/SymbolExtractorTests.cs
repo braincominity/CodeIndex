@@ -275,6 +275,9 @@ public class SymbolExtractorTests
             export module my_module;
 
             inline namespace v2 {}
+            namespace outer::inner {
+                class Nested {};
+            }
 
             template <typename T>
             concept Addable = requires(T a, T b) { a + b; };
@@ -317,8 +320,10 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "my_module");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "v2");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Addable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Nested" && s.ContainerName == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
@@ -9624,6 +9629,8 @@ public class SymbolExtractorTests
             "CREATE SCHEMA sales AUTHORIZATION dbo;\n" +
             "CREATE TYPE sales.Money FROM DECIMAL(18, 4) NOT NULL;\n" +
             "CREATE SEQUENCE sales.OrderSeq START WITH 1 INCREMENT BY 1;\n" +
+            "CREATE RULE sales.discount_rule AS @price > 0;\n" +
+            "CREATE DEFAULT dbo.zero_default AS 0;\n" +
             "CREATE SYNONYM dbo.Customers FOR external.Customers;\n" +
             "CREATE LOGIN [app_service] WITH PASSWORD = 'x';\n" +
             "CREATE USER app_service FOR LOGIN app_service;\n" +
@@ -9651,6 +9658,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.Money");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.OrderSeq");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.discount_rule");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.zero_default");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.Customers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[app_service]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_service");
@@ -11923,6 +11932,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_NormalizesIncludeTargets()
+    {
+        // C: include targets should be searchable by header name / C: include 先はヘッダー名で検索できるべき
+        var content = """
+            #include <stdio.h>
+            #include "project/foo.h"
+            #include HEADER_NAME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
@@ -12044,6 +12070,7 @@ public class SymbolExtractorTests
             type UserId = int
             type User = { Name: string; Age: int }
             type Color = Red | Green | Blue
+            exception ``domain error`` of string
             type Person(name: string) =
                 member _.Name = name
 
@@ -12068,6 +12095,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "exception" && s.Name == "domain error");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "x");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "counter");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
