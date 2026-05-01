@@ -9803,6 +9803,8 @@ public class SymbolExtractorTests
             "CREATE TYPE sales.Money FROM DECIMAL(18, 4) NOT NULL;\n" +
             "CREATE SEQUENCE sales.OrderSeq START WITH 1 INCREMENT BY 1;\n" +
             "CREATE AGGREGATE dbo.SumInt (@value INT) RETURNS INT EXTERNAL NAME dbo.SumInt;\n" +
+            "CREATE ASSEMBLY dbo.MyAssembly FROM 0x010203;\n" +
+            "CREATE XML SCHEMA COLLECTION dbo.XmlCollection AS N'<schema />';\n" +
             "CREATE RULE sales.discount_rule AS @price > 0;\n" +
             "CREATE DEFAULT dbo.zero_default AS 0;\n" +
             "CREATE SYNONYM dbo.Customers FOR external.Customers;\n" +
@@ -9823,6 +9825,8 @@ public class SymbolExtractorTests
             "ALTER FUNCTION dbo.fn_Total() RETURNS INT AS BEGIN RETURN 1 END;\n" +
             "ALTER PARTITION FUNCTION pf_OrdersByYear() SPLIT RANGE ('2025-01-01');\n" +
             "ALTER AGGREGATE dbo.SumInt (@value INT) RETURNS INT EXTERNAL NAME dbo.SumIntV2;\n" +
+            "ALTER ASSEMBLY dbo.MyAssembly FROM 0x040506;\n" +
+            "ALTER XML SCHEMA COLLECTION dbo.XmlCollection ADD N'<schema />';\n" +
             "ALTER SCHEMA sales TRANSFER dbo.Customers;\n" +
             "ALTER EXTENSION hstore UPDATE TO '1.5';\n" +
             "ALTER CERTIFICATE svc_cert WITH PRIVATE KEY (DECRYPTION BY PASSWORD = 'x');\n" +
@@ -9834,6 +9838,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.Money");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.OrderSeq");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.SumInt");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.MyAssembly");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.XmlCollection");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.discount_rule");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.zero_default");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.Customers");
@@ -9862,6 +9868,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear" && s.Signature != null && s.Signature.StartsWith("ALTER PARTITION FUNCTION", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.SumInt" && s.Signature != null && s.Signature.StartsWith("CREATE AGGREGATE", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.SumInt" && s.Signature != null && s.Signature.StartsWith("ALTER AGGREGATE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.MyAssembly" && s.Signature != null && s.Signature.StartsWith("CREATE ASSEMBLY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.MyAssembly" && s.Signature != null && s.Signature.StartsWith("ALTER ASSEMBLY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.XmlCollection" && s.Signature != null && s.Signature.StartsWith("CREATE XML SCHEMA COLLECTION", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.XmlCollection" && s.Signature != null && s.Signature.StartsWith("ALTER XML SCHEMA COLLECTION", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales" && s.Signature != null && s.Signature.StartsWith("ALTER SCHEMA", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "hstore");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert" && s.Signature != null && s.Signature.StartsWith("ALTER CERTIFICATE", StringComparison.OrdinalIgnoreCase));

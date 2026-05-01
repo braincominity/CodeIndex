@@ -406,7 +406,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Solidity | .sol | -- | -- | -- | -- | -- | -- | -- | -- |
 | Tcl | .tcl, .tk | -- | -- | -- | -- | -- | -- | -- | -- |
 | Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, AGGREGATE, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
+| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, AGGREGATE, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, ASSEMBLY, XML SCHEMA COLLECTION, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | `var.*`, `local.*`, `module.*`, `data.*`, same-file resource-like `TYPE.NAME` references such as `aws_instance.web` and `depends_on = [aws_s3_bucket.foo]` | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
