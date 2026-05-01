@@ -1127,7 +1127,8 @@ public static class SymbolExtractor
             // Companion object / コンパニオンオブジェクト
             new("class",    new Regex(@"^\s*companion\s+object(?:\s+(?<name>\w+))?", RegexOptions.Compiled), BodyStyle.Brace),
             // Interface / インターフェース
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Kotlin fun interface / Kotlin の fun interface も interface として扱う。
+            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
             new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
