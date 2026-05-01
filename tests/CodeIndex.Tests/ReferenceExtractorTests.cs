@@ -1692,6 +1692,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeQueries_CaptureImportAndWrappedTargets()
+    {
+        const string content = """
+            class Point {}
+
+            type ImportedPoint = typeof import("./point").Point;
+            type KeyedPoint = keyof typeof import("./point").Point;
+            type WrappedPoint =
+                Promise<
+                    typeof Point
+                >;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "Point"
+            && reference.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "import"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptMultilineTypeQueryContext_DoesNotLeakRuntimeReferences()
+    {
+        const string content = """
+            function caller(value: unknown) {
+              const runtime =
+                typeof value === "string";
+              const another =
+                Promise<
+                  string
+                >;
+              return runtime && another.length > 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "value");
+    }
+
+    [Fact]
     public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
     {
         const string content = "function f() {\n" +

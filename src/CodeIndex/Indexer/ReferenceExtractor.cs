@@ -119,18 +119,24 @@ public static class ReferenceExtractor
 
     private static readonly HashSet<string> TypeScriptTypeQueryDisqualifyingTokens = new(StringComparer.Ordinal)
     {
+        "class",
+        "const",
         "if",
         "else",
         "for",
         "foreach",
+        "function",
+        "let",
         "while",
         "switch",
         "case",
         "do",
         "try",
         "catch",
+        "enum",
         "return",
         "throw",
+        "var",
         "new",
         "delete",
         "void",
@@ -4451,41 +4457,17 @@ public static class ReferenceExtractor
             if (token is not "typeof" and not "keyof")
                 continue;
 
-            var previousPreparedLine = lineIndex > 0 ? preparedLines[lineIndex - 1] : null;
-            if (!IsTypeScriptTypeQueryContext(preparedLine, tokens, tokenIndex, previousPreparedLine))
+            if (!IsTypeScriptTypeQueryContext(preparedLines, lineIndex, preparedLine, tokens, tokenIndex))
                 continue;
 
-            var expressionStart = tokens[tokenIndex].Start + tokens[tokenIndex].Length;
-            while (expressionStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[expressionStart]))
-                expressionStart++;
-
-            if (expressionStart >= preparedLine.Length)
+            if (!TryExtractTypeScriptTypeQueryTarget(preparedLine, tokens[tokenIndex].Start + tokens[tokenIndex].Length, out var expressionStart, out var expressionLength))
                 continue;
-
-            if (preparedLine.AsSpan(expressionStart).StartsWith("typeof", StringComparison.Ordinal)
-                && (expressionStart + "typeof".Length == preparedLine.Length
-                    || !IsJavaIdentifierPart(preparedLine[expressionStart + "typeof".Length])))
-            {
-                expressionStart += "typeof".Length;
-                while (expressionStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[expressionStart]))
-                    expressionStart++;
-            }
-
-            if (expressionStart >= preparedLine.Length || !IsJavaIdentifierStart(preparedLine[expressionStart]))
-                continue;
-
-            var expressionEnd = expressionStart + 1;
-            while (expressionEnd < preparedLine.Length
-                   && (IsJavaIdentifierPart(preparedLine[expressionEnd]) || preparedLine[expressionEnd] == '.'))
-            {
-                expressionEnd++;
-            }
 
             AddTypeReferenceSegments(
                 references,
                 seen,
                 fileId,
-                preparedLine.Substring(expressionStart, expressionEnd - expressionStart),
+                preparedLine.Substring(expressionStart, expressionLength),
                 expressionStart,
                 context,
                 lineNumber,
@@ -5907,10 +5889,11 @@ public static class ReferenceExtractor
         language == "csharp" ? IsCSharpIdentifierPart(c) : IsJavaIdentifierPart(c);
 
     private static bool IsTypeScriptTypeQueryContext(
+        IReadOnlyList<string> preparedLines,
+        int lineIndex,
         string line,
         List<(int Start, int Length)> tokens,
-        int keywordIndex,
-        string? previousPreparedLine)
+        int keywordIndex)
     {
         for (int i = 0; i < keywordIndex; i++)
         {
@@ -5923,19 +5906,28 @@ public static class ReferenceExtractor
         }
 
         if (keywordIndex == 0)
-        {
-            if (previousPreparedLine == null)
-                return false;
-
-            if (IsTypeScriptTypeQueryLineContext(previousPreparedLine))
-                return true;
-
-            var previousTrimmed = previousPreparedLine.TrimEnd();
-            return previousTrimmed.EndsWith(':');
-        }
+            return HasTypeScriptTypeQueryLeadingContext(preparedLines, lineIndex);
 
         var previousToken = line.Substring(tokens[keywordIndex - 1].Start, tokens[keywordIndex - 1].Length);
         return previousToken.EndsWith(':');
+    }
+
+    private static bool HasTypeScriptTypeQueryLeadingContext(IReadOnlyList<string> preparedLines, int lineIndex)
+    {
+        for (int previousIndex = lineIndex - 1; previousIndex >= 0; previousIndex--)
+        {
+            var previousLine = preparedLines[previousIndex];
+            if (string.IsNullOrWhiteSpace(previousLine))
+                continue;
+
+            if (IsTypeScriptTypeQueryLineContext(previousLine))
+                return true;
+
+            if (!IsTypeScriptTypeQueryContinuationLine(previousLine))
+                return false;
+        }
+
+        return false;
     }
 
     private static bool IsTypeScriptTypeQueryLineContext(string line)
@@ -5944,11 +5936,121 @@ public static class ReferenceExtractor
         foreach (var token in tokens)
         {
             var text = line.Substring(token.Start, token.Length);
+            if (TypeScriptTypeQueryDisqualifyingTokens.Contains(text))
+                return false;
             if (TypeScriptTypeQueryContextTokens.Contains(text))
                 return true;
         }
 
         return false;
+    }
+
+    private static bool IsTypeScriptTypeQueryContinuationLine(string line)
+    {
+        var trimmed = line.TrimEnd();
+        if (trimmed.Length == 0)
+            return false;
+
+        return trimmed[^1] is '<' or '(' or '[' or ',' or '|' or '&' or ':';
+    }
+
+    private static bool TryExtractTypeScriptTypeQueryTarget(
+        string line,
+        int startIndex,
+        out int targetStart,
+        out int targetLength)
+    {
+        targetStart = 0;
+        targetLength = 0;
+
+        var cursor = startIndex;
+        while (cursor < line.Length)
+        {
+            cursor = SkipWhitespace(line, cursor);
+            if (cursor >= line.Length)
+                return false;
+
+            if (TryConsumeTypeScriptTypeQueryWrapper(line, cursor, "typeof", out cursor))
+                continue;
+
+            if (TryConsumeTypeScriptImportTypeWrapper(line, cursor, out cursor))
+                continue;
+
+            if (line[cursor] == '(' || line[cursor] == '[')
+            {
+                cursor++;
+                continue;
+            }
+
+            break;
+        }
+
+        cursor = SkipWhitespace(line, cursor);
+        while (cursor < line.Length && line[cursor] == '.')
+        {
+            cursor++;
+            cursor = SkipWhitespace(line, cursor);
+        }
+
+        if (cursor >= line.Length || !IsJavaIdentifierStart(line[cursor]))
+            return false;
+
+        var end = cursor + 1;
+        while (end < line.Length && (IsJavaIdentifierPart(line[end]) || line[end] == '.'))
+            end++;
+
+        targetStart = cursor;
+        targetLength = end - cursor;
+        return targetLength > 0;
+    }
+
+    private static bool TryConsumeTypeScriptTypeQueryWrapper(
+        string line,
+        int cursor,
+        string keyword,
+        out int nextCursor)
+    {
+        nextCursor = cursor;
+        if (cursor + keyword.Length > line.Length
+            || !line.AsSpan(cursor, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var nextIndex = cursor + keyword.Length;
+        if (nextIndex < line.Length && (char.IsLetterOrDigit(line[nextIndex]) || line[nextIndex] == '_'))
+            return false;
+
+        nextCursor = nextIndex;
+        return true;
+    }
+
+    private static bool TryConsumeTypeScriptImportTypeWrapper(
+        string line,
+        int cursor,
+        out int nextCursor)
+    {
+        nextCursor = cursor;
+        if (cursor + "import".Length > line.Length
+            || !line.AsSpan(cursor, "import".Length).Equals("import", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var nextIndex = cursor + "import".Length;
+        if (nextIndex < line.Length && (char.IsLetterOrDigit(line[nextIndex]) || line[nextIndex] == '_'))
+            return false;
+
+        nextIndex = SkipWhitespace(line, nextIndex);
+        if (nextIndex >= line.Length || line[nextIndex] != '(')
+            return false;
+
+        var closeIndex = SkipBalanced(line, nextIndex, '(', ')');
+        if (closeIndex <= nextIndex)
+            return false;
+
+        nextCursor = closeIndex;
+        return true;
     }
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
