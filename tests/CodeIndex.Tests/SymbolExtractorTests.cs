@@ -10393,6 +10393,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsBacktickEscapedTypealiasAndWhereClause()
+    {
+        var content = """
+            public typealias `Callback`<T> = (T) -> Void where T: Sendable
+            typealias ResultHandler<T> where T: Hashable = (T) -> Void
+
+            public protocol Store {
+                associatedtype Item
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "`Callback`");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "ResultHandler");
+        Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Item");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsEnumCasesAndIndirectEnums()
     {
         var content = """
