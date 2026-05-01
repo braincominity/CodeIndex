@@ -9686,16 +9686,18 @@ public class SymbolExtractorTests
             module math_utils
               implicit none
             contains
-              pure real function square(x) result(y)
-                real, intent(in) :: x
-                y = x * x
-              end function square
-
               recursive subroutine normalize(v)
               end subroutine normalize
             end module math_utils
 
+            submodule (math_utils) math_utils_impl
+            contains
+              module subroutine expand(v)
+              end subroutine expand
+            end submodule math_utils_impl
+
             program demo
+              print *, "hello"
             end program demo
 
             integer function add(a, b)
@@ -9706,10 +9708,28 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "fortran", content);
 
-        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "math_utils");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "demo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "square");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+        var mathUtils = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils");
+        Assert.NotNull(mathUtils.BodyStartLine);
+        Assert.NotNull(mathUtils.BodyEndLine);
+
+        var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
+        Assert.NotNull(mathUtilsImpl.BodyStartLine);
+        Assert.NotNull(mathUtilsImpl.BodyEndLine);
+
+        var demo = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "demo");
+        Assert.NotNull(demo.BodyStartLine);
+        Assert.NotNull(demo.BodyEndLine);
+
+        var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
+        Assert.Equal("namespace", normalize.ContainerKind);
+        Assert.Equal("math_utils", normalize.ContainerName);
+
+        var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
+        Assert.Equal("namespace", expand.ContainerKind);
+        Assert.Equal("math_utils_impl", expand.ContainerName);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "subroutine");
+
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "typed_value");
     }
