@@ -145,11 +145,11 @@ public class FileIndexer
         [".toml"]   = "toml",
         [".xaml"]   = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
         [".axaml"]  = "xml",    // Avalonia XAML / Avalonia XAML
-        [".csproj"] = "xml",    // C# project file / C# プロジェクトファイル
-        [".fsproj"] = "xml",    // F# project file / F# プロジェクトファイル
-        [".vbproj"] = "xml",    // VB.NET project file / VB.NET プロジェクトファイル
-        [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
-        [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
+        [".csproj"] = "msbuild",// C# project file / C# プロジェクトファイル
+        [".fsproj"] = "msbuild",// F# project file / F# プロジェクトファイル
+        [".vbproj"] = "msbuild",// VB.NET project file / VB.NET プロジェクトファイル
+        [".props"]  = "msbuild",// MSBuild props / MSBuild プロパティ
+        [".targets"]= "msbuild",// MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
         [".htm"]    = "html",    // Legacy / Windows / IIS default / 旧来の Windows / IIS 既定拡張子
         [".xhtml"]  = "html",    // XHTML / XHTML

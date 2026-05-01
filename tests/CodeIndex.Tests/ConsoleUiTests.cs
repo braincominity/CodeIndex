@@ -214,6 +214,7 @@ public class ConsoleUiTests
                 {
                     // Should contain dynamically generated languages, including newly added ones
                     // 動的生成の言語リストに新しく追加した言語が含まれているか検証
+                    Assert.Contains("msbuild", output);
                     Assert.Contains("elixir", output);
                     Assert.Contains("graphql", output);
                     Assert.Contains("protobuf", output);
