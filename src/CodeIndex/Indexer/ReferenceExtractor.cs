@@ -117,6 +117,31 @@ public static class ReferenceExtractor
         "async",
     };
 
+    private static readonly HashSet<string> TypeScriptTypeQueryDisqualifyingTokens = new(StringComparer.Ordinal)
+    {
+        "if",
+        "else",
+        "for",
+        "foreach",
+        "while",
+        "switch",
+        "case",
+        "do",
+        "try",
+        "catch",
+        "return",
+        "throw",
+        "new",
+        "delete",
+        "void",
+        "await",
+        "yield",
+        "in",
+        "instanceof",
+        "=>",
+        "?",
+    };
+
     private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
@@ -5882,7 +5907,7 @@ public static class ReferenceExtractor
         for (int i = 0; i < keywordIndex; i++)
         {
             var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (string.Equals(token, "?", StringComparison.Ordinal))
+            if (TypeScriptTypeQueryDisqualifyingTokens.Contains(token))
                 return false;
 
             if (TypeScriptTypeQueryContextTokens.Contains(token))

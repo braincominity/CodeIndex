@@ -18082,4 +18082,17 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
+
+    [Fact]
+    public void Extract_TypeScriptRuntimeTypeof_OnOneLine_IsNotCapturedAsTypeReference()
+    {
+        const string content = """
+            const runtime = (value: unknown) => typeof value === "string";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+    }
 }
