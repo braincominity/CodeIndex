@@ -1169,10 +1169,6 @@ public static class SymbolExtractor
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:[\w:<>~]+[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
-            // Namespace aliases / 名前空間エイリアス
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"namespace\s+(?<name>\w+)\s*=\s*(?:::)?[\w:]+", RegexOptions.Compiled), BodyStyle.None),
-            // Namespace directives / 名前空間導入
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+namespace\s+(?<name>(?:::)?[\w:]+)", RegexOptions.Compiled), BodyStyle.None),
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
@@ -11715,9 +11711,7 @@ private sealed class RubyMaskState
 
         if (trimmed.StartsWith("using namespace ", StringComparison.Ordinal))
         {
-            var target = trimmed["using namespace ".Length..].Trim();
-            if (target.EndsWith(';'))
-                target = target[..^1].TrimEnd();
+            var target = NormalizeCppUsingNamespaceTarget(trimmed["using namespace ".Length..]);
 
             if (target.Length > 0)
             {
@@ -11811,6 +11805,22 @@ private sealed class RubyMaskState
             return null;
 
         return text[start..end].ToString();
+    }
+
+    private static string NormalizeCppUsingNamespaceTarget(string text)
+    {
+        var target = text.Trim();
+        var commentIndex = target.IndexOf("//", StringComparison.Ordinal);
+        if (commentIndex < 0)
+            commentIndex = target.IndexOf("/*", StringComparison.Ordinal);
+
+        if (commentIndex >= 0)
+            target = target[..commentIndex].TrimEnd();
+
+        if (target.EndsWith(';'))
+            target = target[..^1].TrimEnd();
+
+        return target;
     }
 
     private static void RemoveTrailingSameNameDeclarationOnlyFunctions(List<SymbolRecord> symbols, SymbolRecord symbol)
