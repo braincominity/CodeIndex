@@ -3145,6 +3145,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsAccessorClassFields()
+    {
+        var content = """
+            class Settings {
+                accessor theme: string;
+                accessor count: number;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Settings");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "theme" && s.ContainerKind == "class" && s.ContainerName == "Settings" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerKind == "class" && s.ContainerName == "Settings" && s.ReturnType == "number");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DoesNotMergeAbstractMemberIntoFollowingConcreteMethod()
     {
         var content = """

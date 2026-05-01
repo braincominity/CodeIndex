@@ -9521,6 +9521,46 @@ public static class SymbolExtractor
                     && classScanTarget.ContainerKind is "interface" or "class"
                     && StartsJavaScriptTypeScriptClassMemberAt(sanitizedLine, column))
                 {
+                    if (lang == "typescript"
+                        && classScanTarget.ContainerKind == "class"
+                        && TryParseJavaScriptTypeScriptAccessorFieldHeader(
+                            sanitizedLine,
+                            column,
+                            out var accessorName,
+                            out var accessorVisibility,
+                            out var accessorTypeStartColumn,
+                            out var accessorTypeEndColumn,
+                            out var accessorHeaderEndColumn))
+                    {
+                        var accessorStartLine = i + 1;
+                        if (seenMethodStarts.Add((accessorStartLine, column)))
+                        {
+                            var accessorSignatureEnd = accessorHeaderEndColumn < line.Length
+                                ? accessorHeaderEndColumn + 1
+                                : line.Length;
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "property",
+                                Name = accessorName,
+                                Line = accessorStartLine,
+                                StartLine = accessorStartLine,
+                                EndLine = accessorStartLine,
+                                BodyStartLine = null,
+                                BodyEndLine = null,
+                                Signature = line[column..accessorSignatureEnd].Trim(),
+                                ContainerKind = classScanTarget.ContainerKind,
+                                ContainerName = classScanTarget.ContainerName,
+                                Visibility = accessorVisibility,
+                                ReturnType = NormalizeMetadata(
+                                    line[(accessorTypeStartColumn + 1)..(accessorTypeEndColumn + 1)]),
+                            });
+                        }
+
+                        column = accessorHeaderEndColumn + 1;
+                        continue;
+                    }
+
                     var requireAbstractModifier = classScanTarget.ContainerKind == "class";
                     if (TryParseJavaScriptTypeScriptMemberPropertyHeader(
                         sanitizedLine,
@@ -13213,6 +13253,7 @@ public static class SymbolExtractor
 
         var index = Math.Max(0, startColumn);
         var sawAbstract = false;
+        var sawAccessor = false;
         var sawName = false;
 
         while (index < sanitizedLine.Length)
@@ -13235,7 +13276,7 @@ public static class SymbolExtractor
                 continue;
             }
 
-            if (token is "static" or "readonly" or "override" or "declare")
+            if (token is "static" or "readonly" or "override" or "declare" or "accessor")
             {
                 continue;
             }
@@ -13243,6 +13284,12 @@ public static class SymbolExtractor
             if (token == "abstract")
             {
                 sawAbstract = true;
+                continue;
+            }
+
+            if (token == "accessor")
+            {
+                sawAccessor = true;
                 continue;
             }
 
@@ -13257,7 +13304,7 @@ public static class SymbolExtractor
         if (!sawName)
             return false;
 
-        if (requireAbstractModifier && !sawAbstract)
+        if (requireAbstractModifier && !sawAbstract && !sawAccessor)
             return false;
 
         if (index < sanitizedLine.Length && sanitizedLine[index] == '?')
@@ -13640,6 +13687,87 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool TryParseJavaScriptTypeScriptAccessorFieldHeader(
+        string sanitizedLine,
+        int startColumn,
+        out string name,
+        out string? visibility,
+        out int typeStartColumn,
+        out int typeEndColumn,
+        out int headerEndColumn)
+    {
+        name = string.Empty;
+        visibility = null;
+        typeStartColumn = -1;
+        typeEndColumn = -1;
+        headerEndColumn = -1;
+
+        var index = Math.Max(0, startColumn);
+        var sawAccessor = false;
+
+        while (index < sanitizedLine.Length)
+        {
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+
+            if (index >= sanitizedLine.Length)
+                return false;
+
+            if (!TryReadJavaScriptTypeScriptSourceMethodName(sanitizedLine, ref index, out var token))
+                return false;
+
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+
+            if (token is "public" or "private" or "protected")
+            {
+                visibility = token;
+                continue;
+            }
+
+            if (token is "static" or "readonly" or "override" or "declare")
+                continue;
+
+            if (token == "accessor")
+            {
+                sawAccessor = true;
+                continue;
+            }
+
+            if (!IsJavaScriptTypeScriptIdentifierStart(token[0]))
+                return false;
+
+            name = token;
+            break;
+        }
+
+        if (!sawAccessor)
+            return false;
+
+        if (index < sanitizedLine.Length && sanitizedLine[index] == '?')
+        {
+            index++;
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+        }
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
+            return false;
+
+        typeStartColumn = index;
+        if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilSemicolon(sanitizedLine, ref index, out typeEndColumn))
+            return false;
+
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ';')
+            return false;
+
+        headerEndColumn = index;
+        return true;
     }
 
     // Multi-line accumulating wrapper for class-field arrow functions. Mirrors
