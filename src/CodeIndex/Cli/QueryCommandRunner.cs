@@ -21,6 +21,13 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
+    private static readonly Dictionary<string, string> LangFilterAliases = new(StringComparer.Ordinal)
+    {
+        ["py"] = "python",
+        ["py3"] = "python",
+        ["pyi"] = "python",
+        ["pyw"] = "python",
+    };
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -2988,11 +2995,7 @@ public static class QueryCommandRunner
         if (langValue == null)
             return null;
         var normalized = langValue.ToLowerInvariant();
-        return normalized switch
-        {
-            "py" => "python",
-            _ => normalized,
-        };
+        return LangFilterAliases.TryGetValue(normalized, out var canonical) ? canonical : normalized;
     }
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
