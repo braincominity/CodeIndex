@@ -515,10 +515,10 @@ public static class SymbolExtractor
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
-      private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Async|Partial)";
-      private const string VbOperatorModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Async|Partial|Widening|Narrowing)";
-      private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Default|ReadOnly|WriteOnly)";
-      private const string VbEventModifierPattern = @"(?:Shared|Overloads|Custom)";
+    private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Shadows|Async|Partial)";
+    private const string VbOperatorModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Shadows|Async|Partial|Widening|Narrowing)";
+    private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Shadows|Default|ReadOnly|WriteOnly)";
+    private const string VbEventModifierPattern = @"(?:Shared|Overloads|Shadows|Custom)";
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {

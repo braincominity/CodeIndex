@@ -12618,20 +12618,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_VB_DetectsOverloadsMembers()
+    public void Extract_VB_DetectsShadowsMembers()
     {
-        // VB.NET Overloads members should still be searchable / VB.NET の Overloads 付き member も
+        // VB.NET Shadows members should still be searchable / VB.NET の Shadows 付き member も
         // 変わらず検索できること。
         var content = """
             Public Class DerivedWidget
-                Public Overloads Sub Render()
+                Public Shadows Sub Render()
                 End Sub
 
-                Public Overloads Function Compute() As Integer
+                Public Shadows Function Compute() As Integer
                     Return 42
                 End Function
 
-                Public Overloads ReadOnly Property Count As Integer
+                Public Shadows ReadOnly Property Count As Integer
                     Get
                         Return 1
                     End Get
