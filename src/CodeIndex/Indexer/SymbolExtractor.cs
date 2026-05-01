@@ -504,6 +504,14 @@ public static class SymbolExtractor
             new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>[\w.]+)\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["cobol"] =
+        [
+            // COBOL is organized around program IDs rather than brace-scoped members.
+            // Keep the extraction deliberately small and conservative: one symbol per program.
+            // COBOL は brace ではなく program ID 単位で構成されるため、抽出は保守的に
+            // program ひとつにつき 1 symbol に絞る。
+            new("class", new Regex(@"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["javascript"] =
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
@@ -21288,6 +21296,7 @@ public static class SymbolExtractor
         return lang switch
         {
             "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
+            "cobol" => NormalizeCobolSymbolName(name),
             "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
             "sql" => NormalizeSqlSymbolName(name),
@@ -21345,6 +21354,13 @@ public static class SymbolExtractor
             || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
             ? "Companion"
             : name;
+    }
+
+    private static string NormalizeCobolSymbolName(string name)
+    {
+        return string.IsNullOrWhiteSpace(name)
+            ? name
+            : name.Trim().ToUpperInvariant();
     }
 
     private static void NormalizeKotlinSecondaryConstructorNames(List<SymbolRecord> symbols)
