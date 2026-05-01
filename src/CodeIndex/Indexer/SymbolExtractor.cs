@@ -3210,7 +3210,7 @@ private sealed class RubyMaskState
                     if (!suppressJavaStatementSymbol)
                     {
                         var pythonImportEntries = lang == "python" && pattern.Kind == "import"
-                            ? TryExpandPythonImportSymbols(line, absoluteStartColumn)
+                            ? TryExpandPythonImportSymbols(lines, i, absoluteStartColumn)
                             : null;
                         var declaratorEntries = lang == "csharp"
                             && pattern.Kind == "property"
@@ -3856,8 +3856,9 @@ private sealed class RubyMaskState
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string line, int absoluteStartColumn)
+    private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string[] lines, int lineIndex, int absoluteStartColumn)
     {
+        var line = lines[lineIndex];
         if (absoluteStartColumn < 0 || absoluteStartColumn >= line.Length)
             return null;
 
@@ -3896,14 +3897,105 @@ private sealed class RubyMaskState
         var modulePart = fromImportMatch.Groups["module"].Value;
         var fromImportSpecs = fromImportMatch.Groups["imports"].Value;
         AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames);
+        if (TryExpandPythonMultilineParenthesizedImportBlock(
+                lines,
+                lineIndex,
+                absoluteStartColumn + fromImportMatch.Groups["imports"].Index,
+                fromImportSpecs,
+                entries,
+                seenNames))
+        {
+            return entries.Count > 0 ? entries : null;
+        }
+
         AddPythonImportSpecEntries(
             line,
-            absoluteStartColumn,
+            absoluteStartColumn + fromImportMatch.Groups["imports"].Index,
             fromImportSpecs,
             entries,
             seenNames,
             treatAsFromImport: true);
         return entries.Count > 0 ? entries : null;
+    }
+
+    private static bool TryExpandPythonMultilineParenthesizedImportBlock(
+        string[] lines,
+        int startLineIndex,
+        int importsStartColumn,
+        string importSpecs,
+        List<PythonImportSymbolEntry> entries,
+        HashSet<string> seenNames)
+    {
+        if (!importSpecs.StartsWith('(') || importSpecs.EndsWith(')'))
+            return false;
+
+        var currentLineIndex = startLineIndex;
+        var importLineIndent = FindFirstNonWhitespaceColumn(lines[startLineIndex]);
+        var fragment = importSpecs[1..];
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            var fragmentStartColumn = currentLineIndex == startLineIndex
+                ? Math.Min(importsStartColumn + 1, currentLine.Length)
+                : FindFirstNonWhitespaceColumn(currentLine);
+            if (fragmentStartColumn >= currentLine.Length)
+            {
+                currentLineIndex++;
+                fragment = string.Empty;
+                if (currentLineIndex >= lines.Length)
+                    return true;
+                continue;
+            }
+
+            if (currentLineIndex != startLineIndex && fragmentStartColumn <= importLineIndent)
+                return true;
+
+            fragment = currentLineIndex == startLineIndex
+                ? fragment
+                : currentLine[fragmentStartColumn..];
+
+            var commentIndex = fragment.IndexOf('#');
+            if (commentIndex >= 0)
+                fragment = fragment[..commentIndex];
+
+            fragment = fragment.TrimEnd();
+            if (fragment.Length > 0)
+            {
+                var closingParenIndex = fragment.IndexOf(')');
+                if (closingParenIndex >= 0)
+                {
+                    fragment = fragment[..closingParenIndex].TrimEnd();
+                    if (fragment.Length > 0)
+                    {
+                        AddPythonImportSpecEntries(
+                            currentLine,
+                            fragmentStartColumn,
+                            fragment,
+                            entries,
+                            seenNames,
+                            treatAsFromImport: true);
+                    }
+
+                    return true;
+                }
+
+                AddPythonImportSpecEntries(
+                    currentLine,
+                    fragmentStartColumn,
+                    fragment,
+                    entries,
+                    seenNames,
+                    treatAsFromImport: true);
+            }
+
+            if (currentLineIndex + 1 >= lines.Length)
+                return true;
+
+            currentLineIndex++;
+        }
+
+        return true;
     }
 
     private static void AddPythonImportSpecEntries(
@@ -3993,6 +4085,15 @@ private sealed class RubyMaskState
         }
 
         entries.Add(new PythonImportSymbolEntry(symbolName, startColumn));
+    }
+
+    private static int FindFirstNonWhitespaceColumn(string text)
+    {
+        var column = 0;
+        while (column < text.Length && char.IsWhiteSpace(text[column]))
+            column++;
+
+        return column;
     }
 
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)

@@ -87,6 +87,10 @@ public class SymbolExtractorTests
         var content = """
             import numpy as np
             from  collections   import  defaultdict, OrderedDict as OD
+            from itertools import (
+                chain,
+                zip_longest as zipl,
+            )
             from .helpers import build as build_helper
             """;
 
@@ -99,9 +103,53 @@ public class SymbolExtractorTests
         Assert.Contains(imports, symbol => symbol.Name == "defaultdict");
         Assert.Contains(imports, symbol => symbol.Name == "OrderedDict");
         Assert.Contains(imports, symbol => symbol.Name == "OD");
+        Assert.Contains(imports, symbol => symbol.Name == "itertools");
+        Assert.Contains(imports, symbol => symbol.Name == "chain");
+        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
+        Assert.Contains(imports, symbol => symbol.Name == "zipl");
         Assert.Contains(imports, symbol => symbol.Name == "helpers");
         Assert.Contains(imports, symbol => symbol.Name == "build");
         Assert.Contains(imports, symbol => symbol.Name == "build_helper");
+    }
+
+    [Fact]
+    public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
+    {
+        var content = """
+            from itertools import (
+                chain,
+                zip_longest as zipl,
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "itertools");
+        Assert.Contains(imports, symbol => symbol.Name == "chain");
+        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
+        Assert.Contains(imports, symbol => symbol.Name == "zipl");
+        Assert.DoesNotContain(imports, symbol => symbol.Name == "(");
+    }
+
+    [Fact]
+    public void Extract_Python_StopsAtUnclosedMultilineImportBlocksBeforeUnrelatedCode()
+    {
+        var content = """
+            from itertools import (
+                chain,
+                zip_longest as zipl,
+
+            value = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "itertools");
+        Assert.Contains(imports, symbol => symbol.Name == "chain");
+        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
+        Assert.Contains(imports, symbol => symbol.Name == "zipl");
+        Assert.DoesNotContain(imports, symbol => symbol.Name == "value = 1");
     }
 
     [Fact]
