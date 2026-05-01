@@ -652,7 +652,7 @@ The database reflects the working tree at the time of the last index. After swit
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | command-style function calls |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | function/filter (scope prefixes), configuration, workflow, class constructors/methods/properties, enum values, Import-Module, using module/namespace/assembly |
-| Batch | `.bat`, `.cmd` | labels + `goto`/`call` targets, including inline/chained control flow |
+  | Batch | `.bat`, `.cmd` | labels + `goto`/`call` targets, including inline/chained control flow and `if` comparison forms |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 Query-time `--lang tsql` is accepted as an alias for the SQL bucket.
@@ -1634,7 +1634,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | 関数のコマンド構文呼び出し |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | 関数/フィルタ（scope プレフィックス付き）、configuration、workflow、class、enum、Import-Module、using module/namespace/assembly |
-| Batch | `.bat`, `.cmd` | ラベル + `goto`/`call` ターゲット、inline / chained な制御フローも含む |
+  | Batch | `.bat`, `.cmd` | ラベル + `goto`/`call` ターゲット、inline / chained な制御フローに加えて `if` 比較式も含む |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 クエリ時の `--lang tsql` は SQL バケットの別名として受け付けられます。

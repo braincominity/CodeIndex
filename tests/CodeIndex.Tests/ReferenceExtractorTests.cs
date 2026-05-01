@@ -6764,11 +6764,15 @@ public class ReferenceExtractorTests
             goto :Next & call :Build
             call :Done && goto :Retry
             echo ^& goto :Quoted
+            if /i "%MODE%"=="release" goto :Release
+            if not "debug"=="release" call :Fallback
             rem goto :Ignored
             :Build
             :Retry
             :Next
             :Done
+            :Release
+            :Fallback
             call :Build
             :: call :Commented
             goto :EOF
@@ -6781,6 +6785,8 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "Retry" && r.ReferenceKind == "call"));
         Assert.Contains(references, r => r.SymbolName == "Next" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Done" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Release" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Fallback" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "EOF" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ignored" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Quoted" && r.ReferenceKind == "call");
