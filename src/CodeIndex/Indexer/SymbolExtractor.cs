@@ -2209,6 +2209,9 @@ private sealed class RubyMaskState
             if (fortranContinuationCandidate != null)
                 matchLine = fortranContinuationCandidate.Value.MatchLine;
 
+            if (lang == "fsharp" && TryAddFSharpActivePatternSymbols(symbols, fileId, line, i + 1))
+                continue;
+
             if (lang == "php")
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
@@ -23140,6 +23143,45 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             return name[2..^2];
 
         return name;
+    }
+
+    private static readonly Regex FSharpActivePatternDefinitionRegex = new(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\(\|(?<cases>.+?)\|\)", RegexOptions.Compiled);
+    private static readonly Regex FSharpActivePatternNameRegex = new(@"^(?:``[^`]+``|[_\p{L}][\w']*)$", RegexOptions.Compiled);
+
+    private static bool TryAddFSharpActivePatternSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
+    {
+        var match = FSharpActivePatternDefinitionRegex.Match(line);
+        if (!match.Success)
+            return false;
+
+        var activePatternNames = match.Groups["cases"].Value
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var emittedAny = false;
+        foreach (var rawName in activePatternNames)
+        {
+            if (rawName == "_" || !FSharpActivePatternNameRegex.IsMatch(rawName))
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = NormalizeFSharpSymbolName(rawName),
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                rawLine: line);
+            emittedAny = true;
+        }
+
+        return emittedAny;
     }
 
     private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
