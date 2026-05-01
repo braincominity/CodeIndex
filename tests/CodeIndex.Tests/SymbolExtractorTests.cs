@@ -15750,6 +15750,42 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
     }
 
+    [Fact]
+    public void Extract_CommonLisp_DetectsTopLevelDefinitions()
+    {
+        // Common Lisp: package, classes, structs, variables, functions / Common Lisp: パッケージ、クラス、構造体、変数、関数
+        var content = """
+            (defpackage :my-app
+              (:use :cl))
+
+            (in-package :my-app)
+
+            (defclass widget ()
+              ())
+
+            (defstruct point
+              x
+              y)
+
+            (defparameter *default-size* 42)
+
+            (defun render (widget)
+              widget)
+
+            (defmacro with-widget ((widget) &body body)
+              `(let ((,widget ,widget))
+                 ,@body))
+            """;
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":my-app");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "widget");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "*default-size*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "with-widget");
+    }
+
     [Theory]
     [InlineData("csharp", "public interface IFoo { }", "interface")]
     [InlineData("csharp", "public enum Color { }", "enum")]
