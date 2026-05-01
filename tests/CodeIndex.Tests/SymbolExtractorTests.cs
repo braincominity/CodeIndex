@@ -15536,22 +15536,28 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_R_DetectsS4AndReferenceClassDefinitions()
     {
-        // R: setClass, setRefClass, setGeneric, setMethod / R: setClass、setRefClass、setGeneric、setMethod
+        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
         var content = """
             setClass("Person", slots = c(name = "character"))
 
+            setClassUnion("Renderable", c("Person", "Widget"))
+
             setRefClass("Widget", fields = list(value = "numeric"))
+
+            R6Class("Thing", public = list(print = function() self))
 
             setGeneric("normalize", function(x) standardGeneric("normalize"))
 
-            setMethod("show", signature(object = "Person"), function(object) {
+            setMethod(show, signature(object = "Person"), function(object) {
               object
             })
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Renderable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }
