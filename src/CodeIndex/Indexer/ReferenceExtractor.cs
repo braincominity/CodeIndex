@@ -25,7 +25,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol",
+        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol", "batch",
         "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css"
@@ -52,6 +52,12 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolPerformRegex = new(
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Batch `goto :label` / `call :label` targets are line-oriented and do not use parentheses.
+    // batch の `goto :label` / `call :label` は行指向で、括弧を使わない。
+    private static readonly Regex BatchLabelTargetRegex = new(
+        @"^\s*@?\s*(?:goto|call)\s+:(?<name>[\w.\-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
@@ -2309,6 +2315,20 @@ public static class ReferenceExtractor
 
                     if (RubyCommandTargetSingleTokenNames.Contains(name))
                         break;
+                }
+            }
+
+            if (language is "batch" && !IsBatchCommentLine(originalLine))
+            {
+                foreach (Match match in BatchLabelTargetRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var callIndex = match.Groups["name"].Index;
+                    var callContainer = ResolveContainerForCall(callIndex);
+                    AddReference(references, seen, fileId, name, callIndex, "call", context, lineNumber, callContainer);
                 }
             }
 
@@ -14974,5 +14994,50 @@ public static class ReferenceExtractor
             backslashCount++;
 
         return (backslashCount & 1) == 1;
+    }
+
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`).
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 }
