@@ -1169,6 +1169,10 @@ public static class SymbolExtractor
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:[\w:<>~]+[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // Namespace aliases / 名前空間エイリアス
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"namespace\s+(?<name>\w+)\s*=\s*(?:::)?[\w:]+", RegexOptions.Compiled), BodyStyle.None),
+            // Namespace directives / 名前空間導入
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+namespace\s+(?<name>(?:::)?[\w:]+)", RegexOptions.Compiled), BodyStyle.None),
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
@@ -1182,7 +1186,7 @@ public static class SymbolExtractor
             new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^\s*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -11681,11 +11685,61 @@ private sealed class RubyMaskState
         if (string.IsNullOrWhiteSpace(line))
             return false;
 
-        if (line.Length == line.TrimStart().Length)
-            return false;
-
         var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("namespace ", StringComparison.Ordinal))
+        {
+            var equalsIndex = trimmed.IndexOf('=');
+            if (equalsIndex > 0)
+            {
+                var aliasName = ExtractTrailingCppIdentifier(trimmed.AsSpan(0, equalsIndex));
+                if (aliasName != null)
+                {
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "import",
+                            Name = aliasName,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            EndLine = lineNumber,
+                            Signature = trimmed
+                        });
+                    return true;
+                }
+            }
+        }
+
         if (trimmed.StartsWith("using namespace ", StringComparison.Ordinal))
+        {
+            var target = trimmed["using namespace ".Length..].Trim();
+            if (target.EndsWith(';'))
+                target = target[..^1].TrimEnd();
+
+            if (target.Length > 0)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = target,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = trimmed
+                    });
+                return true;
+            }
+        }
+
+        if (line.Length == line.TrimStart().Length)
             return false;
 
         if (trimmed.StartsWith("using ", StringComparison.Ordinal))

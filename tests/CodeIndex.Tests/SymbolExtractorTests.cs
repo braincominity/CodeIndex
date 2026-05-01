@@ -384,7 +384,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "StringList");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ptr");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
     }
 
     [Fact]
@@ -401,7 +401,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "DemoValue");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
     }
 
     [Fact]
@@ -12418,6 +12418,28 @@ public class SymbolExtractorTests
         var content = "namespace MyApp {\nclass Handler {\n    void process(int data) {\n    }\n};\n}";
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsNamespaceAliasesAndNamespaceDirectives()
+    {
+        // C++: namespace aliases and using namespace directives / C++: 名前空間エイリアスと using namespace
+        var content = """
+            namespace MyApp {
+                namespace fs = std::filesystem;
+                using namespace std::chrono_literals;
+
+                class Handler {
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "fs" && s.ContainerName == "MyApp");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::chrono_literals" && s.ContainerName == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
     }
