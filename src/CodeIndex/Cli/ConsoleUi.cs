@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Text;
 
 namespace CodeIndex.Cli;
 
@@ -60,7 +61,7 @@ public static class ConsoleUi
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
         bool isThemed = frames.Length > 0 && frames[0].Length > 2;
 
-        if (Console.IsOutputRedirected)
+        if (!ShouldUseInteractiveConsole())
         {
             Console.WriteLine(message);
             return null;
@@ -94,7 +95,7 @@ public static class ConsoleUi
         cts.Cancel();
         // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
         Thread.Sleep(SpinnerStopDelayMs);
-        if (!Console.IsOutputRedirected)
+        if (ShouldUseInteractiveConsole())
         {
             Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
             Console.Out.Flush();
@@ -187,7 +188,7 @@ public static class ConsoleUi
             return;
 
         var output = Console.Out;
-        var redirected = Console.IsOutputRedirected;
+        var redirected = !ShouldUseInteractiveConsole();
 
         // Update every 50 files or at completion / 50ファイルごと、または完了時に更新
         if (current % 50 != 0 && current != total)
@@ -227,7 +228,7 @@ public static class ConsoleUi
     /// </summary>
     public static void ClearProgressLine()
     {
-        if (!Console.IsOutputRedirected && _lastProgressLineLength > 0)
+        if (ShouldUseInteractiveConsole() && _lastProgressLineLength > 0)
         {
             Console.Write($"\r{new string(' ', _lastProgressLineLength)}\r");
             Console.Out.Flush();
@@ -552,22 +553,26 @@ public static class ConsoleUi
     /// </summary>
     public static bool PrintCompletions(string shell)
     {
-        switch (shell.ToLowerInvariant())
+        try
         {
-            case "bash":
-                PrintBashCompletions();
-                return true;
-            case "zsh":
-                PrintZshCompletions();
-                return true;
-            case "fish":
-                PrintFishCompletions();
-                return true;
-            default:
-                Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
-                return false;
+            Console.WriteLine(GetCompletionScript(shell));
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
+            return false;
         }
     }
+
+    internal static string GetCompletionScript(string shell) =>
+        shell.ToLowerInvariant() switch
+        {
+            "bash" => GetBashCompletions(),
+            "zsh" => GetZshCompletions(),
+            "fish" => GetFishCompletions(),
+            _ => throw new ArgumentOutOfRangeException(nameof(shell), shell, "Unknown shell"),
+        };
 
     /// <summary>
     /// Get sorted unique language names from FileIndexer for completion values.
@@ -580,11 +585,11 @@ public static class ConsoleUi
             .Distinct()
             .OrderBy(l => l));
 
-    private static void PrintBashCompletions()
+    private static string GetBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
-        Console.WriteLine($@"_cdidx() {{
+        return $@"_cdidx() {{
     local cur prev commands
     local cmd
     cur=""${{COMP_WORDS[COMP_CWORD]}}""
@@ -620,13 +625,13 @@ public static class ConsoleUi
             ;;
     esac
 }}
-complete -F _cdidx cdidx");
+complete -F _cdidx cdidx";
     }
 
-    private static void PrintZshCompletions()
+    private static string GetZshCompletions()
     {
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
-        Console.WriteLine($@"#compdef cdidx
+        return $@"#compdef cdidx
 _cdidx() {{
     local -a commands
     commands=(
@@ -753,41 +758,45 @@ _cdidx() {{
             ;;
     esac
 }}
-_cdidx");
+_cdidx";
     }
 
-    private static void PrintFishCompletions()
+    private static string GetFishCompletions()
     {
-        Console.WriteLine("# cdidx fish completions");
+        var lines = new List<string>
+        {
+            "# cdidx fish completions",
+        };
         foreach (var cmd in Commands)
-            Console.WriteLine($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
-        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
-        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
-        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
+            lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
+        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
+        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
+        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
 
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l limit -r -d 'Max results'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l lang -r -d 'Filter by language'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l count -d 'Count only'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from hotspots' -l group-by-name -d 'Collapse same-name rows across files'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l limit -r -d 'Max results'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l lang -r -d 'Filter by language'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l count -d 'Count only'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from hotspots' -l group-by-name -d 'Collapse same-name rows across files'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
+        return string.Join(Environment.NewLine, lines);
     }
 
     // --- Helpers / ヘルパー ---
@@ -800,7 +809,7 @@ _cdidx");
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
-        if (!Console.IsOutputRedirected)
+        if (ShouldUseInteractiveConsole())
         {
             var color = kind switch
             {
@@ -820,6 +829,17 @@ _cdidx");
                 return $"{color}{padded}\x1b[0m";
         }
         return padded;
+    }
+
+    internal static bool ShouldUseInteractiveConsole()
+    {
+        if (Console.IsOutputRedirected)
+            return false;
+
+        // StringWriter-based test capture leaves the process console attached, so
+        // Console.IsOutputRedirected stays false even though interactive terminal
+        // behavior would be unsafe. Treat UTF-16 Console.Out as redirected capture.
+        return !Console.Out.Encoding.Equals(Encoding.Unicode);
     }
 
     /// <summary>

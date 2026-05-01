@@ -609,7 +609,7 @@ public static class IndexCommandRunner
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         CancellationTokenSource? updateCts = null;
-        var interactiveUpdateSpinner = !options.Json && !Console.IsOutputRedirected;
+          var interactiveUpdateSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<object>();
         var warningList = new List<object>();
@@ -1528,7 +1528,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
 
-        var interactiveIndexSpinner = !options.Json && !Console.IsOutputRedirected;
+          var interactiveIndexSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
