@@ -9684,11 +9684,11 @@ public class SymbolExtractorTests
     {
         var content = """
             module math_utils
-              interface
+              interface math_iface
                 module procedure normalize_iface, normalize_alt
                 procedure(normalize_iface) :: normalize_forward
                 procedure, pointer :: normalize_pointer
-              end interface
+              end interface math_iface
               implicit none
             contains
               recursive subroutine normalize(v)
@@ -9720,10 +9720,16 @@ public class SymbolExtractorTests
         Assert.NotNull(mathUtils.BodyStartLine);
         Assert.NotNull(mathUtils.BodyEndLine);
 
+        var mathIface = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_iface");
+        Assert.NotNull(mathIface.BodyStartLine);
+        Assert.NotNull(mathIface.BodyEndLine);
+
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_iface");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_alt");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_forward");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_pointer");
+        Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
+        Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
 
         var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
         Assert.NotNull(mathUtilsImpl.BodyStartLine);
