@@ -26013,6 +26013,29 @@ public class QueryCommandRunnerTests
 
             Assert.Single(referencesTsqlRows);
             Assert.Equal("sales.usp_Caller", referencesTsqlRows[0].GetProperty("container_name").GetString());
+
+            var (callersTsqlExitCode, callersTsqlStdout, callersTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["dbo.usp_Target", "--db", dbPath, "--json", "--lang", "tsql", "--exact-name"],
+                _jsonOptions));
+            var (calleesTsqlExitCode, calleesTsqlStdout, calleesTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["sales.usp_Caller", "--db", dbPath, "--json", "--lang", "tsql", "--exact-name"],
+                _jsonOptions));
+
+            var callersTsqlRows = ParseJsonLines(callersTsqlStdout).Select(document => document.RootElement).ToList();
+            var calleesTsqlRows = ParseJsonLines(calleesTsqlStdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, callersTsqlExitCode);
+            Assert.Equal(CommandExitCodes.Success, calleesTsqlExitCode);
+            Assert.Equal(string.Empty, callersTsqlStderr);
+            Assert.Equal(string.Empty, calleesTsqlStderr);
+
+            Assert.Single(callersTsqlRows);
+            Assert.Equal("sales.usp_Caller", callersTsqlRows[0].GetProperty("caller_name").GetString());
+            Assert.Equal("usp_Target", callersTsqlRows[0].GetProperty("callee_name").GetString());
+
+            Assert.Single(calleesTsqlRows);
+            Assert.Equal("sales.usp_Caller", calleesTsqlRows[0].GetProperty("caller_name").GetString());
+            Assert.Equal("usp_Target", calleesTsqlRows[0].GetProperty("callee_name").GetString());
         }
         finally
         {
