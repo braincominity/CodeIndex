@@ -17311,6 +17311,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
+    {
+        var content = """
+            FROM --platform=$BUILDPLATFORM golang:1.22 AS builder
+            FROM --platform=linux/amd64 alpine:3.20
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "--platform=$BUILDPLATFORM");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsBuildArgs()
     {
         var content = """
