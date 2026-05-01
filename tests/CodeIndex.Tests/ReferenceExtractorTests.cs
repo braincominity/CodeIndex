@@ -7614,6 +7614,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsSpaceSeparatedApplicationCalls()
+    {
+        const string content = """
+            let increment value = value + 1
+
+            let results =
+                List.map increment numbers
+
+            let audit =
+                printfn "Processing %A" results
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "map" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "let");
+    }
+
+    [Fact]
     public void Extract_R_DetectsCallSites()
     {
         const string content = """
