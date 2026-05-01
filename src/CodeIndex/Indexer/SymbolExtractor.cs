@@ -1211,7 +1211,7 @@ public static class SymbolExtractor
             new("property", new Regex(@$"^\s*(?:(?:{VbPropertyModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbPropertyModifierPattern})\s+)*Property\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
             new("event",    new Regex(@$"^\s*(?:(?:{VbEventModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbEventModifierPattern})\s+)*Event\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
             new("interface", new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
-            new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("struct",   new Regex(@$"^\s*(?:(?:Partial)\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("class",    new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("import",   new Regex(@"^\s*Imports\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
@@ -1677,8 +1677,9 @@ public static class SymbolExtractor
     private static readonly Regex ElixirBlockStartRegex = new(@"^\s*(?:defmodule|defprotocol|defimpl|defmacro|defguardp?|defp?)\b", RegexOptions.Compiled);
     private static readonly Regex ElixirBlockTokenRegex = new(@"\b(?:do|fn|end)\b(?!:)", RegexOptions.Compiled);
     private static readonly Regex ElixirDoShorthandRegex = new(@",\s*do:\s*", RegexOptions.Compiled);
-    private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b|(?:(?:{VbOperatorModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbOperatorModifierPattern})\s+)*Operator\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface|Operator)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface|Enum)\b|(?:(?:{VbOperatorModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbOperatorModifierPattern})\s+)*Operator\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface|Enum|Operator)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicEnumMemberRegex = new(@"^\s*(?<name>(?:\[[^\]\r\n]+\]|\w+))\s*(?:=\s*[^'\r\n]+)?\s*(?:'|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Explicit-interface implementations reuse CSharpTypePattern for the return type so nested
     // generics and function pointers (`delegate*<List<int>, int>`, `delegate*<delegate*<int, void>, int>`)
     // are handled uniformly with the regular method / property / indexer / delegate paths. The
@@ -3174,6 +3175,8 @@ public static class SymbolExtractor
             ExtractJavaCompactConstructors(fileId, lines, symbols);
             ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols);
         }
+        else if (lang == "vb")
+            ExtractVisualBasicEnumMembers(fileId, lines, symbols);
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
@@ -5026,6 +5029,60 @@ public static class SymbolExtractor
                 bodyEndLineIndex,
                 bodyEndColumnExclusive,
                 symbols);
+        }
+    }
+
+    private static void ExtractVisualBasicEnumMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var enumDeclarations = symbols
+            .Where(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "enum"
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null)
+            .OrderBy(symbol => symbol.StartLine)
+            .ThenByDescending(symbol => symbol.EndLine)
+            .ToList();
+
+        foreach (var enumSymbol in enumDeclarations)
+        {
+            var bodyStartLineIndex = enumSymbol.BodyStartLine!.Value - 1;
+            var bodyEndLineIndex = enumSymbol.BodyEndLine!.Value - 1;
+            for (var lineIndex = bodyStartLineIndex; lineIndex <= bodyEndLineIndex && lineIndex < lines.Length; lineIndex++)
+            {
+                var trimmed = lines[lineIndex].Trim();
+                if (trimmed.Length == 0
+                    || trimmed.StartsWith("'", StringComparison.Ordinal)
+                    || trimmed.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (trimmed.StartsWith("End Enum", StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                var match = VisualBasicEnumMemberRegex.Match(trimmed);
+                if (!match.Success)
+                    continue;
+
+                var name = match.Groups["name"].Value;
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                if (name.Length >= 2 && name[0] == '[' && name[^1] == ']')
+                    name = name[1..^1];
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "enum",
+                    Name = name,
+                    Line = lineIndex + 1,
+                    StartLine = lineIndex + 1,
+                    EndLine = lineIndex + 1,
+                    Signature = trimmed,
+                });
+            }
         }
     }
 
