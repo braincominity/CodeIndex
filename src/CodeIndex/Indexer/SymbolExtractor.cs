@@ -488,12 +488,12 @@ public static class SymbolExtractor
         @"^\s*\$:\s*(?<name>\w+)\s*=",
         RegexOptions.Compiled);
 
-      private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
-      private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
-      private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
-      private const string VbOperatorModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Async|Partial|Widening|Narrowing)";
-      private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Default|ReadOnly|WriteOnly)";
-      private const string VbEventModifierPattern = @"(?:Shared|Custom)";
+    private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
+    private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
+    private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
+    private const string VbOperatorModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Async|Partial|Widening|Narrowing)";
+    private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Default|ReadOnly|WriteOnly)";
+    private const string VbEventModifierPattern = @"(?:Shared|Custom)";
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
@@ -1665,8 +1665,8 @@ public static class SymbolExtractor
     private static readonly Regex ElixirBlockStartRegex = new(@"^\s*(?:defmodule|defprotocol|defimpl|defmacro|defguardp?|defp?)\b", RegexOptions.Compiled);
     private static readonly Regex ElixirBlockTokenRegex = new(@"\b(?:do|fn|end)\b(?!:)", RegexOptions.Compiled);
     private static readonly Regex ElixirDoShorthandRegex = new(@",\s*do:\s*", RegexOptions.Compiled);
-      private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b|(?:(?:{VbOperatorModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbOperatorModifierPattern})\s+)*Operator\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-      private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface|Operator)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b|(?:(?:{VbOperatorModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbOperatorModifierPattern})\s+)*Operator\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface|Operator)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Explicit-interface implementations reuse CSharpTypePattern for the return type so nested
     // generics and function pointers (`delegate*<List<int>, int>`, `delegate*<delegate*<int, void>, int>`)
     // are handled uniformly with the regular method / property / indexer / delegate paths. The
