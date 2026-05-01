@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Text;
 
 namespace CodeIndex.Cli;
 
@@ -60,7 +61,7 @@ public static class ConsoleUi
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
         bool isThemed = frames.Length > 0 && frames[0].Length > 2;
 
-        if (Console.IsOutputRedirected)
+        if (!ShouldUseInteractiveConsole())
         {
             Console.WriteLine(message);
             return null;
@@ -94,7 +95,7 @@ public static class ConsoleUi
         cts.Cancel();
         // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
         Thread.Sleep(SpinnerStopDelayMs);
-        if (!Console.IsOutputRedirected)
+        if (ShouldUseInteractiveConsole())
         {
             Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
             Console.Out.Flush();
@@ -187,7 +188,7 @@ public static class ConsoleUi
             return;
 
         var output = Console.Out;
-        var redirected = Console.IsOutputRedirected;
+        var redirected = !ShouldUseInteractiveConsole();
 
         // Update every 50 files or at completion / 50ファイルごと、または完了時に更新
         if (current % 50 != 0 && current != total)
@@ -227,7 +228,7 @@ public static class ConsoleUi
     /// </summary>
     public static void ClearProgressLine()
     {
-        if (!Console.IsOutputRedirected && _lastProgressLineLength > 0)
+        if (ShouldUseInteractiveConsole() && _lastProgressLineLength > 0)
         {
             Console.Write($"\r{new string(' ', _lastProgressLineLength)}\r");
             Console.Out.Flush();
@@ -808,7 +809,7 @@ _cdidx";
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
-        if (!Console.IsOutputRedirected)
+        if (ShouldUseInteractiveConsole())
         {
             var color = kind switch
             {
@@ -828,6 +829,17 @@ _cdidx";
                 return $"{color}{padded}\x1b[0m";
         }
         return padded;
+    }
+
+    internal static bool ShouldUseInteractiveConsole()
+    {
+        if (Console.IsOutputRedirected)
+            return false;
+
+        // StringWriter-based test capture leaves the process console attached, so
+        // Console.IsOutputRedirected stays false even though interactive terminal
+        // behavior would be unsafe. Treat UTF-16 Console.Out as redirected capture.
+        return !Console.Out.Encoding.Equals(Encoding.Unicode);
     }
 
     /// <summary>
