@@ -159,12 +159,19 @@ public class SymbolExtractorTests
             IDENTIFICATION DIVISION.
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
+            MAIN-PARA.
+                PERFORM HELPER-PARA
                 STOP RUN.
+            HELPER-PARA.
+                DISPLAY "DONE".
+            END PROGRAM hello-world.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "HELLO-WORLD");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
         Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cobol");
     }
 

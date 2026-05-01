@@ -162,19 +162,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CobolProgramCall_CapturesProgramLevelCallReference()
+    public void Extract_CobolPerform_CapturesParagraphLevelCallReference()
     {
         const string content = """
             IDENTIFICATION DIVISION.
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
+            MAIN-PARA.
+                PERFORM HELPER-PARA
+                STOP RUN.
+            HELPER-PARA.
                 CALL "other-program"
                 STOP RUN.
+            END PROGRAM hello-world.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
         var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
 
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "HELPER-PARA"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "MAIN-PARA");
         Assert.Contains(references, reference =>
             reference.SymbolName == "OTHER-PROGRAM"
             && reference.ReferenceKind == "call");
