@@ -9913,7 +9913,7 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Shell_DetectsFunctions()
+    public void Extract_Shell_DetectsFunctionsAndAliases()
     {
         var content = """
             function setup() {
@@ -9925,6 +9925,7 @@ public class SymbolExtractorTests
             }
 
             alias ll='ls -la'
+            alias my-grep='grep -n'
             alias -g G='| grep'
             """;
         var symbols = SymbolExtractor.Extract(1, "shell", content);
@@ -9932,6 +9933,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cleanup");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ll");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "my-grep");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
     }
 

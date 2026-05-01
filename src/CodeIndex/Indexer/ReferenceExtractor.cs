@@ -486,7 +486,7 @@ public static class ReferenceExtractor
     // は末尾 `(` を持たないため、共通 CallRegex では拾えない。bare command head に限定し、
     // さらに現在ファイルで定義された function 名だけを参照として出す。
     private static readonly Regex ShellCommandCallRegex = new(
-        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_]\w*)(?=\s|$|[;|&}])",
+        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
         RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
@@ -1185,6 +1185,7 @@ public static class ReferenceExtractor
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = BuildDockerfileStageNames(language, symbols);
         var shellCallableNames = BuildShellCallableNames(language, symbols);
+        var shellGlobalAliasNames = BuildShellGlobalAliasNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -2332,6 +2333,33 @@ public static class ReferenceExtractor
 
                     var callIndex = match.Groups["name"].Index;
                     AddCallLikeReference(name, callIndex);
+                }
+
+                if (shellGlobalAliasNames != null && shellGlobalAliasNames.Count > 0)
+                {
+                    var trimmedPreparedLine = preparedLine.TrimStart();
+                    if (!trimmedPreparedLine.StartsWith("alias", StringComparison.Ordinal))
+                    {
+                        foreach (var aliasName in shellGlobalAliasNames)
+                        {
+                            var searchIndex = 0;
+                            while (searchIndex < preparedLine.Length)
+                            {
+                                var aliasIndex = preparedLine.IndexOf(aliasName, searchIndex, StringComparison.Ordinal);
+                                if (aliasIndex < 0)
+                                    break;
+
+                                if (!IsShellGlobalAliasReferenceBoundary(preparedLine, aliasIndex, aliasName.Length))
+                                {
+                                    searchIndex = aliasIndex + aliasName.Length;
+                                    continue;
+                                }
+
+                                AddCallLikeReference(aliasName, aliasIndex);
+                                searchIndex = aliasIndex + aliasName.Length;
+                            }
+                        }
+                    }
                 }
             }
             else
@@ -6416,6 +6444,30 @@ public static class ReferenceExtractor
         return names;
     }
 
+    private static HashSet<string>? BuildShellGlobalAliasNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language != "shell")
+            return null;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "alias" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var signature = symbol.Signature?.TrimStart();
+            if (string.IsNullOrWhiteSpace(signature))
+                continue;
+
+            if (!Regex.IsMatch(signature, @"^alias(?:\s+-[^\s=]+)*\s+-g\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                continue;
+
+            names.Add(symbol.Name);
+        }
+
+        return names;
+    }
+
     private static HashSet<string>? BuildDockerfileStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "dockerfile")
@@ -6432,6 +6484,21 @@ public static class ReferenceExtractor
 
         return names;
     }
+
+    private static bool IsShellGlobalAliasReferenceBoundary(string text, int startIndex, int length)
+    {
+        if (startIndex < 0 || length <= 0 || startIndex + length > text.Length)
+            return false;
+
+        if (startIndex > 0 && !IsShellGlobalAliasBoundarySeparator(text[startIndex - 1]))
+            return false;
+
+        var endIndex = startIndex + length;
+        return endIndex >= text.Length || IsShellGlobalAliasBoundarySeparator(text[endIndex]);
+    }
+
+    private static bool IsShellGlobalAliasBoundarySeparator(char ch) =>
+        char.IsWhiteSpace(ch) || ch is '|' or ';' or '&' or '{' or '}' or '(' or ')' or '!';
 
     private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
     {
