@@ -17330,6 +17330,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsLowercaseInstructionsAndEnvSymbols()
+    {
+        var content = """
+            from --platform=$BUILDPLATFORM golang:1.22 as builder
+            env APP_HOME=/app
+            env PATH=/usr/local/bin:$PATH
+            from --platform=linux/amd64 alpine:3.20
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
+        Assert.Equal(4, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
