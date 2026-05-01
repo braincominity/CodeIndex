@@ -1398,6 +1398,11 @@ public static class SymbolExtractor
             // BodyStyle.SqlProcBody により BEGIN...END / dollar-quoted の本体範囲を求め、ReferenceExtractor の
             // ResolveContainerForCall が本体内の呼び出しを外側のプロシージャに帰属させられるようにする（issue #429）。
             new("function", new Regex($@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            // SQL Server aggregate definitions are callable search anchors too, but they do not have
+            // a statement body to scan, so they stay on the BodyStyle.None path.
+            // SQL Server の aggregate 定義も検索アンカーとして有用だが、走査すべき statement body は
+            // 持たないため BodyStyle.None のまま扱う。
+            new("function", new Regex($@"^\s*CREATE\s+AGGREGATE\b\s+(?<name>{SqlQualifiedIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("enum",     new Regex($@"^\s*CREATE\s+TYPE\s+(?<name>{SqlQualifiedIdentifierPattern})\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Oracle: CREATE [OR REPLACE] TYPE BODY <name> and CREATE [OR REPLACE] PACKAGE [BODY] <name>.
             // These must precede the bare CREATE TYPE / CREATE PACKAGE rows so the `BODY` keyword is
@@ -1450,6 +1455,7 @@ public static class SymbolExtractor
             // BodyStyle.SqlProcBody を使う。ALTER PARTITION FUNCTION は本体を持たない
             // （パーティション境界の変更のみ）ため、下の別パターンで BodyStyle.None のままにする。
             new("function", new Regex($@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("function", new Regex($@"^\s*ALTER\s+AGGREGATE\b\s+(?<name>{SqlQualifiedIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("function", new Regex($@"^\s*ALTER\s+PARTITION\s+FUNCTION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("namespace", new Regex($@"^\s*ALTER\s+SCHEMA\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",   new Regex($@"^\s*ALTER\s+EXTENSION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
