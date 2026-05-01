@@ -2017,26 +2017,33 @@ public static class SymbolExtractor
         }
     }
 
-    private static void CollectRustUseSymbolNames(string body, ISet<string> names)
+    private static void CollectRustUseSymbolNames(string body, ISet<string> names, string? prefix = null)
     {
         var text = body.Trim();
         if (text.Length == 0)
             return;
 
-        var openBraceIndex = FindTopLevelChar(text, '{');
+        var openBraceIndex = text.IndexOf('{');
         if (openBraceIndex >= 0)
         {
-            var closeBraceIndex = FindMatchingRustBrace(text, openBraceIndex);
+            var closeBraceIndex = text.LastIndexOf('}');
             if (closeBraceIndex > openBraceIndex)
             {
+                var groupedPrefix = CombineRustUsePrefix(prefix, text[..openBraceIndex].Trim());
                 var inner = text[(openBraceIndex + 1)..closeBraceIndex];
                 foreach (var item in SplitRustUseItems(inner))
-                    CollectRustUseSymbolNames(item, names);
+                    CollectRustUseSymbolNames(item, names, groupedPrefix);
                 return;
             }
         }
 
         var aliasIndex = FindTopLevelKeyword(text, " as ");
+        var hasPathPrefix = !string.IsNullOrWhiteSpace(prefix);
+        var isQualifiedSymbol = text.Contains("::", StringComparison.Ordinal) || aliasIndex >= 0 || hasPathPrefix;
+
+        if (isQualifiedSymbol && text is not "self" and not "super" and not "crate" and not "*")
+            names.Add(CombineRustUsePrefix(prefix, text));
+
         if (aliasIndex >= 0)
         {
             var alias = text[(aliasIndex + 4)..].Trim();
@@ -2056,7 +2063,23 @@ public static class SymbolExtractor
             leaf = leaf[(leafIndex + 2)..].Trim();
 
         if (leaf.Length > 0 && leaf is not "self" and not "super" and not "crate" and not "*")
+        {
+            if (hasPathPrefix)
+                names.Add(CombineRustUsePrefix(prefix, leaf));
             names.Add(leaf);
+        }
+    }
+
+    private static string CombineRustUsePrefix(string? prefix, string name)
+    {
+        var cleanedPrefix = prefix?.Trim().TrimEnd(':');
+        var cleanedName = name.Trim();
+
+        if (string.IsNullOrWhiteSpace(cleanedPrefix))
+            return cleanedName;
+        if (string.IsNullOrWhiteSpace(cleanedName))
+            return cleanedPrefix;
+        return $"{cleanedPrefix}::{cleanedName}";
     }
 
     private static IEnumerable<string> SplitRustUseItems(string text)
