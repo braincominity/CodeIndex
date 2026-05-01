@@ -5846,6 +5846,8 @@ private sealed class RubyMaskState
                 var argumentName = argument[..argument.IndexOf('=')].Trim();
                 if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase))
                     return normalized;
+
+                continue;
             }
 
             fallback ??= normalized;

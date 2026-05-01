@@ -19402,6 +19402,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Root");
     }
 
     [Fact]
