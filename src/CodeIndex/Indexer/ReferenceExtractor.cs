@@ -57,11 +57,7 @@ public static class ReferenceExtractor
     // Batch jump targets can appear as direct commands, chained commands, or inline `if` forms.
     // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
     private static readonly Regex BatchJumpTargetRegex = new(
-        @"\b(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex BatchConditionalJumpPrefixRegex = new(
-        @"^\s*@?\s*if\s+(?:not\s+)?(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)\s*$",
+        @"^\s*@?\s*(?:(?:if\s+(?:not\s+)?(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
@@ -2324,18 +2320,34 @@ public static class ReferenceExtractor
 
             if (language is "batch" && !IsBatchCommentLine(originalLine))
             {
-                foreach (Match match in BatchJumpTargetRegex.Matches(preparedLine))
+                for (var segmentStart = 0; segmentStart < preparedLine.Length;)
                 {
-                    var name = match.Groups["name"].Value;
-                    if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    var segmentEnd = segmentStart;
+                    while (segmentEnd < preparedLine.Length && preparedLine[segmentEnd] is not '&' and not '|')
+                        segmentEnd++;
 
-                    var callIndex = match.Groups["command"].Index;
-                    if (!IsBatchJumpTargetContext(preparedLine, callIndex))
-                        continue;
+                    ProcessBatchJumpSegment(
+                        preparedLine[segmentStart..segmentEnd],
+                        segmentStart,
+                        references,
+                        seen,
+                        context,
+                        fileId,
+                        lineNumber,
+                        ResolveContainerForCall);
 
-                    var callContainer = ResolveContainerForCall(callIndex);
-                    AddReference(references, seen, fileId, name, callIndex, "call", context, lineNumber, callContainer);
+                    var segment = preparedLine[segmentStart..segmentEnd].TrimStart();
+                    if (segment.Length > 0)
+                    {
+                        if (segment[0] == '@')
+                            segment = segment[1..].TrimStart();
+                        if (segment.Length > 0 && (segment.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(segment, 0)))
+                            break;
+                    }
+
+                    segmentStart = segmentEnd;
+                    while (segmentStart < preparedLine.Length && (preparedLine[segmentStart] is '&' or '|' || char.IsWhiteSpace(preparedLine[segmentStart])))
+                        segmentStart++;
                 }
             }
 
@@ -15048,42 +15060,53 @@ public static class ReferenceExtractor
         return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 
-    private static bool IsBatchJumpTargetContext(string line, int commandIndex)
+    private static void ProcessBatchJumpSegment(
+        string segment,
+        int segmentOffset,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        string context,
+        long fileId,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        var segmentStart = commandIndex;
-        while (segmentStart > 0 && char.IsWhiteSpace(line[segmentStart - 1]))
-            segmentStart--;
+        var trimmed = segment.TrimStart();
+        if (trimmed.Length == 0)
+            return;
 
-        while (segmentStart > 0)
+        if (trimmed[0] == '@')
         {
-            var previous = line[segmentStart - 1];
-            if (previous is '&' or '|' or '(' or ')')
-                break;
-            segmentStart--;
+            trimmed = trimmed[1..].TrimStart();
+            if (trimmed.Length == 0)
+                return;
         }
 
-        var prefix = line[segmentStart..commandIndex].TrimStart();
-        if (prefix.Length == 0)
-            return true;
+        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(trimmed, 0))
+            return;
 
-        if (prefix[0] == '@')
+        if (trimmed.StartsWith("else ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("else", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("do ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("do", StringComparison.OrdinalIgnoreCase))
         {
-            prefix = prefix[1..].TrimStart();
-            if (prefix.Length == 0)
-                return true;
+            var spaceIndex = trimmed.IndexOf(' ');
+            if (spaceIndex < 0)
+                return;
+            trimmed = trimmed[(spaceIndex + 1)..].TrimStart();
+            if (trimmed.Length == 0)
+                return;
         }
 
-        if (prefix.StartsWith("if", StringComparison.OrdinalIgnoreCase))
-            return BatchConditionalJumpPrefixRegex.IsMatch(prefix);
+        var match = BatchJumpTargetRegex.Match(trimmed);
+        if (!match.Success)
+            return;
 
-        if (prefix.Equals("else", StringComparison.OrdinalIgnoreCase) ||
-            prefix.StartsWith("else ", StringComparison.OrdinalIgnoreCase) ||
-            prefix.Equals("do", StringComparison.OrdinalIgnoreCase) ||
-            prefix.StartsWith("do ", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
+        var name = match.Groups["name"].Value;
+        if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
+            return;
 
-        return false;
+        var commandIndex = segmentOffset + match.Groups["command"].Index;
+        var callContainer = resolveContainerForCall(commandIndex);
+        AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
     }
 }
