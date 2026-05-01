@@ -1081,6 +1081,14 @@ public static class ReferenceExtractor
         var sqlDefinitionLeafSpansByLine = language == "sql"
             ? BuildSqlDefinitionLeafSpansByLine(lines, symbols)
             : null;
+        var cobolCallableSymbols = language == "cobol"
+            ? symbols
+                .Where(symbol => symbol.Kind == "function")
+                .OrderBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.StartLine)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : null;
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
         // enclosing class (see issue #233).
@@ -1582,7 +1590,8 @@ public static class ReferenceExtractor
                     references,
                     seen,
                     fileId,
-                    container);
+                    container,
+                    cobolCallableSymbols);
             }
 
             var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
@@ -2686,7 +2695,8 @@ public static class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
     {
         foreach (Match match in CobolCallRegex.Matches(rawLine))
         {
@@ -2703,8 +2713,94 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
+            var endName = match.Groups["end"].Value;
+            if (!string.IsNullOrWhiteSpace(endName)
+                && TryAddCobolPerformRangeReferences(
+                    cobolCallableSymbols,
+                    name,
+                    endName,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    container))
+            {
+                continue;
+            }
+
             AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
         }
+    }
+
+    private static bool TryAddCobolPerformRangeReferences(
+        IReadOnlyList<SymbolRecord>? cobolCallableSymbols,
+        string startName,
+        string endName,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container)
+    {
+        if (cobolCallableSymbols == null || cobolCallableSymbols.Count == 0)
+            return false;
+
+        var normalizedStartName = startName.Trim();
+        var normalizedEndName = endName.Trim();
+        if (normalizedStartName.Length == 0 || normalizedEndName.Length == 0)
+            return false;
+
+        var startSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedStartName);
+        if (startSymbol == null)
+            return false;
+
+        var startLine = startSymbol.Line;
+        var endSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedEndName, startLine);
+        if (endSymbol == null)
+            return false;
+
+        var lowerLine = Math.Min(startSymbol.Line, endSymbol.Line);
+        var upperLine = Math.Max(startSymbol.Line, endSymbol.Line);
+        var emittedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var emittedAny = false;
+
+        foreach (var symbol in cobolCallableSymbols)
+        {
+            if (symbol.Line < lowerLine || symbol.Line > upperLine)
+                continue;
+
+            if (!emittedNames.Add(symbol.Name))
+                continue;
+
+            var nameIndex = Math.Max(0, symbol.StartColumn.GetValueOrDefault() - 1);
+            AddReference(references, seen, fileId, symbol.Name, nameIndex, "call", context, lineNumber, container);
+            emittedAny = true;
+        }
+
+        return emittedAny;
+    }
+
+    private static SymbolRecord? FindCobolCallableSymbol(
+        IReadOnlyList<SymbolRecord> cobolCallableSymbols,
+        string targetName,
+        int? minimumLine = null)
+    {
+        SymbolRecord? fallback = null;
+
+        foreach (var symbol in cobolCallableSymbols)
+        {
+            if (!string.Equals(symbol.Name, targetName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (minimumLine == null || symbol.Line >= minimumLine.Value)
+                return symbol;
+
+            fallback ??= symbol;
+        }
+
+        return fallback;
     }
 
     private static bool IsJsxFilePath(string? path)
