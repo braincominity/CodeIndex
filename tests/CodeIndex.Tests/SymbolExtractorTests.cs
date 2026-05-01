@@ -15899,7 +15899,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_R_DetectsS4AndReferenceClassDefinitions()
     {
-        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
+        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod, inherit metadata / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod、inherit メタデータ
         var content = """
             methods::setClass(Class = "Person", slots = c(name = "character"))
 
@@ -15912,6 +15912,7 @@ public class SymbolExtractorTests
             methods::setValidity(Class = "LegacyThing", function(object) TRUE)
 
             R6::R6Class(classname = Thing,
+              inherit = BaseThing,
               public = list(print = function() self),
               private = list(secret = function() self),
               active = list(state = function(value) self))
@@ -15929,6 +15930,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyThing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BaseThing");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LegacyThing");
         var print = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "print");
         Assert.Equal("public", print.Visibility);
