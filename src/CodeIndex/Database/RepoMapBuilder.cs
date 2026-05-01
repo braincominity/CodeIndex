@@ -53,7 +53,7 @@ internal sealed class RepoMapBuilder
         ["dart"] = ["main.dart", "app.dart"],
         ["scala"] = ["Main.scala", "App.scala", "Application.scala"],
         ["fsharp"] = ["Program.fs", "App.fs"],
-        ["vb"] = ["Program.vb", "Main.vb", "Module.vb", "Module1.vb", "App.vb"],
+        ["vb"] = ["Program.vb", "Main.vb", "Module.vb", "Module1.vb", "Form1.vb", "App.xaml.vb", "App.vb"],
         ["c"] = ["main.c"],
         ["cpp"] = ["main.cpp", "main.cc", "main.cxx"],
         ["haskell"] = ["Main.hs", "Main.lhs"],

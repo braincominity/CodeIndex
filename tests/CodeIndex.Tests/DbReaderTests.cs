@@ -8190,6 +8190,8 @@ public class DbReaderTests : IDisposable
     [Theory]
     [InlineData("src/Main.vb")]
     [InlineData("src/Module.vb")]
+    [InlineData("src/Form1.vb")]
+    [InlineData("src/App.xaml.vb")]
     public void GetRepoMap_AddsFileFallbackEntrypointForCommonVbStartupFiles(string path)
     {
         InsertIndexedFile(path, "vb",
