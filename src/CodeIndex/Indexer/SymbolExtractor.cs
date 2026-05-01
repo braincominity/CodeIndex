@@ -1137,18 +1137,26 @@ public static class SymbolExtractor
             // wrapped in backticks (e.g. `func `repeat`() {}`).
             // Swift の関数名は通常識別子に加えて、バッククォートでエスケープした識別子
             // （例: `func `repeat`() {}`）も取りうる。
-            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:static|class|nonisolated|mutating|nonmutating)\s+)*(?:override\s+)?func\s+(?<name>`[^`]+`|\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("struct",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",      new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("property",  new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:static|class|nonisolated|mutating|nonmutating)\s+)*(?:override\s+)?func\s+(?<name>`[^`]+`|\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:required|convenience|nonisolated|mutating|nonmutating|override)\s+)*(?<name>init)(?:\?)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:nonisolated)\s+)*(?<name>deinit)\s*(?:\{|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",      new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("property",  new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
+            new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("import",   new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Extension declarations are important search anchors in Swift-heavy codebases.
             // extension 宣言は Swift コード検索における重要なアンカー。
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final)\s+)?extension\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // actor (Swift 5.5+) / アクター
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*typealias\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*macro\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*precedencegroup\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:prefix|infix|postfix)\s+operator\s+(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["objc"] =
