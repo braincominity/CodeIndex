@@ -1039,6 +1039,8 @@ public static class SymbolExtractor
         ],
         ["fortran"] =
         [
+            // Named interfaces / 名前付き interface
+            new("namespace", new Regex(@"^\s*interface\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Fortran modules / モジュール
             new("namespace", new Regex(@"^\s*module\s+(?!(?:procedure|subroutine|function)\b)(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Fortran submodules / サブモジュール
@@ -15440,6 +15442,12 @@ private sealed class RubyMaskState
                 return false;
 
             kind = "module";
+            return true;
+        }
+
+        if (StartsWithFortranWord(trimmed, "interface"))
+        {
+            kind = "interface";
             return true;
         }
 
