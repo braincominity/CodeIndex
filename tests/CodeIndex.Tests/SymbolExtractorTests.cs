@@ -11771,6 +11771,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsInitDeinitSubscriptStoredPropertyAndAssociatedType()
+    {
+        var content = """
+            public extension Foundation.URLSession {
+                public convenience init?(configuration: URLSessionConfiguration) {
+                }
+
+                deinit {
+                }
+
+                subscript(index: Int) -> String {
+                    "value"
+                }
+            }
+
+            public protocol CacheStore {
+                associatedtype Key
+            }
+
+            public struct UserCache {
+                public let capacity: Int
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.URLSession");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Key");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
+    }
+
+    [Fact]
+    public void Extract_Swift_SupportsPackageVisibility()
+    {
+        var content = """
+            package struct SessionCache {
+                package func save() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "SessionCache");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsMacroDeclarations()
+    {
+        var content = """
+            public macro stringify<T>(_ value: T) = #externalMacro(module: "MyMacros", type: "StringifyMacro")
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringify");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsOperatorsAndPrecedenceGroup()
+    {
+        var content = """
+            public precedencegroup ForwardApplicationPrecedence {
+                associativity: left
+            }
+
+            infix operator |> : ForwardApplicationPrecedence
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ForwardApplicationPrecedence");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "|>");
+    }
+
+    [Fact]
     public void Extract_C_DetectsFunctionsAndStructs()
     {
         // C: functions, struct / C: 関数、構造体
