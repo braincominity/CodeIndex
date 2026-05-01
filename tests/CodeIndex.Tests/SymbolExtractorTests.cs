@@ -12279,6 +12279,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsEnumMembersWithAttributesAndMultilineInitializers()
+    {
+        // VB.NET enum members can carry attributes and split initializers across lines.
+        // The fallback needs to keep both shapes searchable / VB.NET の enum member は属性と
+        // 複数行 initializer を持てるため、fallback が両方を検索可能に保つこと。
+        var content = """
+            Public Enum Status
+                <Obsolete,
+                 System.ComponentModel.Description("legacy")>
+                Legacy
+
+                Complex = If(
+                    True,
+                    1,
+                    2)
+
+                Ready
+            End Enum
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Legacy");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Complex");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Ready");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPlainFieldDeclarations()
     {
         // Plain fields are now captured as kind `property` so definition/symbols/outline/

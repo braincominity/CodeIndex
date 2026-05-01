@@ -5055,6 +5055,10 @@ public static class SymbolExtractor
         {
             var bodyStartLineIndex = enumSymbol.BodyStartLine!.Value - 1;
             var bodyEndLineIndex = enumSymbol.BodyEndLine!.Value - 1;
+            var inAttributeBlock = false;
+            var inInitializer = false;
+            var initializerParenDepth = 0;
+
             for (var lineIndex = bodyStartLineIndex; lineIndex <= bodyEndLineIndex && lineIndex < lines.Length; lineIndex++)
             {
                 var trimmed = lines[lineIndex].Trim();
@@ -5068,16 +5072,44 @@ public static class SymbolExtractor
                 if (trimmed.StartsWith("End Enum", StringComparison.OrdinalIgnoreCase))
                     break;
 
-                var match = VisualBasicEnumMemberRegex.Match(trimmed);
-                if (!match.Success)
+                if (inAttributeBlock)
+                {
+                    var attributeCloseIndex = trimmed.IndexOf('>');
+                    if (attributeCloseIndex < 0)
+                        continue;
+
+                    trimmed = trimmed[(attributeCloseIndex + 1)..].TrimStart();
+                    inAttributeBlock = false;
+                    if (trimmed.Length == 0)
+                        continue;
+                }
+
+                while (trimmed.StartsWith("<", StringComparison.Ordinal))
+                {
+                    var attributeCloseIndex = trimmed.IndexOf('>');
+                    if (attributeCloseIndex < 0)
+                    {
+                        inAttributeBlock = true;
+                        trimmed = string.Empty;
+                        break;
+                    }
+
+                    trimmed = trimmed[(attributeCloseIndex + 1)..].TrimStart();
+                    if (trimmed.Length == 0)
+                        break;
+                }
+
+                if (trimmed.Length == 0)
                     continue;
 
-                var name = match.Groups["name"].Value;
-                if (string.IsNullOrWhiteSpace(name))
+                if (inInitializer)
+                {
+                    UpdateVisualBasicEnumInitializerState(trimmed, ref initializerParenDepth, ref inInitializer);
                     continue;
+                }
 
-                if (name.Length >= 2 && name[0] == '[' && name[^1] == ']')
-                    name = name[1..^1];
+                if (!TryExtractVisualBasicEnumMemberName(trimmed, out var name))
+                    continue;
 
                 symbols.Add(new SymbolRecord
                 {
@@ -5089,8 +5121,78 @@ public static class SymbolExtractor
                     EndLine = lineIndex + 1,
                     Signature = trimmed,
                 });
+
+                UpdateVisualBasicEnumInitializerState(trimmed, ref initializerParenDepth, ref inInitializer);
             }
         }
+    }
+
+    private static bool TryExtractVisualBasicEnumMemberName(string line, out string name)
+    {
+        var match = VisualBasicEnumMemberRegex.Match(line);
+        if (!match.Success)
+        {
+            name = string.Empty;
+            return false;
+        }
+
+        name = match.Groups["name"].Value;
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        if (name.Length >= 2 && name[0] == '[' && name[^1] == ']')
+            name = name[1..^1];
+
+        return true;
+    }
+
+    private static void UpdateVisualBasicEnumInitializerState(string line, ref int parenDepth, ref bool inInitializer)
+    {
+        var code = StripVisualBasicComment(line);
+        foreach (var ch in code)
+        {
+            if (ch == '(')
+                parenDepth++;
+            else if (ch == ')' && parenDepth > 0)
+                parenDepth--;
+        }
+
+        var trimmed = code.TrimEnd();
+        inInitializer = parenDepth > 0
+            || trimmed.EndsWith("_", StringComparison.Ordinal)
+            || trimmed.EndsWith("=", StringComparison.Ordinal)
+            || trimmed.EndsWith("+", StringComparison.Ordinal)
+            || trimmed.EndsWith("-", StringComparison.Ordinal)
+            || trimmed.EndsWith("*", StringComparison.Ordinal)
+            || trimmed.EndsWith("/", StringComparison.Ordinal)
+            || trimmed.EndsWith("&", StringComparison.Ordinal)
+            || trimmed.EndsWith(",", StringComparison.Ordinal)
+            || trimmed.EndsWith(".", StringComparison.Ordinal);
+    }
+
+    private static string StripVisualBasicComment(string line)
+    {
+        var inString = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '"')
+            {
+                if (inString && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                inString = !inString;
+                continue;
+            }
+
+            if (!inString && ch == '\'')
+                return line[..i];
+        }
+
+        return line;
     }
 
     private static void RecoverJavaEnumMembersByLine(
