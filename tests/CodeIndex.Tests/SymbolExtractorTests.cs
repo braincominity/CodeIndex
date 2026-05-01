@@ -17331,22 +17331,32 @@ public class SymbolExtractorTests
         // `definition` / `references` が raw text chunk ではなく参照先へ飛べるようにする。
         var content = """
             <img src="/images/logo.png" alt="logo">
+            <img srcset="/images/logo-1x.png 1x, /images/logo-2x.png 2x" src="/images/logo.png" alt="logo">
             <iframe src="/docs/frame.html"></iframe>
             <video poster="/media/thumb.jpg">
               <source src="/media/movie.mp4" type="video/mp4">
+              <source srcset="/media/movie-480.jpg 480w, /media/movie-960.jpg 960w">
             </video>
             <object data="/files/manual.pdf"></object>
             <svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="/icons.svg#check"></use></svg>
+            <a href="/docs/readme.html">Read more</a>
+            <area href="/docs/map.html">
             """;
 
         var symbols = SymbolExtractor.Extract(1, "html", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/images/logo.png");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/images/logo-1x.png");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/images/logo-2x.png");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/docs/frame.html");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/thumb.jpg");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/movie.mp4");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/movie-480.jpg");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/movie-960.jpg");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/files/manual.pdf");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/icons.svg#check");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/docs/readme.html");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/docs/map.html");
     }
 
     [Fact]
