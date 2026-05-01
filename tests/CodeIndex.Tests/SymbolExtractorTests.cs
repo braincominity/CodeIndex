@@ -12583,6 +12583,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsOverloadsMembers()
+    {
+        // VB.NET Overloads members should still be searchable / VB.NET の Overloads 付き member も
+        // 変わらず検索できること。
+        var content = """
+            Public Class DerivedWidget
+                Public Overloads Sub Render()
+                End Sub
+
+                Public Overloads Function Compute() As Integer
+                    Return 42
+                End Function
+
+                Public Overloads ReadOnly Property Count As Integer
+                    Get
+                        Return 1
+                    End Get
+                End Property
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compute");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNestedEnumMembersAndMembersAfterEnum()
     {
         // VB.NET enum bodies should stay searchable, and nested enums must not cut off later
