@@ -2756,17 +2756,18 @@ private sealed class RubyMaskState
                         signature = line[absoluteStartColumn..].Trim();
                     }
 
-                    List<string>? fortranModuleProcedureNames = null;
+                    List<string>? fortranProcedureNames = null;
                     if (lang == "fortran"
                         && pattern.Kind == "function"
-                        && signature.Contains("module procedure", StringComparison.OrdinalIgnoreCase))
+                        && name.Contains(',')
+                        && signature.Contains("procedure", StringComparison.OrdinalIgnoreCase))
                     {
                         var names = name.Split(',');
                         for (var index = 0; index < names.Length; index++)
                             names[index] = names[index].Trim();
 
                         if (names.Any(static candidate => candidate.Length > 0))
-                            fortranModuleProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
+                            fortranProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
                     }
 
                     var suppressJavaStatementSymbol = false;
@@ -2815,9 +2816,9 @@ private sealed class RubyMaskState
                                     line);
                             }
                         }
-                        else if (fortranModuleProcedureNames != null)
+                        else if (fortranProcedureNames != null)
                         {
-                            foreach (var procedureName in fortranModuleProcedureNames)
+                            foreach (var procedureName in fortranProcedureNames)
                             {
                                 AddSymbolRecord(
                                     symbols,
