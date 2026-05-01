@@ -270,6 +270,8 @@ public class FileIndexer
         ["BUILD.bazel"]   = "python",
         ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース
         ["WORKSPACE.bazel"]= "python",
+        ["pyproject.toml"] = "python",      // Python project manifest / Python プロジェクトマニフェスト
+        ["requirements.txt"] = "python",    // Python dependencies manifest / Python 依存関係マニフェスト
         ["go.mod"]        = "go",           // Go module manifest / Go モジュールマニフェスト
         ["go.work"]       = "go",           // Go workspace manifest / Go ワークスペースマニフェスト
         [".editorconfig"] = "editorconfig",
@@ -892,11 +894,10 @@ public class FileIndexer
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath)
     {
-        var ext = Path.GetExtension(filePath);
-        if (LangMap.TryGetValue(ext, out var lang))
-            return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
-
-        // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
+        // Exact filename matching beats extension lookup so manifest-style filenames like
+        // `pyproject.toml` can map to a project language instead of the generic file type.
+        // `pyproject.toml` のようなマニフェスト系ファイル名が、汎用拡張子ではなく
+        // プロジェクト言語に紐づくよう、完全一致ファイル名を拡張子より先に判定する。
         var fileName = Path.GetFileName(filePath);
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
@@ -913,6 +914,10 @@ public class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
             }
         }
+
+        var ext = Path.GetExtension(filePath);
+        if (LangMap.TryGetValue(ext, out var lang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
 
         if (!string.IsNullOrEmpty(ext))
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);

@@ -85,6 +85,8 @@ public class FileIndexerTests
     [InlineData("BUILD.bazel", "python")]
     [InlineData("WORKSPACE", "python")]
     [InlineData("WORKSPACE.bazel", "python")]
+    [InlineData("pyproject.toml", "python")]
+    [InlineData("requirements.txt", "python")]
     [InlineData("go.mod", "go")]
     [InlineData("go.work", "go")]
     // Issue #189: additional extensions / 追加拡張子
@@ -360,6 +362,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_IndexesPythonProjectManifests()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "pyproject.toml"), "[project]\nname = 'sample'\n");
+            File.WriteAllText(Path.Combine(tempDir, "requirements.txt"), "pytest\n");
+            File.WriteAllText(Path.Combine(tempDir, "unknown.txt"), "ignored\n");
+
+            var files = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["pyproject.toml", "requirements.txt"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GetLanguageExtensions_ExposesPrefixAndFileNameVariants()
     {
         // `cdidx languages` (and the MCP listing) should advertise everything TryDetectLanguage
@@ -379,6 +405,8 @@ public class FileIndexerTests
         Assert.Equal("ruby", map["Gemfile"]);
         Assert.Equal("ruby", map["Rakefile"]);
         Assert.Equal("python", map["BUILD.bazel"]);
+        Assert.Equal("python", map["pyproject.toml"]);
+        Assert.Equal("python", map["requirements.txt"]);
 
         // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
         // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。
