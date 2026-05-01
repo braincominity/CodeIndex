@@ -71,8 +71,10 @@ jobs:
       # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
       # source files) dominates the Windows lane of this workflow as well.
       # Excluding the workspace plus the effective temp roots before build/test
-      # prevents silent regression if the runner image or TMP/TEMP wiring
-      # changes again in the future.
+      # and the immutable NuGet global package cache keeps Defender from
+      # repeatedly scanning the restore/build inputs that dotnet touches on
+      # Windows. This also prevents silent regression if the runner image or
+      # TMP/TEMP wiring changes again in the future.
       # We rely on -ExclusionPath only: -ExclusionProcess expects full image
       # paths, so bare filenames like 'dotnet.exe' would silently fail to take
       # effect. We include $env:TMP and the live [IO.Path]::GetTempPath() value
@@ -88,8 +90,11 @@ jobs:
       # release workflow の Windows lane でも、テストスイートが大量に作る
       # 一時ファイル（temp project / SQLite DB / .cdidx / 合成ソース）を
       # Windows Defender が都度スキャンする影響は同じく支配的になる。
-      # build/test 前に workspace と実効 temp root 群を除外し、runner image
-      # や TMP/TEMP の配線が今後変わっても silent regression しないようにする。
+      # build/test 前に workspace と実効 temp root 群に加えて変更されない
+      # NuGet global package cache も除外し、Windows で dotnet が繰り返し触る
+      # restore / build 入力を Defender に再スキャンさせない。これで runner
+      # image や TMP/TEMP の配線が今後変わっても silent regression しない
+      # ようにする。
       # -ExclusionProcess はフルパスを要求する仕様のため、bare filename では
       # 黙って no-op になる。ここでは -ExclusionPath だけに寄せる。.NET の
       # Path.GetTempPath() は TMP → TEMP → USERPROFILE の順で参照し、pwsh の
@@ -109,7 +114,10 @@ jobs:
             $env:RUNNER_TEMP,
             $env:TEMP,
             $env:TMP,
-            [System.IO.Path]::GetTempPath()
+            [System.IO.Path]::GetTempPath(),
+            $env:NUGET_PACKAGES,
+            (Join-Path $env:USERPROFILE ".nuget\packages"),
+            (Join-Path $env:LOCALAPPDATA "NuGet\packages")
           )
 
           $paths = $candidates |
