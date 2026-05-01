@@ -6715,6 +6715,7 @@ public class ReferenceExtractorTests
             if errorlevel 1 goto :Retry
             goto :Next & call :Build
             call :Done && goto :Retry
+            echo ^& goto :Quoted
             rem goto :Ignored
             :Build
             :Retry
@@ -6734,6 +6735,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Done" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "EOF" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ignored" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Quoted" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Commented" && r.ReferenceKind == "call");
     }
 

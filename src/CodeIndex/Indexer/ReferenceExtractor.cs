@@ -2323,7 +2323,7 @@ public static class ReferenceExtractor
                 for (var segmentStart = 0; segmentStart < preparedLine.Length;)
                 {
                     var segmentEnd = segmentStart;
-                    while (segmentEnd < preparedLine.Length && preparedLine[segmentEnd] is not '&' and not '|')
+                    while (segmentEnd < preparedLine.Length && !IsBatchCommandSeparator(preparedLine, segmentEnd))
                         segmentEnd++;
 
                     ProcessBatchJumpSegment(
@@ -2346,7 +2346,7 @@ public static class ReferenceExtractor
                     }
 
                     segmentStart = segmentEnd;
-                    while (segmentStart < preparedLine.Length && (preparedLine[segmentStart] is '&' or '|' || char.IsWhiteSpace(preparedLine[segmentStart])))
+                    while (segmentStart < preparedLine.Length && (char.IsWhiteSpace(preparedLine[segmentStart]) || IsBatchCommandSeparator(preparedLine, segmentStart)))
                         segmentStart++;
                 }
             }
@@ -15058,6 +15058,19 @@ public static class ReferenceExtractor
             return true;
         var next = line[start + 3];
         return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
+    private static bool IsBatchCommandSeparator(string line, int index)
+    {
+        var c = line[index];
+        if (c is not '&' and not '|')
+            return false;
+
+        var caretCount = 0;
+        for (var i = index - 1; i >= 0 && line[i] == '^'; i--)
+            caretCount++;
+
+        return (caretCount & 1) == 0;
     }
 
     private static void ProcessBatchJumpSegment(
