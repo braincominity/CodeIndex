@@ -15734,26 +15734,20 @@ public class SymbolExtractorTests
     {
         // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
         var content = """
-            setClass(Person, slots = c(name = "character"))
+            methods::setClass(Person, slots = c(name = "character"))
 
-            setClassUnion(Renderable, c(Person, Widget))
+            methods::setClassUnion(Renderable, c(Person, Widget))
 
-            setRefClass(Widget, fields = list(value = "numeric"))
+            methods::setRefClass(Widget, fields = list(value = "numeric"))
 
-            R6Class(Thing,
-              public = list(
-                print = function() self
-              ),
-              private = list(
-                secret = function() self
-              ),
-              active = list(
-                state = function(value) self
-              ))
+            R6::R6Class(Thing,
+              public = list(print = function() self),
+              private = list(secret = function() self),
+              active = list(state = function(value) self))
 
-            setGeneric("normalize", function(x) standardGeneric("normalize"))
+            methods::setGeneric("normalize", function(x) standardGeneric("normalize"))
 
-            setMethod(show, signature(object = "Person"), function(object) {
+            methods::setMethod(show, signature(object = "Person"), function(object) {
               object
             })
             """;
@@ -15763,9 +15757,12 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Renderable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "print");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "secret");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "state");
+        var print = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "print");
+        Assert.Equal("public", print.Visibility);
+        var secret = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "secret");
+        Assert.Equal("private", secret.Visibility);
+        var state = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "state");
+        Assert.Equal("active", state.Visibility);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }
