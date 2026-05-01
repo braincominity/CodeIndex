@@ -11730,6 +11730,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsExtensionsAndEscapedFunctionNames()
+    {
+        var content = """
+            public extension URLSession {
+                func `repeat`() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "URLSession");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "`repeat`");
+    }
+
+    [Fact]
     public void Extract_C_DetectsFunctionsAndStructs()
     {
         // C: functions, struct / C: 関数、構造体

@@ -1124,11 +1124,18 @@ public static class SymbolExtractor
         ],
         ["swift"] =
         [
-            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:static|class|nonisolated|mutating|nonmutating)\s+)*(?:override\s+)?func\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Swift function names may be ordinary identifiers or escaped identifiers
+            // wrapped in backticks (e.g. `func `repeat`() {}`).
+            // Swift の関数名は通常識別子に加えて、バッククォートでエスケープした識別子
+            // （例: `func `repeat`() {}`）も取りうる。
+            new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:static|class|nonisolated|mutating|nonmutating)\s+)*(?:override\s+)?func\s+(?<name>`[^`]+`|\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("struct",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",      new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("property",  new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Extension declarations are important search anchors in Swift-heavy codebases.
+            // extension 宣言は Swift コード検索における重要なアンカー。
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final)\s+)?extension\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス
