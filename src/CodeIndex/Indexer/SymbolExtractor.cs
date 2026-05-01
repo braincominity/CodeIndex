@@ -2470,6 +2470,9 @@ private sealed class RubyMaskState
             if (lang == "php")
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
+            if (lang is "javascript" or "typescript")
+                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, line, structuralLine, i + 1, symbols);
+
             if (lang == "cpp" && TryAddCppIndentedAlias(fileId, line, i + 1, symbols))
                 continue;
 
@@ -7424,6 +7427,99 @@ private sealed class RubyMaskState
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(fileId, lines, sanitizedLines, symbols, objectLiteralTargets);
+    }
+
+    private static void ExtractJavaScriptTypeScriptDynamicImportSymbols(
+        long fileId,
+        string rawLine,
+        string structuralLine,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var searchStart = 0;
+        while (searchStart < rawLine.Length)
+        {
+            var importIndex = rawLine.IndexOf("import", searchStart, StringComparison.Ordinal);
+            if (importIndex < 0)
+                return;
+
+            searchStart = importIndex + "import".Length;
+
+            if (importIndex > 0 && (char.IsLetterOrDigit(rawLine[importIndex - 1]) || rawLine[importIndex - 1] is '_' or '$'))
+                continue;
+
+            var prefixEnd = importIndex;
+            while (prefixEnd > 0 && char.IsWhiteSpace(rawLine[prefixEnd - 1]))
+                prefixEnd--;
+
+            var tokenStart = prefixEnd;
+            while (tokenStart > 0 && (char.IsLetterOrDigit(rawLine[tokenStart - 1]) || rawLine[tokenStart - 1] is '_' or '$'))
+                tokenStart--;
+
+            // Skip type-query contexts like `typeof import("./mod")`; only real runtime
+            // dynamic imports should create the module-name symbol target.
+            if (tokenStart < prefixEnd)
+            {
+                var precedingToken = rawLine[tokenStart..prefixEnd];
+                if (precedingToken is "typeof" or "keyof")
+                    continue;
+            }
+
+            var cursor = SkipWhitespace(rawLine, importIndex + "import".Length);
+            if (cursor >= rawLine.Length || rawLine[cursor] != '(')
+                continue;
+
+            var moduleQuoteIndex = SkipWhitespace(rawLine, cursor + 1);
+            if (moduleQuoteIndex >= rawLine.Length || rawLine[moduleQuoteIndex] is not '\'' and not '"')
+                continue;
+
+            var moduleLiteralStart = moduleQuoteIndex + 1;
+            var moduleLiteralEnd = moduleLiteralStart;
+            while (moduleLiteralEnd < rawLine.Length)
+            {
+                if (rawLine[moduleLiteralEnd] == '\\' && moduleLiteralEnd + 1 < rawLine.Length)
+                {
+                    moduleLiteralEnd += 2;
+                    continue;
+                }
+
+                if (rawLine[moduleLiteralEnd] == rawLine[moduleQuoteIndex])
+                    break;
+
+                moduleLiteralEnd++;
+            }
+
+            if (moduleLiteralEnd < moduleLiteralStart)
+                continue;
+
+            if (moduleLiteralEnd >= rawLine.Length || rawLine[moduleLiteralEnd] != rawLine[moduleQuoteIndex])
+                continue;
+
+            var closeIndex = moduleLiteralEnd + 1;
+            while (closeIndex < rawLine.Length && char.IsWhiteSpace(rawLine[closeIndex]))
+                closeIndex++;
+
+            if (closeIndex >= rawLine.Length || rawLine[closeIndex] != ')')
+                continue;
+
+            var moduleName = rawLine.Substring(moduleLiteralStart, moduleLiteralEnd - moduleLiteralStart);
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = moduleName,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = moduleLiteralStart,
+                    EndLine = lineNumber,
+                    Signature = rawLine.Trim(),
+                },
+                rawLine);
+        }
     }
 
     private static void ExtractJavaScriptTypeScriptQualifiedAssignments(
