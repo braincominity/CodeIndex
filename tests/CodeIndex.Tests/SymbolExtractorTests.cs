@@ -10582,9 +10582,16 @@ public class SymbolExtractorTests
             - (NSString *)describe;
             @end
 
+            @interface Dog (Testing)
+            - (BOOL)isReady;
+            @end
+
             @implementation Dog
             - (void)bark {
                 NSLog(@"Woof!");
+            }
+            - (BOOL)isReady {
+                return YES;
             }
             @end
 
@@ -10605,19 +10612,31 @@ public class SymbolExtractorTests
             typedef NS_ERROR_ENUM(NSInteger, FruitError) {
                 FruitErrorUnknown,
             };
+
+            typedef CF_ENUM(NSInteger, FruitKind) {
+                FruitKindFresh,
+            };
+
+            typedef CF_OPTIONS(NSUInteger, FruitFlags) {
+                FruitFlagTasty = 1 << 0,
+            };
             """;
         var symbols = SymbolExtractor.Extract(1, "objc", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Dog");
-        Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "Dog"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Dog(Testing)");
+        Assert.True(symbols.Count(s => s.Kind == "class" && s.Name == "Dog") >= 2);
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Animal");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitType");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitMood");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitOptions");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitError");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitKind");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitFlags");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bark");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isReady");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dogWithName");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "move");

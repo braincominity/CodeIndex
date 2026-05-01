@@ -126,6 +126,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ObjCCategoryDeclarationRegex = new(
+        @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -1201,11 +1204,13 @@ public static class SymbolExtractor
         [
             new("class",    new Regex(@"^\s*@interface\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*@implementation\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*@(?:interface|implementation)\s+(?<name>\w+\s*\(\s*[^)]+?\s*\))\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^\s*@protocol\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
             // Apple enum macros / Apple の enum マクロ
             new("enum",     new Regex(@"^\s*typedef\s+(?:NS_(?:CLOSED_)?ENUM|NS_EXTENSIBLE_ENUM)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*typedef\s+NS_OPTIONS\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*typedef\s+NS_ERROR_ENUM\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*typedef\s+(?:CF_ENUM|CF_OPTIONS)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("property", new Regex(@"^\s*@property\b(?:\s*\([^)]*\))?.*?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*[+-]\s*\([^)]*\)\s*(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#(?:import|include)\s+[<""](?<name>[^"">]+)[>""]", RegexOptions.Compiled), BodyStyle.None),
@@ -2789,6 +2794,34 @@ public static class SymbolExtractor
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
                                 line);
+
+                            if (lang == "objc"
+                                && pattern.Kind == "class"
+                                && TryGetObjCCategoryDisplayName(patternMatchLine[absoluteStartColumn..], name, out var categoryDisplayName))
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = "class",
+                                        Name = categoryDisplayName,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = csharpSingleLineCollapsedMatch
+                                            ? csharpSignatureRawStartColumn
+                                            : absoluteStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
+                                    },
+                                    line);
+                            }
                         }
                     }
 
@@ -21369,6 +21402,26 @@ public static class SymbolExtractor
         symbol.Kind is "class" or "interface" or "struct"
         && !string.IsNullOrWhiteSpace(symbol.Signature)
         && PartialModifierRegex.IsMatch(symbol.Signature);
+
+    private static bool TryGetObjCCategoryDisplayName(string objcDeclaration, string baseName, out string displayName)
+    {
+        var match = ObjCCategoryDeclarationRegex.Match(objcDeclaration);
+        if (!match.Success || !string.Equals(match.Groups["class"].Value, baseName, StringComparison.Ordinal))
+        {
+            displayName = string.Empty;
+            return false;
+        }
+
+        var categoryName = match.Groups["category"].Value.Trim();
+        if (categoryName.Length == 0)
+        {
+            displayName = string.Empty;
+            return false;
+        }
+
+        displayName = $"{baseName}({categoryName})";
+        return true;
+    }
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
