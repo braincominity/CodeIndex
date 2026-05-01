@@ -1997,7 +1997,7 @@ public class McpServerTests : IDisposable
     {
         for (int i = 0; i < 60; i++)
         {
-            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "shell",
+            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "text",
                 """
                 Foo() {
                   :
