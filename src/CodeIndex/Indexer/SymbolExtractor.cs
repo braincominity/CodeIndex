@@ -4082,6 +4082,16 @@ private sealed class RubyMaskState
             if (importedName.Length > 0)
             {
                 AddPythonImportEntry(line, absoluteStartColumn, importedName, entries, seenNames, ref searchStartColumn);
+                if (importedName.Contains('.'))
+                {
+                    AddPythonImportDottedPrefixEntries(
+                        line,
+                        absoluteStartColumn,
+                        importedName,
+                        entries,
+                        seenNames,
+                        ref searchStartColumn);
+                }
             }
 
             if (localName.Length > 0
@@ -4109,6 +4119,16 @@ private sealed class RubyMaskState
 
         var searchStartColumn = absoluteStartColumn;
         AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
+        if (normalizedModule.Contains('.'))
+        {
+            AddPythonImportDottedPrefixEntries(
+                line,
+                absoluteStartColumn,
+                normalizedModule,
+                entries,
+                seenNames,
+                ref searchStartColumn);
+        }
     }
 
     private static void AddPythonImportEntry(
@@ -4136,6 +4156,31 @@ private sealed class RubyMaskState
         }
 
         entries.Add(new PythonImportSymbolEntry(symbolName, startColumn));
+    }
+
+    private static void AddPythonImportDottedPrefixEntries(
+        string line,
+        int absoluteStartColumn,
+        string dottedName,
+        List<PythonImportSymbolEntry> entries,
+        HashSet<string> seenNames,
+        ref int searchStartColumn)
+    {
+        var prefixStart = 0;
+        while (prefixStart >= 0 && prefixStart < dottedName.Length)
+        {
+            var dotIndex = dottedName.IndexOf('.', prefixStart);
+            if (dotIndex < 0)
+                break;
+
+            var prefix = dottedName[..dotIndex].Trim();
+            if (prefix.Length > 0)
+            {
+                AddPythonImportEntry(line, absoluteStartColumn, prefix, entries, seenNames, ref searchStartColumn);
+            }
+
+            prefixStart = dotIndex + 1;
+        }
     }
 
     private static int FindFirstNonWhitespaceColumn(string text)
