@@ -25,7 +25,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-63 languages supported. 24 MCP tools. Incremental updates. Zero config.
+78 languages supported. 24 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, AI response details, and release workflow
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -1041,7 +1041,7 @@ cdidx deps --path src/           # ファイル間依存グラフ
 cdidx mcp                        # AIツール向けMCPサーバー起動
 ```
 
-46言語対応。24 MCPツール。インクリメンタル更新。設定不要。
+78言語対応。24 MCPツール。インクリメンタル更新。設定不要。
 
 - **ドキュメント**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) アーキテクチャ、AI応答の詳細、リリース手順
 - **AI開発規約**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
