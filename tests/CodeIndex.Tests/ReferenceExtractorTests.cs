@@ -1673,6 +1673,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptRuntimeTypeofWrappedAssignment_DoesNotBecomeTypeReference()
+    {
+        const string content = """
+            function caller(value: unknown) {
+              const runtime =
+                typeof value === "string";
+              return runtime;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "value");
+    }
+
+    [Fact]
     public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
     {
         const string content = "function f() {\n" +

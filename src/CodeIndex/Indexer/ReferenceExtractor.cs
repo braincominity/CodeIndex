@@ -5925,12 +5925,28 @@ public static class ReferenceExtractor
             if (previousPreparedLine == null)
                 return false;
 
+            if (IsTypeScriptTypeQueryLineContext(previousPreparedLine))
+                return true;
+
             var previousTrimmed = previousPreparedLine.TrimEnd();
-            return previousTrimmed.EndsWith(':') || previousTrimmed.EndsWith('=');
+            return previousTrimmed.EndsWith(':');
         }
 
         var previousToken = line.Substring(tokens[keywordIndex - 1].Start, tokens[keywordIndex - 1].Length);
         return previousToken.EndsWith(':');
+    }
+
+    private static bool IsTypeScriptTypeQueryLineContext(string line)
+    {
+        var tokens = GetTopLevelTokenSpans(line);
+        foreach (var token in tokens)
+        {
+            var text = line.Substring(token.Start, token.Length);
+            if (TypeScriptTypeQueryContextTokens.Contains(text))
+                return true;
+        }
+
+        return false;
     }
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
