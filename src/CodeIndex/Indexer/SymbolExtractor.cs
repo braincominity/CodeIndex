@@ -109,6 +109,9 @@ public static class SymbolExtractor
     private static readonly Regex PhpRequireIncludeRegex = new(
         @"^\s*(?:require|include)(?:_once)?\s*\(?\s*(?:'(?<singleName>[^']+)'|""(?<doubleName>[^""]+)"")\s*\)?\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex PhpPrefixedRequireIncludeRegex = new(
+        @"^\s*(?:require|include)(?:_once)?\s*\(?\s*(?<prefix>(?:(?:__DIR__|__FILE__|dirname\s*\(\s*__FILE__\s*\))\s*\.\s*)+)\s*(?:'(?<singleName>[^']+)'|""(?<doubleName>[^""]+)"")\s*\)?\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -11152,6 +11155,8 @@ public static class SymbolExtractor
 
         var requireMatch = PhpRequireIncludeRegex.Match(line);
         if (!requireMatch.Success)
+            requireMatch = PhpPrefixedRequireIncludeRegex.Match(line);
+        if (!requireMatch.Success)
             return;
 
         var importedPath = requireMatch.Groups["singleName"].Success
@@ -11159,6 +11164,9 @@ public static class SymbolExtractor
             : requireMatch.Groups["doubleName"].Value.Trim();
         if (importedPath.Length == 0)
             return;
+
+        if (requireMatch.Groups["prefix"].Success)
+            importedPath = importedPath.TrimStart('/', '\\');
 
         AddSymbolRecord(
             symbols,
