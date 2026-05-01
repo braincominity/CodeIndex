@@ -232,58 +232,30 @@ public class ConsoleUiTests
     [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows across files]", "--exact-name[Exact symbol-name equality]")]
     public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions(shell));
-                var output = writer.ToString();
-                Assert.Contains(hotspotsBranchMarker, output);
-                Assert.Contains(groupedFlagToken, output);
+        var output = ConsoleUi.GetCompletionScript(shell);
+        Assert.Contains(hotspotsBranchMarker, output);
+        Assert.Contains(groupedFlagToken, output);
 
-                var hotspotsIndex = output.IndexOf(hotspotsBranchMarker, StringComparison.Ordinal);
-                var genericIndex = output.LastIndexOf(genericExactNameToken, StringComparison.Ordinal);
-                Assert.True(hotspotsIndex >= 0);
-                Assert.True(genericIndex > hotspotsIndex);
-                Assert.DoesNotContain("--group-by-name --exact-name", output, StringComparison.Ordinal);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        var hotspotsIndex = output.IndexOf(hotspotsBranchMarker, StringComparison.Ordinal);
+        var genericIndex = output.LastIndexOf(genericExactNameToken, StringComparison.Ordinal);
+        Assert.True(hotspotsIndex >= 0);
+        Assert.True(genericIndex > hotspotsIndex);
+        Assert.DoesNotContain("--group-by-name --exact-name", output, StringComparison.Ordinal);
     }
 
     [Fact]
     public void PrintCompletions_FishIncludesFindOptions()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions("fish"));
-                var output = writer.ToString();
-                Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
-                Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
-                Assert.Contains("__fish_seen_subcommand_from search find", output);
-                Assert.Contains("-l query -r -d 'Literal query'", output);
-                Assert.Contains("-l before -r -d 'Context lines before'", output);
-                Assert.Contains("-l after -r -d 'Context lines after'", output);
-                Assert.Contains("-l exact -d 'Exact match'", output);
-                Assert.Contains("__fish_seen_subcommand_from hotspots", output);
-                Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        var output = ConsoleUi.GetCompletionScript("fish");
+        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
+        Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
+        Assert.Contains("__fish_seen_subcommand_from search find", output);
+        Assert.Contains("-l query -r -d 'Literal query'", output);
+        Assert.Contains("-l before -r -d 'Context lines before'", output);
+        Assert.Contains("-l after -r -d 'Context lines after'", output);
+        Assert.Contains("-l exact -d 'Exact match'", output);
+        Assert.Contains("__fish_seen_subcommand_from hotspots", output);
+        Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }
 
     [Theory]
@@ -291,44 +263,30 @@ public class ConsoleUiTests
     [InlineData("zsh")]
     public void PrintCompletions_BashAndZshKeepFocusOptionsExcerptOnly(string shell)
     {
-        lock (TestConsoleLock.Gate)
+        var output = ConsoleUi.GetCompletionScript(shell);
+        Assert.Contains("find", output);
+        Assert.Contains("--before", output);
+        Assert.Contains("--after", output);
+        Assert.Contains("--max-line-width", output);
+        Assert.Contains("--exact", output);
+        Assert.Contains("--query", output);
+        if (shell == "bash")
         {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions(shell));
-                var output = writer.ToString();
-                Assert.Contains("find", output);
-                Assert.Contains("--before", output);
-                Assert.Contains("--after", output);
-                Assert.Contains("--max-line-width", output);
-                Assert.Contains("--exact", output);
-                Assert.Contains("--query", output);
-                if (shell == "bash")
-                {
-                    Assert.Contains("if [ \"$cmd\" = \"find\" ]", output);
-                    Assert.Contains("elif [ \"$cmd\" = \"excerpt\" ]; then", output);
-                    var findBranch = ExtractBetween(output, "if [ \"$cmd\" = \"find\" ]", "elif [ \"$cmd\" = \"excerpt\" ]; then");
-                    var excerptBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"excerpt\" ]; then", "elif [ \"$cmd\" = \"references\" ]; then");
-                    Assert.DoesNotContain("--focus-column", findBranch);
-                    Assert.Contains("--focus-column", excerptBranch);
-                }
-                else
-                {
-                    Assert.Contains("if [[ $subcmd == find ]]; then", output);
-                    Assert.Contains("elif [[ $subcmd == excerpt ]]; then", output);
-                    var findBranch = ExtractBetween(output, "if [[ $subcmd == find ]]; then", "elif [[ $subcmd == excerpt ]]; then");
-                    var excerptBranch = ExtractBetween(output, "elif [[ $subcmd == excerpt ]]; then", "elif [[ $subcmd == references ]]; then");
-                    Assert.DoesNotContain("focus-column", findBranch);
-                    Assert.Contains("focus-column", excerptBranch);
-                }
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            Assert.Contains("if [ \"$cmd\" = \"find\" ]", output);
+            Assert.Contains("elif [ \"$cmd\" = \"excerpt\" ]; then", output);
+            var findBranch = ExtractBetween(output, "if [ \"$cmd\" = \"find\" ]", "elif [ \"$cmd\" = \"excerpt\" ]; then");
+            var excerptBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"excerpt\" ]; then", "elif [ \"$cmd\" = \"references\" ]; then");
+            Assert.DoesNotContain("--focus-column", findBranch);
+            Assert.Contains("--focus-column", excerptBranch);
+        }
+        else
+        {
+            Assert.Contains("if [[ $subcmd == find ]]; then", output);
+            Assert.Contains("elif [[ $subcmd == excerpt ]]; then", output);
+            var findBranch = ExtractBetween(output, "if [[ $subcmd == find ]]; then", "elif [[ $subcmd == excerpt ]]; then");
+            var excerptBranch = ExtractBetween(output, "elif [[ $subcmd == excerpt ]]; then", "elif [[ $subcmd == references ]]; then");
+            Assert.DoesNotContain("focus-column", findBranch);
+            Assert.Contains("focus-column", excerptBranch);
         }
     }
 
@@ -352,43 +310,28 @@ public class ConsoleUiTests
     [InlineData("zsh")]
     public void PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch(string shell)
     {
-        lock (TestConsoleLock.Gate)
+        var output = ConsoleUi.GetCompletionScript(shell).Replace("\r\n", "\n");
+        if (shell == "bash")
         {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions(shell));
-                // Normalize line endings / 改行を正規化 — Windows Console.WriteLine emits \r\n
-                var output = writer.ToString().Replace("\r\n", "\n");
-                if (shell == "bash")
-                {
-                    Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);
-                    var searchBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"search\" ]; then", "else\n");
-                    var genericBranch = ExtractBetween(output, "else\n                COMPREPLY=($(compgen -W \"", "\" -- \"$cur\"))\n            fi");
-                    Assert.Contains("--max-line-width", searchBranch);
-                    Assert.Contains("--top", searchBranch);
-                    Assert.Contains("--no-dedup", searchBranch);
-                    Assert.DoesNotContain("--exact-name", searchBranch);
-                    Assert.DoesNotContain("--max-line-width", genericBranch);
-                }
-                else
-                {
-                    Assert.Contains("elif [[ $subcmd == search ]]; then", output);
-                    var searchBranch = ExtractBetween(output, "elif [[ $subcmd == search ]]; then", "else\n");
-                    var genericBranch = ExtractBetween(output, "else\n                _arguments", "fi\n            ;;");
-                    Assert.Contains("--max-line-width", searchBranch);
-                    Assert.Contains("'--top", searchBranch);
-                    Assert.Contains("'--no-dedup", searchBranch);
-                    Assert.DoesNotContain("--exact-name", searchBranch);
-                    Assert.DoesNotContain("--max-line-width", genericBranch);
-                }
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);
+            var searchBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"search\" ]; then", "else\n");
+            var genericBranch = ExtractBetween(output, "else\n                COMPREPLY=($(compgen -W \"", "\" -- \"$cur\"))\n            fi");
+            Assert.Contains("--max-line-width", searchBranch);
+            Assert.Contains("--top", searchBranch);
+            Assert.Contains("--no-dedup", searchBranch);
+            Assert.DoesNotContain("--exact-name", searchBranch);
+            Assert.DoesNotContain("--max-line-width", genericBranch);
+        }
+        else
+        {
+            Assert.Contains("elif [[ $subcmd == search ]]; then", output);
+            var searchBranch = ExtractBetween(output, "elif [[ $subcmd == search ]]; then", "else\n");
+            var genericBranch = ExtractBetween(output, "else\n                _arguments", "fi\n            ;;");
+            Assert.Contains("--max-line-width", searchBranch);
+            Assert.Contains("'--top", searchBranch);
+            Assert.Contains("'--no-dedup", searchBranch);
+            Assert.DoesNotContain("--exact-name", searchBranch);
+            Assert.DoesNotContain("--max-line-width", genericBranch);
         }
     }
 
