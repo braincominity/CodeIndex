@@ -12820,6 +12820,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsUnionCasesAndRecordFields()
+    {
+        var content = """
+            module MyApp.Domain
+
+            type Color =
+                | Red
+                | Green
+                | Blue
+
+            type Person =
+                { Name: string
+                  Age: int }
+        """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        Assert.Contains(symbols, s => s.Name == "Red");
+        Assert.Contains(symbols, s => s.Name == "Green");
+        Assert.Contains(symbols, s => s.Name == "Blue");
+        Assert.Contains(symbols, s => s.Name == "Name");
+        Assert.Contains(symbols, s => s.Name == "Age");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsValueBindings()
     {
         // F# value bindings should be indexed by their binding names / F# の値束縛は
