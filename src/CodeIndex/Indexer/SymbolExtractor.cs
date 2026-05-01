@@ -3533,7 +3533,6 @@ private sealed class RubyMaskState
             return false;
 
         var currentLineIndex = startLineIndex;
-        var sawContinuationLine = false;
         var fragment = importSpecs[1..];
 
         while (currentLineIndex < lines.Length)
@@ -3545,8 +3544,9 @@ private sealed class RubyMaskState
             if (fragmentStartColumn >= currentLine.Length)
             {
                 currentLineIndex++;
-                sawContinuationLine = true;
                 fragment = string.Empty;
+                if (currentLineIndex >= lines.Length)
+                    return true;
                 continue;
             }
 
@@ -3576,7 +3576,7 @@ private sealed class RubyMaskState
                             treatAsFromImport: true);
                     }
 
-                    return sawContinuationLine;
+                    return true;
                 }
 
                 AddPythonImportSpecEntries(
@@ -3589,13 +3589,12 @@ private sealed class RubyMaskState
             }
 
             if (currentLineIndex + 1 >= lines.Length)
-                return false;
+                return true;
 
             currentLineIndex++;
-            sawContinuationLine = true;
         }
 
-        return false;
+        return true;
     }
 
     private static void AddPythonImportSpecEntries(

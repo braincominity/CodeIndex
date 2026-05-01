@@ -113,6 +113,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
+    {
+        var content = """
+            from itertools import (
+                chain,
+                zip_longest as zipl,
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "itertools");
+        Assert.Contains(imports, symbol => symbol.Name == "chain");
+        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
+        Assert.Contains(imports, symbol => symbol.Name == "zipl");
+        Assert.DoesNotContain(imports, symbol => symbol.Name == "(");
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsEnumPackageOneofExtendAndService()
     {
         var content = """
