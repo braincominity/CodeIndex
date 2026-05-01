@@ -11756,10 +11756,13 @@ public class SymbolExtractorTests
     public void Extract_Kotlin_UseSiteTargetsAndAnnotatedSecondaryConstructors_AreIndexed()
     {
         var content = """
-            class Envelope(@field:Deprecated val id: String)
+            class Envelope(@field:Deprecated val id: String, @param:Deprecated val count: Int)
 
             @get:JvmName("displayName")
             val name: String = "x"
+
+            @receiver:JvmName("decorate")
+            fun String.marked(): String = this
 
             class Service {
                 @Inject
@@ -11771,7 +11774,9 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Envelope");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ContainerKind == "class" && s.ContainerName == "Envelope");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerKind == "class" && s.ContainerName == "Envelope");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "marked");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Service" && s.ContainerKind == "class" && s.ContainerName == "Service");
     }
