@@ -73,13 +73,15 @@ public static class SymbolExtractor
     private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[(?:[^\]\r\n]|\]\])+\]|""[^""]+""|[\w$#]+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:" + SqlQualifiedIdentifierSegmentPattern + @")(?:\s*\.\s*(?:" + SqlQualifiedIdentifierSegmentPattern + @"))*";
-    // C++ return-type atoms need to accept both ordinary word tokens and `decltype(auto)`.
-    // The latter is common in modern C++ APIs and previously fell through the generic
-    // function pattern, making those functions invisible to symbol-oriented search.
-    // C++ の戻り値型トークンは通常の単語トークンに加え `decltype(auto)` も受け入れる必要がある。
-    // 後者は現代的な C++ API でよく使われるが、従来は汎用 function パターンから漏れており、
-    // その関数が symbol ベースの検索から見えなくなっていた。
-    private const string CppFunctionReturnTypeAtomPattern = @"(?:decltype\s*\(\s*auto\s*\)|[\w:<>]+)";
+    // C++ return-type atoms need to accept both ordinary word tokens and `decltype(...)`.
+    // The decltype branch allows nested parentheses so modern forms such as
+    // `decltype(auto)`, `decltype((value))`, and `decltype(foo<T>(x))` stay searchable.
+    // C++ の戻り値型トークンは通常の単語トークンに加え `decltype(...)` も受け入れる必要がある。
+    // ここで括弧の入れ子を許容し、`decltype(auto)` / `decltype((value))` /
+    // `decltype(foo<T>(x))` のような現代的な形も検索可能なままにする。
+    private const string CppDecltypePattern =
+        @"decltype\s*\((?:(?>[^()]+)|\((?<CppDecltypeDepth>)|\)(?<-CppDecltypeDepth>))*(?(CppDecltypeDepth)(?!))\)";
+    private const string CppFunctionReturnTypeAtomPattern = @"(?:" + CppDecltypePattern + @"|[\w:<>~]+)";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
     private const string CSharpTypePattern =
@@ -1189,7 +1191,7 @@ public static class SymbolExtractor
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
@@ -3874,6 +3876,8 @@ private sealed class RubyMaskState
             ExtractRustUseSymbols(fileId, lines, symbols);
         if (lang == "go")
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
+        if (lang == "cpp")
+            ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
@@ -3904,6 +3908,111 @@ private sealed class RubyMaskState
                 Signature = lines[i].Trim(),
             });
         }
+    }
+
+    private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var classSymbols = symbols
+            .Where(symbol =>
+                symbol.Kind is "class" or "struct"
+                && symbol.BodyStartLine.HasValue
+                && symbol.BodyEndLine.HasValue
+                && symbol.StartLine == symbol.BodyStartLine.Value
+                && symbol.EndLine == symbol.BodyEndLine.Value)
+            .ToList();
+
+        foreach (var classSymbol in classSymbols)
+        {
+            var lineIndex = classSymbol.StartLine - 1;
+            if (lineIndex < 0 || lineIndex >= lines.Length)
+                continue;
+
+            var line = lines[lineIndex];
+            var openBraceIndex = line.IndexOf('{');
+            var closeBraceIndex = line.LastIndexOf('}');
+            if (openBraceIndex < 0 || closeBraceIndex <= openBraceIndex)
+                continue;
+
+            var body = line[(openBraceIndex + 1)..closeBraceIndex];
+            if (body.Length == 0)
+                continue;
+
+            var segments = body.Split(';');
+            var searchStart = 0;
+            foreach (var segment in segments)
+            {
+                var trimmedSegment = segment.Trim();
+                if (trimmedSegment.Length == 0)
+                {
+                    searchStart += segment.Length + 1;
+                    continue;
+                }
+
+                var segmentStart = line.IndexOf(trimmedSegment, searchStart, StringComparison.Ordinal);
+                if (segmentStart < 0)
+                {
+                    searchStart += segment.Length + 1;
+                    continue;
+                }
+
+                if (TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, trimmedSegment, lineIndex + 1, symbols))
+                    searchStart = segmentStart + trimmedSegment.Length + 1;
+                else
+                    searchStart = segmentStart + trimmedSegment.Length + 1;
+            }
+        }
+    }
+
+    private static bool TryAddCppSameLineClassMemberSymbol(
+        long fileId,
+        SymbolRecord classSymbol,
+        string segment,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        foreach (var pattern in PatternCache["cpp"])
+        {
+            if (pattern.Kind != "function")
+                continue;
+
+            var match = pattern.Regex.Match(segment);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Success
+                ? match.Groups["name"].Value.Trim()
+                : match.Value.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (symbols.Any(symbol =>
+                symbol.Kind == "function"
+                && symbol.Line == lineNumber
+                && symbol.Name == name
+                && symbol.ContainerKind == classSymbol.Kind
+                && symbol.ContainerName == classSymbol.Name))
+            {
+                return true;
+            }
+
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = segment.Trim(),
+                ContainerKind = classSymbol.Kind,
+                ContainerName = classSymbol.Name,
+                ReturnType = TryGetGroup(match, "returnType"),
+            });
+
+            return true;
+        }
+
+        return false;
     }
 
     private readonly record struct PythonImportSymbolEntry(string Name, int StartColumn);
@@ -17581,7 +17690,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         if (kind is not ("class" or "struct" or "interface" or "enum" or "namespace"))
             return false;
 
-        return lang is "csharp" or "java";
+        return lang is "csharp" or "java" or "cpp";
     }
 
     private static bool IsCSharpFieldLikeFunctionPattern(SymbolPattern pattern)
