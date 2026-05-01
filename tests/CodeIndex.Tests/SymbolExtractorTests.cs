@@ -14857,6 +14857,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsOperatorDeclarations()
+    {
+        var content = """
+            Namespace MyApp
+
+            Public Class Money
+                Public Shared Operator +(left As Money, right As Money) As Money
+                    Return New Money()
+                End Operator
+
+                Public Shared Widening Operator CType(value As Money) As Decimal
+                    Return 0D
+                End Operator
+            End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var add = Assert.Single(symbols, s => s.Kind == "operator" && s.Name == "Operator +");
+        Assert.Equal(4, add.StartLine);
+        Assert.Equal(5, add.BodyStartLine);
+        Assert.Equal(6, add.BodyEndLine);
+        Assert.Equal(6, add.EndLine);
+        Assert.Equal("class", add.ContainerKind);
+        Assert.Equal("Money", add.ContainerName);
+
+        var conversion = Assert.Single(symbols, s => s.Kind == "operator" && s.Name == "Operator CType");
+        Assert.Equal(8, conversion.StartLine);
+        Assert.Equal(9, conversion.BodyStartLine);
+        Assert.Equal(10, conversion.BodyEndLine);
+        Assert.Equal(10, conversion.EndLine);
+        Assert.Equal("class", conversion.ContainerKind);
+        Assert.Equal("Money", conversion.ContainerName);
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """
