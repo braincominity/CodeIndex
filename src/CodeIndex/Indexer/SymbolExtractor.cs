@@ -187,6 +187,7 @@ public static class SymbolExtractor
         Brace,
         Indent,
         RubyEnd,
+        FortranEnd,
         ElixirEnd,
         VisualBasicEnd,
         SqlProcBody,
@@ -1039,9 +1040,11 @@ public static class SymbolExtractor
         ["fortran"] =
         [
             // Fortran modules / モジュール
-            new("namespace", new Regex(@"^\s*module\s+(?!procedure\b)(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*module\s+(?!(?:procedure|subroutine|function)\b)(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Fortran submodules / サブモジュール
+            new("namespace", new Regex(@"^\s*submodule\s*\(\s*[^)]*\)\s*(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Program units / プログラム本体
-            new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Typed or untyped functions / 型付き・型なし関数
@@ -11808,15 +11811,16 @@ private sealed class RubyMaskState
         {
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
-            BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
-            BodyStyle.Indent => FindIndentRange(lines, startIndex),
-            BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
-            BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
-            BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
-            BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
-            _ => (startIndex + 1, null, null),
-        };
+              BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
+              BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
+              BodyStyle.Indent => FindIndentRange(lines, startIndex),
+              BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
+              BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
+              BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
+              BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
+              BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
+              _ => (startIndex + 1, null, null),
+          };
     }
 
     private static bool TryFindKotlinScalaExpressionBodyEndLine(string line, int startColumn)
@@ -15158,6 +15162,95 @@ private sealed class RubyMaskState
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (endLine, bodyStartLine, endLine);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindFortranRange(string[] lines, int startIndex)
+    {
+        if (!TryGetFortranBlockStartKind(lines[startIndex], out var blockKind))
+            return (startIndex + 1, null, null);
+
+        int? bodyStartLine = null;
+        var endLine = startIndex + 1;
+
+        for (int i = startIndex + 1; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith('!'))
+                continue;
+
+            if (IsFortranBlockEndLine(trimmed, blockKind))
+            {
+                if (bodyStartLine == null)
+                    return (i + 1, null, null);
+
+                return (i + 1, bodyStartLine, i + 1);
+            }
+
+            if (bodyStartLine == null)
+                bodyStartLine = i + 1;
+
+            endLine = i + 1;
+        }
+
+        return bodyStartLine == null
+            ? (startIndex + 1, null, null)
+            : (endLine, bodyStartLine, endLine);
+    }
+
+    private static bool TryGetFortranBlockStartKind(string line, out string kind)
+    {
+        kind = string.Empty;
+        var trimmed = line.TrimStart();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (StartsWithFortranWord(trimmed, "module"))
+        {
+            var remainder = trimmed["module".Length..].TrimStart();
+            if (StartsWithFortranWord(remainder, "procedure") || StartsWithFortranWord(remainder, "subroutine") || StartsWithFortranWord(remainder, "function"))
+                return false;
+
+            kind = "module";
+            return true;
+        }
+
+        if (StartsWithFortranWord(trimmed, "submodule"))
+        {
+            kind = "submodule";
+            return true;
+        }
+
+        if (StartsWithFortranWord(trimmed, "program"))
+        {
+            kind = "program";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsFortranBlockEndLine(string trimmedLine, string blockKind)
+    {
+        if (!StartsWithFortranWord(trimmedLine, "end"))
+            return false;
+
+        var remainder = trimmedLine["end".Length..].TrimStart();
+        if (!StartsWithFortranWord(remainder, blockKind))
+            return false;
+
+        var afterKind = remainder[blockKind.Length..].TrimStart();
+        if (blockKind == "module" && StartsWithFortranWord(afterKind, "procedure"))
+            return false;
+
+        return afterKind.Length == 0 || afterKind.StartsWith('!') || afterKind.StartsWith('(') || afterKind.StartsWith(':') || char.IsLetterOrDigit(afterKind[0]) || afterKind[0] == '_';
+    }
+
+    private static bool StartsWithFortranWord(string input, string word)
+    {
+        if (!input.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return input.Length == word.Length || !char.IsLetterOrDigit(input[word.Length]) && input[word.Length] != '_';
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindRubyRange(string[] lines, int startIndex)
