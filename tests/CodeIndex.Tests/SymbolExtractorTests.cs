@@ -177,6 +177,9 @@ public class SymbolExtractorTests
             export module my_module;
 
             inline namespace v2 {}
+            namespace outer::inner {
+                class Nested {};
+            }
 
             template <typename T>
             concept Addable = requires(T a, T b) { a + b; };
@@ -219,8 +222,10 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "my_module");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "v2");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Addable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Nested" && s.ContainerName == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
