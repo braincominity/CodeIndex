@@ -82,6 +82,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_ExpandsImportAliasesAndImportedNames()
+    {
+        var content = """
+            import numpy as np
+            from  collections   import  defaultdict, OrderedDict as OD
+            from .helpers import build as build_helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "numpy");
+        Assert.Contains(imports, symbol => symbol.Name == "np");
+        Assert.Contains(imports, symbol => symbol.Name == "collections");
+        Assert.Contains(imports, symbol => symbol.Name == "defaultdict");
+        Assert.Contains(imports, symbol => symbol.Name == "OrderedDict");
+        Assert.Contains(imports, symbol => symbol.Name == "OD");
+        Assert.Contains(imports, symbol => symbol.Name == "helpers");
+        Assert.Contains(imports, symbol => symbol.Name == "build");
+        Assert.Contains(imports, symbol => symbol.Name == "build_helper");
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsEnumPackageOneofExtendAndService()
     {
         var content = """
