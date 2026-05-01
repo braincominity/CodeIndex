@@ -113,6 +113,8 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("bat", "batch")]
+    [InlineData("cmd", "batch")]
     [InlineData("Python", "python")]
     [InlineData("py", "python")]
     [InlineData("PY3", "python")]
@@ -123,6 +125,36 @@ public class QueryCommandRunnerTests
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
 
         Assert.Equal(expected, options.Lang);
+    }
+
+    [Theory]
+    [InlineData("bat")]
+    [InlineData("cmd")]
+    public void RunSearch_NormalizesBatchLangAliases(string input)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_batch_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "batch_lang_alias_7a24d1";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "scripts/run.bat",
+                "batch",
+                $"echo {queryToken}\r\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
