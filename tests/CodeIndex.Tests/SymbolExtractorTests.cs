@@ -17295,6 +17295,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesCommonResourceTagsAsImports()
+    {
+        // HTML pages often embed navigable assets outside `<script>` / `<link>` too:
+        // images, iframes, media, and embedded documents are all useful search targets.
+        // Keep those resource-bearing attributes queryable so `definition` / `references`
+        // can jump to the referenced path instead of only seeing the raw text chunk.
+        // HTML ページは `<script>` / `<link>` 以外にも探索対象の資産を埋め込む。
+        // 画像・iframe・メディア・埋め込み文書も検索できるようにして、
+        // `definition` / `references` が raw text chunk ではなく参照先へ飛べるようにする。
+        var content = """
+            <img src="/images/logo.png" alt="logo">
+            <iframe src="/docs/frame.html"></iframe>
+            <video poster="/media/thumb.jpg">
+              <source src="/media/movie.mp4" type="video/mp4">
+            </video>
+            <object data="/files/manual.pdf"></object>
+            <svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="/icons.svg#check"></use></svg>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/images/logo.png");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/docs/frame.html");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/thumb.jpg");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/media/movie.mp4");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/files/manual.pdf");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/icons.svg#check");
+    }
+
+    [Fact]
     public void Extract_Html_CapturesCustomWebComponentTagsAsClasses()
     {
         // Custom element tag names always contain a hyphen per the HTML spec.
