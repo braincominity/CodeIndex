@@ -194,6 +194,29 @@ public class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void GetFamilyScopeKey_MsbuildProjectFileIgnoresDirectoryBuildMarkersForScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(srcDir);
+            File.WriteAllText(Path.Combine(srcDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.targets"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src", indexer.GetFamilyScopeKey(Path.Combine(srcDir, "App.csproj"), "msbuild"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。

@@ -983,14 +983,17 @@ public class FileIndexer
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns != null)
         {
+            var primaryProjectMarkerPatterns = GetPrimaryProjectMarkerPatterns(lang) ?? projectMarkerPatterns;
             var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
             while (!string.IsNullOrEmpty(currentDir))
             {
-                var markerCount = CountProjectMarkerFiles(currentDir, projectMarkerPatterns);
+                var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
                 if (markerCount == 1)
                     return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
                 if (markerCount > 1)
                     return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
+                if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
+                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
                     break;
@@ -1117,6 +1120,15 @@ public class FileIndexer
         "vb" => ["*.vbproj"],
         "fsharp" => ["*.fsproj"],
         "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"],
+        _ => null,
+    };
+
+    private static IReadOnlyList<string>? GetPrimaryProjectMarkerPatterns(string? lang) => lang switch
+    {
+        "csharp" => ["*.csproj"],
+        "vb" => ["*.vbproj"],
+        "fsharp" => ["*.fsproj"],
+        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj"],
         _ => null,
     };
 
