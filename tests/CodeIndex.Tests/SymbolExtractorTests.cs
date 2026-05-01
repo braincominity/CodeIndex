@@ -16036,6 +16036,12 @@ public class SymbolExtractorTests
               to { opacity: 1; }
             }
 
+            @property --accent-color {
+              syntax: "<color>";
+              inherits: true;
+              initial-value: #09f;
+            }
+
             .container {
               max-width: 1200px;
             }
@@ -16052,6 +16058,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shade-color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent-color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
     }
