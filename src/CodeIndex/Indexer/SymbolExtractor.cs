@@ -4530,7 +4530,7 @@ private sealed class RubyMaskState
 
             foreach (Match keyMatch in XamlKeyRegex.Matches(line))
             {
-                var value = keyMatch.Groups["value"].Value.Trim();
+                var value = NormalizeXamlKeyValue(keyMatch.Groups["value"].Value);
                 if (value.Length == 0)
                     continue;
                 symbols.Add(new SymbolRecord
@@ -4547,6 +4547,23 @@ private sealed class RubyMaskState
         }
 
         return symbols;
+    }
+
+    private static string NormalizeXamlKeyValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length < 2 || value[0] != '{' || value[^1] != '}')
+            return value;
+
+        value = value[1..^1].Trim();
+        if (value.Length == 0)
+            return value;
+
+        var separatorIndex = value.IndexOfAny([' ', '\t', '\r', '\n']);
+        if (separatorIndex >= 0)
+            value = value[(separatorIndex + 1)..].Trim();
+
+        return value;
     }
 
     private static bool IsHtmlTagNameStart(char c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
