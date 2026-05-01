@@ -1273,10 +1273,19 @@ public static class SymbolExtractor
         ["commonlisp"] =
         [
             new("namespace", new Regex(@"^\s*\(\s*defpackage\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",    new Regex(@"^\s*\(\s*in-package\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("class",     new Regex(@"^\s*\(\s*defclass\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("struct",    new Regex(@"^\s*\(\s*defstruct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("property",  new Regex(@"^\s*\(\s*(?:defparameter|defvar|defconstant)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("function",  new Regex(@"^\s*\(\s*(?:defun|defmacro|defgeneric|defmethod)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
+        ["racket"] =
+        [
+            new("namespace", new Regex(@"^\s*\(\s*module(?:\*|\+)?\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser)?|-values)?\s+\(\s*(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("property",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser)?|-values)?\s+(?<name>[^\s()()]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("struct",    new Regex(@"^\s*\(\s*struct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",    new Regex(@"^\s*\(\s*require\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["dart"] =
         [
