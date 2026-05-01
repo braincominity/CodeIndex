@@ -151,6 +151,10 @@ public class FileIndexerTests
     [InlineData("demo.f08", "fortran")]
     [InlineData("demo.for", "fortran")]
     [InlineData("demo.ftn", "fortran")]
+    [InlineData("demo.cbl", "cobol")]
+    [InlineData("demo.cob", "cobol")]
+    [InlineData("demo.cobol", "cobol")]
+    [InlineData("demo.cpy", "cobol")]
     [InlineData("demo.raku", "raku")]
     [InlineData("demo.rakumod", "raku")]
     [InlineData("demo.rakutest", "raku")]
@@ -364,6 +368,10 @@ public class FileIndexerTests
         Assert.Equal("fortran", map[".f90"]);
         Assert.Equal("raku", map[".raku"]);
         Assert.Equal("perl", map[".t"]);
+        Assert.Equal("cobol", map[".cbl"]);
+        Assert.Equal("cobol", map[".cob"]);
+        Assert.Equal("cobol", map[".cobol"]);
+        Assert.Equal("cobol", map[".cpy"]);
         // Mainstream extension-only languages should now be recognized for search/indexing.
         // 主要な拡張子ベース言語も search/indexing 用に認識されるべき。
         Assert.Equal("ocaml", map[".ml"]);
@@ -391,6 +399,36 @@ public class FileIndexerTests
         // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
         Assert.Equal("objc", map[".m"]);
         Assert.Equal("objc", map[".mm"]);
+    }
+
+    [Fact]
+    public void ScanFiles_IndexesCobolExtensions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["hello.cbl"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
+                ["copy.cpy"] = "       01  COPY-NAME PIC X(10).\n",
+                ["legacy.cob"] = "       PROCEDURE DIVISION.\n",
+                ["modern.cobol"] = "       STOP RUN.\n",
+            };
+            foreach (var (name, content) in files)
+                File.WriteAllText(Path.Combine(tempDir, name), content);
+
+            var scanned = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList(), scanned);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
