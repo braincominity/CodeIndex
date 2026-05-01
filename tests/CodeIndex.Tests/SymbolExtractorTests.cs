@@ -10927,6 +10927,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsPubUseStatements()
+    {
+        var content = """
+            pub use std::fmt::Display;
+            pub(crate) use std::io::Result as IoResult;
+            use std::collections::HashMap;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::fmt::Display");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::io::Result as IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashMap");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Display");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashMap");
+    }
+
+    [Fact]
     public void Extract_Rust_MapsImplBlocksToImplementingType()
     {
         var content = """

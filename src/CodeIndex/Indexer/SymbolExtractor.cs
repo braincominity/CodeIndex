@@ -129,6 +129,9 @@ public static class SymbolExtractor
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RustUseStatementRegex = new(
+        @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1086,7 +1089,7 @@ public static class SymbolExtractor
             new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // type alias / 型エイリアス
             new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, "visibility"),
         ],
         ["java"] =
         [
@@ -1970,6 +1973,200 @@ public static class SymbolExtractor
                 continue;
             }
         }
+    }
+
+    private static void ExtractRustUseSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var match = RustUseStatementRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var body = match.Groups["body"].Value.Trim();
+            if (body.Length == 0)
+                continue;
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            CollectRustUseSymbolNames(body, names);
+
+            foreach (var name in names)
+            {
+                if (HasRustSymbol(symbols, fileId, i + 1, "import", name))
+                    continue;
+
+                var startColumn = line.IndexOf(name, StringComparison.Ordinal);
+                if (startColumn < 0)
+                    startColumn = line.Length - line.TrimStart().Length;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = name,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = startColumn,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    },
+                    line);
+            }
+        }
+    }
+
+    private static void CollectRustUseSymbolNames(string body, ISet<string> names)
+    {
+        var text = body.Trim();
+        if (text.Length == 0)
+            return;
+
+        var openBraceIndex = FindTopLevelChar(text, '{');
+        if (openBraceIndex >= 0)
+        {
+            var closeBraceIndex = FindMatchingRustBrace(text, openBraceIndex);
+            if (closeBraceIndex > openBraceIndex)
+            {
+                var inner = text[(openBraceIndex + 1)..closeBraceIndex];
+                foreach (var item in SplitRustUseItems(inner))
+                    CollectRustUseSymbolNames(item, names);
+                return;
+            }
+        }
+
+        var aliasIndex = FindTopLevelKeyword(text, " as ");
+        if (aliasIndex >= 0)
+        {
+            var alias = text[(aliasIndex + 4)..].Trim();
+            if (alias.Length > 0)
+                names.Add(alias);
+        }
+
+        var leaf = text;
+        if (aliasIndex >= 0)
+            leaf = text[..aliasIndex].Trim();
+
+        if (leaf.Length == 0)
+            return;
+
+        var leafIndex = leaf.LastIndexOf("::", StringComparison.Ordinal);
+        if (leafIndex >= 0)
+            leaf = leaf[(leafIndex + 2)..].Trim();
+
+        if (leaf.Length > 0 && leaf is not "self" and not "super" and not "crate")
+            names.Add(leaf);
+    }
+
+    private static IEnumerable<string> SplitRustUseItems(string text)
+    {
+        var start = 0;
+        var braceDepth = 0;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',':
+                    if (braceDepth == 0)
+                    {
+                        var item = text[start..i].Trim();
+                        if (item.Length > 0)
+                            yield return item;
+                        start = i + 1;
+                    }
+                    break;
+            }
+        }
+
+        var tail = text[start..].Trim();
+        if (tail.Length > 0)
+            yield return tail;
+    }
+
+    private static int FindTopLevelChar(string text, char target)
+    {
+        var braceDepth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                default:
+                    if (braceDepth == 0 && text[i] == target)
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingRustBrace(string text, int openIndex)
+    {
+        var braceDepth = 0;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            if (text[i] == '{')
+                braceDepth++;
+            else if (text[i] == '}')
+            {
+                braceDepth--;
+                if (braceDepth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelKeyword(string text, string keyword)
+    {
+        var braceDepth = 0;
+        for (var i = 0; i <= text.Length - keyword.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+            }
+
+            if (braceDepth == 0 && text.AsSpan(i, keyword.Length).SequenceEqual(keyword))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool HasRustSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string kind, string name)
+    {
+        return symbols.Any(symbol =>
+            symbol.FileId == fileId
+            && symbol.Line == lineNumber
+            && symbol.Kind == kind
+            && symbol.Name == name);
     }
 
     private static readonly HashSet<string> ContainerKinds =
@@ -3619,6 +3816,8 @@ private sealed class RubyMaskState
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
+        if (lang == "rust")
+            ExtractRustUseSymbols(fileId, lines, symbols);
         if (lang == "go")
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
