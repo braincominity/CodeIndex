@@ -356,6 +356,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
+    {
+        // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
+        var content = """
+            namespace demo {
+                using DemoValue = long;
+                using namespace std;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "DemoValue");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "std");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsTypedefAliases()
+    {
+        // C++: typedef aliases / C++: typedef エイリアス
+        var content = """
+            namespace demo {
+                typedef long DemoLength;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "DemoLength");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
     {
         var content = """

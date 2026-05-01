@@ -1116,6 +1116,10 @@ public static class SymbolExtractor
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.Brace),
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
@@ -1877,6 +1881,9 @@ public static class SymbolExtractor
 
             if (lang == "php")
                 ExtractPhpImportSymbols(symbols, line, i + 1);
+
+            if (lang == "cpp" && TryAddCppIndentedAlias(fileId, line, i + 1, symbols))
+                continue;
 
             // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
             // `do` boundary tokens that the property regex now accepts for inline `set`
@@ -10865,6 +10872,93 @@ public static class SymbolExtractor
                 EndLine = lineNumber,
                 Signature = line.Trim()
             });
+    }
+
+    private static bool TryAddCppIndentedAlias(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        if (line.Length == line.TrimStart().Length)
+            return false;
+
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("using namespace ", StringComparison.Ordinal))
+            return false;
+
+        if (trimmed.StartsWith("using ", StringComparison.Ordinal))
+        {
+            var equalsIndex = trimmed.IndexOf('=');
+            if (equalsIndex <= 0)
+                return false;
+
+            var aliasName = ExtractTrailingCppIdentifier(trimmed.AsSpan(0, equalsIndex));
+            if (aliasName == null)
+                return false;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = aliasName,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = trimmed
+                });
+            return true;
+        }
+
+        if (!trimmed.StartsWith("typedef ", StringComparison.Ordinal) || trimmed.Contains('('))
+            return false;
+
+        var semicolonIndex = trimmed.IndexOf(';');
+        if (semicolonIndex <= 0)
+            return false;
+
+        var typedefName = ExtractTrailingCppIdentifier(trimmed.AsSpan(0, semicolonIndex));
+        if (typedefName == null)
+            return false;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = typedefName,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = trimmed
+            });
+        return true;
+    }
+
+    private static string? ExtractTrailingCppIdentifier(ReadOnlySpan<char> text)
+    {
+        var end = text.Length;
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        var start = end;
+        while (start > 0 && (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_'))
+            start--;
+
+        if (start == end)
+            return null;
+
+        return text[start..end].ToString();
     }
 
     private static void RemoveTrailingSameNameDeclarationOnlyFunctions(List<SymbolRecord> symbols, SymbolRecord symbol)
