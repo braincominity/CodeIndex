@@ -129,6 +129,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlKeyRegex = new(
+        @"\bx:Key\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -4511,6 +4514,23 @@ private sealed class RubyMaskState
             foreach (Match nameMatch in XamlNameRegex.Matches(line))
             {
                 var value = nameMatch.Groups["value"].Value.Trim();
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
+            foreach (Match keyMatch in XamlKeyRegex.Matches(line))
+            {
+                var value = keyMatch.Groups["value"].Value.Trim();
                 if (value.Length == 0)
                     continue;
                 symbols.Add(new SymbolRecord
