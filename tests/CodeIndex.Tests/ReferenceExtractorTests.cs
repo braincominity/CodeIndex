@@ -18245,6 +18245,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeExpressions_IgnoreTemplateRawTextAndStringKeys()
+    {
+        const string content = """
+            class User {}
+
+            type Label = `prefix;${User}_suffix`;
+            type UserId = User["id"];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "id" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptRuntimeTypeof_OnOneLine_IsNotCapturedAsTypeReference()
     {
         const string content = """

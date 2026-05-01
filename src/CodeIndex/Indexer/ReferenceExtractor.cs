@@ -1613,6 +1613,15 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall);
+
+                EmitTypeScriptDeclarationTypeReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
             else if (language == "css")
             {
@@ -5007,7 +5016,8 @@ public static class ReferenceExtractor
         {
             if (TryGetCallableReturnTypeSpan(line, callableNameStart, language, out var typeStart, out var typeLength))
             {
-                AddTypeExpressionSegments(
+                AddTypeExpressionSegmentsForLanguage(
+                    language,
                     references,
                     seen,
                     fileId,
@@ -5015,8 +5025,7 @@ public static class ReferenceExtractor
                     typeStart,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(typeStart),
-                    language);
+                    resolveContainerForColumn(typeStart));
             }
 
             EmitParameterTypeReferences(
@@ -5034,7 +5043,8 @@ public static class ReferenceExtractor
 
         if (TryGetSimpleDeclarationTypeSpan(line, language, out var declarationTypeStart, out var declarationTypeLength))
         {
-            AddTypeExpressionSegments(
+            AddTypeExpressionSegmentsForLanguage(
+                language,
                 references,
                 seen,
                 fileId,
@@ -5042,9 +5052,146 @@ public static class ReferenceExtractor
                 declarationTypeStart,
                 context,
                 lineNumber,
-                resolveContainerForColumn(declarationTypeStart),
-                language);
+                resolveContainerForColumn(declarationTypeStart));
         }
+    }
+
+    private static void EmitTypeScriptDeclarationTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        int equalsIndex = FindTopLevelAssignmentIndex(line);
+        if (equalsIndex < 0)
+            return;
+
+        var head = line.Substring(0, equalsIndex);
+        var tokens = GetTopLevelTokenSpans(head);
+        if (tokens.Count < 2)
+            return;
+
+        int first = 0;
+        while (first < tokens.Count)
+        {
+            var token = head.Substring(tokens[first].Start, tokens[first].Length);
+            if (token is "export" or "declare")
+            {
+                first++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (first >= tokens.Count - 1)
+            return;
+
+        var keyword = head.Substring(tokens[first].Start, tokens[first].Length);
+        if (!string.Equals(keyword, "type", StringComparison.Ordinal))
+            return;
+
+        int typeStart = SkipWhitespace(line, equalsIndex + 1);
+        if (typeStart >= line.Length)
+            return;
+
+        int typeEnd = FindTypeScriptTypeExpressionTerminator(line, typeStart);
+        if (typeEnd < 0)
+            typeEnd = line.Length;
+
+        AddTypeScriptTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            line.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart));
+    }
+
+    private static int FindTypeScriptTypeExpressionTerminator(string line, int startIndex)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+
+        for (int i = startIndex; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (c == '\'' || c == '"')
+            {
+                i = SkipTypeScriptStringLiteral(line, i) - 1;
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = ScanTypeScriptTemplateLiteralForTypeExpression(
+                    line,
+                    i,
+                    0,
+                    string.Empty,
+                    0,
+                    [],
+                    [],
+                    0,
+                    null,
+                    null) - 1;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length)
+            {
+                if (line[i + 1] == '/')
+                    return i;
+                if (line[i + 1] == '*')
+                {
+                    i = SkipTypeScriptBlockCommentForTypeExpression(line, i + 2);
+                    continue;
+                }
+            }
+
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ';' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    return i;
+            }
+        }
+
+        return line.Length;
     }
 
     private static bool TryFindCallableParameterList(
@@ -5164,7 +5311,8 @@ public static class ReferenceExtractor
                 continue;
 
             int absoluteStart = paramStart + segmentStart + typeRelativeStart;
-            AddTypeExpressionSegments(
+            AddTypeExpressionSegmentsForLanguage(
+                language,
                 references,
                 seen,
                 fileId,
@@ -5172,9 +5320,241 @@ public static class ReferenceExtractor
                 absoluteStart,
                 context,
                 lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                language);
+                resolveContainerForColumn(absoluteStart));
         }
+    }
+
+    private static void AddTypeExpressionSegmentsForLanguage(
+        string language,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (language == "typescript")
+        {
+            AddTypeScriptTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                expression,
+                expressionStartInLine,
+                context,
+                lineNumber,
+                container);
+            return;
+        }
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            expression,
+            expressionStartInLine,
+            context,
+            lineNumber,
+            container,
+            language);
+    }
+
+    private static void AddTypeScriptTypeExpressionSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+
+            if (c is '\'' or '"')
+            {
+                i = SkipTypeScriptQuotedString(expression, i);
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = SkipTypeScriptTemplateLiteral(expression, i, references, seen, fileId, expressionStartInLine, context, lineNumber, container);
+                continue;
+            }
+
+            if (c == '/' && i + 1 < expression.Length)
+            {
+                if (expression[i + 1] == '/')
+                {
+                    i = SkipTypeScriptLineComment(expression, i + 2);
+                    continue;
+                }
+
+                if (expression[i + 1] == '*')
+                {
+                    i = SkipTypeScriptBlockCommentForTypeExpression(expression, i + 2);
+                    continue;
+                }
+            }
+
+            if (!IsTypeExpressionIdentifierStart("typescript", c))
+                continue;
+
+            int segmentStart = i;
+            while (i < expression.Length && IsTypeExpressionIdentifierPart("typescript", expression[i]))
+                i++;
+
+            var segment = expression.Substring(segmentStart, i - segmentStart);
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, "typescript");
+            i--;
+        }
+    }
+
+    private static int SkipTypeScriptQuotedString(string text, int start)
+    {
+        char quote = text[start];
+        int i = start + 1;
+        while (i < text.Length)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (text[i] == quote)
+                return i;
+
+            i++;
+        }
+
+        return text.Length - 1;
+    }
+
+    private static int SkipTypeScriptLineComment(string text, int start)
+    {
+        int i = start;
+        while (i < text.Length && text[i] != '\n' && text[i] != '\r')
+            i++;
+        return Math.Max(start - 1, i - 1);
+    }
+
+    private static int SkipTypeScriptBlockComment(string text, int start)
+    {
+        for (int i = start; i + 1 < text.Length; i++)
+        {
+            if (text[i] == '*' && text[i + 1] == '/')
+                return i + 1;
+        }
+
+        return text.Length - 1;
+    }
+
+    private static int SkipTypeScriptTemplateLiteral(
+        string text,
+        int start,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        int i = start + 1;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (c == '\\' && i + 1 < text.Length)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (c == '`')
+                return i;
+
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '{')
+            {
+                int holeStart = i + 2;
+                int holeEnd = FindMatchingTypeScriptTemplateHoleEnd(text, holeStart);
+                if (holeEnd < 0)
+                    return text.Length - 1;
+
+                var hole = text.Substring(holeStart, holeEnd - holeStart);
+                AddTypeScriptTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    hole,
+                    expressionStartInLine + holeStart,
+                    context,
+                    lineNumber,
+                    container);
+                i = holeEnd + 1;
+                continue;
+            }
+
+            i++;
+        }
+
+        return text.Length - 1;
+    }
+
+    private static int FindMatchingTypeScriptTemplateHoleEnd(string text, int start)
+    {
+        int braceDepth = 1;
+        for (int i = start; i < text.Length; i++)
+        {
+            char c = text[i];
+
+            if (c is '\'' or '"')
+            {
+                i = SkipTypeScriptQuotedString(text, i);
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = SkipTypeScriptTemplateLiteral(text, i, new List<ReferenceRecord>(), new HashSet<string>(), 0, 0, string.Empty, 0, null);
+                continue;
+            }
+
+            if (c == '/' && i + 1 < text.Length)
+            {
+                if (text[i + 1] == '/')
+                {
+                    i = SkipTypeScriptLineComment(text, i + 2);
+                    continue;
+                }
+
+                if (text[i + 1] == '*')
+                {
+                    i = SkipTypeScriptBlockComment(text, i + 2);
+                    continue;
+                }
+            }
+
+            if (c == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                braceDepth--;
+                if (braceDepth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool TryGetParameterTypeRelativeSpan(string parameterFragment, string language, out int typeStart, out int typeLength)
@@ -5397,6 +5777,21 @@ public static class ReferenceExtractor
         string language,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        if (language == "typescript")
+        {
+            AddTypeScriptTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                expression,
+                expressionStartInLine,
+                context,
+                lineNumber,
+                container,
+                ignoredSegments);
+            return;
+        }
+
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
@@ -5430,6 +5825,216 @@ public static class ReferenceExtractor
             AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments);
             i--;
         }
+    }
+
+    private static void AddTypeScriptTypeExpressionSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        IReadOnlySet<string>? ignoredSegments = null)
+    {
+        int i = 0;
+        while (i < expression.Length)
+        {
+            char c = expression[i];
+            if (c == '\'' || c == '"')
+            {
+                i = SkipTypeScriptStringLiteral(expression, i);
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = ScanTypeScriptTemplateLiteralForTypeExpression(
+                    expression,
+                    i,
+                    expressionStartInLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    container,
+                    ignoredSegments);
+                continue;
+            }
+
+            if (!IsJavaIdentifierStart(c))
+            {
+                i++;
+                continue;
+            }
+
+            int segmentStart = i;
+            i++;
+            while (i < expression.Length && IsJavaIdentifierPart(expression[i]))
+                i++;
+
+            var segment = expression.Substring(segmentStart, i - segmentStart);
+            AddTypeReferenceSegment(
+                references,
+                seen,
+                fileId,
+                segment,
+                expressionStartInLine + segmentStart,
+                context,
+                lineNumber,
+                container,
+                "typescript",
+                ignoredSegments: ignoredSegments);
+        }
+    }
+
+    private static int ScanTypeScriptTemplateLiteralForTypeExpression(
+        string expression,
+        int startIndex,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container,
+        IReadOnlySet<string>? ignoredSegments)
+    {
+        int i = startIndex + 1;
+        while (i < expression.Length)
+        {
+            char c = expression[i];
+            if (c == '\\')
+            {
+                i += Math.Min(2, expression.Length - i);
+                continue;
+            }
+
+            if (c == '\'' || c == '"')
+            {
+                i = SkipTypeScriptStringLiteral(expression, i);
+                continue;
+            }
+
+            if (c == '$' && i + 1 < expression.Length && expression[i + 1] == '{')
+            {
+                int holeStart = i + 2;
+                int holeEnd = FindMatchingTypeScriptHoleEndForTypeExpression(expression, holeStart);
+                if (holeEnd < 0)
+                    return expression.Length;
+
+                AddTypeScriptTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    expression.Substring(holeStart, holeEnd - holeStart),
+                    expressionStartInLine + holeStart,
+                    context,
+                    lineNumber,
+                    container,
+                    ignoredSegments);
+                i = holeEnd + 1;
+                continue;
+            }
+
+            if (c == '`')
+                return i + 1;
+
+            i++;
+        }
+
+        return expression.Length;
+    }
+
+    private static int FindMatchingTypeScriptHoleEndForTypeExpression(string text, int startIndex)
+    {
+        int braceDepth = 0;
+        int i = startIndex;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (c == '\\')
+            {
+                i += Math.Min(2, text.Length - i);
+                continue;
+            }
+
+            if (c == '\'' || c == '"')
+            {
+                i = SkipTypeScriptStringLiteral(text, i);
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = ScanTypeScriptTemplateLiteralForTypeExpression(
+                    text,
+                    i,
+                    0,
+                    string.Empty,
+                    0,
+                    [],
+                    [],
+                    0,
+                    null,
+                    null);
+                continue;
+            }
+
+            if (c == '{')
+            {
+                braceDepth++;
+                i++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                if (braceDepth == 0)
+                    return i;
+                braceDepth--;
+                i++;
+                continue;
+            }
+
+            i++;
+        }
+
+        return -1;
+    }
+
+    private static int SkipTypeScriptStringLiteral(string text, int startIndex)
+    {
+        char quote = text[startIndex];
+        int i = startIndex + 1;
+        while (i < text.Length)
+        {
+            if (text[i] == '\\')
+            {
+                i += Math.Min(2, text.Length - i);
+                continue;
+            }
+
+            if (text[i] == quote)
+                return i + 1;
+
+            i++;
+        }
+
+        return text.Length;
+    }
+
+    private static int SkipTypeScriptBlockCommentForTypeExpression(string text, int startIndex)
+    {
+        for (int i = startIndex; i + 1 < text.Length; i++)
+        {
+            if (text[i] == '*' && text[i + 1] == '/')
+                return i + 1;
+        }
+
+        return text.Length - 1;
     }
 
     private static int SkipBalanced(string line, int start, char open, char close)
