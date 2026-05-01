@@ -621,7 +621,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
 | Solidity | `.sol` | -- |
 | Tcl | `.tcl`, `.tk` | -- |
-| R | `.r`, `.R` | yes (function assignments, methods::setClass/methods::setClassUnion/R6::R6Class/methods::setRefClass, R6 public/private/active methods, methods::setGeneric/methods::setMethod, library/require) |
+| R | `.r`, `.R` | yes (function assignments, methods::setClass/methods::setClassUnion/R6::R6Class/methods::setRefClass with named arguments, R6 public/private/active methods, methods::setGeneric/methods::setMethod with named arguments, library/require) |
 | Haskell | `.hs`, `.lhs` | yes |
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
 | VB.NET | `.vb`, `.vbs` | yes |
