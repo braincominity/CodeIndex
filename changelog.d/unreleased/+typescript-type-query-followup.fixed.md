@@ -7,8 +7,8 @@ affected:
 
 ## English
 
-- **TypeScript type-query extraction now handles `typeof import(...)` and deeper multiline continuations** - follow-up coverage from PR #1239 now keeps walking through import-type wrappers and continuation lines inside nested type expressions, so more real-world `references` / `impact` edges surface without mistaking runtime `typeof` usage for type references.
+- **TypeScript type-expression scanning now skips template raw text and string keys while keeping real identifiers** - follow-up coverage from PR #1245 now ignores the literal text inside template-literal types and indexed-access string keys, but still records the type names inside `${...}` holes and other genuine type references.
 
 ## 日本語
 
-- **TypeScript の型クエリ抽出が `typeof import(...)` と、より深い多行継続を扱えるようになりました** - PR #1239 の follow-up として、import 型ラッパーや入れ子の型式内の継続行までたどるようにし、実際の `references` / `impact` エッジを増やしつつ、ランタイムの `typeof` を型参照と誤認しにくくしています。
+- **TypeScript の型式走査が template literal の raw text と文字列キーを飛ばし、本物の識別子だけを残すようになりました** - PR #1245 の follow-up として、template literal 型の中の文字面や indexed access の文字列キーは無視しつつ、`${...}` の穴や他の本物の型参照はそのまま記録します。
