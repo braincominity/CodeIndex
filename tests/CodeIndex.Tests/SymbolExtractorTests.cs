@@ -336,6 +336,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsUsingTypeAliases()
+    {
+        // C++: using 型エイリアス / C++: using type aliases
+        var content = """
+            using StringList = std::vector<std::string>;
+            template <typename T> using Ptr = std::unique_ptr<T>;
+
+            namespace demo {
+                using namespace std;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "StringList");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ptr");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "std");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsQualifiedAssignmentsAndObjectLiteralFunctionValues()
     {
         var content = """
