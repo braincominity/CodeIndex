@@ -40,6 +40,8 @@ Examples:
 Use issue numbers when the PR is tied to GitHub issues. Use `+<slug>` for
 workflow, infrastructure, documentation, or other changes without a stable
 issue number.
+If the fragment is not tied to an issue, omit `issues` from the front matter
+entirely; do not write `issues: null` or `issues: []`.
 
 ## Categories
 
@@ -88,6 +90,24 @@ affected:
 ## 日本語
 
 - **C# の verbatim 識別子が見つからない場合でも `impact` が元の検索文字列を維持するようになりました (#960)** — `impact` は C# verbatim lookup の miss 時にユーザー入力の綴りを保持するため、human / JSON 出力が誤解を招く canonicalized query を返さなくなりました。
+```
+
+For a non-issue fragment, the same template should simply omit `issues`:
+
+```md
+---
+category: docs
+affected:
+  - changelog.d/README.md
+---
+
+## English
+
+- **Non-issue fragments omit `issues` front matter** — use a `+<slug>.<category>.md` file name and leave out `issues` entirely when the work is not tied to GitHub issues.
+
+## 日本語
+
+- **issue 非対応フラグメントでは `issues` の front matter を省略します** — GitHub issue に紐づかない作業では `+<slug>.<category>.md` を使い、`issues` は完全に省略します。
 ```
 
 ## Release preparation
