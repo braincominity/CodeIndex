@@ -3025,8 +3025,8 @@ public class DbReaderTests : IDisposable
 
         var shellFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "scripts/legacy.sh",
-            Lang = "shell",
+            Path = "scripts/legacy.txt",
+            Lang = "text",
             Size = 48,
             Lines = 2,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -7790,7 +7790,7 @@ public class DbReaderTests : IDisposable
                 public void Run() { }
             }
             """);
-        InsertIndexedFile("src/tools.sh", "shell",
+        InsertIndexedFile("src/tools.txt", "text",
             """
             FooService() {
               :
@@ -7823,7 +7823,7 @@ public class DbReaderTests : IDisposable
     {
         for (int i = 0; i < 60; i++)
         {
-            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "shell",
+            InsertIndexedFile($"scripts/Foo{i:D2}.txt", "text",
                 """
                 Foo() {
                   :
@@ -10412,8 +10412,8 @@ public class DbReaderTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "script.sh",
-            Lang = "shell",
+            Path = "script.txt",
+            Lang = "text",
             Size = 64,
             Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),

@@ -4104,7 +4104,7 @@ public class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "shell"],
+                ["--db", dbPath, "--json", "--lang", "text"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -4130,7 +4130,7 @@ public class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "shell", "--count"],
+                ["--db", dbPath, "--json", "--lang", "text", "--count"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -22340,7 +22340,7 @@ public class QueryCommandRunnerTests
                     public void Run() { }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/tools.sh", "shell",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/tools.txt", "text",
                 """
                 FooService() {
                   :
@@ -22391,7 +22391,7 @@ public class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             for (int i = 0; i < 60; i++)
             {
-                TestProjectHelper.InsertIndexedFile(dbPath, $"scripts/Foo{i:D2}.sh", "shell",
+                TestProjectHelper.InsertIndexedFile(dbPath, $"scripts/Foo{i:D2}.txt", "text",
                     """
                     Foo() {
                       :
@@ -27210,15 +27210,15 @@ public class QueryCommandRunnerTests
 
     private static (string ProjectRoot, string DbPath) CreateUnsupportedLanguageUnusedFixtureDb()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_shell_json");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_text_json");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
         using var db = new DbContext(dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "script.sh",
-            Lang = "shell",
+            Path = "script.txt",
+            Lang = "text",
             Size = 64,
             Lines = 6,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
