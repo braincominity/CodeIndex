@@ -39,7 +39,7 @@ internal sealed class RepoMapBuilder
     };
     private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "MainWindow.xaml.cs", "MainPage.xaml.cs", "AppShell.xaml.cs", "App.cs", "App.razor"],
+        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "MainWindow.xaml.cs", "MainPage.xaml.cs", "AppShell.xaml.cs", "Shell.xaml.cs", "ContentPage.xaml.cs", "ContentView.xaml.cs", "Window.xaml.cs", "UserControl.xaml.cs", "App.cs", "App.razor"],
         ["python"] = ["main.py", "__main__.py", "app.py", "cli.py"],
         ["javascript"] = ["index.js", "main.js", "app.js", "server.js"],
         ["typescript"] = ["index.ts", "main.ts", "app.ts", "server.ts"],
