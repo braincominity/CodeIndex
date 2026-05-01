@@ -1129,7 +1129,9 @@ public static class SymbolExtractor
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("struct",   new Regex(@"^\s*typedef\s+struct\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*typedef\s+enum\s+(?:\w+\s+)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
