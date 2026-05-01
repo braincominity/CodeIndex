@@ -1,6 +1,7 @@
 ---
 category: fixed
-issues: []
+issues:
+  - 1127
 affected:
   - src/CodeIndex/Indexer/SymbolExtractor.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
