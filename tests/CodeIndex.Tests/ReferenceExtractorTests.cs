@@ -18176,7 +18176,7 @@ public class ReferenceExtractorTests
         const string content = """
             class User {}
 
-            type Label = `prefix_${User}_suffix`;
+            type Label = `prefix;${User}_suffix`;
             type UserId = User["id"];
             """;
 

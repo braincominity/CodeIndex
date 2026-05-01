@@ -5050,19 +5050,100 @@ public static class ReferenceExtractor
         if (typeStart >= line.Length)
             return;
 
-        int typeEnd = FindFirstTopLevelChar(line.Substring(typeStart), ';');
+        int typeEnd = FindTypeScriptTypeExpressionTerminator(line, typeStart);
         if (typeEnd < 0)
-            typeEnd = line.Length - typeStart;
+            typeEnd = line.Length;
 
         AddTypeScriptTypeExpressionSegments(
             references,
             seen,
             fileId,
-            line.Substring(typeStart, typeEnd),
+            line.Substring(typeStart, typeEnd - typeStart),
             typeStart,
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static int FindTypeScriptTypeExpressionTerminator(string line, int startIndex)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+
+        for (int i = startIndex; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (c == '\'' || c == '"')
+            {
+                i = SkipTypeScriptStringLiteral(line, i) - 1;
+                continue;
+            }
+
+            if (c == '`')
+            {
+                i = ScanTypeScriptTemplateLiteralForTypeExpression(
+                    line,
+                    i,
+                    0,
+                    string.Empty,
+                    0,
+                    [],
+                    [],
+                    0,
+                    null,
+                    null) - 1;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length)
+            {
+                if (line[i + 1] == '/')
+                    return i;
+                if (line[i + 1] == '*')
+                {
+                    i = SkipTypeScriptBlockCommentForTypeExpression(line, i + 2);
+                    continue;
+                }
+            }
+
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ';' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    return i;
+            }
+        }
+
+        return line.Length;
     }
 
     private static bool TryFindCallableParameterList(
@@ -5268,7 +5349,7 @@ public static class ReferenceExtractor
 
                 if (expression[i + 1] == '*')
                 {
-                    i = SkipTypeScriptBlockComment(expression, i + 2);
+                    i = SkipTypeScriptBlockCommentForTypeExpression(expression, i + 2);
                     continue;
                 }
             }
@@ -5895,6 +5976,17 @@ public static class ReferenceExtractor
         }
 
         return text.Length;
+    }
+
+    private static int SkipTypeScriptBlockCommentForTypeExpression(string text, int startIndex)
+    {
+        for (int i = startIndex; i + 1 < text.Length; i++)
+        {
+            if (text[i] == '*' && text[i + 1] == '/')
+                return i + 1;
+        }
+
+        return text.Length - 1;
     }
 
     private static int SkipBalanced(string line, int start, char open, char close)
