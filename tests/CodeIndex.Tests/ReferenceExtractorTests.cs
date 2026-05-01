@@ -7720,6 +7720,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsMatchArmApplicationCalls()
+    {
+        const string content = """
+            let describe value =
+                match value with
+                | Some user -> printfn "User: %A" user
+                | None -> failwith "Missing value"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "failwith" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "match");
+    }
+
+    [Fact]
     public void Extract_R_DetectsCallSites()
     {
         const string content = """

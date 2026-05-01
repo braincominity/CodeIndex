@@ -394,12 +394,14 @@ public static class ReferenceExtractor
     // F# also allows ordinary space-separated application such as `printfn "x"` or
     // `List.map increment numbers`. Capture the callable leaf when the expression starts a
     // statement or follows a small set of expression separators so common non-paren calls stay
-    // visible without trying to parse the full language.
+    // visible without trying to parse the full language. Match arms (`| Some x -> printfn ...`)
+    // are included because they are a very common F# search target.
     // F# では `printfn "x"` や `List.map increment numbers` のような空白区切り application も普通に使う。
     // 全体構文の解析はせず、文頭または少数の式区切りの後ろにある callable leaf を拾うことで、
-    // 慣用的な non-paren 呼び出しも可視化する。
+    // 慣用的な non-paren 呼び出しも可視化する。`| Some x -> printfn ...` のような match arm も
+    // F# の検索対象として重要なので含める。
     private static readonly Regex FSharpSpaceApplicationCallRegex = new(
-        $@"(?:\b(?:then|do|else|in)\s+|[=(,\[\{{;]\s*|^\s*)
+        $@"(?:\b(?:then|do|else|in)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{FSharpIdentifierPattern})\s*\.\s*)*
             (?<name>{FSharpIdentifierPattern})\b
             (?=\s+(?:{FSharpIdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
