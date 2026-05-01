@@ -23,8 +23,8 @@ Treat any request to "update the changelog" as a fragment request unless the tas
    `deprecated`, `removed`, `security`, `docs`, `internal`.
 5. Include required front matter.
    - For issue-based work, `issues` must list one or more issue numbers.
-   - For non-issue work, set `issues: null`.
-   - Do **not** write `issues: []` (empty arrays fail validation/pipeline checks).
+   - For non-issue work, **omit the `issues` field entirely**.
+   - Do **not** write `issues: null` or `issues: []` (both fail validation/pipeline checks).
 6. Include both `## English` and `## 日本語` sections.
 7. Do not include release headings or compare-link footer definitions.
 8. Validate fragments before committing.
@@ -55,16 +55,15 @@ affected:
 ```md
 ---
 category: docs
-issues: null
 affected:
   - .codex/workflows/changelog-fragment.md
 ---
 
 ## English
 
-- **Clarified non-issue fragment front matter requirements** — non-issue changelog fragments now explicitly require `issues: null`, preventing `issues: []` validation failures in agent-generated fragments.
+ - **Clarified non-issue fragment front matter requirements** — non-issue changelog fragments now omit `issues` entirely, preventing `issues: null` / `issues: []` validation failures in agent-generated fragments.
 
 ## 日本語
 
-- **issue 非対応フラグメントの front matter 要件を明確化** — issue 非対応の changelog フラグメントでは `issues: null` を明示的に必須とし、エージェント生成時の `issues: []` による検証失敗を防止しました。
+ - **issue 非対応フラグメントの front matter 要件を明確化** — issue 非対応の changelog フラグメントでは `issues` 自体を記載しないようにし、エージェント生成時の `issues: null` / `issues: []` による検証失敗を防止しました。
 ```
