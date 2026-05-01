@@ -12089,10 +12089,11 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Kotlin_DetectsExpandedFeatures()
     {
-        var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
+        var content = "sealed interface Shape\nfun interface Transformer\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Shape");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Transformer");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
         // Companion object (unnamed) / コンパニオンオブジェクト（無名）
