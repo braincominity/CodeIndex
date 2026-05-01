@@ -1673,6 +1673,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptRuntimeTypeofWrappedAssignment_DoesNotBecomeTypeReference()
+    {
+        const string content = """
+            function caller(value: unknown) {
+              const runtime =
+                typeof value === "string";
+              return runtime;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "value");
+    }
+
+    [Fact]
     public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
     {
         const string content = "function f() {\n" +
@@ -18078,5 +18097,41 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeQueries_CaptureTypeReferences()
+    {
+        const string content = """
+            class Point {}
+
+            type PointCtor = typeof Point;
+            type PointKeys = keyof Point;
+            type PointCtorMultiline =
+                typeof Point;
+
+            function runtime(value: unknown) {
+                return typeof value === "string";
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptRuntimeTypeof_OnOneLine_IsNotCapturedAsTypeReference()
+    {
+        const string content = """
+            const runtime = (value: unknown) => typeof value === "string";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 }
