@@ -9624,6 +9624,8 @@ public class SymbolExtractorTests
             "CREATE SCHEMA sales AUTHORIZATION dbo;\n" +
             "CREATE TYPE sales.Money FROM DECIMAL(18, 4) NOT NULL;\n" +
             "CREATE SEQUENCE sales.OrderSeq START WITH 1 INCREMENT BY 1;\n" +
+            "CREATE RULE sales.discount_rule AS @price > 0;\n" +
+            "CREATE DEFAULT dbo.zero_default AS 0;\n" +
             "CREATE SYNONYM dbo.Customers FOR external.Customers;\n" +
             "CREATE LOGIN [app_service] WITH PASSWORD = 'x';\n" +
             "CREATE USER app_service FOR LOGIN app_service;\n" +
@@ -9651,6 +9653,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.Money");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.OrderSeq");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.discount_rule");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.zero_default");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.Customers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[app_service]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_service");
