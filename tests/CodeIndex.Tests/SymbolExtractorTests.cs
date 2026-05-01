@@ -3250,6 +3250,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsMultipleAliasDefinitions()
+    {
+        var content = """
+            alias ll='ls -la' gs='git status'
+            alias -g G='| grep' H='| head'
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ll");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "gs");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "H");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAccessorClassFields()
     {
         var content = """
@@ -19373,5 +19389,19 @@ public class SymbolExtractorTests
         }
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
+    }
+    [Fact]
+    public void Extract_Shell_DetectsMultipleAliases()
+    {
+        var content = """
+            alias ll='ls -la' gs='git status'
+            alias -g G='| grep' H='| head'
+            """;
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ll");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "gs");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "H");
     }
 }
