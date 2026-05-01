@@ -63,7 +63,7 @@ public class FileIndexer
             PathFilterKind.ExcludedByDefaultFile;
     }
 
-    private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
+    private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
@@ -980,17 +980,20 @@ public class FileIndexer
 
     public string GetFamilyScopeKey(string absolutePath, string? lang)
     {
-        var projectMarkerPattern = GetProjectMarkerPattern(lang);
-        if (projectMarkerPattern != null)
+        var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
+        if (projectMarkerPatterns != null)
         {
+            var primaryProjectMarkerPatterns = GetPrimaryProjectMarkerPatterns(lang) ?? projectMarkerPatterns;
             var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
             while (!string.IsNullOrEmpty(currentDir))
             {
-                var markerCount = Directory.EnumerateFiles(currentDir, projectMarkerPattern, SearchOption.TopDirectoryOnly).Take(2).Count();
+                var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
                 if (markerCount == 1)
                     return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
                 if (markerCount > 1)
                     return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
+                if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
+                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
                     break;
@@ -1006,16 +1009,16 @@ public class FileIndexer
     public static IReadOnlyList<string> GetHotspotFamilyMarkerLanguages() => HotspotFamilyMarkerLanguages;
 
     public static bool SupportsHotspotFamilyMarkerLanguage(string? lang) =>
-        GetProjectMarkerPattern(lang) != null;
+        GetProjectMarkerPatterns(lang) != null;
 
     public string? GetProjectMarkerFingerprint(string? lang)
     {
-        var projectMarkerPattern = GetProjectMarkerPattern(lang);
-        if (projectMarkerPattern == null)
+        var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
+        if (projectMarkerPatterns == null)
             return null;
 
         var projectMarkers = new List<string>();
-        CollectProjectMarkerFiles(_projectRoot, projectMarkerPattern, projectMarkers);
+        CollectProjectMarkerFiles(_projectRoot, projectMarkerPatterns, projectMarkers);
         projectMarkers.Sort(StringComparer.Ordinal);
 
         var payload = string.Join('\n', projectMarkers);
@@ -1065,19 +1068,38 @@ public class FileIndexer
         return $"{left}/{right}";
     }
 
-    private void CollectProjectMarkerFiles(string dir, string pattern, List<string> projectMarkers)
+    private static int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
+    {
+        var count = 0;
+        foreach (var pattern in patterns)
+        {
+            foreach (var _ in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
+            {
+                count++;
+                if (count > 1)
+                    return count;
+            }
+        }
+
+        return count;
+    }
+
+    private void CollectProjectMarkerFiles(string dir, IReadOnlyList<string> patterns, List<string> projectMarkers)
     {
         try
         {
-            foreach (var file in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
-                projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, file)));
+            foreach (var pattern in patterns)
+            {
+                foreach (var file in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
+                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, file)));
+            }
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
                 if (SkipDirs.Contains(Path.GetFileName(subDir)))
                     continue;
 
-                CollectProjectMarkerFiles(subDir, pattern, projectMarkers);
+                CollectProjectMarkerFiles(subDir, patterns, projectMarkers);
             }
         }
         catch (UnauthorizedAccessException)
@@ -1092,11 +1114,21 @@ public class FileIndexer
         }
     }
 
-    private static string? GetProjectMarkerPattern(string? lang) => lang switch
+    private static IReadOnlyList<string>? GetProjectMarkerPatterns(string? lang) => lang switch
     {
-        "csharp" => "*.csproj",
-        "vb" => "*.vbproj",
-        "fsharp" => "*.fsproj",
+        "csharp" => ["*.csproj"],
+        "vb" => ["*.vbproj"],
+        "fsharp" => ["*.fsproj"],
+        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"],
+        _ => null,
+    };
+
+    private static IReadOnlyList<string>? GetPrimaryProjectMarkerPatterns(string? lang) => lang switch
+    {
+        "csharp" => ["*.csproj"],
+        "vb" => ["*.vbproj"],
+        "fsharp" => ["*.fsproj"],
+        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj"],
         _ => null,
     };
 

@@ -169,6 +169,55 @@ public class FileIndexerTests
     }
 
     [Theory]
+    [InlineData("App.csproj")]
+    [InlineData("Directory.Build.props")]
+    [InlineData("Directory.Build.targets")]
+    [InlineData("Library.fsproj")]
+    [InlineData("Project.vbproj")]
+    public void GetProjectMarkerFingerprint_RecognizesMsbuildProjectMarkers(string markerFileName)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, markerFileName), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
+            Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MsbuildProjectFileIgnoresDirectoryBuildMarkersForScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(srcDir);
+            File.WriteAllText(Path.Combine(srcDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.targets"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src", indexer.GetFamilyScopeKey(Path.Combine(srcDir, "App.csproj"), "msbuild"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。
     [InlineData("Dockerfile.")]
