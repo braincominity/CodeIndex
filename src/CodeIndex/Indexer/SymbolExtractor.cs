@@ -1718,6 +1718,11 @@ public static class SymbolExtractor
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
+    private sealed class RubyMaskState
+    {
+        public bool InSingleQuote { get; set; }
+        public bool InDoubleQuote { get; set; }
+    }
     private static readonly Regex ElixirBlockStartRegex = new(@"^\s*(?:defmodule|defprotocol|defimpl|defmacro|defguardp?|defp?)\b", RegexOptions.Compiled);
     private static readonly Regex ElixirBlockTokenRegex = new(@"\b(?:do|fn|end)\b(?!:)", RegexOptions.Compiled);
     private static readonly Regex ElixirDoShorthandRegex = new(@",\s*do:\s*", RegexOptions.Compiled);
@@ -2088,7 +2093,7 @@ public static class SymbolExtractor
                         }
 
                         var absoluteStartColumn = lineOffset + match.Index;
-                        if (lang == "java" && javaLeadingAnnotationOffset > 0)
+                        if (lang is "java" or "kotlin" && javaLeadingAnnotationOffset > 0)
                             absoluteStartColumn = lineOffset + javaLeadingAnnotationOffset;
                         var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
@@ -14922,12 +14927,16 @@ public static class SymbolExtractor
         if (!RubyBlockStartRegex.IsMatch(firstLine))
             return (startIndex + 1, null, null);
 
+        var scanState = new RubyMaskState();
+        var maskedFirstLine = MaskRubyLineForBodyScan(firstLine, scanState);
         int depth = 0;
         int? bodyStartLine = null;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = i == startIndex
+                ? maskedFirstLine.Trim()
+                : MaskRubyLineForBodyScan(lines[i], scanState).Trim();
             if (trimmed.Length == 0)
                 continue;
 
@@ -14954,6 +14963,67 @@ public static class SymbolExtractor
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (lines.Length, bodyStartLine, lines.Length);
+    }
+
+    private static string MaskRubyLineForBodyScan(string line, RubyMaskState state)
+    {
+        var masked = line.ToCharArray();
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (state.InSingleQuote)
+            {
+                masked[i] = ' ';
+                if (line[i] == '\\' && i + 1 < line.Length)
+                {
+                    masked[++i] = ' ';
+                    continue;
+                }
+
+                if (line[i] == '\'')
+                    state.InSingleQuote = false;
+
+                continue;
+            }
+
+            if (state.InDoubleQuote)
+            {
+                masked[i] = ' ';
+                if (line[i] == '\\' && i + 1 < line.Length)
+                {
+                    masked[++i] = ' ';
+                    continue;
+                }
+
+                if (line[i] == '"')
+                    state.InDoubleQuote = false;
+
+                continue;
+            }
+
+            if (line[i] == '#')
+            {
+                for (int j = i; j < line.Length; j++)
+                    masked[j] = ' ';
+                break;
+            }
+
+            if (line[i] == '\'')
+            {
+                masked[i] = ' ';
+                state.InSingleQuote = true;
+                continue;
+            }
+
+            if (line[i] == '"')
+            {
+                masked[i] = ' ';
+                state.InDoubleQuote = true;
+                continue;
+            }
+        }
+
+        return new string(masked);
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindElixirRange(string[] lines, int startIndex)
@@ -19828,7 +19898,7 @@ public static class SymbolExtractor
 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
         var javaLeadingAnnotationOffset = 0;
-        var recordMatch = lang == "java"
+        var recordMatch = lang is "java" or "kotlin"
             ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
                 ? javaRecordMatch
                 : recordRegex.Match(declaration))

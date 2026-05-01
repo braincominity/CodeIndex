@@ -11736,6 +11736,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_AnnotatedDeclarations_AreStillIndexed()
+    {
+        var content = """
+            @Serializable
+            class Envelope { }
+
+            @Deprecated("use markedV2")
+            fun marked(): Int = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Envelope");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "marked");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsExpandedFeatures()
     {
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
@@ -11898,6 +11915,29 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "find_user");
+    }
+
+    [Fact]
+    public void Extract_Ruby_IgnoresEndInsideStringsAndComments()
+    {
+        var content = "class UserService\n  def find_user(id)\n    puts \"the word end should not close this block\"\n    # end should not close this block either\n    id\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "UserService"
+            && s.StartLine == 1
+            && s.EndLine == 7
+            && s.BodyStartLine == 2
+            && s.BodyEndLine == 7);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "find_user"
+            && s.StartLine == 2
+            && s.EndLine == 6
+            && s.BodyStartLine == 3
+            && s.BodyEndLine == 6);
     }
 
     [Fact]
