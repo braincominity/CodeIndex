@@ -349,6 +349,9 @@ public class DbContext : IDisposable
                 return normalizedName.Length == 0 ? null : NameFold.Fold(normalizedName) ?? normalizedName;
             });
         connection.CreateFunction(
+            "sql_normalize_csharp_verbatim_name",
+            (string? text) => string.IsNullOrWhiteSpace(text) ? null : CSharpVerbatimNameNormalizer.Normalize(text));
+        connection.CreateFunction(
             "sql_segment_count",
             (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
         connection.CreateFunction(
