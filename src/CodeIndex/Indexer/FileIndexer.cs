@@ -191,6 +191,10 @@ public class FileIndexer
         [".f08"]    = "fortran",
         [".for"]    = "fortran",
         [".ftn"]    = "fortran",
+        [".cbl"]    = "cobol",
+        [".cob"]    = "cobol",
+        [".cobol"]  = "cobol",
+        [".cpy"]    = "cobol",   // COBOL copybook / COBOL コピー句
         [".raku"]   = "raku",
         [".rakumod"]= "raku",
         [".rakutest"]= "raku",
