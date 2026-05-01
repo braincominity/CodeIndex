@@ -1498,6 +1498,8 @@ public static class SymbolExtractor
             // コンストラクタは class 本体内に置かれる bare な class-name 宣言なので、
             // PascalCase の条件で cmdlet 風の呼び出しを大半弾きつつ、PS5+ の標準形を拾う。
             new("function", new Regex(@"^\s*(?<name>[A-Z]\w*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            // Alias definitions / エイリアス定義
+            new("alias", new Regex(@"^\s*(?:Set-Alias|New-Alias)\s+(?:-Name\s+)?(?<name>[\w-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Attributes and typed properties / 属性付きプロパティと型付きプロパティ
             new("property", new Regex(@"^\s*(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s*)+\$(?<name>\w+)\s*(?:=|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Class (PowerShell 5+) / クラス (PowerShell 5+)

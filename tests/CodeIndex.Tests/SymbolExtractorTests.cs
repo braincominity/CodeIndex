@@ -16212,6 +16212,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PowerShell_DetectsAliasDefinitions()
+    {
+        const string content = """
+            Set-Alias gci Get-ChildItem
+            New-Alias -Name ls -Value Get-ChildItem
+
+            function Show-Items {
+                gci
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "gci");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ls");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Show-Items");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsClassMembersAndEnumValues()
     {
         var content = """
