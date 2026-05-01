@@ -6707,6 +6707,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Batch_IndexesGotoAndCallTargets()
+    {
+        const string content = """
+            @echo off
+            goto :Build
+            rem goto :Ignored
+            :Build
+            call :Build
+            :: call :Commented
+            goto :EOF
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "batch", content);
+        var references = ReferenceExtractor.Extract(1, "batch", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Build" && r.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "EOF" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ignored" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Commented" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SQL_TruncateTargetsHandleOnlyAndMultipleTargets()
     {
         // issues #684 / #711: `TRUNCATE TABLE` should skip `ONLY` and keep all comma-separated
