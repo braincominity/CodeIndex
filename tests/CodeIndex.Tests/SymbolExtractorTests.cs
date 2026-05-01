@@ -113,6 +113,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_ExpandsDottedImportPrefixesForSearchability()
+    {
+        var content = """
+            import package.submodule as alias
+            from package.subpackage import helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "package");
+        Assert.Contains(imports, symbol => symbol.Name == "package.submodule");
+        Assert.Contains(imports, symbol => symbol.Name == "package.subpackage");
+        Assert.Contains(imports, symbol => symbol.Name == "alias");
+        Assert.Contains(imports, symbol => symbol.Name == "helper");
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
