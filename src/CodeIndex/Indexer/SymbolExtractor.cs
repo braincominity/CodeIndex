@@ -3533,6 +3533,7 @@ private sealed class RubyMaskState
             return false;
 
         var currentLineIndex = startLineIndex;
+        var importLineIndent = FindFirstNonWhitespaceColumn(lines[startLineIndex]);
         var fragment = importSpecs[1..];
 
         while (currentLineIndex < lines.Length)
@@ -3549,6 +3550,9 @@ private sealed class RubyMaskState
                     return true;
                 continue;
             }
+
+            if (currentLineIndex != startLineIndex && fragmentStartColumn <= importLineIndent)
+                return true;
 
             fragment = currentLineIndex == startLineIndex
                 ? fragment
