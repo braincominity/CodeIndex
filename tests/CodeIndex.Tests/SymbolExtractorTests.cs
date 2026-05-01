@@ -18828,7 +18828,7 @@ public class SymbolExtractorTests
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <SolidColorBrush x:Key="AccentBrush" Color="Tomato" />
+                <SolidColorBrush x:Key="{x:Static local:Keys.AccentBrush}" Color="Tomato" />
                 <Style x:Key="PrimaryButtonStyle" TargetType="Button">
                     <Setter Property="Background" Value="{StaticResource AccentBrush}" />
                 </Style>
@@ -18837,7 +18837,7 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AccentBrush");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "local:Keys.AccentBrush");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryButtonStyle");
     }
 
