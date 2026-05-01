@@ -138,6 +138,7 @@ public static class ReferenceExtractor
         {
             "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
             "module", "type", "of", "then", "elif", "done", "begin", "end",
+            "let", "use", "if", "else", "do", "try", "finally", "in", "for", "while", "return", "yield",
         },
         // PHP include/require constructs / PHP の include/require 構文
         ["php"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -378,6 +379,19 @@ public static class ReferenceExtractor
     private static readonly Regex FSharpPipelineCallRegex = new(
         $@"(?<![\w$])(?:\|{{1,3}}>)\s*(?:(?:{FSharpIdentifierPattern})\s*\.\s*)*(?<name>{FSharpIdentifierPattern})\b",
         RegexOptions.Compiled);
+    // F# also allows ordinary space-separated application such as `printfn "x"` or
+    // `List.map increment numbers`. Capture the callable leaf when the expression starts a
+    // statement or follows a small set of expression separators so common non-paren calls stay
+    // visible without trying to parse the full language.
+    // F# では `printfn "x"` や `List.map increment numbers` のような空白区切り application も普通に使う。
+    // 全体構文の解析はせず、文頭または少数の式区切りの後ろにある callable leaf を拾うことで、
+    // 慣用的な non-paren 呼び出しも可視化する。
+    private static readonly Regex FSharpSpaceApplicationCallRegex = new(
+        $@"(?:\b(?:then|do|else|in)\s+|[=(,\[\{{;]\s*|^\s*)
+            (?:(?:{FSharpIdentifierPattern})\s*\.\s*)*
+            (?<name>{FSharpIdentifierPattern})\b
+            (?=\s+(?:{FSharpIdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
+        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
     // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
     // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
     // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
@@ -2263,6 +2277,13 @@ public static class ReferenceExtractor
                 if (language == "fsharp")
                 {
                     foreach (Match match in FSharpPipelineCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        AddCallLikeReference(name, callIndex);
+                    }
+
+                    foreach (Match match in FSharpSpaceApplicationCallRegex.Matches(preparedLine))
                     {
                         var name = match.Groups["name"].Value;
                         var callIndex = match.Groups["name"].Index;
