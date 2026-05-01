@@ -85,6 +85,8 @@ public class FileIndexerTests
     [InlineData("BUILD.bazel", "python")]
     [InlineData("WORKSPACE", "python")]
     [InlineData("WORKSPACE.bazel", "python")]
+    [InlineData("go.mod", "go")]
+    [InlineData("go.work", "go")]
     // Issue #189: additional extensions / 追加拡張子
     [InlineData("types.pyi", "python")]
     [InlineData("windowed.pyw", "python")]

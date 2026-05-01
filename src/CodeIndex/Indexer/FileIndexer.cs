@@ -270,6 +270,8 @@ public class FileIndexer
         ["BUILD.bazel"]   = "python",
         ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース
         ["WORKSPACE.bazel"]= "python",
+        ["go.mod"]        = "go",           // Go module manifest / Go モジュールマニフェスト
+        ["go.work"]       = "go",           // Go workspace manifest / Go ワークスペースマニフェスト
         [".editorconfig"] = "editorconfig",
         [".gitignore"]    = "gitignore",
         [".dockerignore"] = "dockerignore",
