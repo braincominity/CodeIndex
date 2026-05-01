@@ -16002,6 +16002,7 @@ public class SymbolExtractorTests
               (:use :cl))
 
             (in-package :my-app)
+            (use-package :cl)
 
             (defclass widget ()
               ())
@@ -16023,6 +16024,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":my-app");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":my-app");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":cl");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "widget");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "*default-size*");
@@ -16039,11 +16041,16 @@ public class SymbolExtractorTests
 
             (module app racket
               (require racket/list)
+              (provide render)
+              (provide point)
 
               (define answer 42)
 
               (define (render value)
                 value)
+
+              (define-syntax-rule (make-point x)
+                x)
 
               (struct point (x y)))
             """;
@@ -16051,8 +16058,11 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "racket/list");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "make-point");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
     }
 
