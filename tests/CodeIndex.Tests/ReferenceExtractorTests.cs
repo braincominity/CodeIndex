@@ -671,6 +671,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileFromStageReferences_IndexLowercaseInstructions()
+    {
+        const string content = """
+            from golang:1.21 as builder
+
+            from builder as build2
+
+            copy --from=builder /src/app /usr/local/bin/app
+
+            from alpine:3.20
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "alpine:3.20");
+    }
+
+    [Fact]
     public void Extract_DockerfileCopyFromReferences_IndexStageDependencies()
     {
         const string content = """
