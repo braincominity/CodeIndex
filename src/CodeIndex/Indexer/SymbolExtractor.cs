@@ -303,6 +303,10 @@ public static class SymbolExtractor
         int? SignatureLastLineExclusiveEndColumn = null,
         int? ExpressionBodyEndLineIndex = null);
 
+    private readonly record struct FortranContinuationMatchCandidate(
+        string MatchLine,
+        int LastConsumedLineIndex);
+
     private enum CSharpAccessorProbeStatus
     {
         Pending,
@@ -2002,6 +2006,12 @@ private sealed class RubyMaskState
                 matchLine = csharpMatchLines![i];
             }
 
+            var fortranContinuationCandidate = lang == "fortran"
+                ? TryBuildFortranContinuationMatchLine(lines, i)
+                : null;
+            if (fortranContinuationCandidate != null)
+                matchLine = fortranContinuationCandidate.Value.MatchLine;
+
             if (lang == "php")
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
@@ -2058,6 +2068,8 @@ private sealed class RubyMaskState
                         ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
                         : new CSharpPropertyMatchCandidate(matchLine, i, i);
                     var patternMatchLine = csharpPropertyCandidate.MatchLine;
+                    if (fortranContinuationCandidate != null)
+                        patternMatchLine = fortranContinuationCandidate.Value.MatchLine;
                     var lineOffset = patternStartOffset;
                     string? csharpWrappedModifierPrefix = null;
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
@@ -2424,6 +2436,8 @@ private sealed class RubyMaskState
                         && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
                             ? (i + 1, null, null)
                             : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                    if (fortranContinuationCandidate != null)
+                        endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                     var startLine = i + 1;
                     if (lang == "csharp"
                         && pattern.Kind == "property"
@@ -2766,7 +2780,9 @@ private sealed class RubyMaskState
                     }
                     else
                     {
-                        signature = line[absoluteStartColumn..].Trim();
+                        signature = lang == "fortran"
+                            ? patternMatchLine[absoluteStartColumn..].Trim()
+                            : line[absoluteStartColumn..].Trim();
                     }
 
                     List<string>? fortranProcedureNames = null;
@@ -15426,6 +15442,82 @@ private sealed class RubyMaskState
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (endLine, bodyStartLine, endLine);
+    }
+
+    private static FortranContinuationMatchCandidate? TryBuildFortranContinuationMatchLine(string[] lines, int startIndex)
+    {
+        var firstLine = lines[startIndex];
+        var firstTrimmed = firstLine.TrimStart();
+        if (!StartsWithFortranContinuationCandidate(firstTrimmed))
+            return null;
+
+        var firstCode = StripFortranComment(firstLine).TrimEnd();
+        if (!firstCode.Contains('&'))
+            return null;
+
+        var builder = new StringBuilder(firstCode.Length + 32);
+        var lastConsumedLineIndex = startIndex;
+        var currentLine = firstCode;
+
+        while (true)
+        {
+            var continuationIndex = currentLine.LastIndexOf('&');
+            if (continuationIndex < 0)
+            {
+                if (currentLine.Length > 0)
+                {
+                    if (builder.Length > 0)
+                        builder.Append(' ');
+                    builder.Append(currentLine.Trim());
+                }
+
+                break;
+            }
+
+            if (builder.Length > 0)
+                builder.Append(' ');
+            builder.Append(currentLine[..continuationIndex].TrimEnd());
+
+            if (lastConsumedLineIndex + 1 >= lines.Length)
+                break;
+
+            var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]).TrimStart();
+            if (nextLine.StartsWith('&'))
+                nextLine = nextLine[1..].TrimStart();
+
+            lastConsumedLineIndex++;
+            currentLine = nextLine.TrimEnd();
+            if (currentLine.Length == 0)
+                break;
+        }
+
+        var normalized = builder.ToString().Trim();
+        return normalized.Length == 0 || lastConsumedLineIndex == startIndex
+            ? null
+            : new FortranContinuationMatchCandidate(normalized, lastConsumedLineIndex);
+    }
+
+    private static bool StartsWithFortranContinuationCandidate(string trimmedLine)
+    {
+        if (StartsWithFortranWord(trimmedLine, "interface"))
+            return true;
+
+        if (StartsWithFortranWord(trimmedLine, "abstract"))
+        {
+            var afterAbstract = trimmedLine["abstract".Length..].TrimStart();
+            return StartsWithFortranWord(afterAbstract, "interface");
+        }
+
+        return StartsWithFortranWord(trimmedLine, "module")
+            || StartsWithFortranWord(trimmedLine, "subroutine")
+            || StartsWithFortranWord(trimmedLine, "function")
+            || StartsWithFortranWord(trimmedLine, "procedure");
+    }
+
+    private static string StripFortranComment(string line)
+    {
+        var commentIndex = line.IndexOf('!');
+        return commentIndex >= 0 ? line[..commentIndex] : line;
     }
 
     private static bool TryGetFortranBlockStartKind(string line, out string kind)
