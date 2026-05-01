@@ -18070,6 +18070,8 @@ public class ReferenceExtractorTests
 
             type PointCtor = typeof Point;
             type PointKeys = keyof Point;
+            type PointCtorMultiline =
+                typeof Point;
 
             function runtime(value: unknown) {
                 return typeof value === "string";
@@ -18079,7 +18081,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 

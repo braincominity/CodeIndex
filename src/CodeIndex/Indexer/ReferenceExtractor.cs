@@ -1609,6 +1609,8 @@ public static class ReferenceExtractor
             else if (language == "typescript")
             {
                 EmitTypeScriptTypePositionReferences(
+                    preparedLines,
+                    i,
                     preparedLine,
                     references,
                     seen,
@@ -4427,6 +4429,8 @@ public static class ReferenceExtractor
     }
 
     private static void EmitTypeScriptTypePositionReferences(
+        IReadOnlyList<string> preparedLines,
+        int lineIndex,
         string preparedLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -4445,7 +4449,8 @@ public static class ReferenceExtractor
             if (token is not "typeof" and not "keyof")
                 continue;
 
-            if (!IsTypeScriptTypeQueryContext(preparedLine, tokens, tokenIndex))
+            var previousPreparedLine = lineIndex > 0 ? preparedLines[lineIndex - 1] : null;
+            if (!IsTypeScriptTypeQueryContext(preparedLine, tokens, tokenIndex, previousPreparedLine))
                 continue;
 
             var expressionStart = tokens[tokenIndex].Start + tokens[tokenIndex].Length;
@@ -5902,7 +5907,8 @@ public static class ReferenceExtractor
     private static bool IsTypeScriptTypeQueryContext(
         string line,
         List<(int Start, int Length)> tokens,
-        int keywordIndex)
+        int keywordIndex,
+        string? previousPreparedLine)
     {
         for (int i = 0; i < keywordIndex; i++)
         {
@@ -5915,7 +5921,13 @@ public static class ReferenceExtractor
         }
 
         if (keywordIndex == 0)
-            return false;
+        {
+            if (previousPreparedLine == null)
+                return false;
+
+            var previousTrimmed = previousPreparedLine.TrimEnd();
+            return previousTrimmed.EndsWith(':') || previousTrimmed.EndsWith('=');
+        }
 
         var previousToken = line.Substring(tokens[keywordIndex - 1].Start, tokens[keywordIndex - 1].Length);
         return previousToken.EndsWith(':');
