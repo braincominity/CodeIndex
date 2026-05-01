@@ -50,6 +50,24 @@ affected:
 - **C# の verbatim 識別子が見つからない場合でも `impact` が元の検索文字列を維持するようになりました (#960)** — `impact` は C# verbatim lookup の miss 時にユーザー入力の綴りを保持するため、human / JSON 出力が誤解を招く canonicalized query を返さなくなりました。
 ```
 
+### Non-issue Fragment Template
+
+```md
+---
+category: docs
+affected:
+  - .codex/workflows/changelog-fragment.md
+---
+
+## English
+
+- **Non-issue changelog fragments omit `issues` front matter** — use `+<slug>.<category>.md` for workflow, docs, or infrastructure changes that are not tied to GitHub issues, and leave out `issues` entirely so validation does not fail on `issues: null` or `issues: []`.
+
+## 日本語
+
+- **issue 非対応の changelog フラグメントでは `issues` の front matter を省略します** — GitHub issue に紐づかない workflow / docs / infrastructure 変更は `+<slug>.<category>.md` を使い、`issues` 自体は書かないことで `issues: null` や `issues: []` の検証失敗を防ぎます。
+```
+
 ### Non-issue Template
 
 ```md
@@ -61,9 +79,9 @@ affected:
 
 ## English
 
- - **Clarified non-issue fragment front matter requirements** — non-issue changelog fragments now omit `issues` entirely, preventing `issues: null` / `issues: []` validation failures in agent-generated fragments.
+- **Clarified non-issue fragment front matter requirements** — non-issue changelog fragments now omit `issues` entirely, preventing `issues: null` / `issues: []` validation failures in agent-generated fragments.
 
 ## 日本語
 
- - **issue 非対応フラグメントの front matter 要件を明確化** — issue 非対応の changelog フラグメントでは `issues` 自体を記載しないようにし、エージェント生成時の `issues: null` / `issues: []` による検証失敗を防止しました。
+- **issue 非対応フラグメントの front matter 要件を明確化** — issue 非対応の changelog フラグメントでは `issues` 自体を記載しないようにし、エージェント生成時の `issues: null` / `issues: []` による検証失敗を防止しました。
 ```
