@@ -7889,6 +7889,49 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExactSubstringTreatsTsqlQualifiedNamesAsCanonical()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_tsql_canonical");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/target.sql",
+                "sql",
+                """
+                CREATE PROCEDURE [sales] . [usp_Target]
+                AS
+                SELECT 1;
+                GO
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "scripts/ignored.bat",
+                "batch",
+                """
+                [sales] . [usp_Target]
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["sales.usp_Target", "--db", dbPath, "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringHumanSnippetUsesCaseSensitiveFocusLine()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_human_snippet");
