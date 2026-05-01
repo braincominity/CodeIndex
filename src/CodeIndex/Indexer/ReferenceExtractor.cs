@@ -15097,10 +15097,7 @@ public static class ReferenceExtractor
         if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(trimmed, 0))
             return;
 
-        if (trimmed.StartsWith("else ", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("else", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.StartsWith("do ", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("do", StringComparison.OrdinalIgnoreCase))
+        if (StartsWithBatchWord(trimmed, "else") || StartsWithBatchWord(trimmed, "do"))
         {
             var keywordEnd = 0;
             while (keywordEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[keywordEnd]))
@@ -15123,5 +15120,12 @@ public static class ReferenceExtractor
         var commandIndex = segmentOffset + match.Groups["command"].Index;
         var callContainer = resolveContainerForCall(commandIndex);
         AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
+    }
+
+    private static bool StartsWithBatchWord(string text, string word)
+    {
+        if (!text.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return text.Length == word.Length || char.IsWhiteSpace(text[word.Length]);
     }
 }
