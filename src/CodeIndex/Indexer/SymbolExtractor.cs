@@ -126,6 +126,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ObjCCategoryDeclarationRegex = new(
+        @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -1201,11 +1204,13 @@ public static class SymbolExtractor
         [
             new("class",    new Regex(@"^\s*@interface\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*@implementation\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*@(?:interface|implementation)\s+(?<name>\w+\s*\(\s*[^)]+?\s*\))\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^\s*@protocol\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
             // Apple enum macros / Apple の enum マクロ
             new("enum",     new Regex(@"^\s*typedef\s+(?:NS_(?:CLOSED_)?ENUM|NS_EXTENSIBLE_ENUM)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*typedef\s+NS_OPTIONS\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*typedef\s+NS_ERROR_ENUM\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*typedef\s+(?:CF_ENUM|CF_OPTIONS)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             new("property", new Regex(@"^\s*@property\b(?:\s*\([^)]*\))?.*?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*[+-]\s*\([^)]*\)\s*(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#(?:import|include)\s+[<""](?<name>[^"">]+)[>""]", RegexOptions.Compiled), BodyStyle.None),
@@ -1463,6 +1468,8 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @property / カスタムプロパティ登録
+            new("property", new Regex(@"^\s*@property\s+(?<name>--[\w-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @page / ページ規則
             new("namespace", new Regex(@"^\s*@page(?:\s+(?<name>:[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @namespace / 名前空間
@@ -1716,11 +1723,24 @@ public static class SymbolExtractor
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
-    private sealed class RubyMaskState
-    {
-        public bool InSingleQuote { get; set; }
-        public bool InDoubleQuote { get; set; }
-    }
+private enum RubyScanMode
+{
+    Code,
+    SingleQuote,
+    DoubleQuote,
+    PercentLiteral,
+    Heredoc,
+}
+private sealed class RubyMaskState
+{
+    public RubyScanMode Mode { get; set; } = RubyScanMode.Code;
+    public char PercentOpenDelimiter { get; set; }
+    public char PercentCloseDelimiter { get; set; }
+    public bool PercentDelimiterIsPaired { get; set; }
+    public int PercentDelimiterDepth { get; set; }
+    public string? HeredocTerminator { get; set; }
+    public bool HeredocAllowsIndentation { get; set; }
+}
     private static readonly Regex ElixirBlockStartRegex = new(@"^\s*(?:defmodule|defprotocol|defimpl|defmacro|defguardp?|defp?)\b", RegexOptions.Compiled);
     private static readonly Regex ElixirBlockTokenRegex = new(@"\b(?:do|fn|end)\b(?!:)", RegexOptions.Compiled);
     private static readonly Regex ElixirDoShorthandRegex = new(@",\s*do:\s*", RegexOptions.Compiled);
@@ -1992,7 +2012,7 @@ public static class SymbolExtractor
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
                         var javaLeadingAnnotationOffset = 0;
-                        var match = lang == "java"
+                        var match = lang is "java" or "kotlin"
                             ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
                                 ? javaMatch
                                 : pattern.Regex.Match(patternMatchLine[lineOffset..]))
@@ -2805,6 +2825,34 @@ public static class SymbolExtractor
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
                                 line);
+
+                            if (lang == "objc"
+                                && pattern.Kind == "class"
+                                && TryGetObjCCategoryDisplayName(patternMatchLine[absoluteStartColumn..], name, out var categoryDisplayName))
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = "class",
+                                        Name = categoryDisplayName,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = csharpSingleLineCollapsedMatch
+                                            ? csharpSignatureRawStartColumn
+                                            : absoluteStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
+                                    },
+                                    line);
+                            }
                         }
                     }
 
@@ -9575,7 +9623,8 @@ public static class SymbolExtractor
                             out var accessorVisibility,
                             out var accessorTypeStartColumn,
                             out var accessorTypeEndColumn,
-                            out var accessorHeaderEndColumn))
+                            out var accessorHeaderEndColumn,
+                            out var accessorHasInitializer))
                     {
                         var accessorStartLine = i + 1;
                         if (seenMethodStarts.Add((accessorStartLine, column)))
@@ -9598,8 +9647,18 @@ public static class SymbolExtractor
                                 ContainerName = classScanTarget.ContainerName,
                                 Visibility = accessorVisibility,
                                 ReturnType = NormalizeMetadata(
-                                    line[(accessorTypeStartColumn + 1)..(accessorTypeEndColumn + 1)]),
+                                    accessorTypeStartColumn >= 0 && accessorTypeEndColumn >= accessorTypeStartColumn
+                                        ? line[(accessorTypeStartColumn + 1)..(accessorTypeEndColumn + 1)]
+                                        : null),
                             });
+                        }
+
+                        if (accessorHasInitializer)
+                        {
+                            inFieldInitializer = true;
+                            initializerParenDepth = 0;
+                            initializerBracketDepth = 0;
+                            initializerBraceDepth = 0;
                         }
 
                         column = accessorHeaderEndColumn + 1;
@@ -13902,13 +13961,15 @@ public static class SymbolExtractor
         out string? visibility,
         out int typeStartColumn,
         out int typeEndColumn,
-        out int headerEndColumn)
+        out int headerEndColumn,
+        out bool hasInitializer)
     {
         name = string.Empty;
         visibility = null;
         typeStartColumn = -1;
         typeEndColumn = -1;
         headerEndColumn = -1;
+        hasInitializer = false;
 
         var index = Math.Max(0, startColumn);
         var sawAccessor = false;
@@ -13959,21 +14020,123 @@ public static class SymbolExtractor
                 index++;
         }
 
-        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
-            return false;
-
-        typeStartColumn = index;
-        if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilSemicolon(sanitizedLine, ref index, out typeEndColumn))
-            return false;
-
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
             index++;
 
-        if (index >= sanitizedLine.Length || sanitizedLine[index] != ';')
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == ':')
+        {
+            typeStartColumn = index;
+            if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilAccessorTerminator(sanitizedLine, ref index, out typeEndColumn, out hasInitializer))
+                return false;
+
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+        }
+        else if (sanitizedLine[index] == '=')
+        {
+            hasInitializer = true;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == '=')
+        {
+            hasInitializer = true;
+            headerEndColumn = index;
+            return true;
+        }
+
+        if (sanitizedLine[index] != ';')
             return false;
 
         headerEndColumn = index;
         return true;
+    }
+
+    // Walks a TypeScript accessor field type annotation from `:` to either a terminating `;` or
+    // a field initializer `=`. This mirrors the member-property helper but keeps the auto-accessor
+    // initializer boundary visible so the outer scanner can switch into field-initializer mode.
+    // TypeScript の accessor field 型注釈を `:` から終端 `;` または initializer `=` まで歩く。
+    // member-property 用 helper を踏襲しつつ、auto-accessor の initializer 境界を外側に見せることで、
+    // 呼び出し側が field-initializer モードへ切り替えられるようにする。
+    private static bool TrySkipJavaScriptTypeScriptTypeAnnotationUntilAccessorTerminator(
+        string sanitizedLine,
+        ref int index,
+        out int typeEndColumn,
+        out bool hasInitializer)
+    {
+        typeEndColumn = -1;
+        hasInitializer = false;
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
+            return false;
+
+        var lastNonWs = index;
+        index++;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        while (index < sanitizedLine.Length)
+        {
+            var ch = sanitizedLine[index];
+
+            if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+            {
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                    lastNonWs = index + 1;
+                index += 2;
+                continue;
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+            {
+                if (ch == ';')
+                {
+                    typeEndColumn = lastNonWs;
+                    return true;
+                }
+
+                if (ch == '=')
+                {
+                    if (index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '=')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    typeEndColumn = lastNonWs;
+                    hasInitializer = true;
+                    return true;
+                }
+
+                if (!char.IsWhiteSpace(ch))
+                    lastNonWs = index;
+            }
+
+            if (ch == '(') parenDepth++;
+            else if (ch == ')' && parenDepth > 0) parenDepth--;
+            else if (ch == '[') bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0) bracketDepth--;
+            else if (ch == '{') braceDepth++;
+            else if (ch == '}' && braceDepth > 0) braceDepth--;
+            else if (ch == '<') angleDepth++;
+            else if (ch == '>' && angleDepth > 0) angleDepth--;
+
+            index++;
+        }
+
+        return false;
     }
 
     // Multi-line accumulating wrapper for class-field arrow functions. Mirrors
@@ -14963,67 +15126,259 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static string MaskRubyLineForBodyScan(string line, RubyMaskState state)
+private static string MaskRubyLineForBodyScan(string line, RubyMaskState state)
+{
+    if (line.Length == 0)
+        return line;
+
+    var masked = line.ToCharArray();
+
+    if (state.Mode == RubyScanMode.Heredoc)
     {
-        var masked = line.ToCharArray();
+        for (int i = 0; i < masked.Length; i++)
+            masked[i] = ' ';
 
-        for (int i = 0; i < line.Length; i++)
+        if (IsRubyHeredocTerminatorLine(line, state.HeredocTerminator!, state.HeredocAllowsIndentation))
         {
-            if (state.InSingleQuote)
-            {
-                masked[i] = ' ';
-                if (line[i] == '\\' && i + 1 < line.Length)
-                {
-                    masked[++i] = ' ';
-                    continue;
-                }
-
-                if (line[i] == '\'')
-                    state.InSingleQuote = false;
-
-                continue;
-            }
-
-            if (state.InDoubleQuote)
-            {
-                masked[i] = ' ';
-                if (line[i] == '\\' && i + 1 < line.Length)
-                {
-                    masked[++i] = ' ';
-                    continue;
-                }
-
-                if (line[i] == '"')
-                    state.InDoubleQuote = false;
-
-                continue;
-            }
-
-            if (line[i] == '#')
-            {
-                for (int j = i; j < line.Length; j++)
-                    masked[j] = ' ';
-                break;
-            }
-
-            if (line[i] == '\'')
-            {
-                masked[i] = ' ';
-                state.InSingleQuote = true;
-                continue;
-            }
-
-            if (line[i] == '"')
-            {
-                masked[i] = ' ';
-                state.InDoubleQuote = true;
-                continue;
-            }
+            state.Mode = RubyScanMode.Code;
+            state.HeredocTerminator = null;
+            state.HeredocAllowsIndentation = false;
         }
 
         return new string(masked);
     }
 
+    for (int i = 0; i < masked.Length; i++)
+    {
+        if (state.Mode == RubyScanMode.SingleQuote)
+        {
+            masked[i] = ' ';
+            if (line[i] == '\\' && i + 1 < masked.Length)
+            {
+                masked[++i] = ' ';
+                continue;
+            }
+
+            if (line[i] == '\'')
+                state.Mode = RubyScanMode.Code;
+
+            continue;
+        }
+
+        if (state.Mode == RubyScanMode.DoubleQuote)
+        {
+            masked[i] = ' ';
+            if (line[i] == '\\' && i + 1 < masked.Length)
+            {
+                masked[++i] = ' ';
+                continue;
+            }
+
+            if (line[i] == '"')
+                state.Mode = RubyScanMode.Code;
+
+            continue;
+        }
+
+        if (state.Mode == RubyScanMode.PercentLiteral)
+        {
+            masked[i] = ' ';
+            if (line[i] == '\\' && i + 1 < masked.Length)
+            {
+                masked[++i] = ' ';
+                continue;
+            }
+
+            if (state.PercentDelimiterIsPaired && line[i] == state.PercentOpenDelimiter)
+            {
+                state.PercentDelimiterDepth++;
+                continue;
+            }
+
+            if (line[i] == state.PercentCloseDelimiter)
+            {
+                if (state.PercentDelimiterIsPaired && state.PercentDelimiterDepth > 0)
+                {
+                    state.PercentDelimiterDepth--;
+                    continue;
+                }
+
+                state.Mode = RubyScanMode.Code;
+                state.PercentOpenDelimiter = default;
+                state.PercentCloseDelimiter = default;
+                state.PercentDelimiterIsPaired = false;
+                state.PercentDelimiterDepth = 0;
+            }
+
+            continue;
+        }
+
+        if (line[i] == '#')
+        {
+            for (int j = i; j < masked.Length; j++)
+                masked[j] = ' ';
+            break;
+        }
+
+        if (line[i] == '\'')
+        {
+            masked[i] = ' ';
+            state.Mode = RubyScanMode.SingleQuote;
+            continue;
+        }
+
+        if (line[i] == '"')
+        {
+            masked[i] = ' ';
+            state.Mode = RubyScanMode.DoubleQuote;
+            continue;
+        }
+
+        if (TryStartRubyPercentLiteral(line, i, out var consumedChars, out var openDelimiter, out var closeDelimiter, out var isPaired))
+        {
+            for (int j = 0; j < consumedChars && i + j < masked.Length; j++)
+                masked[i + j] = ' ';
+
+            state.Mode = RubyScanMode.PercentLiteral;
+            state.PercentOpenDelimiter = openDelimiter;
+            state.PercentCloseDelimiter = closeDelimiter;
+            state.PercentDelimiterIsPaired = isPaired;
+            state.PercentDelimiterDepth = 0;
+            i += consumedChars - 1;
+            continue;
+        }
+
+        if (TryStartRubyHeredoc(line, i, out consumedChars, out var heredocTerminator, out var heredocAllowsIndentation))
+        {
+            for (int j = i; j < masked.Length; j++)
+                masked[j] = ' ';
+
+            state.Mode = RubyScanMode.Heredoc;
+            state.HeredocTerminator = heredocTerminator;
+            state.HeredocAllowsIndentation = heredocAllowsIndentation;
+            return new string(masked);
+        }
+    }
+
+    return new string(masked);
+}
+
+private static bool TryStartRubyPercentLiteral(string line, int index, out int consumedChars, out char openDelimiter, out char closeDelimiter, out bool isPaired)
+{
+    consumedChars = 0;
+    openDelimiter = default;
+    closeDelimiter = default;
+    isPaired = false;
+
+    if (index + 2 >= line.Length || line[index] != '%' || !IsRubyPercentLiteralKind(line[index + 1]))
+        return false;
+
+    var delimiter = line[index + 2];
+    if (!TryGetRubyPercentLiteralDelimiterPair(delimiter, out openDelimiter, out closeDelimiter, out isPaired))
+        return false;
+
+    consumedChars = 3;
+    return true;
+}
+
+private static bool IsRubyPercentLiteralKind(char ch)
+    => ch is 'q' or 'Q' or 'r' or 'w' or 'W' or 'i' or 'I' or 'x' or 'X';
+
+private static bool TryGetRubyPercentLiteralDelimiterPair(char delimiter, out char openDelimiter, out char closeDelimiter, out bool isPaired)
+{
+    if (delimiter == '(')
+    {
+        openDelimiter = '(';
+        closeDelimiter = ')';
+        isPaired = true;
+        return true;
+    }
+
+    if (delimiter == '[')
+    {
+        openDelimiter = '[';
+        closeDelimiter = ']';
+        isPaired = true;
+        return true;
+    }
+
+    if (delimiter == '{')
+    {
+        openDelimiter = '{';
+        closeDelimiter = '}';
+        isPaired = true;
+        return true;
+    }
+
+    if (delimiter == '<')
+    {
+        openDelimiter = '<';
+        closeDelimiter = '>';
+        isPaired = true;
+        return true;
+    }
+
+    openDelimiter = delimiter;
+    closeDelimiter = delimiter;
+    isPaired = false;
+    return true;
+}
+
+private static bool TryStartRubyHeredoc(string line, int index, out int consumedChars, out string terminator, out bool allowsIndentation)
+{
+    consumedChars = 0;
+    terminator = string.Empty;
+    allowsIndentation = false;
+
+    if (index + 1 >= line.Length || line[index] != '<' || line[index + 1] != '<')
+        return false;
+
+    var scanIndex = index + 2;
+    if (scanIndex < line.Length && line[scanIndex] is '-' or '~')
+    {
+        allowsIndentation = true;
+        scanIndex++;
+    }
+
+    while (scanIndex < line.Length && char.IsWhiteSpace(line[scanIndex]))
+        scanIndex++;
+
+    if (scanIndex >= line.Length)
+        return false;
+
+    if (line[scanIndex] is '\'' or '"' or '`')
+    {
+        var quote = line[scanIndex];
+        scanIndex++;
+        var start = scanIndex;
+        while (scanIndex < line.Length && line[scanIndex] != quote)
+            scanIndex++;
+
+        if (scanIndex >= line.Length || scanIndex == start)
+            return false;
+
+        terminator = line[start..scanIndex];
+        consumedChars = scanIndex + 1 - index;
+        return true;
+    }
+
+    var startIndex = scanIndex;
+    while (scanIndex < line.Length && (char.IsLetterOrDigit(line[scanIndex]) || line[scanIndex] == '_'))
+        scanIndex++;
+
+    if (scanIndex == startIndex)
+        return false;
+
+    terminator = line[startIndex..scanIndex];
+    consumedChars = scanIndex - index;
+    return true;
+}
+
+private static bool IsRubyHeredocTerminatorLine(string line, string terminator, bool allowsIndentation)
+{
+    var trimmed = allowsIndentation ? line.Trim() : line.TrimEnd();
+    return trimmed == terminator;
+}
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindElixirRange(string[] lines, int startIndex)
     {
         var firstLine = lines[startIndex];
@@ -19896,7 +20251,7 @@ public static class SymbolExtractor
 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
         var javaLeadingAnnotationOffset = 0;
-        var recordMatch = lang == "java"
+        var recordMatch = lang is "java" or "kotlin"
             ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
                 ? javaRecordMatch
                 : recordRegex.Match(declaration))
@@ -21450,6 +21805,26 @@ public static class SymbolExtractor
         symbol.Kind is "class" or "interface" or "struct"
         && !string.IsNullOrWhiteSpace(symbol.Signature)
         && PartialModifierRegex.IsMatch(symbol.Signature);
+
+    private static bool TryGetObjCCategoryDisplayName(string objcDeclaration, string baseName, out string displayName)
+    {
+        var match = ObjCCategoryDeclarationRegex.Match(objcDeclaration);
+        if (!match.Success || !string.Equals(match.Groups["class"].Value, baseName, StringComparison.Ordinal))
+        {
+            displayName = string.Empty;
+            return false;
+        }
+
+        var categoryName = match.Groups["category"].Value.Trim();
+        if (categoryName.Length == 0)
+        {
+            displayName = string.Empty;
+            return false;
+        }
+
+        displayName = $"{baseName}({categoryName})";
+        return true;
+    }
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
