@@ -2055,6 +2055,9 @@ public static class SymbolExtractor
         if (aliasIndex >= 0)
             leaf = text[..aliasIndex].Trim();
 
+        if (hasPathPrefix && text == "self")
+            names.Add(CombineRustUsePrefix(prefix, string.Empty));
+
         if (leaf.Length == 0)
             return;
 
