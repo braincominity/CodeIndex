@@ -9713,16 +9713,26 @@ public class SymbolExtractorTests
                   normalize_alt
                 procedure(normalize_iface) :: &
                   normalize_forward
-                procedure, pointer :: &
+              procedure, pointer :: &
                   normalize_pointer
               end interface math_iface
-              abstract interface
+              abstract &
+              interface
                 subroutine abstract_callback( &
                     value)
                 end subroutine abstract_callback
               end interface
               implicit none
             contains
+              integer(kind=4) &
+              function split_value(value)
+              end function split_value
+
+              pure &
+              recursive &
+              subroutine split_subroutine(value)
+              end subroutine split_subroutine
+
               recursive subroutine normalize(v)
               end subroutine normalize
               end module procedure normalize_iface
@@ -9761,6 +9771,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_forward");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_pointer");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "abstract_callback");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_value");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_subroutine");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
 
