@@ -9662,6 +9662,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsGenericFunctions()
+    {
+        var content = """
+            func Identity[T any](value T) T {
+                return value
+            }
+
+            func NewHandler() *Handler {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Identity");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NewHandler");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function"));
+    }
+
+    [Fact]
     public void Extract_Go_DetectsGenericTypeDeclarations()
     {
         var content = """
