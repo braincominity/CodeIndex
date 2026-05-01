@@ -407,6 +407,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsNamedTypesAndAliasesAsClassSymbols()
+    {
+        var content = """
+            package demo
+
+            type Identifier = string
+            type Count int
+
+            type (
+                Alias = otherpkg.Value
+                Score uint64
+                Node struct {
+                    ID Identifier
+                }
+                Reader interface {
+                    Read([]byte) (int, error)
+                }
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Identifier");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Count");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Score");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Reader");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsQualifiedDefinitionsConceptsAndModules()
     {
         var content = """
@@ -9903,7 +9934,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
     }
 
     [Fact]
@@ -9936,7 +9967,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Named");
