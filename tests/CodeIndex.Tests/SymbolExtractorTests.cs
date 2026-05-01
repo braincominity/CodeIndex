@@ -10587,6 +10587,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsPrivateSetProperties()
+    {
+        var content = """
+            public struct Counter {
+                private(set) var value = 0
+                fileprivate(set) var label = "shared"
+                public(set) var capacity = 10
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Counter");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "label");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsEnumCasesAndIndirectEnums()
     {
         var content = """
