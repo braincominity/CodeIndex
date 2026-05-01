@@ -15589,7 +15589,10 @@ public class SymbolExtractorTests
 
             setRefClass("Widget", fields = list(value = "numeric"))
 
-            R6Class("Thing", public = list(print = function() self))
+            R6Class("Thing",
+              public = list(
+                print = function() self
+              ))
 
             setGeneric("normalize", function(x) standardGeneric("normalize"))
 
@@ -15603,6 +15606,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Renderable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "print");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }

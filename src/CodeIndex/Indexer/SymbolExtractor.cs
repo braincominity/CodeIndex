@@ -1301,6 +1301,7 @@ public static class SymbolExtractor
         [
             new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:setClass|setRefClass|setClassUnion|R6Class)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*setGeneric\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*setMethod\s*\(\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None),
