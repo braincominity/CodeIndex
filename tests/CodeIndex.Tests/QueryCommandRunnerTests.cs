@@ -112,6 +112,47 @@ public class QueryCommandRunnerTests
         Assert.Equal("query.db", options.DbPath);
     }
 
+    [Fact]
+    public void RunSearch_RecognizesMsbuildProjectFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_msbuild_lang");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "msbuild_lang_search_4f9c2a";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.csproj",
+                "msbuild",
+                $$"""
+                <Project>
+                  <PropertyGroup>
+                    <CustomToken>{{queryToken}}</CustomToken>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+            var (msbuildExitCode, msbuildStdout, msbuildStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", "msbuild", "--count"],
+                _jsonOptions));
+            var (xmlExitCode, xmlStdout, xmlStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", "xml", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, msbuildExitCode);
+            Assert.Equal("1", msbuildStdout.Trim());
+            Assert.Equal(string.Empty, msbuildStderr);
+
+            Assert.Equal(CommandExitCodes.Success, xmlExitCode);
+            Assert.Equal("0", xmlStdout.Trim());
+            Assert.Equal(string.Empty, xmlStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("bat", "batch")]
     [InlineData("cmd", "batch")]
@@ -973,7 +1014,7 @@ public class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus", "msbuild" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -1025,15 +1066,24 @@ public class QueryCommandRunnerTests
         Assert.Contains(".pm", perlExts);
         Assert.Contains(".pod", perlExts);
         Assert.Contains(".t", perlExts);
+
+        var msbuildExts = languages["msbuild"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".csproj", msbuildExts);
+        Assert.Contains(".fsproj", msbuildExts);
+        Assert.Contains(".vbproj", msbuildExts);
+        Assert.Contains(".props", msbuildExts);
+        Assert.Contains(".targets", msbuildExts);
+        Assert.DoesNotContain(".csproj", languages["xml"].GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
     [Fact]
     public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
     {
         // The human-readable table must not let long extension lists (dockerfile / makefile /
-        // python / ruby / xml) swallow the Symbols / Graph columns. Instead, spill onto a
+        // python / ruby / xml / msbuild) swallow the Symbols / Graph columns. Instead, spill onto a
         // continuation line so the row is still readable.
-        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml）が
+        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml / msbuild）が
         // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
 
@@ -1047,9 +1097,9 @@ public class QueryCommandRunnerTests
         var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
         Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+yes\s+yes\s*$", csharpLine);
 
-        // Dockerfile / Makefile / Python / Ruby / XML rows spill extensions to a continuation line.
-        // Dockerfile / Makefile / Python / Ruby / XML 行は拡張子を継続行に退避する。
-        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "xml" };
+        // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
+        // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
+        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
