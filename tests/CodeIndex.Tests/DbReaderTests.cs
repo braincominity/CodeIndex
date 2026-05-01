@@ -8191,6 +8191,8 @@ public class DbReaderTests : IDisposable
     [InlineData("src/MainWindow.xaml.cs", "MainWindow")]
     [InlineData("src/MainPage.xaml.cs", "MainPage")]
     [InlineData("src/AppShell.xaml.cs", "AppShell")]
+    [InlineData("src/Shell.xaml.cs", "Shell")]
+    [InlineData("src/ContentPage.xaml.cs", "ContentPage")]
     public void GetRepoMap_AddsFileFallbackEntrypointForCommonCSharpXamlCodeBehind(string path, string className)
     {
         InsertIndexedFile(path, "csharp", "public partial class " + className + "\n{\n}\n");

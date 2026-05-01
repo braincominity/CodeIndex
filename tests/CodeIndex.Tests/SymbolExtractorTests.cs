@@ -19141,6 +19141,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesCommonEventHandlers()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                <VerticalStackLayout>
+                    <Button Text="Save" Clicked="OnSaveClicked" />
+                    <Entry TextChanged="OnFilterTextChanged" />
+                    <CollectionView SelectionChanged="OnSelectionChanged" />
+                </VerticalStackLayout>
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSaveClicked");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnFilterTextChanged");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSelectionChanged");
+    }
+
+    [Fact]
     public void Extract_Xml_NonXamlXmlDoesNotEmitXamlSymbols()
     {
         var content = """
