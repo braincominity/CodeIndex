@@ -669,6 +669,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileFromStageReferences_IndexPlatformFlaggedStages()
+    {
+        const string content = """
+            FROM golang:1.21 AS builder
+
+            FROM --platform=$BUILDPLATFORM builder AS final
+            COPY --from=builder /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)

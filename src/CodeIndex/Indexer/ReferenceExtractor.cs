@@ -40,7 +40,7 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex DockerfileStageReferenceRegex = new(
-        @"^\s*FROM\s+(?<name>\w+)\s+AS\s+\w+\s*$",
+        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\w+)\s+AS\s+\w+\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex DockerfileCopyFromReferenceRegex = new(
