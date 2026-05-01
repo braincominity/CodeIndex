@@ -4612,6 +4612,12 @@ private sealed class RubyMaskState
         "missing-glyph",
     };
 
+    private static bool IsHtmlSrcResourceTag(string tagNameLower) =>
+        tagNameLower is "audio" or "embed" or "iframe" or "img" or "input" or "script" or "source" or "track" or "video";
+
+    private static bool IsHtmlHrefResourceTag(string tagNameLower) =>
+        tagNameLower is "image" or "link" or "use";
+
     private static string MaskHtmlRawTextRegions(string text)
     {
         // Walk `text` character by character, masking the body of raw-text /
@@ -5203,9 +5209,13 @@ private sealed class RubyMaskState
                     continue;
 
                 string? emitKind = null;
-                if (attrNameLower == "src" && tagNameLower == "script")
+                if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagNameLower))
                     emitKind = "import";
-                else if (attrNameLower == "href" && tagNameLower == "link")
+                else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagNameLower))
+                    emitKind = "import";
+                else if (attrNameLower == "data" && tagNameLower == "object")
+                    emitKind = "import";
+                else if (attrNameLower == "poster" && tagNameLower == "video")
                     emitKind = "import";
                 else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
                     emitKind = "property";
