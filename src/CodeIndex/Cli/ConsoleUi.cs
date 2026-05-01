@@ -186,6 +186,9 @@ public static class ConsoleUi
         if (total <= 0)
             return;
 
+        var output = Console.Out;
+        var redirected = Console.IsOutputRedirected;
+
         // Update every 50 files or at completion / 50ファイルごと、または完了時に更新
         if (current % 50 != 0 && current != total)
             return;
@@ -200,21 +203,21 @@ public static class ConsoleUi
         var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
         var line = $"{spinner} {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
 
-        if (!Console.IsOutputRedirected)
+        if (!redirected)
         {
-            Console.Write($"\r{line}");
-            Console.Out.Flush();
+            output.Write($"\r{line}");
+            output.Flush();
             _lastProgressLineLength = line.Length;
             if (current == total)
             {
-                Console.WriteLine();
+                output.WriteLine();
                 _lastProgressLineLength = 0;
             }
         }
         else
         {
             // Fallback for redirected output / リダイレクト時はフォールバック
-            Console.WriteLine(line.TrimStart());
+            output.WriteLine(line.TrimStart());
         }
     }
 
