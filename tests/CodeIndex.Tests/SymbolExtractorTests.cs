@@ -11923,6 +11923,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_NormalizesIncludeTargets()
+    {
+        // C: include targets should be searchable by header name / C: include 先はヘッダー名で検索できるべき
+        var content = """
+            #include <stdio.h>
+            #include "project/foo.h"
+            #include HEADER_NAME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
