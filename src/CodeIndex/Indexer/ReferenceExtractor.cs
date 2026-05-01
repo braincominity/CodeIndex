@@ -6407,7 +6407,7 @@ public static class ReferenceExtractor
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+            if (symbol.Kind is not ("function" or "alias") || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             names.Add(symbol.Name);

@@ -1414,6 +1414,8 @@ public static class SymbolExtractor
             // Bash/Zsh function declarations / Bash/Zsh 関数宣言
             new("function", new Regex(@"^\s*(?:function\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*function\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // Alias definitions / エイリアス定義
+            new("alias", new Regex(@"^\s*alias(?:\s+-[^\s=]+)*\s+(?<name>[A-Za-z_]\w*)\s*=", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["sql"] =
         [

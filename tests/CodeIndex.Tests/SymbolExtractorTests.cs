@@ -9915,11 +9915,24 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Shell_DetectsFunctions()
     {
-        var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";
+        var content = """
+            function setup() {
+              echo 'setup'
+            }
+
+            cleanup() {
+              echo 'cleanup'
+            }
+
+            alias ll='ls -la'
+            alias -g G='| grep'
+            """;
         var symbols = SymbolExtractor.Extract(1, "shell", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cleanup");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ll");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
     }
 
     [Fact]
