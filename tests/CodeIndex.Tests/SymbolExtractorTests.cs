@@ -9684,6 +9684,9 @@ public class SymbolExtractorTests
     {
         var content = """
             module math_utils
+              interface
+                module procedure normalize_iface
+              end interface
               implicit none
             contains
               recursive subroutine normalize(v)
@@ -9711,6 +9714,8 @@ public class SymbolExtractorTests
         var mathUtils = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils");
         Assert.NotNull(mathUtils.BodyStartLine);
         Assert.NotNull(mathUtils.BodyEndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_iface");
 
         var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
         Assert.NotNull(mathUtilsImpl.BodyStartLine);
