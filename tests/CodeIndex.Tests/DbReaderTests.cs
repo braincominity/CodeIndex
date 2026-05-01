@@ -168,6 +168,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_RustQualifiedQueriesResolveToLeafNames()
+    {
+        InsertIndexedFile(
+            "src/lib.rs",
+            "rust",
+            """
+            pub mod macros {
+                pub fn build() {}
+            }
+            """);
+
+        var results = _reader.SearchSymbols("crate::macros::build", lang: "rust", exact: true);
+
+        var symbol = Assert.Single(results);
+        Assert.Equal("build", symbol.Name);
+        Assert.Equal("src/lib.rs", symbol.Path);
+    }
+
+    [Fact]
     public void GetOutline_PreservesNestedSymbolDepths()
     {
         InsertIndexedFile(

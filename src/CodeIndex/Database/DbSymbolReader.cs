@@ -109,19 +109,19 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
         return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
         return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -136,7 +136,7 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
 
@@ -218,7 +218,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -500,7 +500,7 @@ public partial class DbReader
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -569,6 +569,36 @@ public partial class DbReader
         return reader.TrackedRead()
             ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
             : new QueryCountResult(0, 0);
+    }
+
+    private static string? NormalizeSymbolSearchQuery(string? query, string? lang)
+    {
+        if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
+            return NormalizeRustSymbolSearchQuery(query);
+
+        return NormalizeCSharpVerbatimQuery(query, lang);
+    }
+
+    private static string? NormalizeRustSymbolSearchQuery(string? query)
+    {
+        if (query == null)
+            return null;
+
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        if (trimmed.EndsWith("!", StringComparison.Ordinal))
+            trimmed = trimmed[..^1].TrimEnd();
+
+        if (trimmed.Length == 0)
+            return null;
+
+        var leafIndex = trimmed.LastIndexOf("::", StringComparison.Ordinal);
+        if (leafIndex >= 0)
+            trimmed = trimmed[(leafIndex + 2)..].Trim();
+
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     /// <summary>
@@ -654,7 +684,7 @@ public partial class DbReader
         }
 
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
