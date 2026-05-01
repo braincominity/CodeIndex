@@ -187,6 +187,43 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void RustQualifiedQueriesResolveAcrossGraphCommands()
+    {
+        InsertIndexedFile(
+            "src/lib.rs",
+            "rust",
+            """
+            pub mod macros {
+                pub fn build() {}
+
+                pub fn invoke() {
+                    build();
+                }
+            }
+            """);
+
+        var references = _reader.SearchReferences("crate::macros::build", lang: "rust", exact: true);
+        var reference = Assert.Single(references);
+        Assert.Equal("build", reference.SymbolName);
+        Assert.Equal("src/lib.rs", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("crate::macros::build", lang: "rust", exact: true));
+
+        var callers = _reader.GetCallers("crate::macros::build", lang: "rust", exact: true);
+        var caller = Assert.Single(callers);
+        Assert.Equal("invoke", caller.CallerName);
+        Assert.Equal("build", caller.CalleeName);
+        Assert.Equal("src/lib.rs", caller.Path);
+        Assert.Equal(1, _reader.CountCallers("crate::macros::build", lang: "rust", exact: true));
+
+        var callees = _reader.GetCallees("crate::macros::invoke", lang: "rust", exact: true);
+        var callee = Assert.Single(callees);
+        Assert.Equal("invoke", callee.CallerName);
+        Assert.Equal("build", callee.CalleeName);
+        Assert.Equal("src/lib.rs", callee.Path);
+        Assert.Equal(1, _reader.CountCallees("crate::macros::invoke", lang: "rust", exact: true));
+    }
+
+    [Fact]
     public void GetOutline_PreservesNestedSymbolDepths()
     {
         InsertIndexedFile(
