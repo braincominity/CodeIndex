@@ -570,7 +570,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        if (lang != null && !string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase))
+        if (lang != null && !IsSqlLanguage(lang))
             return false;
 
         using var cmd = _conn.CreateCommand();
@@ -708,7 +708,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return cmd.ExecuteScalar() != null;
@@ -772,7 +772,10 @@ public partial class DbReader
     }
 
     internal static bool IsSqlLanguage(string? lang)
-        => string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(NormalizeQueryLanguage(lang), "sql", StringComparison.OrdinalIgnoreCase);
+
+    internal static string? NormalizeQueryLanguage(string? lang)
+        => string.Equals(lang, "tsql", StringComparison.OrdinalIgnoreCase) ? "sql" : lang;
 
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);
@@ -846,6 +849,7 @@ public partial class DbReader
     /// </summary>
     public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
+        lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -899,6 +903,7 @@ public partial class DbReader
 
     public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
+        lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -936,6 +941,7 @@ public partial class DbReader
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
@@ -1152,7 +1158,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (includeOrdering)
         {
@@ -3103,7 +3109,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -3113,6 +3119,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
@@ -3223,7 +3230,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -3237,6 +3244,7 @@ public partial class DbReader
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -3345,7 +3353,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -3376,6 +3384,7 @@ public partial class DbReader
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
@@ -3451,7 +3460,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -3537,7 +3546,7 @@ public partial class DbReader
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -3551,6 +3560,7 @@ public partial class DbReader
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
@@ -3684,6 +3694,7 @@ public partial class DbReader
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
+        lang = NormalizeQueryLanguage(lang);
         query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
@@ -3769,6 +3780,7 @@ public partial class DbReader
 
     public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
@@ -4102,6 +4114,7 @@ public partial class DbReader
     /// </summary>
     public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
+        lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
         var definitions = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests);
         var definitionPaths = definitions
@@ -5398,6 +5411,7 @@ public partial class DbReader
     /// </summary>
     public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
+        lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");

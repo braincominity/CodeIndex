@@ -654,6 +654,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
+Query-time `--lang tsql` is accepted as an alias for the SQL bucket.
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
@@ -1632,6 +1633,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
+クエリ時の `--lang tsql` は SQL バケットの別名として受け付けられます。
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
