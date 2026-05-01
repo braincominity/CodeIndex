@@ -16,7 +16,7 @@ public static class Program
                 return args.Length == 0 ? 1 : 0;
             }
 
-            var root = FindRepositoryRoot(Directory.GetCurrentDirectory());
+            var root = FindRepositoryRoot();
             var tool = new ChangelogTool(root);
 
             var command = args[0];
@@ -102,7 +102,22 @@ public static class Program
         return new ParsedOptions(version, releaseDate.Value);
     }
 
-    private static string FindRepositoryRoot(string startDirectory)
+    private static string FindRepositoryRoot()
+    {
+        var currentDirectory = Directory.GetCurrentDirectory();
+        var assemblyDirectory = Path.GetDirectoryName(typeof(Program).Assembly.Location);
+
+        foreach (var startDirectory in new[] { currentDirectory, assemblyDirectory }.Where(directory => !string.IsNullOrWhiteSpace(directory)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var root = TryFindRepositoryRoot(startDirectory!);
+            if (root is not null)
+                return root;
+        }
+
+        throw new ChangelogException("Could not locate the repository root.");
+    }
+
+    private static string? TryFindRepositoryRoot(string startDirectory)
     {
         var current = new DirectoryInfo(startDirectory);
         while (current is not null)
@@ -116,7 +131,7 @@ public static class Program
             current = current.Parent;
         }
 
-        throw new ChangelogException("Could not locate the repository root.");
+        return null;
     }
 
     private sealed record ParsedOptions(Version Version, DateOnly ReleaseDate);
