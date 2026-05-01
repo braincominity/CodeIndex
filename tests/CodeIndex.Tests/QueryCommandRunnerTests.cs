@@ -310,6 +310,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearchAndSymbols_ExactQueriesSeePythonInitAllExports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_all_exports");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "package/__init__.py",
+                "python",
+                """
+                __all__ = [
+                    "public_api",
+                ]
+                """);
+
+            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["public_api", "--db", dbPath, "--exact", "--count"],
+                _jsonOptions));
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal("1", searchStdout.Trim());
+            Assert.Equal(string.Empty, searchStderr);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal("1", symbolsStdout.Trim());
+            Assert.Equal(string.Empty, symbolsStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");

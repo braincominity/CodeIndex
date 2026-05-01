@@ -145,6 +145,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlDataTypeRegex = new(
+        @"\bx:DataType\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -153,6 +156,9 @@ public static class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlEventHandlerRegex = new(
         @"\b(?:Clicked|Tapped|Loaded|Unloaded|SelectionChanged|TextChanged|CheckedChanged|Unchecked|SelectedIndexChanged|PointerPressed|PointerReleased|PointerEntered|PointerExited|Drop|DragOver|Completed|Appearing|Disappearing|NavigatedTo|NavigatedFrom|SizeChanged)\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlBindingRegex = new(
+        @"\{(?<kind>Binding|x:Bind)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
@@ -1334,6 +1340,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass|R6Class)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*inherit\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[A-Z][\w.]*))", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setValidity\s*\(\s*(?:(?:Class|class|classes|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setGeneric\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None),
@@ -1412,9 +1419,9 @@ public static class SymbolExtractor
         ],
         ["dockerfile"] =
         [
-            new("property", new Regex(@"^\s*ARG\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+(?:AS|as)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),  // Named stage / 名前付きステージ
-            new("class",    new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None),  // Base image / ベースイメージ
+            new("property", new Regex(@"^\s*(?:ARG|ENV)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+(?:AS|as)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Named stage / 名前付きステージ
+            new("class",    new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Base image / ベースイメージ
         ],
         ["protobuf"] =
         [
@@ -1785,7 +1792,7 @@ public static class SymbolExtractor
             ? "struct"
             : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
                 ? "interface"
-                : "import";
+                : "class";
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
             return true;
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
@@ -3882,6 +3889,8 @@ private sealed class RubyMaskState
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
+        if (lang == "python")
+            ExtractPythonAllExportSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
@@ -4020,8 +4029,10 @@ private sealed class RubyMaskState
     }
 
     private readonly record struct PythonImportSymbolEntry(string Name, int StartColumn);
+    private readonly record struct PythonExportSymbolEntry(string Name, int LineIndex, int StartColumn);
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string[] lines, int lineIndex, int absoluteStartColumn)
     {
@@ -4082,6 +4093,132 @@ private sealed class RubyMaskState
             entries,
             seenNames,
             treatAsFromImport: true);
+        return entries.Count > 0 ? entries : null;
+    }
+
+    private static void ExtractPythonAllExportSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var exports = TryExpandPythonAllExportSymbols(lines, i);
+            if (exports == null)
+                continue;
+
+            foreach (var export in exports)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    export.LineIndex + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = export.Name,
+                        Line = export.LineIndex + 1,
+                        StartLine = export.LineIndex + 1,
+                        StartColumn = export.StartColumn,
+                        EndLine = export.LineIndex + 1,
+                        Signature = lines[export.LineIndex].Trim(),
+                    },
+                    lines[export.LineIndex]);
+            }
+        }
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
+    {
+        var line = lines[lineIndex];
+        var match = PythonAllAssignmentRegex.Match(line);
+        if (!match.Success)
+            return null;
+
+        var valuesStartColumn = match.Groups["values"].Index;
+        if (valuesStartColumn < 0 || valuesStartColumn >= line.Length)
+            return null;
+
+        var entries = new List<PythonExportSymbolEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var currentLineIndex = lineIndex;
+        var currentColumn = valuesStartColumn;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
+            }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var name = currentLine[stringStartColumn..currentColumn].Trim();
+                    if (name.Length > 0 && seenNames.Add(name))
+                    {
+                        entries.Add(new PythonExportSymbolEntry(name, currentLineIndex, stringStartColumn));
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch == '\'' || ch == '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '[' or '(' or '{')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is ']' or ')' or '}')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
+        }
+
         return entries.Count > 0 ? entries : null;
     }
 
@@ -5561,6 +5698,23 @@ private sealed class RubyMaskState
                 });
             }
 
+            foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
+            {
+                var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
             foreach (Match nameMatch in XamlNameRegex.Matches(line))
             {
                 var value = nameMatch.Groups["value"].Value.Trim();
@@ -5581,6 +5735,23 @@ private sealed class RubyMaskState
             foreach (Match keyMatch in XamlKeyRegex.Matches(line))
             {
                 var value = NormalizeXamlKeyValue(keyMatch.Groups["value"].Value);
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(line))
+            {
+                var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
                 if (value.Length == 0)
                     continue;
                 symbols.Add(new SymbolRecord
@@ -5623,6 +5794,89 @@ private sealed class RubyMaskState
             return value;
 
         return NormalizeXamlMarkupExtensionContent(value[1..^1].Trim());
+    }
+
+    private static string NormalizeXamlBindingValue(string kind, string content)
+    {
+        kind = kind.Trim();
+        content = content.Trim();
+        if (content.Length == 0)
+            return content;
+
+        var payload = kind.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
+            ? $"x:Bind {content}"
+            : $"Binding {content}";
+
+        var firstPath = NormalizeXamlBindingPath(payload);
+        return firstPath.Length > 0 ? firstPath : content;
+    }
+
+    private static string NormalizeXamlBindingPath(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        var payloadStart = FindTopLevelMarkupPayloadStart(value);
+        if (payloadStart < 0)
+            return value;
+
+        var payload = value[(payloadStart + 1)..].TrimStart();
+        if (payload.Length == 0)
+            return value;
+
+        string? fallback = null;
+        foreach (var argument in SplitTopLevelMarkupArguments(payload))
+        {
+            var normalized = NormalizeXamlBindingArgument(argument);
+            if (normalized.Length == 0)
+                continue;
+
+            if (argument.IndexOf('=', StringComparison.Ordinal) >= 0)
+            {
+                var argumentName = argument[..argument.IndexOf('=')].Trim();
+                if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase))
+                    return normalized;
+            }
+
+            fallback ??= normalized;
+        }
+
+        return fallback ?? value;
+    }
+
+    private static string NormalizeXamlBindingArgument(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        var equalsIndex = IndexOfTopLevelEquals(value);
+        if (equalsIndex >= 0)
+        {
+            var name = value[..equalsIndex].Trim();
+            var normalized = value[(equalsIndex + 1)..].Trim();
+            if (string.Equals(name, "Path", StringComparison.OrdinalIgnoreCase))
+                return NormalizeXamlBindingPathValue(normalized);
+            if (normalized.Length > 0)
+                return NormalizeXamlMarkupValue(normalized);
+        }
+
+        return NormalizeXamlBindingPathValue(value);
+    }
+
+    private static string NormalizeXamlBindingPathValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        value = NormalizeXamlMarkupValue(value);
+        var lastDot = value.LastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < value.Length)
+            value = value[(lastDot + 1)..];
+
+        return value.Trim();
     }
 
     private static string NormalizeXamlMarkupValue(string value)

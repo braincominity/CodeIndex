@@ -131,6 +131,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllExportsFromInitModules()
+    {
+        var content = """
+            __all__ = [
+                "public_api",
+                "secondary_api",
+            ]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var exports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(exports, symbol => symbol.Name == "public_api");
+        Assert.Contains(exports, symbol => symbol.Name == "secondary_api");
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
@@ -387,6 +404,37 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ErrNotFound");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultConfig");
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsNamedTypesAndAliasesAsClassSymbols()
+    {
+        var content = """
+            package demo
+
+            type Identifier = string
+            type Count int
+
+            type (
+                Alias = otherpkg.Value
+                Score uint64
+                Node struct {
+                    ID Identifier
+                }
+                Reader interface {
+                    Read([]byte) (int, error)
+                }
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Identifier");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Count");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Score");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Reader");
     }
 
     [Fact]
@@ -9886,7 +9934,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
     }
 
     [Fact]
@@ -9919,7 +9967,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Named");
@@ -15901,7 +15949,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_R_DetectsS4AndReferenceClassDefinitions()
     {
-        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
+        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod, inherit metadata / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod、inherit メタデータ
         var content = """
             methods::setClass(Class = "Person", slots = c(name = "character"))
 
@@ -15914,6 +15962,7 @@ public class SymbolExtractorTests
             methods::setValidity(Class = "LegacyThing", function(object) TRUE)
 
             R6::R6Class(classname = Thing,
+              inherit = BaseThing,
               public = list(print = function() self),
               private = list(secret = function() self),
               active = list(state = function(value) self))
@@ -15931,6 +15980,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyThing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BaseThing");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LegacyThing");
         var print = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "print");
         Assert.Equal("public", print.Visibility);
@@ -17310,6 +17360,24 @@ public class SymbolExtractorTests
         // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
         Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsLowercaseInstructionsAndEnvSymbols()
+    {
+        var content = """
+            from --platform=$BUILDPLATFORM golang:1.22 as builder
+            env APP_HOME=/app
+            env PATH=/usr/local/bin:$PATH
+            from --platform=linux/amd64 alpine:3.20
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
+        Assert.Equal(4, symbols.Count);
     }
 
     [Fact]
@@ -19342,6 +19410,27 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSaveClicked");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnFilterTextChanged");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSelectionChanged");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlCapturesBindingPaths()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:vm="clr-namespace:Sample.ViewModels">
+                <StackPanel DataContext="{Binding Source={x:Reference Root}, Path=ViewModel}">
+                    <Label Text="{Binding Title}" />
+                    <Button Command="{x:Bind ViewModel.SaveCommand}" />
+                </StackPanel>
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
     }
 
     [Fact]

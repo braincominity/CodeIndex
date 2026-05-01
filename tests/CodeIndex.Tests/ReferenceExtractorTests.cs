@@ -678,6 +678,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileFromStageReferences_IndexLowercaseInstructions()
+    {
+        const string content = """
+            from golang:1.21 as builder
+
+            from builder as build2
+
+            copy --from=builder /src/app /usr/local/bin/app
+
+            from alpine:3.20
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "alpine:3.20");
+    }
+
+    [Fact]
     public void Extract_DockerfileCopyFromReferences_IndexStageDependencies()
     {
         const string content = """
@@ -1760,7 +1783,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(5, references.Count(reference =>
             reference.SymbolName == "Point"
             && reference.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, reference =>
@@ -6732,13 +6755,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_Batch_IndexesGotoAndCallTargets()
+    public void Extract_Batch_IndexesGotoCallAndInlineTargets()
     {
         const string content = """
             @echo off
             goto :Build
+            if errorlevel 1 goto :Retry
+            goto :Next & call :Build
+            call :Done && goto :Retry
+            echo ^& goto :Quoted
+            if /i "%MODE%"=="release" goto :Release
+            if not "debug"=="release" call :Fallback
             rem goto :Ignored
             :Build
+            :Retry
+            :Next
+            :Done
+            :Release
+            :Fallback
             call :Build
             :: call :Commented
             goto :EOF
@@ -6747,9 +6781,15 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "batch", content);
         var references = ReferenceExtractor.Extract(1, "batch", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "Build" && r.ReferenceKind == "call"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Build" && r.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Retry" && r.ReferenceKind == "call"));
+        Assert.Contains(references, r => r.SymbolName == "Next" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Done" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Release" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Fallback" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "EOF" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ignored" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Quoted" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Commented" && r.ReferenceKind == "call");
     }
 
@@ -18261,6 +18301,25 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "./mod"
             && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeExpressions_IgnoreTemplateRawTextAndStringKeys()
+    {
+        const string content = """
+            class User {}
+
+            type Label = `prefix;${User}_suffix`;
+            type UserId = User["id"];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "id" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
