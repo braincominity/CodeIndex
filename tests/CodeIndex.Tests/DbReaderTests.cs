@@ -149,6 +149,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_RustMacroQueriesIgnoreTrailingBang()
+    {
+        InsertIndexedFile(
+            "src/macros.rs",
+            "rust",
+            """
+            macro_rules! my_macro {
+                () => {};
+            }
+            """);
+
+        var results = _reader.SearchSymbols("my_macro!", lang: "rust", exact: true);
+
+        var symbol = Assert.Single(results);
+        Assert.Equal("my_macro", symbol.Name);
+        Assert.Equal("src/macros.rs", symbol.Path);
+    }
+
+    [Fact]
     public void GetOutline_PreservesNestedSymbolDepths()
     {
         InsertIndexedFile(
