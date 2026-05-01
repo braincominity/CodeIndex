@@ -297,7 +297,16 @@ public partial class DbReader
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id
-                WHERE instr(c.content, @exactQuery) > 0";
+                WHERE instr(
+                    CASE WHEN f.lang = 'csharp'
+                         THEN sql_normalize_csharp_verbatim_name(c.content)
+                         ELSE c.content
+                    END,
+                    CASE WHEN f.lang = 'csharp'
+                         THEN sql_normalize_csharp_verbatim_name(@exactQuery)
+                         ELSE @exactQuery
+                    END
+                ) > 0";
         }
         else
         {
@@ -370,7 +379,16 @@ public partial class DbReader
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id
-                WHERE instr(c.content, @exactQuery) > 0";
+                WHERE instr(
+                    CASE WHEN f.lang = 'csharp'
+                         THEN sql_normalize_csharp_verbatim_name(c.content)
+                         ELSE c.content
+                    END,
+                    CASE WHEN f.lang = 'csharp'
+                         THEN sql_normalize_csharp_verbatim_name(@exactQuery)
+                         ELSE @exactQuery
+                    END
+                ) > 0";
         }
         else
         {

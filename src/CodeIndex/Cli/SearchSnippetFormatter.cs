@@ -11,9 +11,9 @@ public static class SearchSnippetFormatter
     public const int DefaultSnippetLines = 8;
     public const int MaxSnippetLines = 20;
 
-    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null)
     {
-        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive, maxLineWidth);
+        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive, maxLineWidth, lang);
         if (excerpt.Lines.Count == 0)
             return [];
 
@@ -29,9 +29,9 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null)
     {
-        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth);
+        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang);
         return new CompactSearchResult
         {
             Path = result.Path,
@@ -50,7 +50,7 @@ public static class SearchSnippetFormatter
         };
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null)
     {
         maxLines = ClampSnippetLines(maxLines);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
@@ -66,15 +66,31 @@ public static class SearchSnippetFormatter
         }
 
         var normalizedQuery = query.Trim();
+        var normalizeCSharpVerbatimNames = caseSensitive && string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase);
+        if (normalizeCSharpVerbatimNames)
+            normalizedQuery = CSharpVerbatimNameNormalizer.Normalize(normalizedQuery);
+
         var tokens = query
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
             .Select(NormalizeToken)
             .Where(t => t.Length > 0)
             .Where(t => t is not "AND" and not "OR" and not "NOT" and not "NEAR")
+            .Select(token => normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(token) : token)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var matchIndexes = FindMatchingLineIndexes(lines, normalizedQuery, tokens, caseSensitive);
+        string[]? normalizedLines = null;
+        int[][]? rawIndexMaps = null;
+        if (normalizeCSharpVerbatimNames)
+        {
+            normalizedLines = new string[lines.Length];
+            rawIndexMaps = new int[lines.Length][];
+            for (int i = 0; i < lines.Length; i++)
+                normalizedLines[i] = CSharpVerbatimNameNormalizer.Normalize(lines[i], out rawIndexMaps[i]);
+        }
+
+        var matchLinesSource = normalizedLines ?? lines;
+        var matchIndexes = FindMatchingLineIndexes(matchLinesSource, normalizedQuery, tokens, caseSensitive);
         var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
         var focusEnd = focusStart;
         foreach (var matchIndex in matchIndexes.Skip(1))
@@ -118,7 +134,15 @@ public static class SearchSnippetFormatter
         for (int i = start; i <= end; i++)
         {
             var originalLine = lines[i];
-            var clamped = ClampSnippetLine(originalLine, maxLineWidth, matchSet.Contains(i) ? normalizedQuery : null, tokens, caseSensitive);
+            ClampedTextResult clamped;
+            if (normalizeCSharpVerbatimNames && matchSet.Contains(i) && normalizedLines != null && rawIndexMaps != null)
+            {
+                clamped = ClampNormalizedSnippetLine(originalLine, normalizedLines[i], rawIndexMaps[i], maxLineWidth, normalizedQuery, tokens, caseSensitive);
+            }
+            else
+            {
+                clamped = ClampSnippetLine(originalLine, maxLineWidth, matchSet.Contains(i) ? normalizedQuery : null, tokens, caseSensitive);
+            }
             clampedLines.Add(clamped.Text);
             if (clamped.Truncated)
                 truncatedLineCount++;
@@ -134,7 +158,7 @@ public static class SearchSnippetFormatter
                 Text = clamped.Text,
                 OriginalLineLength = originalLine.Length,
                 Truncated = clamped.Truncated,
-                Terms = GetMatchedTerms(originalLine, normalizedQuery, tokens, caseSensitive),
+                Terms = GetMatchedTerms(normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine, normalizedQuery, tokens, caseSensitive),
             });
         }
 
@@ -168,6 +192,19 @@ public static class SearchSnippetFormatter
             return LineWidthFormatter.ClampLine(line, maxLineWidth);
 
         return LineWidthFormatter.ClampLine(line, maxLineWidth, matchColumn, matchLength);
+    }
+
+    private static ClampedTextResult ClampNormalizedSnippetLine(string originalLine, string normalizedLine, int[] rawIndexMap, int maxLineWidth, string normalizedQuery, string[] tokens, bool caseSensitive)
+    {
+        var (matchColumn, matchLength) = FindFirstMatchColumn(normalizedLine, normalizedQuery, tokens, caseSensitive);
+        if (matchColumn <= 0)
+            return LineWidthFormatter.ClampLine(originalLine, maxLineWidth);
+
+        var normalizedStart = matchColumn - 1;
+        var normalizedEnd = Math.Min(rawIndexMap.Length - 1, normalizedStart + Math.Max(1, matchLength) - 1);
+        var rawFocusColumn = rawIndexMap[normalizedStart] + 1;
+        var rawFocusLength = rawIndexMap[normalizedEnd] - rawIndexMap[normalizedStart] + 1;
+        return LineWidthFormatter.ClampLine(originalLine, maxLineWidth, rawFocusColumn, rawFocusLength);
     }
 
     private static (int Column, int Length) FindFirstMatchColumn(string line, string normalizedQuery, string[] tokens, bool caseSensitive)
@@ -269,6 +306,7 @@ public static class SearchSnippetFormatter
             .Trim('"', '\'', '(', ')')
             .TrimEnd('*');
     }
+
 }
 
 public sealed class CompactSearchResult
