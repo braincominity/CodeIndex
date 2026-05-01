@@ -8188,6 +8188,19 @@ public class DbReaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData("src/MainWindow.xaml.cs", "MainWindow")]
+    [InlineData("src/MainPage.xaml.cs", "MainPage")]
+    [InlineData("src/AppShell.xaml.cs", "AppShell")]
+    public void GetRepoMap_AddsFileFallbackEntrypointForCommonCSharpXamlCodeBehind(string path, string className)
+    {
+        InsertIndexedFile(path, "csharp", "public partial class " + className + "\n{\n}\n");
+
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { path });
+
+        Assert.Contains(map.Entrypoints, item => item.Kind == "class" && item.Name == className && item.Path == path);
+    }
+
+    [Theory]
     [InlineData("src/Main.vb")]
     [InlineData("src/Module.vb")]
     [InlineData("src/Form1.vb")]
