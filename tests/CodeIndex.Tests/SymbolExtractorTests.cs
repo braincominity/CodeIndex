@@ -16825,6 +16825,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsBuildArgs()
+    {
+        var content = """
+            ARG NODE_VERSION=20
+            FROM node:${NODE_VERSION} AS builder
+
+            ARG APP_HOME
+            WORKDIR /app
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NODE_VERSION");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name.Contains("node:${NODE_VERSION}", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsSymbols()
     {
         var content = """

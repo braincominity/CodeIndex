@@ -630,7 +630,7 @@ The database reflects the working tree at the time of the last index. After swit
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
-| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes; `ARG` build args are searchable as `property` symbols |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | -- |
 | CUDA | `.cu`, `.cuh` | -- |
 | GLSL | `.glsl`, `.vert`, `.frag` | -- |
@@ -1627,7 +1627,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
-| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes; `ARG` ビルド引数も `property` シンボルとして検索可 |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
