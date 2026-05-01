@@ -131,6 +131,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllExportsFromInitModules()
+    {
+        var content = """
+            __all__ = [
+                "public_api",
+                "secondary_api",
+            ]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var exports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(exports, symbol => symbol.Name == "public_api");
+        Assert.Contains(exports, symbol => symbol.Name == "secondary_api");
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
