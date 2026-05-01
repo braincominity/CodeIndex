@@ -15734,20 +15734,20 @@ public class SymbolExtractorTests
     {
         // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod
         var content = """
-            methods::setClass(Person, slots = c(name = "character"))
+            methods::setClass(Class = "Person", slots = c(name = "character"))
 
-            methods::setClassUnion(Renderable, c(Person, Widget))
+            methods::setClassUnion(name = Renderable, c(Person, Widget))
 
-            methods::setRefClass(Widget, fields = list(value = "numeric"))
+            methods::setRefClass(classname = Widget, fields = list(value = "numeric"))
 
-            R6::R6Class(Thing,
+            R6::R6Class(classname = Thing,
               public = list(print = function() self),
               private = list(secret = function() self),
               active = list(state = function(value) self))
 
-            methods::setGeneric("normalize", function(x) standardGeneric("normalize"))
+            methods::setGeneric(f = "normalize", function(x) standardGeneric("normalize"))
 
-            methods::setMethod(show, signature(object = "Person"), function(object) {
+            methods::setMethod(f = show, signature(object = "Person"), function(object) {
               object
             })
             """;
