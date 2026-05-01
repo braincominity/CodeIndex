@@ -6732,13 +6732,20 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_Batch_IndexesGotoAndCallTargets()
+    public void Extract_Batch_IndexesGotoCallAndInlineTargets()
     {
         const string content = """
             @echo off
             goto :Build
+            if errorlevel 1 goto :Retry
+            goto :Next & call :Build
+            call :Done && goto :Retry
+            echo ^& goto :Quoted
             rem goto :Ignored
             :Build
+            :Retry
+            :Next
+            :Done
             call :Build
             :: call :Commented
             goto :EOF
@@ -6747,9 +6754,13 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "batch", content);
         var references = ReferenceExtractor.Extract(1, "batch", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "Build" && r.ReferenceKind == "call"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Build" && r.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Retry" && r.ReferenceKind == "call"));
+        Assert.Contains(references, r => r.SymbolName == "Next" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Done" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "EOF" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ignored" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Quoted" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Commented" && r.ReferenceKind == "call");
     }
 

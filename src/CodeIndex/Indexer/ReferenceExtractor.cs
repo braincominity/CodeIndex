@@ -54,10 +54,10 @@ public static class ReferenceExtractor
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    // Batch `goto :label` / `call :label` targets are line-oriented and do not use parentheses.
-    // batch の `goto :label` / `call :label` は行指向で、括弧を使わない。
-    private static readonly Regex BatchLabelTargetRegex = new(
-        @"^\s*@?\s*(?:goto|call)\s+:(?<name>[\w.\-]+)\b",
+    // Batch jump targets can appear as direct commands, chained commands, or inline `if` forms.
+    // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
+    private static readonly Regex BatchJumpTargetRegex = new(
+        @"^\s*@?\s*(?:(?:if\s+(?:not\s+)?(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
@@ -2330,15 +2330,34 @@ public static class ReferenceExtractor
 
             if (language is "batch" && !IsBatchCommentLine(originalLine))
             {
-                foreach (Match match in BatchLabelTargetRegex.Matches(preparedLine))
+                for (var segmentStart = 0; segmentStart < preparedLine.Length;)
                 {
-                    var name = match.Groups["name"].Value;
-                    if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    var segmentEnd = segmentStart;
+                    while (segmentEnd < preparedLine.Length && !IsBatchCommandSeparator(preparedLine, segmentEnd))
+                        segmentEnd++;
 
-                    var callIndex = match.Groups["name"].Index;
-                    var callContainer = ResolveContainerForCall(callIndex);
-                    AddReference(references, seen, fileId, name, callIndex, "call", context, lineNumber, callContainer);
+                    ProcessBatchJumpSegment(
+                        preparedLine[segmentStart..segmentEnd],
+                        segmentStart,
+                        references,
+                        seen,
+                        context,
+                        fileId,
+                        lineNumber,
+                        ResolveContainerForCall);
+
+                    var segment = preparedLine[segmentStart..segmentEnd].TrimStart();
+                    if (segment.Length > 0)
+                    {
+                        if (segment[0] == '@')
+                            segment = segment[1..].TrimStart();
+                        if (segment.Length > 0 && (segment.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(segment, 0)))
+                            break;
+                    }
+
+                    segmentStart = segmentEnd;
+                    while (segmentStart < preparedLine.Length && (char.IsWhiteSpace(preparedLine[segmentStart]) || IsBatchCommandSeparator(preparedLine, segmentStart)))
+                        segmentStart++;
                 }
             }
 
@@ -15711,5 +15730,74 @@ public static class ReferenceExtractor
             return true;
         var next = line[start + 3];
         return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
+    private static bool IsBatchCommandSeparator(string line, int index)
+    {
+        var c = line[index];
+        if (c is not '&' and not '|')
+            return false;
+
+        var caretCount = 0;
+        for (var i = index - 1; i >= 0 && line[i] == '^'; i--)
+            caretCount++;
+
+        return (caretCount & 1) == 0;
+    }
+
+    private static void ProcessBatchJumpSegment(
+        string segment,
+        int segmentOffset,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        string context,
+        long fileId,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var trimmed = segment.TrimStart();
+        if (trimmed.Length == 0)
+            return;
+
+        if (trimmed[0] == '@')
+        {
+            trimmed = trimmed[1..].TrimStart();
+            if (trimmed.Length == 0)
+                return;
+        }
+
+        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(trimmed, 0))
+            return;
+
+        if (StartsWithBatchWord(trimmed, "else") || StartsWithBatchWord(trimmed, "do"))
+        {
+            var keywordEnd = 0;
+            while (keywordEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[keywordEnd]))
+                keywordEnd++;
+            while (keywordEnd < trimmed.Length && char.IsWhiteSpace(trimmed[keywordEnd]))
+                keywordEnd++;
+            if (keywordEnd >= trimmed.Length)
+                return;
+            trimmed = trimmed[keywordEnd..].TrimStart();
+        }
+
+        var match = BatchJumpTargetRegex.Match(trimmed);
+        if (!match.Success)
+            return;
+
+        var name = match.Groups["name"].Value;
+        if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var commandIndex = segmentOffset + match.Groups["command"].Index;
+        var callContainer = resolveContainerForCall(commandIndex);
+        AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
+    }
+
+    private static bool StartsWithBatchWord(string text, string word)
+    {
+        if (!text.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return text.Length == word.Length || char.IsWhiteSpace(text[word.Length]);
     }
 }
