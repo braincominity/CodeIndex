@@ -12559,11 +12559,14 @@ public class SymbolExtractorTests
     public void Extract_Cpp_DetectsClassAndNamespace()
     {
         // C++: class, namespace, functions / C++: クラス、名前空間、関数
-        var content = "namespace MyApp {\nclass Handler {\n    void process(int data) {\n    }\n};\n}";
+        var content = "namespace MyApp {\nconstexpr decltype(auto) value() { return 42; }\nclass Handler {\n    void process(int data) {\n    }\n};\n}";
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
+        var value = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "value");
+        Assert.Equal("MyApp", value.ContainerName);
+        Assert.Contains("decltype(auto)", value.ReturnType);
     }
 
     [Fact]
