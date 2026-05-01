@@ -9680,6 +9680,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Fortran_DetectsModulesProgramsSubroutinesAndFunctions()
+    {
+        var content = """
+            module math_utils
+              implicit none
+            contains
+              pure real function square(x) result(y)
+                real, intent(in) :: x
+                y = x * x
+              end function square
+
+              recursive subroutine normalize(v)
+              end subroutine normalize
+            end module math_utils
+
+            program demo
+            end program demo
+
+            integer function add(a, b)
+            end function add
+
+            real(kind=8) function typed_value(x)
+            end function typed_value
+            """;
+        var symbols = SymbolExtractor.Extract(1, "fortran", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "math_utils");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "square");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "typed_value");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsGenericTypeDeclarations()
     {
         var content = """
