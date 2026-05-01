@@ -15340,9 +15340,6 @@ private static bool TryStartRubyHeredoc(string line, int index, out int consumed
         scanIndex++;
     }
 
-    while (scanIndex < line.Length && char.IsWhiteSpace(line[scanIndex]))
-        scanIndex++;
-
     if (scanIndex >= line.Length)
         return false;
 
