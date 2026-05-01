@@ -1788,7 +1788,7 @@ public static class SymbolExtractor
             ? "struct"
             : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
                 ? "interface"
-                : "import";
+                : "class";
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
             return true;
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
