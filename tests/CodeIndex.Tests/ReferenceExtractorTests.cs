@@ -1821,7 +1821,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(5, references.Count(reference =>
             reference.SymbolName == "Point"
             && reference.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, reference =>
@@ -18320,6 +18320,25 @@ public class ReferenceExtractorTests
 
         Assert.Equal(3, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
+    {
+        const string content = """
+            const loaded = import("./mod");
+            type ModuleNamespace = typeof import("./mod");
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "import"
+            && symbol.Name == "./mod");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./mod"
+            && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]

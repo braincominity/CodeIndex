@@ -1609,6 +1609,7 @@ public static class ReferenceExtractor
                     preparedLines,
                     i,
                     preparedLine,
+                    lines[i],
                     references,
                     seen,
                     fileId,
@@ -4498,6 +4499,7 @@ public static class ReferenceExtractor
         IReadOnlyList<string> preparedLines,
         int lineIndex,
         string preparedLine,
+        string rawLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -4518,14 +4520,38 @@ public static class ReferenceExtractor
             if (!IsTypeScriptTypeQueryContext(preparedLines, lineIndex, preparedLine, tokens, tokenIndex))
                 continue;
 
-            if (!TryExtractTypeScriptTypeQueryTarget(preparedLine, tokens[tokenIndex].Start + tokens[tokenIndex].Length, out var expressionStart, out var expressionLength))
+            if (!TryExtractTypeScriptTypeQueryTarget(
+                    rawLine,
+                    tokens[tokenIndex].Start + tokens[tokenIndex].Length,
+                    out var expressionStart,
+                    out var expressionLength,
+                    out var literalTarget))
                 continue;
 
+            if (literalTarget != null)
+            {
+                AddTypeReferenceSegment(
+                    references,
+                    seen,
+                    fileId,
+                    literalTarget,
+                    expressionStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(expressionStart),
+                    "typescript");
+                continue;
+            }
+
+            if (expressionStart < 0 || expressionStart >= rawLine.Length)
+                continue;
+
+            var expressionLengthSafe = Math.Min(expressionLength, rawLine.Length - expressionStart);
             AddTypeReferenceSegments(
                 references,
                 seen,
                 fileId,
-                preparedLine.Substring(expressionStart, expressionLength),
+                rawLine.Substring(expressionStart, expressionLengthSafe),
                 expressionStart,
                 context,
                 lineNumber,
@@ -6612,10 +6638,12 @@ public static class ReferenceExtractor
         string line,
         int startIndex,
         out int targetStart,
-        out int targetLength)
+        out int targetLength,
+        out string? literalTarget)
     {
         targetStart = 0;
         targetLength = 0;
+        literalTarget = null;
 
         var cursor = startIndex;
         while (cursor < line.Length)
@@ -6627,8 +6655,18 @@ public static class ReferenceExtractor
             if (TryConsumeTypeScriptTypeQueryWrapper(line, cursor, "typeof", out cursor))
                 continue;
 
-            if (TryConsumeTypeScriptImportTypeWrapper(line, cursor, out cursor))
+            if (TryConsumeTypeScriptImportTypeWrapper(line, cursor, out cursor, out var importModuleStart, out var importModuleLength))
+            {
+                if (cursor >= line.Length || line[cursor] != '.')
+                {
+                    targetStart = importModuleStart;
+                    targetLength = importModuleLength;
+                    literalTarget = line.Substring(importModuleStart, importModuleLength);
+                    return targetLength > 0;
+                }
+
                 continue;
+            }
 
             if (line[cursor] == '(' || line[cursor] == '[')
             {
@@ -6682,9 +6720,13 @@ public static class ReferenceExtractor
     private static bool TryConsumeTypeScriptImportTypeWrapper(
         string line,
         int cursor,
-        out int nextCursor)
+        out int nextCursor,
+        out int moduleStart,
+        out int moduleLength)
     {
         nextCursor = cursor;
+        moduleStart = -1;
+        moduleLength = 0;
         if (cursor + "import".Length > line.Length
             || !line.AsSpan(cursor, "import".Length).Equals("import", StringComparison.Ordinal))
         {
@@ -6699,10 +6741,21 @@ public static class ReferenceExtractor
         if (nextIndex >= line.Length || line[nextIndex] != '(')
             return false;
 
+        var moduleQuoteIndex = SkipWhitespace(line, nextIndex + 1);
+        if (moduleQuoteIndex >= line.Length || line[moduleQuoteIndex] is not '\'' and not '"')
+            return false;
+
+        var moduleLiteralStart = moduleQuoteIndex + 1;
+        var moduleLiteralEnd = SkipTypeScriptStringLiteral(line, moduleQuoteIndex) - 1;
+        if (moduleLiteralEnd < moduleLiteralStart)
+            return false;
+
         var closeIndex = SkipBalanced(line, nextIndex, '(', ')');
         if (closeIndex <= nextIndex)
             return false;
 
+        moduleStart = moduleLiteralStart;
+        moduleLength = moduleLiteralEnd - moduleLiteralStart;
         nextCursor = closeIndex;
         return true;
     }
