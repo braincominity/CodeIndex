@@ -21,6 +21,13 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
+    private static readonly Dictionary<string, string> LangFilterAliases = new(StringComparer.Ordinal)
+    {
+        ["py"] = "python",
+        ["py3"] = "python",
+        ["pyi"] = "python",
+        ["pyw"] = "python",
+    };
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -2716,9 +2723,13 @@ public static class QueryCommandRunner
                         WarnIfDuplicateSingleValueOption("--lang", langValue!);
                         // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
                         // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
+                        // Also fold common short aliases (e.g. `py`) to canonical language names so Python-heavy
+                        // workflows can use familiar shorthand without silently returning zero rows.
                         // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
                         // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
-                        lang = langValue?.ToLowerInvariant();
+                        // さらに `py` のような短縮エイリアスを正規名へ畳み込み、Python 利用時の慣用入力で
+                        // 意図せず 0 件になる事故を避ける。
+                        lang = NormalizeLangFilterValue(langValue);
                     }
                     else
                         AddParseError(langError!);
@@ -2977,6 +2988,14 @@ public static class QueryCommandRunner
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    internal static string? NormalizeLangFilterValue(string? langValue)
+    {
+        if (langValue == null)
+            return null;
+        var normalized = langValue.ToLowerInvariant();
+        return LangFilterAliases.TryGetValue(normalized, out var canonical) ? canonical : normalized;
     }
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)

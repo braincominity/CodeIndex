@@ -113,6 +113,19 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("Python", "python")]
+    [InlineData("py", "python")]
+    [InlineData("PY3", "python")]
+    [InlineData("pyi", "python")]
+    [InlineData("pyw", "python")]
+    public void ParseArgs_NormalizesLangAliases(string input, string expected)
+    {
+        var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
+
+        Assert.Equal(expected, options.Lang);
+    }
+
+    [Theory]
     [InlineData("tokio::spawn", "column qualifier")]
     [InlineData("AND OR", "literal-safe search")]
     [InlineData("foo\"bar", "literal-safe search")]
