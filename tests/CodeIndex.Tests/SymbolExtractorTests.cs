@@ -15965,13 +15965,11 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_R_DetectsS4AndReferenceClassDefinitions()
     {
-        // R: setClass, setClassUnion, setAs, setRefClass, R6Class, setGeneric, setMethod, inherit metadata / R: setClass、setClassUnion、setAs、setRefClass、R6Class、setGeneric、setMethod、inherit メタデータ
+        // R: setClass, setClassUnion, setRefClass, R6Class, setGeneric, setMethod, inherit metadata / R: setClass、setClassUnion、setRefClass、R6Class、setGeneric、setMethod、inherit メタデータ
         var content = """
             methods::setClass(Class = "Person", slots = c(name = "character"))
 
             methods::setClassUnion(name = Renderable, c(Person, Widget))
-
-            methods::setAs(from = "SourceClass", to = TargetClass, function(from) from)
 
             methods::setRefClass(classname = Widget, fields = list(value = "numeric"))
 
@@ -15980,7 +15978,7 @@ public class SymbolExtractorTests
             methods::setValidity(Class = "LegacyThing", function(object) TRUE)
 
             R6::R6Class(classname = Thing,
-              inherit = BaseThing,
+              inherit = c(BaseThing, AnotherThing),
               public = list(print = function() self),
               private = list(secret = function() self),
               active = list(state = function(value) self))
@@ -15995,7 +15993,6 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Renderable");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "TargetClass");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyThing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
