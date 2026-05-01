@@ -19439,8 +19439,10 @@ public class SymbolExtractorTests
                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                          xmlns:vm="clr-namespace:Sample.ViewModels">
                 <StackPanel DataContext="{Binding Source={x:Reference Root}, Path=ViewModel}">
-                    <Label Text="{Binding Title}" />
-                    <Button Command="{x:Bind ViewModel.SaveCommand}" />
+                    <Label Text="{Binding
+                        Title}" />
+                    <Button Command="{x:Bind
+                        ViewModel.SaveCommand}" />
                 </StackPanel>
             </ContentPage>
             """;
@@ -19450,6 +19452,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Root");
     }
 
     [Fact]

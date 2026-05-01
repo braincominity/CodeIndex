@@ -5908,6 +5908,15 @@ private sealed class RubyMaskState
         if (!hasXamlNamespace)
             return [];
 
+        var rawText = string.Join('\n', lines);
+        var lineStarts = new int[lines.Length];
+        var lineCursor = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lineStarts[i] = lineCursor;
+            lineCursor += lines[i].Length + 1;
+        }
+
         var symbols = new List<SymbolRecord>();
         for (var i = 0; i < lines.Length; i++)
         {
@@ -5980,23 +5989,6 @@ private sealed class RubyMaskState
                 });
             }
 
-            foreach (Match bindingMatch in XamlBindingRegex.Matches(line))
-            {
-                var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "property",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
-            }
-
             foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
             {
                 var value = handlerMatch.Groups["value"].Value.Trim();
@@ -6013,6 +6005,26 @@ private sealed class RubyMaskState
                     Signature = line.Trim(),
                 });
             }
+        }
+
+        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        {
+            var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
+            if (value.Length == 0)
+                continue;
+
+            var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
+            var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = value,
+                Line = startLine,
+                StartLine = startLine,
+                EndLine = startLine,
+                Signature = lines[signatureIndex].Trim(),
+            });
         }
 
         return symbols;
@@ -6068,6 +6080,8 @@ private sealed class RubyMaskState
                 var argumentName = argument[..argument.IndexOf('=')].Trim();
                 if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase))
                     return normalized;
+
+                continue;
             }
 
             fallback ??= normalized;
