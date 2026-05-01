@@ -15102,12 +15102,14 @@ public static class ReferenceExtractor
             trimmed.StartsWith("do ", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("do", StringComparison.OrdinalIgnoreCase))
         {
-            var spaceIndex = trimmed.IndexOf(' ');
-            if (spaceIndex < 0)
+            var keywordEnd = 0;
+            while (keywordEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[keywordEnd]))
+                keywordEnd++;
+            while (keywordEnd < trimmed.Length && char.IsWhiteSpace(trimmed[keywordEnd]))
+                keywordEnd++;
+            if (keywordEnd >= trimmed.Length)
                 return;
-            trimmed = trimmed[(spaceIndex + 1)..].TrimStart();
-            if (trimmed.Length == 0)
-                return;
+            trimmed = trimmed[keywordEnd..].TrimStart();
         }
 
         var match = BatchJumpTargetRegex.Match(trimmed);
