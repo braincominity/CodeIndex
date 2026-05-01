@@ -7665,6 +7665,41 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExcludeTestsSkipsPythonConftestFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_conftest_exclude");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "python_conftest_fixture_8bb7c4";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/conftest.py",
+                "python",
+                $"fixture_token = \"{queryToken}\"\n");
+
+            var withoutExclude = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--count"],
+                _jsonOptions));
+            var withExclude = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--exclude-tests", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, withoutExclude.Result);
+            Assert.Equal("1", withoutExclude.Stdout.Trim());
+            Assert.Equal(string.Empty, withoutExclude.Stderr);
+
+            Assert.Equal(CommandExitCodes.Success, withExclude.Result);
+            Assert.Equal("0", withExclude.Stdout.Trim());
+            Assert.Equal(string.Empty, withExclude.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringHumanSnippetUsesCaseSensitiveFocusLine()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_human_snippet");

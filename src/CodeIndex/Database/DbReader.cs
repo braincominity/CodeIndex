@@ -94,6 +94,8 @@ public partial class DbReader
             lower(f.path) LIKE '%/test\_%' ESCAPE '\' OR
             lower(f.path) LIKE '%\_tests.%' ESCAPE '\' OR
             lower(f.path) LIKE '%\_test.%' ESCAPE '\' OR
+            lower(f.path) LIKE 'conftest.py' OR
+            lower(f.path) LIKE '%/conftest.py' OR
             lower(f.path) LIKE '%.spec.%' OR
             lower(f.path) LIKE '%.test.%'
         )";
