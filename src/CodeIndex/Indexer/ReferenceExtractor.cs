@@ -54,10 +54,12 @@ public static class ReferenceExtractor
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    // Batch jump targets can appear as direct commands, chained commands, or inline `if` forms.
+    // Batch jump targets can appear as direct commands, chained commands, or inline `if`
+    // forms, including comparison-based conditions such as `if /i "%a%"=="b" goto :X`.
     // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
+    // 比較式ベースの `if /i "%a%"=="b" goto :X` のような形も含めて扱う。
     private static readonly Regex BatchJumpTargetRegex = new(
-        @"^\s*@?\s*(?:(?:if\s+(?:not\s+)?(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
+        @"^\s*@?\s*(?:(?:if\s+(?:/i\s+)?(?:not\s+)?(?:(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)|(?:[^()\r\n]+?\s*(?:==|equ|neq|lss|leq|gtr|geq)\s*[^()\r\n]+?))\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
