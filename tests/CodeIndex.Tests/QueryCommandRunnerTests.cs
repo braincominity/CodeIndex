@@ -4396,6 +4396,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_SwiftKindFiltersSeparateTypealiasAndAssociatedtype()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_swift_kind_filters");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "models.swift"),
+                """
+                public typealias `Callback`<T> = (T) -> Void where T: Sendable
+
+                public protocol Store {
+                    associatedtype Item
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (typealiasExitCode, typealiasStdout, typealiasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "typealias"],
+                _jsonOptions));
+            var (associatedtypeExitCode, associatedtypeStdout, associatedtypeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "associatedtype"],
+                _jsonOptions));
+
+            var typealiasRows = ParseJsonLines(typealiasStdout);
+            var associatedtypeRows = ParseJsonLines(associatedtypeStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, typealiasExitCode);
+            Assert.Equal(string.Empty, typealiasStderr);
+            Assert.Single(typealiasRows);
+            Assert.Equal("typealias", typealiasRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Contains("Callback", typealiasRows[0].RootElement.GetProperty("name").GetString(), StringComparison.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, associatedtypeExitCode);
+            Assert.Equal(string.Empty, associatedtypeStderr);
+            Assert.Single(associatedtypeRows);
+            Assert.Equal("associatedtype", associatedtypeRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Contains("Item", associatedtypeRows[0].RootElement.GetProperty("name").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_And_Definition_NormalizeCSharpVerbatimIdentifiers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_verbatim_query_normalization");

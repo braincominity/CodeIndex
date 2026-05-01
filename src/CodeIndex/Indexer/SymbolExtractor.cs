@@ -1163,8 +1163,8 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // Type alias / 型エイリアス: backtick-escaped names and generic/where clauses.
+            new("typealias", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>`[^`]+`|\w+)(?=\s*(?:<|=|where\b|$))", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*macro\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*precedencegroup\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:prefix|infix|postfix)\s+operator\s+(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
