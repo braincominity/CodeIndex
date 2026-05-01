@@ -1719,7 +1719,7 @@ public static class SymbolExtractor
     {
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
-        if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
+        if (lang == null)
             return [];
 
         // Null / empty fast path — keep the direct-call null-safe contract that
@@ -1729,6 +1729,17 @@ public static class SymbolExtractor
         // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
         // ため、direct call の null セーフ契約をここで復元する。Closes #183.
         if (string.IsNullOrEmpty(content))
+            return [];
+
+        if (lang == "xml")
+        {
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingBom(content);
+            return ExtractXmlSymbols(fileId, content.Split('\n'));
+        }
+
+        if (!PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
@@ -3121,9 +3132,6 @@ public static class SymbolExtractor
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
-        if (lang == "xml")
-            symbols.AddRange(ExtractXmlSymbols(fileId, lines));
-
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
