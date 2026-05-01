@@ -2018,7 +2018,7 @@ private sealed class RubyMaskState
                     {
                         var javaLeadingAnnotationOffset = 0;
                         var match = lang is "java" or "kotlin"
-                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
+                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], lang == "kotlin", out var javaMatch, out javaLeadingAnnotationOffset)
                                 ? javaMatch
                                 : pattern.Regex.Match(patternMatchLine[lineOffset..]))
                             : pattern.Regex.Match(patternMatchLine[lineOffset..]);
@@ -4623,7 +4623,7 @@ private sealed class RubyMaskState
                     while (compactConstructorOffset >= 0 && compactConstructorOffset < segment.Length)
                     {
                         var candidateSegment = segment[compactConstructorOffset..];
-                        if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, candidateSegment, out var match, out var javaLeadingAnnotationOffset)
+                        if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, candidateSegment, false, out var match, out var javaLeadingAnnotationOffset)
                             && match.Groups["name"].Value == recordSymbol.Name)
                         {
                             var absoluteStartColumn = segmentStart + compactConstructorOffset + javaLeadingAnnotationOffset + match.Index;
@@ -4737,6 +4737,7 @@ private sealed class RubyMaskState
         return TryMatchJavaDeclarationSegment(
             GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name),
             rawLines[declarationLineIndex],
+            false,
             out _,
             out _);
     }
@@ -5516,7 +5517,7 @@ private sealed class RubyMaskState
         return false;
     }
 
-    private static int SkipLeadingJavaAnnotations(string span)
+    private static int SkipLeadingJavaAnnotations(string span, bool allowKotlinUseSiteTargets = false)
     {
         var mode = JavaScanMode.Normal;
         var index = SkipJavaWhitespaceAndComments(span, 0, ref mode);
@@ -5527,6 +5528,13 @@ private sealed class RubyMaskState
             index = SkipJavaWhitespaceAndComments(span, index, ref mode);
             if (mode != JavaScanMode.Normal)
                 return index;
+
+            if (allowKotlinUseSiteTargets && TryConsumeKotlinAnnotationTarget(span, ref index))
+            {
+                index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+                if (mode != JavaScanMode.Normal)
+                    return index;
+            }
 
             while (index < span.Length && (char.IsLetterOrDigit(span[index]) || span[index] == '_' || span[index] == '.' || span[index] == '$'))
                 index++;
@@ -5557,9 +5565,32 @@ private sealed class RubyMaskState
         return index;
     }
 
+    private static bool TryConsumeKotlinAnnotationTarget(string span, ref int index)
+    {
+        var targetStart = index;
+        while (index < span.Length && (char.IsLetterOrDigit(span[index]) || span[index] == '_'))
+            index++;
+
+        if (index >= span.Length || span[index] != ':')
+        {
+            index = targetStart;
+            return false;
+        }
+
+        if (!KotlinAnnotationTargets.Contains(span[targetStart..index]))
+        {
+            index = targetStart;
+            return false;
+        }
+
+        index++;
+        return true;
+    }
+
     private static bool TryMatchJavaDeclarationSegment(
         Regex regex,
         string segment,
+        bool allowKotlinUseSiteTargets,
         out Match match,
         out int leadingAnnotationOffset)
     {
@@ -5568,7 +5599,7 @@ private sealed class RubyMaskState
         if (match.Success)
             return true;
 
-        var skippedOffset = SkipLeadingJavaAnnotations(segment);
+        var skippedOffset = SkipLeadingJavaAnnotations(segment, allowKotlinUseSiteTargets);
         if (skippedOffset <= 0 || skippedOffset >= segment.Length)
             return false;
 
@@ -20254,7 +20285,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
         var javaLeadingAnnotationOffset = 0;
         var recordMatch = lang is "java" or "kotlin"
-            ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
+            ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, lang == "kotlin", out var javaRecordMatch, out javaLeadingAnnotationOffset)
                 ? javaRecordMatch
                 : recordRegex.Match(declaration))
             : recordRegex.Match(declaration);
@@ -20888,7 +20919,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         string? visibility = null;
         if (lang == "kotlin")
         {
-            var stripped = StripLeadingJavaRecordComponentAnnotations(normalized);
+            var stripped = StripLeadingJavaRecordComponentAnnotations(normalized, allowKotlinUseSiteTargets: true);
             normalized = stripped.Text;
             componentLine += stripped.ConsumedNewlines;
 
@@ -20920,7 +20951,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         {
             var stripped = lang == "csharp"
                 ? StripLeadingCSharpRecordComponentAttributes(normalized)
-                : StripLeadingJavaRecordComponentAnnotations(normalized);
+                : StripLeadingJavaRecordComponentAnnotations(normalized, allowKotlinUseSiteTargets: lang == "kotlin");
             normalized = stripped.Text;
             componentLine += stripped.ConsumedNewlines;
 
@@ -21344,7 +21375,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         return true;
     }
 
-    private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component)
+    private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component, bool allowKotlinUseSiteTargets)
     {
         var consumedNewlines = 0;
         var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
@@ -21353,6 +21384,15 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             var index = 1;
             while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
                 index++;
+
+            if (allowKotlinUseSiteTargets && index < trimmed.Length && trimmed[index] == ':' && KotlinAnnotationTargets.Contains(trimmed[1..index]))
+            {
+                index++;
+                while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+                    index++;
+                while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
+                    index++;
+            }
 
             if (index < trimmed.Length && trimmed[index] == ':')
             {
@@ -22662,6 +22702,10 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         @"^\s*(?:uses|provides)\s+(?<name>[\w.]+)(?:\s+with\s+[\w.,\s]+)?\s*;$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly string[] JavaModuleDirectiveKeywords = ["requires", "exports", "opens", "uses", "provides"];
+    private static readonly HashSet<string> KotlinAnnotationTargets = new(StringComparer.Ordinal)
+    {
+        "field", "get", "set", "param", "setparam", "property", "receiver", "file", "delegate", "all",
+    };
 
     /// <summary>
     /// Estimate cyclomatic complexity of a code body using keyword counting.
