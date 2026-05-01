@@ -1961,7 +1961,7 @@ public class McpServerTests : IDisposable
                 public void Run() { }
             }
             """);
-        InsertIndexedFile("src/tools.sh", "shell",
+        InsertIndexedFile("src/tools.txt", "text",
             """
             FooService() {
               :
@@ -1997,7 +1997,7 @@ public class McpServerTests : IDisposable
     {
         for (int i = 0; i < 60; i++)
         {
-            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "shell",
+            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "text",
                 """
                 Foo() {
                   :
@@ -5319,8 +5319,8 @@ public class McpServerTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "script.sh",
-            Lang = "shell",
+            Path = "script.txt",
+            Lang = "text",
             Size = 64,
             Lines = 4,
             Modified = new DateTime(2024, 1, 1),
@@ -5340,7 +5340,7 @@ public class McpServerTests : IDisposable
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"shell"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"text"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
