@@ -1242,12 +1242,12 @@ public static class SymbolExtractor
             new("typealias", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?<visibility>(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?)?\s*(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Extension declarations are important search anchors in Swift-heavy codebases.
-            // Generic specializations such as `extension Array<String> where ...` should stay searchable
-            // under the concrete target, not just the base type name.
+            // A dedicated parser keeps nested generic targets searchable even when the
+            // extension also carries protocol conformances or `where` clauses.
             // extension 宣言は Swift コード検索における重要なアンカー。
-            // `extension Array<String> where ...` のような generic specialization も、
-            // base type 名だけでなく具体的な対象として検索可能にする。
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[\w.]+(?:\s*<[^{}\r\n]+>)?)(?=\s*(?:where\b|\{|\s*$))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // 専用パーサにより、protocol conformance や `where` 句が付く場合でも
+            // ネストした generic target を検索対象として維持する。
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final)\s+)?extension\s+(?<name>[^\r\n{]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス: backtick-escaped names and generic/where clauses.
@@ -23751,6 +23751,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             "cobol" => NormalizeCobolSymbolName(name),
             "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            "swift" => NormalizeSwiftSymbolName(name),
             "sql" => NormalizeSqlSymbolName(name),
             _ => name,
         };
@@ -24087,6 +24088,119 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
             ? "Companion"
             : name;
+    }
+
+    private static string NormalizeSwiftSymbolName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return name;
+
+        var trimmed = name.Trim();
+        if (trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf(':') < 0
+            && trimmed.IndexOf("where", StringComparison.Ordinal) < 0
+            && trimmed.IndexOf('/') < 0)
+        {
+            return trimmed;
+        }
+
+        var builder = new StringBuilder(trimmed.Length);
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inBackticks = false;
+
+        for (var index = 0; index < trimmed.Length; index++)
+        {
+            var ch = trimmed[index];
+
+            if (inBackticks)
+            {
+                builder.Append(ch);
+                if (ch == '`')
+                    inBackticks = false;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                builder.Append(ch);
+                inBackticks = true;
+                continue;
+            }
+
+            if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+            {
+                if (ch == ':' || ch == '{')
+                    break;
+
+                if (ch == '/' && index + 1 < trimmed.Length)
+                {
+                    var next = trimmed[index + 1];
+                    if (next == '/' || next == '*')
+                        break;
+                }
+
+                if (char.IsWhiteSpace(ch))
+                {
+                    var nextIndex = index + 1;
+                    while (nextIndex < trimmed.Length && char.IsWhiteSpace(trimmed[nextIndex]))
+                        nextIndex++;
+
+                    if (nextIndex >= trimmed.Length)
+                        break;
+
+                    if (trimmed[nextIndex] == ':'
+                        || trimmed[nextIndex] == '{'
+                        || (trimmed[nextIndex] == '/' && nextIndex + 1 < trimmed.Length && trimmed[nextIndex + 1] is '/' or '*')
+                        || StartsWithWord(trimmed, nextIndex, "where"))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (StartsWithWord(trimmed, index, "where"))
+                    break;
+            }
+
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    builder.Append(ch);
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    builder.Append(ch);
+                    break;
+                case '(':
+                    parenDepth++;
+                    builder.Append(ch);
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    builder.Append(ch);
+                    break;
+                case '[':
+                    bracketDepth++;
+                    builder.Append(ch);
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    builder.Append(ch);
+                    break;
+                default:
+                    builder.Append(ch);
+                    break;
+            }
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static string NormalizeCobolSymbolName(string name)
