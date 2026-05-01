@@ -11753,6 +11753,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_UseSiteTargetsAndAnnotatedSecondaryConstructors_AreIndexed()
+    {
+        var content = """
+            class Envelope(@field:Deprecated val id: String)
+
+            @get:JvmName("displayName")
+            val name: String = "x"
+
+            class Service {
+                @Inject
+                constructor() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Envelope");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ContainerKind == "class" && s.ContainerName == "Envelope");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Service" && s.ContainerKind == "class" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsExpandedFeatures()
     {
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
