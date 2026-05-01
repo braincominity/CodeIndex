@@ -292,20 +292,14 @@ public partial class DbReader
         {
             // Exact substring match using instr() — case-sensitive, no FTS5 tokenization
             // instr() による完全部分一致検索 — 大文字小文字区別、FTS5トークナイズなし
-            sql = @"
+            sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id
                 WHERE instr(
-                    CASE WHEN f.lang = 'csharp'
-                         THEN sql_normalize_csharp_verbatim_name(c.content)
-                         ELSE c.content
-                    END,
-                    CASE WHEN f.lang = 'csharp'
-                         THEN sql_normalize_csharp_verbatim_name(@exactQuery)
-                         ELSE @exactQuery
-                    END
+                    {GetExactSearchTextSql("c.content", "f.lang")},
+                    {GetExactSearchTextSql("@exactQuery", "f.lang")}
                 ) > 0";
         }
         else
@@ -374,20 +368,14 @@ public partial class DbReader
 
         if (exact)
         {
-            sql = @"
+            sql = $@"
                 SELECT f.path, c.start_line, c.end_line,
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id
                 WHERE instr(
-                    CASE WHEN f.lang = 'csharp'
-                         THEN sql_normalize_csharp_verbatim_name(c.content)
-                         ELSE c.content
-                    END,
-                    CASE WHEN f.lang = 'csharp'
-                         THEN sql_normalize_csharp_verbatim_name(@exactQuery)
-                         ELSE @exactQuery
-                    END
+                    {GetExactSearchTextSql("c.content", "f.lang")},
+                    {GetExactSearchTextSql("@exactQuery", "f.lang")}
                 ) > 0";
         }
         else
@@ -472,6 +460,11 @@ public partial class DbReader
             || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase)
             || message.Contains("no such column", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string GetExactSearchTextSql(string valueSql, string langSql)
+        => $"CASE WHEN {langSql} = 'csharp' THEN sql_normalize_csharp_verbatim_name({valueSql}) " +
+           $"WHEN {langSql} = 'sql' THEN sql_normalize_name({valueSql}) " +
+           $"ELSE {valueSql} END";
 
     /// <summary>
     /// Remove search results that overlap with a higher-ranked result in the same file.
