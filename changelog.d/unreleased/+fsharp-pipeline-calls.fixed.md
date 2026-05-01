@@ -1,5 +1,5 @@
 ---
-category: added
+category: fixed
 affected:
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
   - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
