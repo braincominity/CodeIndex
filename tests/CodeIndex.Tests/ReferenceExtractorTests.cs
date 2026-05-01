@@ -168,24 +168,44 @@ public class ReferenceExtractorTests
             IDENTIFICATION DIVISION.
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
-            MAIN-PARA.
-                PERFORM HELPER-PARA
+            MAIN-SECTION SECTION.
+                PERFORM HELPER-SECTION
+                PERFORM HELPER-PARA THRU EXIT-PARA
                 STOP RUN.
+            HELPER-SECTION SECTION.
             HELPER-PARA.
+                DISPLAY "A".
+            MIDDLE-PARA.
+                DISPLAY "B".
+            EXIT-PARA.
                 CALL "other-program"
-                STOP RUN.
             END PROGRAM hello-world.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
         var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
 
-        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-SECTION");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MIDDLE-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "EXIT-PARA");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "HELPER-SECTION"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "MAIN-SECTION");
         Assert.Contains(references, reference =>
             reference.SymbolName == "HELPER-PARA"
             && reference.ReferenceKind == "call"
-            && reference.ContainerName == "MAIN-PARA");
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MIDDLE-PARA"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "EXIT-PARA"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "MAIN-SECTION");
         Assert.Contains(references, reference =>
             reference.SymbolName == "OTHER-PROGRAM"
             && reference.ReferenceKind == "call");

@@ -91,6 +91,9 @@ public static class SymbolExtractor
     private static readonly Regex CobolProcedureDivisionRegex = new(
         @"^\s*PROCEDURE\s+DIVISION\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolSectionHeaderRegex = new(
+        @"^\s{0,6}(?<name>[A-Z0-9][A-Z0-9-]*)\s+SECTION\.\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolParagraphHeaderRegex = new(
         @"^\s{0,6}(?<name>[A-Z0-9][A-Z0-9-]*)\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -10988,6 +10991,38 @@ public static class SymbolExtractor
             if (!inProcedureDivision)
                 continue;
 
+            var sectionMatch = CobolSectionHeaderRegex.Match(line);
+            if (sectionMatch.Success)
+            {
+                var sectionName = NormalizeCobolSymbolName(sectionMatch.Groups["name"].Value);
+                if (string.IsNullOrWhiteSpace(sectionName))
+                    continue;
+
+                var (sectionEndLine, sectionBodyStartLine, sectionBodyEndLine) = FindCobolSectionRange(lines, i);
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = sectionName,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = sectionMatch.Groups["name"].Index,
+                        EndLine = sectionEndLine,
+                        BodyStartLine = sectionBodyStartLine,
+                        BodyEndLine = sectionBodyEndLine,
+                        Signature = line.Trim(),
+                        ContainerKind = programName != null ? "class" : null,
+                        ContainerName = programName,
+                        ContainerQualifiedName = programName,
+                    },
+                    line);
+                continue;
+            }
+
             var paragraphMatch = CobolParagraphHeaderRegex.Match(line);
             if (!paragraphMatch.Success)
                 continue;
@@ -11035,7 +11070,38 @@ public static class SymbolExtractor
             if (CobolProgramIdLineRegex.IsMatch(line)
                 || CobolProcedureDivisionRegex.IsMatch(line)
                 || CobolEndProgramRegex.IsMatch(line)
+                || CobolSectionHeaderRegex.IsMatch(line)
                 || CobolParagraphHeaderRegex.IsMatch(line))
+            {
+                if (bodyStartLine == null)
+                    return (startIndex + 1, null, null);
+
+                return (i, bodyStartLine, i);
+            }
+
+            bodyStartLine ??= i + 1;
+        }
+
+        return bodyStartLine == null
+            ? (startIndex + 1, null, null)
+            : (lines.Length, bodyStartLine, lines.Length);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCobolSectionRange(string[] lines, int startIndex)
+    {
+        int? bodyStartLine = null;
+
+        for (int i = startIndex + 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith("*", StringComparison.Ordinal))
+                continue;
+
+            if (CobolProgramIdLineRegex.IsMatch(line)
+                || CobolProcedureDivisionRegex.IsMatch(line)
+                || CobolEndProgramRegex.IsMatch(line)
+                || CobolSectionHeaderRegex.IsMatch(line))
             {
                 if (bodyStartLine == null)
                     return (startIndex + 1, null, null);

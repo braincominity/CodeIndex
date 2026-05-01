@@ -159,19 +159,28 @@ public class SymbolExtractorTests
             IDENTIFICATION DIVISION.
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
-            MAIN-PARA.
-                PERFORM HELPER-PARA
+            MAIN-SECTION SECTION.
+                PERFORM HELPER-SECTION
+                PERFORM HELPER-PARA THRU EXIT-PARA
                 STOP RUN.
+            HELPER-SECTION SECTION.
             HELPER-PARA.
-                DISPLAY "DONE".
+                DISPLAY "A".
+            MIDDLE-PARA.
+                DISPLAY "B".
+            EXIT-PARA.
+                DISPLAY "C".
             END PROGRAM hello-world.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "HELLO-WORLD");
-        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-SECTION");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MIDDLE-PARA");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "EXIT-PARA");
         Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cobol");
     }
 
