@@ -15315,6 +15315,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsBacktickEscapedFunctionNames()
+    {
+        // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
+        const string content = """
+            `plot-model` <- function(data) {
+              data
+            }
+
+            my_plot <- function(x) {
+              x
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+    }
+
+    [Fact]
     public void Extract_R_DetectsFunctionAssignmentAndLibrary()
     {
         // R: function assignment, library / R: 関数代入、library
