@@ -275,6 +275,7 @@ public static class ReferenceExtractor
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
+    private const string FSharpIdentifierPattern = @"(?:``[^`]+``|[_\p{L}][\w']*)";
     private const string CSharpTypeExpressionPattern =
         @"(?:global::)?(?:"
         + CSharpIdentifierPattern
@@ -367,6 +368,16 @@ public static class ReferenceExtractor
     // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
     // issue #265 参照。
     private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
+    // F# pipeline forms such as `xs |> List.map f` / `xs ||> map2 f g` do not use the shared
+    // trailing `(` shape, so the generic CallRegex misses them. Emit the leaf function name
+    // after the pipeline operator so idiomatic `|>` chains stay searchable. Space-separated
+    // application remains intentionally out of scope for now.
+    // F# の pipeline 形 (`xs |> List.map f` / `xs ||> map2 f g`) は共通の末尾 `(` 形を使わないため、
+    // generic CallRegex では拾えない。pipeline 演算子の後ろにある leaf function 名を出すことで、
+    // 慣用的な `|>` 連鎖も検索可能にする。space-separated application は当面対象外。
+    private static readonly Regex FSharpPipelineCallRegex = new(
+        $@"(?<![\w$])(?:\|{{1,3}}>)\s*(?:(?:{FSharpIdentifierPattern})\s*\.\s*)*(?<name>{FSharpIdentifierPattern})\b",
+        RegexOptions.Compiled);
     // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
     // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
     // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
@@ -2245,6 +2256,16 @@ public static class ReferenceExtractor
                         var callIndex = match.Groups["name"].Index;
                         if (IsTrailingLambdaInheritanceClause(preparedLine, callIndex))
                             continue;
+                        AddCallLikeReference(name, callIndex);
+                    }
+                }
+
+                if (language == "fsharp")
+                {
+                    foreach (Match match in FSharpPipelineCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
                         AddCallLikeReference(name, callIndex);
                     }
                 }

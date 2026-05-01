@@ -7591,6 +7591,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsPipelineCalls()
+    {
+        const string content = """
+            let add x y = x + y
+
+            let results =
+                numbers
+                |> List.map (fun value -> value + 1)
+                |> List.filter (fun value -> value > 0)
+
+            let pairResult = (2, 3) ||> add
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "map" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "add" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fun");
+    }
+
+    [Fact]
     public void Extract_R_DetectsCallSites()
     {
         const string content = """
