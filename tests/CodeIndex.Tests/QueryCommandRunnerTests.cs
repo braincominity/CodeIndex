@@ -25911,6 +25911,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbolsAndReferences_AcceptTsqlAsSqlLanguageAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_tsql_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "schema.tsql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.usp_Target
+                AS
+                SELECT 1;
+                GO
+
+                CREATE PROCEDURE sales.usp_Caller
+                AS
+                BEGIN
+                    EXEC dbo.usp_Target;
+                END
+                GO
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsTsqlExitCode, symbolsTsqlStdout, symbolsTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+                _jsonOptions));
+            var (referencesTsqlExitCode, referencesTsqlStdout, referencesTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+                _jsonOptions));
+
+            var symbolsTsqlRows = ParseJsonLines(symbolsTsqlStdout).Select(document => document.RootElement).ToList();
+            var referencesTsqlRows = ParseJsonLines(referencesTsqlStdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsTsqlExitCode);
+            Assert.Equal(CommandExitCodes.Success, referencesTsqlExitCode);
+            Assert.Equal(string.Empty, symbolsTsqlStderr);
+            Assert.Equal(string.Empty, referencesTsqlStderr);
+
+            Assert.Single(symbolsTsqlRows);
+            Assert.Equal("dbo.usp_Target", symbolsTsqlRows[0].GetProperty("name").GetString());
+
+            Assert.Single(referencesTsqlRows);
+            Assert.Equal("sales.usp_Caller", referencesTsqlRows[0].GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_AcceptsKindFunctionCaseInsensitively()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_case");

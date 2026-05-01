@@ -27,6 +27,7 @@ public static class QueryCommandRunner
         ["py3"] = "python",
         ["pyi"] = "python",
         ["pyw"] = "python",
+        ["tsql"] = "sql",
     };
     private static readonly HashSet<string> ValueTakingOptions =
     [

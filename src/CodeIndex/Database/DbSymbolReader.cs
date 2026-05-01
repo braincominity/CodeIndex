@@ -207,6 +207,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
+        lang = DbReader.NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -286,6 +287,7 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
+        lang = DbReader.NormalizeQueryLanguage(lang);
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
         // (a common/earlier-sorting name cannot starve others out of the candidate pool), then
         // round-robin interleave the per-name results under a single global `limit` cap so the
@@ -455,6 +457,7 @@ public partial class DbReader
     /// </summary>
     public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
+        lang = DbReader.NormalizeQueryLanguage(lang);
         var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
         var results = new List<DefinitionResult>();
 
@@ -650,6 +653,7 @@ public partial class DbReader
             };
         }
 
+        lang = DbReader.NormalizeQueryLanguage(lang);
         var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
