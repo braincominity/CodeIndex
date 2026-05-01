@@ -10587,12 +10587,34 @@ public class SymbolExtractorTests
                 NSLog(@"Woof!");
             }
             @end
+
+            typedef NS_ENUM(NSInteger, FruitType) {
+                FruitTypeApple,
+                FruitTypeOrange,
+            };
+
+            typedef NS_EXTENSIBLE_ENUM(NSInteger, FruitMood) {
+                FruitMoodRipe,
+            };
+
+            typedef NS_OPTIONS(NSUInteger, FruitOptions) {
+                FruitOptionJuicy = 1 << 0,
+                FruitOptionCitrus = 1 << 1,
+            };
+
+            typedef NS_ERROR_ENUM(NSInteger, FruitError) {
+                FruitErrorUnknown,
+            };
             """;
         var symbols = SymbolExtractor.Extract(1, "objc", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Dog");
         Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "Dog"));
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Animal");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitType");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitMood");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitOptions");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "FruitError");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bark");
