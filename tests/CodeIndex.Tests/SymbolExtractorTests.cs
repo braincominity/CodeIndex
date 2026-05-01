@@ -15883,6 +15883,8 @@ public class SymbolExtractorTests
 
             methods::setOldClass(classes = "LegacyThing")
 
+            methods::setValidity(Class = "LegacyThing", function(object) TRUE)
+
             R6::R6Class(classname = Thing,
               public = list(print = function() self),
               private = list(secret = function() self),
@@ -15901,6 +15903,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyThing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LegacyThing");
         var print = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "print");
         Assert.Equal("public", print.Visibility);
         var secret = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "secret");
