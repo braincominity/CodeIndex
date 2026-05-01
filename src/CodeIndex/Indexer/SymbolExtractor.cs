@@ -531,7 +531,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*\(", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
             new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?:from\s+(?<name>[\w.]+)\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cobol"] =
         [
@@ -2816,13 +2816,42 @@ private sealed class RubyMaskState
 
                     if (!suppressJavaStatementSymbol)
                     {
+                        var pythonImportEntries = lang == "python" && pattern.Kind == "import"
+                            ? TryExpandPythonImportSymbols(line, absoluteStartColumn)
+                            : null;
                         var declaratorEntries = lang == "csharp"
                             && pattern.Kind == "property"
                             && pattern.BodyStyle == BodyStyle.None
                             ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, absoluteStartColumn, match, pattern.ReturnTypeGroup, name)
                             : null;
 
-                        if (declaratorEntries != null)
+                        if (pythonImportEntries != null)
+                        {
+                            foreach (var entry in pythonImportEntries)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = entry.Name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = entry.StartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else if (declaratorEntries != null)
                         {
                             foreach (var entry in declaratorEntries)
                             {
@@ -3424,6 +3453,149 @@ private sealed class RubyMaskState
                 Signature = lines[i].Trim(),
             });
         }
+    }
+
+    private readonly record struct PythonImportSymbolEntry(string Name, int StartColumn);
+    private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string line, int absoluteStartColumn)
+    {
+        if (absoluteStartColumn < 0 || absoluteStartColumn >= line.Length)
+            return null;
+
+        var statement = line[absoluteStartColumn..].Trim();
+        if (statement.Length == 0)
+            return null;
+
+        var commentIndex = statement.IndexOf('#');
+        if (commentIndex >= 0)
+            statement = statement[..commentIndex].TrimEnd();
+
+        if (statement.Length == 0)
+            return null;
+
+        var entries = new List<PythonImportSymbolEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+
+        var directImportMatch = PythonDirectImportRegex.Match(statement);
+        if (directImportMatch.Success)
+        {
+            var directImportSpecs = directImportMatch.Groups["imports"].Value;
+            AddPythonImportSpecEntries(
+                line,
+                absoluteStartColumn,
+                directImportSpecs,
+                entries,
+                seenNames,
+                treatAsFromImport: false);
+            return entries.Count > 0 ? entries : null;
+        }
+
+        var fromImportMatch = PythonFromImportRegex.Match(statement);
+        if (!fromImportMatch.Success)
+            return null;
+
+        var modulePart = fromImportMatch.Groups["module"].Value;
+        var fromImportSpecs = fromImportMatch.Groups["imports"].Value;
+        AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames);
+        AddPythonImportSpecEntries(
+            line,
+            absoluteStartColumn,
+            fromImportSpecs,
+            entries,
+            seenNames,
+            treatAsFromImport: true);
+        return entries.Count > 0 ? entries : null;
+    }
+
+    private static void AddPythonImportSpecEntries(
+        string line,
+        int absoluteStartColumn,
+        string importedNames,
+        List<PythonImportSymbolEntry> entries,
+        HashSet<string> seenNames,
+        bool treatAsFromImport)
+    {
+        importedNames = importedNames.Trim();
+        if (importedNames.Length == 0)
+            return;
+
+        if (importedNames.StartsWith('(') && importedNames.EndsWith(')'))
+            importedNames = importedNames[1..^1].Trim();
+
+        var searchStartColumn = absoluteStartColumn;
+        foreach (var rawSpec in importedNames.Split(','))
+        {
+            var spec = rawSpec.Trim();
+            if (spec.Length == 0 || spec == "*")
+                continue;
+
+            var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
+            var importedName = aliasIndex >= 0
+                ? spec[..aliasIndex].Trim()
+                : spec;
+            var localName = aliasIndex >= 0
+                ? spec[(aliasIndex + " as ".Length)..].Trim()
+                : importedName.Split('.')[0].Trim();
+
+            if (importedName.Length > 0)
+            {
+                AddPythonImportEntry(line, absoluteStartColumn, importedName, entries, seenNames, ref searchStartColumn);
+            }
+
+            if (localName.Length > 0
+                && (!string.Equals(localName, importedName, StringComparison.Ordinal) || treatAsFromImport))
+            {
+                AddPythonImportEntry(line, absoluteStartColumn, localName, entries, seenNames, ref searchStartColumn);
+            }
+        }
+    }
+
+    private static void AddPythonImportModuleEntry(
+        string line,
+        int absoluteStartColumn,
+        string modulePart,
+        List<PythonImportSymbolEntry> entries,
+        HashSet<string> seenNames)
+    {
+        modulePart = modulePart.Trim();
+        if (modulePart.Length == 0)
+            return;
+
+        var normalizedModule = modulePart.TrimStart('.');
+        if (normalizedModule.Length == 0)
+            return;
+
+        var searchStartColumn = absoluteStartColumn;
+        AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
+    }
+
+    private static void AddPythonImportEntry(
+        string line,
+        int absoluteStartColumn,
+        string symbolName,
+        List<PythonImportSymbolEntry> entries,
+        HashSet<string> seenNames,
+        ref int searchStartColumn)
+    {
+        symbolName = symbolName.Trim();
+        if (symbolName.Length == 0 || !seenNames.Add(symbolName))
+            return;
+
+        var startColumn = line.IndexOf(symbolName, searchStartColumn, StringComparison.Ordinal);
+        if (startColumn < 0)
+        {
+            startColumn = line.IndexOf(symbolName, absoluteStartColumn, StringComparison.Ordinal);
+            if (startColumn < 0)
+                startColumn = absoluteStartColumn;
+        }
+        else
+        {
+            searchStartColumn = startColumn + Math.Max(1, symbolName.Length);
+        }
+
+        entries.Add(new PythonImportSymbolEntry(symbolName, startColumn));
     }
 
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
