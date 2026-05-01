@@ -96,25 +96,11 @@ public static class ReferenceExtractor
 
     private static readonly HashSet<string> TypeScriptTypeQueryContextTokens = new(StringComparer.Ordinal)
     {
-        "type",
-        "interface",
-        "class",
-        "function",
-        "enum",
         "extends",
         "implements",
-        "as",
         "satisfies",
-        "declare",
-        "export",
-        "default",
-        "abstract",
-        "public",
-        "private",
-        "protected",
-        "static",
-        "readonly",
-        "async",
+        "as",
+        "type",
     };
 
     private static readonly HashSet<string> TypeScriptTypeQueryDisqualifyingTokens = new(StringComparer.Ordinal)
