@@ -12202,6 +12202,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsNestedEnumMembersAndMembersAfterEnum()
+    {
+        // VB.NET enum bodies should stay searchable, and nested enums must not cut off later
+        // declarations in the containing class / VB.NET の enum 本体は検索対象のままであり、
+        // ネストした enum が外側クラスの後続宣言を切り捨てないこと。
+        var content = """
+            Namespace MyApp
+                Public Class Widget
+                    Public Enum Color
+                        Red
+                        Green = 1
+                    End Enum
+
+                    Public Function AfterEnum() As Integer
+                        Return 1
+                    End Function
+                End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "AfterEnum");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPlainFieldDeclarations()
     {
         // Plain fields are now captured as kind `property` so definition/symbols/outline/
