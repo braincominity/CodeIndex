@@ -19382,19 +19382,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesDataType()
+    public void Extract_Xml_XamlCapturesBindingPaths()
     {
         var content = """
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         x:DataType="{x:Type vm:MainViewModel}">
-                <Label Text="{Binding Title}" />
+                         xmlns:vm="clr-namespace:Sample.ViewModels">
+                <StackPanel DataContext="{Binding Source={x:Reference Root}, Path=ViewModel}">
+                    <Label Text="{Binding Title}" />
+                    <Button Command="{x:Bind ViewModel.SaveCommand}" />
+                </StackPanel>
             </ContentPage>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MainViewModel");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
     }
 
     [Fact]
