@@ -15854,11 +15854,38 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":my-app");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":my-app");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "widget");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "*default-size*");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "with-widget");
+    }
+
+    [Fact]
+    public void Extract_Racket_DetectsModuleAndDefinitions()
+    {
+        // Racket: module, define, struct, require / Racket: module、define、struct、require
+        var content = """
+            #lang racket
+
+            (module app racket
+              (require racket/list)
+
+              (define answer 42)
+
+              (define (render value)
+                value)
+
+              (struct point (x y)))
+            """;
+        var symbols = SymbolExtractor.Extract(1, "racket", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "racket/list");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
     }
 
     [Theory]

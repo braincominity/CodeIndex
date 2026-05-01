@@ -640,8 +640,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Verilog | `.v` | -- |
 | SystemVerilog | `.sv`, `.svh` | -- |
 | VHDL | `.vhd`, `.vhdl` | -- |
-| Common Lisp | `.lisp`, `.lsp`, `.cl` | yes (defpackage, defclass, defstruct, defun/defmacro/defgeneric/defmethod) |
-| Racket | `.rkt` | -- |
+| Common Lisp | `.lisp`, `.lsp`, `.cl` | yes (defpackage, in-package, defclass, defstruct, defun/defmacro/defgeneric/defmethod) |
+| Racket | `.rkt` | yes (module, define, struct, require) |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
 | Ada | `.ada`, `.adb`, `.ads` | -- |
 | Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
