@@ -4704,7 +4704,53 @@ private sealed class RubyMaskState
         tagNameLower is "audio" or "embed" or "iframe" or "img" or "input" or "script" or "source" or "track" or "video";
 
     private static bool IsHtmlHrefResourceTag(string tagNameLower) =>
-        tagNameLower is "image" or "link" or "use";
+        tagNameLower is "a" or "area" or "image" or "link" or "use";
+
+    private static bool IsHtmlSrcsetResourceTag(string tagNameLower) =>
+        tagNameLower is "img" or "source";
+
+    private static IEnumerable<string> EnumerateHtmlSrcsetUrls(string value)
+    {
+        var index = 0;
+        while (index < value.Length)
+        {
+            while (index < value.Length && (char.IsWhiteSpace(value[index]) || value[index] == ','))
+                index++;
+
+            if (index >= value.Length)
+                yield break;
+
+            var start = index;
+            var isDataUrl = value.AsSpan(index).StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+            if (isDataUrl)
+            {
+                index += "data:".Length;
+                while (index < value.Length)
+                {
+                    if (char.IsWhiteSpace(value[index]))
+                        break;
+                    if (value[index] == ',' && (index + 1 >= value.Length || char.IsWhiteSpace(value[index + 1])))
+                        break;
+                    index++;
+                }
+            }
+            else
+            {
+                while (index < value.Length && !char.IsWhiteSpace(value[index]) && value[index] != ',')
+                    index++;
+            }
+
+            var url = value[start..index].Trim();
+            if (url.Length > 0)
+                yield return url;
+
+            while (index < value.Length && value[index] != ',')
+                index++;
+
+            if (index < value.Length && value[index] == ',')
+                index++;
+        }
+    }
 
     private static string MaskHtmlRawTextRegions(string text)
     {
@@ -5297,22 +5343,39 @@ private sealed class RubyMaskState
                     continue;
 
                 string? emitKind = null;
+                List<string>? emittedNames = null;
                 if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagNameLower))
+                {
                     emitKind = "import";
+                    emittedNames = [attrValue.Trim()];
+                }
+                else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagNameLower))
+                {
+                    emitKind = "import";
+                    emittedNames = EnumerateHtmlSrcsetUrls(attrValue).ToList();
+                }
                 else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagNameLower))
+                {
                     emitKind = "import";
+                    emittedNames = [attrValue.Trim()];
+                }
                 else if (attrNameLower == "data" && tagNameLower == "object")
+                {
                     emitKind = "import";
+                    emittedNames = [attrValue.Trim()];
+                }
                 else if (attrNameLower == "poster" && tagNameLower == "video")
+                {
                     emitKind = "import";
+                    emittedNames = [attrValue.Trim()];
+                }
                 else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
+                {
                     emitKind = "property";
+                    emittedNames = [attrValue.Trim()];
+                }
 
-                if (emitKind == null)
-                    continue;
-
-                var name = attrValue.Trim();
-                if (name.Length == 0)
+                if (emitKind == null || emittedNames == null || emittedNames.Count == 0)
                     continue;
 
                 // Anchor the symbol at the attribute value so cross-line tags like
@@ -5323,16 +5386,19 @@ private sealed class RubyMaskState
                 var anchor = attrValueStart >= 0 ? attrValueStart : pos;
                 var startLine = FindHtmlLineNumber(lineStarts, anchor);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                symbols.Add(new SymbolRecord
+                foreach (var emittedName in emittedNames)
                 {
-                    FileId = fileId,
-                    Kind = emitKind,
-                    Name = name,
-                    Line = startLine,
-                    StartLine = startLine,
-                    EndLine = startLine,
-                    Signature = lines[signatureIndex].Trim(),
-                });
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = emitKind,
+                        Name = emittedName,
+                        Line = startLine,
+                        StartLine = startLine,
+                        EndLine = startLine,
+                        Signature = lines[signatureIndex].Trim(),
+                    });
+                }
             }
 
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;
