@@ -1048,7 +1048,7 @@ public static class SymbolExtractor
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Module procedure declarations / モジュール手続き宣言
-            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*module\s+procedure\s+(?:::\s*)?(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*module\s+procedure\s+(?:::\s*)?(?<name>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Typed or untyped functions / 型付き・型なし関数
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
@@ -2748,6 +2748,19 @@ private sealed class RubyMaskState
                         signature = line[absoluteStartColumn..].Trim();
                     }
 
+                    List<string>? fortranModuleProcedureNames = null;
+                    if (lang == "fortran"
+                        && pattern.Kind == "function"
+                        && signature.Contains("module procedure", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var names = name.Split(',');
+                        for (var index = 0; index < names.Length; index++)
+                            names[index] = names[index].Trim();
+
+                        if (names.Any(static candidate => candidate.Length > 0))
+                            fortranModuleProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
+                    }
+
                     var suppressJavaStatementSymbol = false;
                     if (lang == "java" && pattern.Kind == "function")
                     {
@@ -2790,6 +2803,34 @@ private sealed class RubyMaskState
                                         Signature = signature,
                                         Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                         ReturnType = NormalizeMetadata(entry.ReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else if (fortranModuleProcedureNames != null)
+                        {
+                            foreach (var procedureName in fortranModuleProcedureNames)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = procedureName,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = csharpSingleLineCollapsedMatch
+                                            ? csharpSignatureRawStartColumn
+                                            : absoluteStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
                                     },
                                     line);
                             }
