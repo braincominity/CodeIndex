@@ -18061,4 +18061,25 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_TypeScriptTypeQueries_CaptureTypeReferences()
+    {
+        const string content = """
+            class Point {}
+
+            type PointCtor = typeof Point;
+            type PointKeys = keyof Point;
+
+            function runtime(value: unknown) {
+                return typeof value === "string";
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+    }
 }

@@ -94,6 +94,29 @@ public static class ReferenceExtractor
         "fixed", "await", "yield", "when",
     };
 
+    private static readonly HashSet<string> TypeScriptTypeQueryContextTokens = new(StringComparer.Ordinal)
+    {
+        "type",
+        "interface",
+        "class",
+        "function",
+        "enum",
+        "extends",
+        "implements",
+        "as",
+        "satisfies",
+        "declare",
+        "export",
+        "default",
+        "abstract",
+        "public",
+        "private",
+        "protected",
+        "static",
+        "readonly",
+        "async",
+    };
+
     private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
@@ -1557,6 +1580,17 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall,
                     container);
+            }
+            else if (language == "typescript")
+            {
+                EmitTypeScriptTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
             else if (language == "css")
             {
@@ -4367,6 +4401,67 @@ public static class ReferenceExtractor
         }
     }
 
+    private static void EmitTypeScriptTypePositionReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var tokens = GetTopLevelTokenSpans(preparedLine);
+        if (tokens.Count == 0)
+            return;
+
+        for (int tokenIndex = 0; tokenIndex < tokens.Count; tokenIndex++)
+        {
+            var token = preparedLine.Substring(tokens[tokenIndex].Start, tokens[tokenIndex].Length);
+            if (token is not "typeof" and not "keyof")
+                continue;
+
+            if (!IsTypeScriptTypeQueryContext(preparedLine, tokens, tokenIndex))
+                continue;
+
+            var expressionStart = tokens[tokenIndex].Start + tokens[tokenIndex].Length;
+            while (expressionStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[expressionStart]))
+                expressionStart++;
+
+            if (expressionStart >= preparedLine.Length)
+                continue;
+
+            if (preparedLine.AsSpan(expressionStart).StartsWith("typeof", StringComparison.Ordinal)
+                && (expressionStart + "typeof".Length == preparedLine.Length
+                    || !IsJavaIdentifierPart(preparedLine[expressionStart + "typeof".Length])))
+            {
+                expressionStart += "typeof".Length;
+                while (expressionStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[expressionStart]))
+                    expressionStart++;
+            }
+
+            if (expressionStart >= preparedLine.Length || !IsJavaIdentifierStart(preparedLine[expressionStart]))
+                continue;
+
+            var expressionEnd = expressionStart + 1;
+            while (expressionEnd < preparedLine.Length
+                   && (IsJavaIdentifierPart(preparedLine[expressionEnd]) || preparedLine[expressionEnd] == '.'))
+            {
+                expressionEnd++;
+            }
+
+            AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                preparedLine.Substring(expressionStart, expressionEnd - expressionStart),
+                expressionStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(expressionStart),
+                "typescript");
+        }
+    }
+
     private static void EmitJavaModuleDirectiveReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -5778,6 +5873,28 @@ public static class ReferenceExtractor
 
     private static bool IsTypeExpressionIdentifierPart(string language, char c) =>
         language == "csharp" ? IsCSharpIdentifierPart(c) : IsJavaIdentifierPart(c);
+
+    private static bool IsTypeScriptTypeQueryContext(
+        string line,
+        List<(int Start, int Length)> tokens,
+        int keywordIndex)
+    {
+        for (int i = 0; i < keywordIndex; i++)
+        {
+            var token = line.Substring(tokens[i].Start, tokens[i].Length);
+            if (string.Equals(token, "?", StringComparison.Ordinal))
+                return false;
+
+            if (TypeScriptTypeQueryContextTokens.Contains(token))
+                return true;
+        }
+
+        if (keywordIndex == 0)
+            return false;
+
+        var previousToken = line.Substring(tokens[keywordIndex - 1].Start, tokens[keywordIndex - 1].Length);
+        return previousToken.EndsWith(':');
+    }
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
