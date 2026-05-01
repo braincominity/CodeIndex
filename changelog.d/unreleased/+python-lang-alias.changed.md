@@ -1,6 +1,5 @@
 ---
 category: changed
-issues: []
 affected:
   - src/CodeIndex/Cli/QueryCommandRunner.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
