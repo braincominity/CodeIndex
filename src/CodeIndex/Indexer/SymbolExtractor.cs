@@ -15943,10 +15943,27 @@ private sealed class RubyMaskState
             return StartsWithFortranWord(afterAbstract, "interface");
         }
 
+        return StartsWithFortranContinuationPrefix(trimmedLine);
+    }
+
+    private static bool StartsWithFortranContinuationPrefix(string trimmedLine)
+    {
         return StartsWithFortranWord(trimmedLine, "module")
             || StartsWithFortranWord(trimmedLine, "subroutine")
             || StartsWithFortranWord(trimmedLine, "function")
-            || StartsWithFortranWord(trimmedLine, "procedure");
+            || StartsWithFortranWord(trimmedLine, "procedure")
+            || StartsWithFortranWord(trimmedLine, "pure")
+            || StartsWithFortranWord(trimmedLine, "elemental")
+            || StartsWithFortranWord(trimmedLine, "recursive")
+            || StartsWithFortranWord(trimmedLine, "impure")
+            || StartsWithFortranWord(trimmedLine, "integer")
+            || StartsWithFortranWord(trimmedLine, "real")
+            || StartsWithFortranWord(trimmedLine, "logical")
+            || StartsWithFortranWord(trimmedLine, "complex")
+            || StartsWithFortranWord(trimmedLine, "character")
+            || StartsWithFortranWord(trimmedLine, "double")
+            || StartsWithFortranWord(trimmedLine, "type")
+            || StartsWithFortranWord(trimmedLine, "class");
     }
 
     private static string StripFortranComment(string line)
