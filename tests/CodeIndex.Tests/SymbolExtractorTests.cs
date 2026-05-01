@@ -11714,6 +11714,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_AnnotatedDeclarations_AreStillIndexed()
+    {
+        var content = """
+            @Serializable
+            class Envelope { }
+
+            @Deprecated("use markedV2")
+            fun marked(): Int = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Envelope");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "marked");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsExpandedFeatures()
     {
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";

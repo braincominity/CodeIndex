@@ -1964,7 +1964,7 @@ public static class SymbolExtractor
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
                         var javaLeadingAnnotationOffset = 0;
-                        var match = lang == "java"
+                        var match = lang is "java" or "kotlin"
                             ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
                                 ? javaMatch
                                 : pattern.Regex.Match(patternMatchLine[lineOffset..]))
@@ -19803,7 +19803,7 @@ public static class SymbolExtractor
 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
         var javaLeadingAnnotationOffset = 0;
-        var recordMatch = lang == "java"
+        var recordMatch = lang is "java" or "kotlin"
             ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
                 ? javaRecordMatch
                 : recordRegex.Match(declaration))
