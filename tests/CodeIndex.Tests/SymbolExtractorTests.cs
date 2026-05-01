@@ -10933,6 +10933,7 @@ public class SymbolExtractorTests
             pub use std::fmt::Display;
             pub(crate) use std::io::Result as IoResult;
             use std::collections::HashMap;
+            pub use std::collections::*;
             """;
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
@@ -10942,6 +10943,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Display");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashMap");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "*");
     }
 
     [Fact]

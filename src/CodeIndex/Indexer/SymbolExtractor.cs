@@ -2058,7 +2058,7 @@ public static class SymbolExtractor
         if (leafIndex >= 0)
             leaf = leaf[(leafIndex + 2)..].Trim();
 
-        if (leaf.Length > 0 && leaf is not "self" and not "super" and not "crate")
+        if (leaf.Length > 0 && leaf is not "self" and not "super" and not "crate" and not "*")
             names.Add(leaf);
     }
 
