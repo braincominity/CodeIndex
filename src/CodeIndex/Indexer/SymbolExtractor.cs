@@ -1047,8 +1047,8 @@ public static class SymbolExtractor
             new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
-            // Module procedure declarations / モジュール手続き宣言
-            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*module\s+procedure\s+(?:::\s*)?(?<name>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Procedure declarations in interfaces / interface 内の手続き宣言
+            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*(?:(?:module\s+)?procedure)(?:\s*\([^)]+\))?(?:\s*,\s*[A-Za-z_]\w*)*\s*(?:::\s*)?(?<name>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Typed or untyped functions / 型付き・型なし関数
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
@@ -15246,6 +15246,9 @@ private sealed class RubyMaskState
             if (trimmed.Length == 0 || trimmed.StartsWith('!'))
                 continue;
 
+            if (IsFortranModuleProcedureEndLine(trimmed))
+                continue;
+
             if (IsFortranBlockEndLine(trimmed, blockKind))
             {
                 if (bodyStartLine == null)
@@ -15311,6 +15314,19 @@ private sealed class RubyMaskState
             return false;
 
         return afterKind.Length == 0 || afterKind.StartsWith('!') || afterKind.StartsWith('(') || afterKind.StartsWith(':') || char.IsLetterOrDigit(afterKind[0]) || afterKind[0] == '_';
+    }
+
+    private static bool IsFortranModuleProcedureEndLine(string trimmedLine)
+    {
+        if (!StartsWithFortranWord(trimmedLine, "end"))
+            return false;
+
+        var remainder = trimmedLine["end".Length..].TrimStart();
+        if (!StartsWithFortranWord(remainder, "module"))
+            return false;
+
+        var afterModule = remainder["module".Length..].TrimStart();
+        return StartsWithFortranWord(afterModule, "procedure");
     }
 
     private static bool StartsWithFortranWord(string input, string word)

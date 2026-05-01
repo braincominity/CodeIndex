@@ -9686,11 +9686,16 @@ public class SymbolExtractorTests
             module math_utils
               interface
                 module procedure normalize_iface, normalize_alt
+                procedure(normalize_iface) :: normalize_forward
+                procedure, pointer :: normalize_pointer
               end interface
               implicit none
             contains
               recursive subroutine normalize(v)
               end subroutine normalize
+              end module procedure normalize_iface
+              recursive subroutine normalize2(v)
+              end subroutine normalize2
             end module math_utils
 
             submodule (math_utils) math_utils_impl
@@ -9717,6 +9722,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_iface");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_alt");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_forward");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_pointer");
 
         var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
         Assert.NotNull(mathUtilsImpl.BodyStartLine);
@@ -9733,6 +9740,10 @@ public class SymbolExtractorTests
         var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
         Assert.Equal("namespace", expand.ContainerKind);
         Assert.Equal("math_utils_impl", expand.ContainerName);
+
+        var normalize2 = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize2");
+        Assert.Equal("namespace", normalize2.ContainerKind);
+        Assert.Equal("math_utils", normalize2.ContainerName);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "subroutine");
 
