@@ -1289,6 +1289,8 @@ public static class SymbolExtractor
         [
             new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?:setClass|setRefClass)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:setGeneric|setMethod)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:library|require)\s*\(\s*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["lua"] =
