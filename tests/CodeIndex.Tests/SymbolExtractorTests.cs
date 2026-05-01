@@ -11854,6 +11854,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_IgnoresEndInsideStringsAndComments()
+    {
+        var content = "class UserService\n  def find_user(id)\n    puts \"the word end should not close this block\"\n    # end should not close this block either\n    id\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "UserService"
+            && s.StartLine == 1
+            && s.EndLine == 7
+            && s.BodyStartLine == 2
+            && s.BodyEndLine == 7);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "find_user"
+            && s.StartLine == 2
+            && s.EndLine == 6
+            && s.BodyStartLine == 3
+            && s.BodyEndLine == 6);
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsFunctionsAndClasses()
     {
         // PHP: function, class, interface / PHP: 関数、クラス、インターフェース
