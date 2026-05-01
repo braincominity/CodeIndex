@@ -1,6 +1,5 @@
 ---
 category: fixed
-issues: []
 affected:
   - src/CodeIndex/Indexer/SymbolExtractor.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
