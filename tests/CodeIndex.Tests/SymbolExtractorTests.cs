@@ -11020,6 +11020,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsGroupedUseTreePrefixes()
+    {
+        var content = """
+            use std::collections::{HashMap, HashSet as Set};
+            pub use crate::io::{self, Result as IoResult, Write};
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashMap");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashMap");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashSet as Set");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashSet");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Set");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io::Result as IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io::Write");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Write");
+    }
+
+    [Fact]
     public void Extract_Rust_MapsImplBlocksToImplementingType()
     {
         var content = """
