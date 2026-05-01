@@ -4563,15 +4563,161 @@ private sealed class RubyMaskState
         if (value.Length < 2 || value[0] != '{' || value[^1] != '}')
             return value;
 
-        value = value[1..^1].Trim();
+        return NormalizeXamlMarkupExtensionContent(value[1..^1].Trim());
+    }
+
+    private static string NormalizeXamlMarkupValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0 || value[0] != '{')
+            return value;
+
+        var closingBraceIndex = FindMatchingBrace(value, 0);
+        if (closingBraceIndex < 0)
+            return value;
+
+        var normalized = NormalizeXamlMarkupExtensionContent(value[1..closingBraceIndex].Trim());
+        var suffix = value[(closingBraceIndex + 1)..].Trim();
+        return suffix.Length == 0 ? normalized : normalized + suffix;
+    }
+
+    private static string NormalizeXamlMarkupExtensionContent(string value)
+    {
+        value = value.Trim();
         if (value.Length == 0)
             return value;
 
-        var separatorIndex = value.IndexOfAny([' ', '\t', '\r', '\n']);
-        if (separatorIndex >= 0)
-            value = value[(separatorIndex + 1)..].Trim();
+        var payloadStart = FindTopLevelMarkupPayloadStart(value);
+        if (payloadStart < 0)
+            return value;
+
+        var payload = value[(payloadStart + 1)..].TrimStart();
+        if (payload.Length == 0)
+            return value;
+
+        foreach (var argument in SplitTopLevelMarkupArguments(payload))
+        {
+            var normalized = NormalizeXamlMarkupArgument(argument);
+            if (normalized.Length > 0)
+                return normalized;
+        }
 
         return value;
+    }
+
+    private static string NormalizeXamlMarkupArgument(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        var equalsIndex = IndexOfTopLevelEquals(value);
+        if (equalsIndex >= 0)
+            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..].Trim());
+
+        return NormalizeXamlMarkupValue(value);
+    }
+
+    private static int FindTopLevelMarkupPayloadStart(string value)
+    {
+        var braceDepth = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (braceDepth == 0 && (char.IsWhiteSpace(ch) || ch == ','))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int IndexOfTopLevelEquals(string value)
+    {
+        var braceDepth = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (braceDepth == 0 && ch == '=')
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static IEnumerable<string> SplitTopLevelMarkupArguments(string value)
+    {
+        var braceDepth = 0;
+        var start = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (braceDepth == 0 && ch == ',')
+            {
+                var segment = value[start..i].Trim();
+                if (segment.Length > 0)
+                    yield return segment;
+                start = i + 1;
+            }
+        }
+
+        var tail = value[start..].Trim();
+        if (tail.Length > 0)
+            yield return tail;
+    }
+
+    private static int FindMatchingBrace(string value, int startIndex)
+    {
+        var braceDepth = 0;
+        for (var i = startIndex; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                braceDepth--;
+                if (braceDepth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool IsHtmlTagNameStart(char c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');

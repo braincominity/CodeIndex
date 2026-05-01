@@ -18828,7 +18828,7 @@ public class SymbolExtractorTests
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <SolidColorBrush x:Key="{x:Static local:Keys.AccentBrush}" Color="Tomato" />
+                <SolidColorBrush x:Key="{x:Static Member={x:Type local:Keys}.AccentBrush}" Color="Tomato" />
                 <Style x:Key="PrimaryButtonStyle" TargetType="Button">
                     <Setter Property="Background" Value="{StaticResource AccentBrush}" />
                 </Style>
