@@ -87,6 +87,10 @@ public class SymbolExtractorTests
         var content = """
             import numpy as np
             from  collections   import  defaultdict, OrderedDict as OD
+            from itertools import (
+                chain,
+                zip_longest as zipl,
+            )
             from .helpers import build as build_helper
             """;
 
@@ -99,6 +103,10 @@ public class SymbolExtractorTests
         Assert.Contains(imports, symbol => symbol.Name == "defaultdict");
         Assert.Contains(imports, symbol => symbol.Name == "OrderedDict");
         Assert.Contains(imports, symbol => symbol.Name == "OD");
+        Assert.Contains(imports, symbol => symbol.Name == "itertools");
+        Assert.Contains(imports, symbol => symbol.Name == "chain");
+        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
+        Assert.Contains(imports, symbol => symbol.Name == "zipl");
         Assert.Contains(imports, symbol => symbol.Name == "helpers");
         Assert.Contains(imports, symbol => symbol.Name == "build");
         Assert.Contains(imports, symbol => symbol.Name == "build_helper");
