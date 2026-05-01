@@ -13392,9 +13392,13 @@ public static class ReferenceExtractor
                 result = result[..dashCommentIndex];
         }
 
-        // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
+        // VB.NET uses Rem and ' for line comments / VB.NET は Rem と ' を行コメントに使う
         if (lang is "vb")
         {
+            var remCommentMatch = VisualBasicRemCommentRegex.Match(result);
+            if (remCommentMatch.Success)
+                result = result[..remCommentMatch.Index];
+
             var vbCommentIndex = result.IndexOf('\'');
             if (vbCommentIndex >= 0)
                 result = result[..vbCommentIndex];
@@ -13402,6 +13406,10 @@ public static class ReferenceExtractor
 
         return result;
     }
+
+    private static readonly Regex VisualBasicRemCommentRegex = new(
+        @"(?:^|:)\s*Rem\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static string MaskPythonSingleLineFStrings(string line)
     {
