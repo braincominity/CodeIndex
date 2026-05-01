@@ -18,9 +18,13 @@ Treat any request to "update the changelog" as a fragment request unless the tas
 2. If no changelog entry is required, explain why in the PR body.
 3. If required, create a fragment named `<issue>.<category>.md`,
    `<issue>-<issue>.<category>.md`, or `+<slug>.<category>.md`.
+   - If the work is **not** issue-based, use `+<slug>.<category>.md`.
 4. Use one of the allowed categories: `added`, `changed`, `fixed`,
    `deprecated`, `removed`, `security`, `docs`, `internal`.
 5. Include required front matter.
+   - For issue-based work, `issues` must list one or more issue numbers.
+   - For non-issue work, set `issues: null`.
+   - Do **not** write `issues: []` (empty arrays fail validation/pipeline checks).
 6. Include both `## English` and `## 日本語` sections.
 7. Do not include release headings or compare-link footer definitions.
 8. Validate fragments before committing.
@@ -44,4 +48,23 @@ affected:
 ## 日本語
 
 - **C# の verbatim 識別子が見つからない場合でも `impact` が元の検索文字列を維持するようになりました (#960)** — `impact` は C# verbatim lookup の miss 時にユーザー入力の綴りを保持するため、human / JSON 出力が誤解を招く canonicalized query を返さなくなりました。
+```
+
+### Non-issue Template
+
+```md
+---
+category: docs
+issues: null
+affected:
+  - .codex/workflows/changelog-fragment.md
+---
+
+## English
+
+- **Clarified non-issue fragment front matter requirements** — non-issue changelog fragments now explicitly require `issues: null`, preventing `issues: []` validation failures in agent-generated fragments.
+
+## 日本語
+
+- **issue 非対応フラグメントの front matter 要件を明確化** — issue 非対応の changelog フラグメントでは `issues: null` を明示的に必須とし、エージェント生成時の `issues: []` による検証失敗を防止しました。
 ```
