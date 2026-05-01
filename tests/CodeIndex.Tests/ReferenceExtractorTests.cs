@@ -230,6 +230,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsMultipleAliasDefinitionsAndCalls()
+    {
+        const string content = """
+            alias ll='ls -la' gs='git status'
+            alias -g G='| grep' H='| head'
+
+            run() {
+              ll /tmp
+              gs
+              echo foo G bar
+              H pattern
+              foo=G
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ll"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "gs"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "G"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "H"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CobolPerform_CapturesParagraphLevelCallReference()
     {
         const string content = """
