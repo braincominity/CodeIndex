@@ -275,6 +275,9 @@ public class SymbolExtractorTests
             export module my_module;
 
             inline namespace v2 {}
+            namespace outer::inner {
+                class Nested {};
+            }
 
             template <typename T>
             concept Addable = requires(T a, T b) { a + b; };
@@ -317,8 +320,10 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "my_module");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "v2");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Addable");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Nested" && s.ContainerName == "outer::inner");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
@@ -10381,9 +10386,9 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NetworkManager");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserID");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RemoteWorker");
     }
 
@@ -11822,7 +11827,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Key");
+        Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Key");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
     }
 
@@ -11924,6 +11929,23 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_BUFFER");
+    }
+
+    [Fact]
+    public void Extract_C_NormalizesIncludeTargets()
+    {
+        // C: include targets should be searchable by header name / C: include 先はヘッダー名で検索できるべき
+        var content = """
+            #include <stdio.h>
+            #include "project/foo.h"
+            #include HEADER_NAME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
     }
 
     [Fact]
@@ -12048,6 +12070,7 @@ public class SymbolExtractorTests
             type UserId = int
             type User = { Name: string; Age: int }
             type Color = Red | Green | Blue
+            exception ``domain error`` of string
             type Person(name: string) =
                 member _.Name = name
 
@@ -12072,6 +12095,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "exception" && s.Name == "domain error");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "x");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "counter");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
@@ -14830,6 +14854,42 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "ProgressHandler");
         var formatter = Assert.Single(symbols, s => s.Kind == "delegate" && s.Name == "Formatter");
         Assert.Equal("Friend", formatter.Visibility);
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsOperatorDeclarations()
+    {
+        var content = """
+            Namespace MyApp
+
+            Public Class Money
+                Public Shared Operator +(left As Money, right As Money) As Money
+                    Return New Money()
+                End Operator
+
+                Public Shared Widening Operator CType(value As Money) As Decimal
+                    Return 0D
+                End Operator
+            End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var add = Assert.Single(symbols, s => s.Kind == "operator" && s.Name == "Operator +");
+        Assert.Equal(4, add.StartLine);
+        Assert.Equal(5, add.BodyStartLine);
+        Assert.Equal(6, add.BodyEndLine);
+        Assert.Equal(6, add.EndLine);
+        Assert.Equal("class", add.ContainerKind);
+        Assert.Equal("Money", add.ContainerName);
+
+        var conversion = Assert.Single(symbols, s => s.Kind == "operator" && s.Name == "Operator CType");
+        Assert.Equal(8, conversion.StartLine);
+        Assert.Equal(9, conversion.BodyStartLine);
+        Assert.Equal(10, conversion.BodyEndLine);
+        Assert.Equal(10, conversion.EndLine);
+        Assert.Equal("class", conversion.ContainerKind);
+        Assert.Equal("Money", conversion.ContainerName);
     }
 
     [Fact]

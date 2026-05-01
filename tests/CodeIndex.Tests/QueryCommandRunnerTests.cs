@@ -4670,6 +4670,63 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_VBOperatorDeclarationsUseDistinctExactNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_vb_operator_names");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.vb",
+                "vb",
+                """
+                Namespace MyApp
+                    Public Class Money
+                        Public Shared Operator +(left As Money, right As Money) As Money
+                            Return New Money()
+                        End Operator
+
+                        Public Shared Widening Operator CType(value As Money) As Decimal
+                            Return 0D
+                        End Operator
+                    End Class
+                End Namespace
+                """);
+
+            var (addExitCode, addStdout, addStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "vb", "--kind", "operator", "--name", "Operator +", "--exact-name"],
+                _jsonOptions));
+
+            using var addDocument = ParseJsonOutput(addStdout);
+            var addSymbol = addDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.Equal(string.Empty, addStderr);
+            Assert.Equal("Operator +", addSymbol.GetProperty("name").GetString());
+            Assert.Equal("operator", addSymbol.GetProperty("kind").GetString());
+            Assert.Equal("Money", addSymbol.GetProperty("container_name").GetString());
+
+            var (conversionExitCode, conversionStdout, conversionStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "vb", "--kind", "operator", "--name", "Operator CType", "--exact-name"],
+                _jsonOptions));
+
+            using var conversionDocument = ParseJsonOutput(conversionStdout);
+            var conversionSymbol = conversionDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, conversionExitCode);
+            Assert.Equal(string.Empty, conversionStderr);
+            Assert.Equal("Operator CType", conversionSymbol.GetProperty("name").GetString());
+            Assert.Equal("operator", conversionSymbol.GetProperty("kind").GetString());
+            Assert.Equal("Money", conversionSymbol.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpPlainFieldEdgeCasesExposeAllDeclarators()
     {
         // End-to-end coverage for the three plain-field shapes the codex adversarial
@@ -25846,6 +25903,59 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCodeLower);
             Assert.Contains("hello", stdoutUpper);
             Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbolsAndReferences_AcceptTsqlAsSqlLanguageAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_tsql_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "schema.tsql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.usp_Target
+                AS
+                SELECT 1;
+                GO
+
+                CREATE PROCEDURE sales.usp_Caller
+                AS
+                BEGIN
+                    EXEC dbo.usp_Target;
+                END
+                GO
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsTsqlExitCode, symbolsTsqlStdout, symbolsTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+                _jsonOptions));
+            var (referencesTsqlExitCode, referencesTsqlStdout, referencesTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+                _jsonOptions));
+
+            var symbolsTsqlRows = ParseJsonLines(symbolsTsqlStdout).Select(document => document.RootElement).ToList();
+            var referencesTsqlRows = ParseJsonLines(referencesTsqlStdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsTsqlExitCode);
+            Assert.Equal(CommandExitCodes.Success, referencesTsqlExitCode);
+            Assert.Equal(string.Empty, symbolsTsqlStderr);
+            Assert.Equal(string.Empty, referencesTsqlStderr);
+
+            Assert.Single(symbolsTsqlRows);
+            Assert.Equal("dbo.usp_Target", symbolsTsqlRows[0].GetProperty("name").GetString());
+
+            Assert.Single(referencesTsqlRows);
+            Assert.Equal("sales.usp_Caller", referencesTsqlRows[0].GetProperty("container_name").GetString());
         }
         finally
         {
