@@ -12488,12 +12488,18 @@ public class SymbolExtractorTests
             type UserId = int
             type OrderId = string
             type Names = string list
+            type Result<'T> = Choice<'T, string>
+            type Pair<'T, 'U> = 'T * 'U
             """;
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Names");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Pair");
+        Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Result");
+        Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Pair");
     }
 
     [Fact]
