@@ -8187,6 +8187,24 @@ public class DbReaderTests : IDisposable
         Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
     }
 
+    [Theory]
+    [InlineData("src/Main.vb")]
+    [InlineData("src/Module.vb")]
+    public void GetRepoMap_AddsFileFallbackEntrypointForCommonVbStartupFiles(string path)
+    {
+        InsertIndexedFile(path, "vb",
+            """
+            Public Class Launcher
+                Public Sub Execute()
+                End Sub
+            End Class
+            """);
+
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { path });
+
+        Assert.Contains(map.Entrypoints, item => item.Kind == "function" && item.Name == "Execute" && item.Path == path);
+    }
+
     [Fact]
     public void GetRepoMap_KeepsScopedFreshnessAndAddsWorkspaceFreshness()
     {
