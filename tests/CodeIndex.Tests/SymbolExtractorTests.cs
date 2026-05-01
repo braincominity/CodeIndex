@@ -131,6 +131,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllExportsFromInitModules()
+    {
+        var content = """
+            __all__ = [
+                "public_api",
+                "secondary_api",
+            ]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var exports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(exports, symbol => symbol.Name == "public_api");
+        Assert.Contains(exports, symbol => symbol.Name == "secondary_api");
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
@@ -17329,6 +17346,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsLowercaseInstructionsAndEnvSymbols()
+    {
+        var content = """
+            from --platform=$BUILDPLATFORM golang:1.22 as builder
+            env APP_HOME=/app
+            env PATH=/usr/local/bin:$PATH
+            from --platform=linux/amd64 alpine:3.20
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
+        Assert.Equal(4, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
@@ -19358,6 +19393,22 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSaveClicked");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnFilterTextChanged");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSelectionChanged");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlCapturesDataType()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         x:DataType="{x:Type vm:MainViewModel}">
+                <Label Text="{Binding Title}" />
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MainViewModel");
     }
 
     [Fact]
