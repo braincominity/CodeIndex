@@ -9812,6 +9812,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsGroupedTypeConstAndVarDeclarations()
+    {
+        var content = """
+            package demo
+
+            type (
+                Stack[T any] struct {
+                    items []T
+                }
+                Container[T comparable, U any] interface {
+                    Get() U
+                }
+                Alias[T any] string
+            )
+
+            const (
+                MaxRetries = 3
+                DefaultTimeout int = 30
+                Named, Other = 1, 2
+            )
+
+            var (
+                Primary, Secondary *Client
+            )
+        """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Named");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Primary");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
+        Assert.DoesNotContain(symbols, s => s.Name == "items");
+        Assert.DoesNotContain(symbols, s => s.Name == "Get");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsFunctions()
     {
         var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";

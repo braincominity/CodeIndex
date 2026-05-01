@@ -123,6 +123,12 @@ public static class SymbolExtractor
     private static readonly Regex GoImportSpecRegex = new(
         @"^(?<name>(?:(?:[._]|[\p{L}_][\p{L}\p{Nd}_]*)\s+)?""(?:\\.|[^""\\])*"")(?:\s*;)?(?:\s*(?://.*|/\*.*\*/))?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoTypeBlockSpecRegex = new(
+        @"^(?<name>\w+)(?:\[[^\]]+\])?\s+(?:(?<kind>struct|interface)\b|.+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoValueBlockSpecRegex = new(
+        @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1668,7 +1674,7 @@ public static class SymbolExtractor
     private static string? NormalizeLanguage(string? lang)
         => lang is "vue" or "svelte" ? "typescript" : lang;
 
-    private static bool TryHandleGoImportLine(
+    private static bool TryHandleGoBlockLine(
         long fileId,
         string line,
         int lineIndex,
@@ -1706,37 +1712,141 @@ public static class SymbolExtractor
             return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, trimmed);
         }
 
-        if (!trimmed.StartsWith("import", StringComparison.Ordinal)
-            || (trimmed.Length > "import".Length
-                && !char.IsWhiteSpace(trimmed["import".Length])
-                && trimmed["import".Length] != '('))
-            return false;
-
-        var afterImport = trimmed["import".Length..].TrimStart();
-        if (afterImport.StartsWith("(", StringComparison.Ordinal))
+        if (trimmed.StartsWith("import", StringComparison.Ordinal))
         {
-            var blockRemainder = afterImport[1..].TrimStart();
-            if (blockRemainder.Length > 0)
+            var afterImport = trimmed["import".Length..].TrimStart();
+            if (afterImport.StartsWith("(", StringComparison.Ordinal))
             {
-                var closingParenIndex = blockRemainder.IndexOf(')');
-                if (closingParenIndex >= 0)
+                var blockRemainder = afterImport[1..].TrimStart();
+                if (blockRemainder.Length > 0)
                 {
-                    var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
-                    if (blockImportText.Length > 0)
-                        TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
+                    var closingParenIndex = blockRemainder.IndexOf(')');
+                    if (closingParenIndex >= 0)
+                    {
+                        var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
+                        if (blockImportText.Length > 0)
+                            TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
 
-                    inImportBlock = false;
-                    return true;
+                        inImportBlock = false;
+                        return true;
+                    }
+
+                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockRemainder);
                 }
 
-                TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockRemainder);
+                inImportBlock = true;
+                return true;
             }
 
-            inImportBlock = true;
-            return true;
+            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, afterImport);
         }
 
-        return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, afterImport);
+        return false;
+    }
+
+    private static bool TryAddGoTypeSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string typeText,
+        ref int goTypeBodyDepth)
+    {
+        var normalizedTypeText = typeText.StartsWith("type", StringComparison.Ordinal)
+            ? typeText["type".Length..].TrimStart()
+            : typeText;
+        var match = GoTypeBlockSpecRegex.Match(normalizedTypeText);
+        if (!match.Success)
+            return true;
+
+        var name = match.Groups["name"].Value.Trim();
+        var kind = Regex.IsMatch(normalizedTypeText, @"\bstruct\b")
+            ? "struct"
+            : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
+                ? "interface"
+                : "import";
+        if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
+            return true;
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = kind,
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = name,
+            },
+            rawLine);
+
+        if (kind is "struct" or "interface")
+            goTypeBodyDepth = CountGoBraceDelta(typeText);
+
+        return true;
+    }
+
+    private static bool TryAddGoValueSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string valueText)
+    {
+        var match = GoValueBlockSpecRegex.Match(valueText);
+        if (!match.Success)
+            return true;
+
+        foreach (var name in match.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (HasGoSymbol(symbols, fileId, lineIndex + 1, "property", name))
+                continue;
+
+            var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+            if (startColumn < 0)
+                startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineIndex + 1,
+                    StartLine = lineIndex + 1,
+                    StartColumn = startColumn,
+                    EndLine = lineIndex + 1,
+                    Signature = name,
+                },
+                rawLine);
+        }
+
+        return true;
+    }
+
+    private static int CountGoBraceDelta(string text)
+    {
+        var delta = 0;
+        foreach (var ch in text)
+        {
+            if (ch == '{')
+                delta++;
+            else if (ch == '}')
+                delta--;
+        }
+
+        return delta;
     }
 
     private static bool TryAddGoImportSymbol(
@@ -1774,6 +1884,92 @@ public static class SymbolExtractor
             },
             rawLine);
         return true;
+    }
+
+    private static bool HasGoSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string kind, string name)
+    {
+        return symbols.Any(symbol =>
+            symbol.FileId == fileId
+            && symbol.Line == lineNumber
+            && symbol.Kind == kind
+            && symbol.Name == name);
+    }
+
+    private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        string? blockKind = null;
+        var typeBodyDepth = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var trimmed = line.TrimStart();
+
+            if (typeBodyDepth > 0)
+            {
+                typeBodyDepth += CountGoBraceDelta(line);
+                if (typeBodyDepth < 0)
+                    typeBodyDepth = 0;
+                continue;
+            }
+
+            if (trimmed.Length == 0
+                || trimmed.StartsWith("//", StringComparison.Ordinal)
+                || trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (trimmed.StartsWith(")", StringComparison.Ordinal))
+            {
+                blockKind = null;
+                typeBodyDepth = 0;
+                continue;
+            }
+
+            if (blockKind is not null)
+            {
+                switch (blockKind)
+                {
+                    case "type":
+                        TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
+                        break;
+                    case "const":
+                    case "var":
+                        TryAddGoValueSymbol(fileId, line, i, symbols, trimmed);
+                        break;
+                }
+
+                continue;
+            }
+
+            if (trimmed.StartsWith("type", StringComparison.Ordinal)
+                && trimmed["type".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+            {
+                blockKind = "type";
+                continue;
+            }
+
+            if (trimmed.StartsWith("const", StringComparison.Ordinal)
+                && trimmed["const".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+            {
+                blockKind = "const";
+                continue;
+            }
+
+            if (trimmed.StartsWith("var", StringComparison.Ordinal)
+                && trimmed["var".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+            {
+                blockKind = "var";
+                continue;
+            }
+
+            if (trimmed.StartsWith("type", StringComparison.Ordinal))
+            {
+                TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
+                continue;
+            }
+        }
     }
 
     private static readonly HashSet<string> ContainerKinds =
@@ -1990,7 +2186,7 @@ private sealed class RubyMaskState
 
             var line = lines[i];
             if (lang == "go"
-                && TryHandleGoImportLine(fileId, line, i, symbols, ref goImportBlock))
+                && TryHandleGoBlockLine(fileId, line, i, symbols, ref goImportBlock))
             {
                 continue;
             }
@@ -3423,6 +3619,8 @@ private sealed class RubyMaskState
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
+        if (lang == "go")
+            ExtractGoGroupedDeclarations(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
