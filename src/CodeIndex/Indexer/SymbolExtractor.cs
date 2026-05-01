@@ -277,7 +277,8 @@ public static class SymbolExtractor
         string Name,
         string Type,
         string Signature,
-        int Line);
+        int Line,
+        string? Visibility = null);
 
     private readonly record struct RecordPrimaryComponentSlice(
         string Text,
@@ -19010,8 +19011,15 @@ public static class SymbolExtractor
         List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents,
         List<SymbolRecord> symbols)
     {
-        if (kind is not "class" and not "struct")
+        if (lang == "kotlin")
+        {
+            if (kind is not "class" and not "enum")
+                return;
+        }
+        else if (kind is not "class" and not "struct")
+        {
             return;
+        }
 
         if (!TryGetRecordPrimaryComponents(
             lang,
@@ -19082,7 +19090,7 @@ public static class SymbolExtractor
                     Signature = component.Signature,
                     ContainerKind = pending.Kind,
                     ContainerName = pending.RecordName,
-                    Visibility = "public",
+                    Visibility = component.Visibility ?? "public",
                     ReturnType = component.Type,
                 });
             }
@@ -19102,10 +19110,12 @@ public static class SymbolExtractor
         components = [];
         declarationEndLine = declarationLineIndex + 1;
 
-        if (lang is not "csharp" and not "java")
+        if (lang is not "csharp" and not "java" and not "kotlin")
             return false;
 
-        var declaration = CollectRecordDeclarationText(lines, declarationLineIndex, declarationStartColumn);
+        var declaration = lang == "kotlin"
+            ? CollectKotlinPrimaryConstructorDeclarationText(lines, declarationLineIndex, declarationStartColumn)
+            : CollectRecordDeclarationText(lines, declarationLineIndex, declarationStartColumn);
         if (string.IsNullOrWhiteSpace(declaration))
             return false;
 
@@ -19186,6 +19196,56 @@ public static class SymbolExtractor
         return builder.ToString();
     }
 
+    private static string CollectKotlinPrimaryConstructorDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
+    {
+        const int KotlinPrimaryConstructorDeclarationLookaheadLineLimit = 32;
+
+        var builder = new System.Text.StringBuilder();
+        var parameterOpenIndex = -1;
+        var parameterCloseIndex = -1;
+        for (int i = declarationLineIndex; i < lines.Length && i < declarationLineIndex + KotlinPrimaryConstructorDeclarationLookaheadLineLimit; i++)
+        {
+            if (builder.Length > 0)
+                builder.Append('\n');
+
+            // Kotlin class headers may split across a few physical lines. Keep the collected
+            // declaration stable across line endings while bounding the scan so a class without
+            // a primary constructor does not cause a whole-file read.
+            // Kotlin の class ヘッダは数行に分割されうる。改行差を吸収しつつ、primary
+            // constructor を持たない class でファイル全体を走査しないよう、収集範囲を
+            // ほどよい行数に制限する。
+            var line = lines[i];
+            var lineText = i == declarationLineIndex
+                ? line[Math.Min(declarationStartColumn, line.Length)..]
+                : line;
+            builder.Append(StripTrailingCr(lineText));
+
+            var declaration = builder.ToString();
+            if (parameterOpenIndex < 0)
+            {
+                parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
+                if (parameterOpenIndex < 0)
+                {
+                    if (FindRecordDeclarationTerminatorIndex(declaration, 0) >= 0)
+                        return declaration;
+
+                    continue;
+                }
+            }
+
+            if (parameterCloseIndex < 0)
+            {
+                parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
+                if (parameterCloseIndex <= parameterOpenIndex)
+                    continue;
+            }
+
+            return declaration[..(parameterCloseIndex + 1)];
+        }
+
+        return builder.ToString();
+    }
+
     private static Regex GetCurrentDeclarationRecordRegex(string lang, string kind, string recordName)
     {
         if (lang == "csharp")
@@ -19193,6 +19253,13 @@ public static class SymbolExtractor
             return kind == "struct"
                 ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
                 : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        }
+
+        if (lang == "kotlin")
+        {
+            return kind == "enum"
+                ? new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*enum\s+class\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+                : new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         }
 
         return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
@@ -19686,15 +19753,49 @@ public static class SymbolExtractor
             return false;
 
         var componentLine = rawComponent.Line;
-        var stripped = lang == "csharp"
-            ? StripLeadingCSharpRecordComponentAttributes(normalized)
-            : StripLeadingJavaRecordComponentAnnotations(normalized);
-        normalized = stripped.Text;
-        componentLine += stripped.ConsumedNewlines;
+        string? visibility = null;
+        if (lang == "kotlin")
+        {
+            var stripped = StripLeadingJavaRecordComponentAnnotations(normalized);
+            normalized = stripped.Text;
+            componentLine += stripped.ConsumedNewlines;
 
-        stripped = StripLeadingRecordComponentModifiers(lang, normalized);
-        normalized = stripped.Text;
-        componentLine += stripped.ConsumedNewlines;
+            stripped = StripLeadingKotlinConstructorPropertyModifiers(normalized, out visibility);
+            normalized = stripped.Text;
+            componentLine += stripped.ConsumedNewlines;
+
+            if (!StartsWithKotlinPropertyKeyword(normalized, out var propertyKeywordLength))
+                return false;
+
+            normalized = normalized[propertyKeywordLength..];
+            var keywordWhitespaceConsumed = 0;
+            normalized = TrimLeadingWhitespaceAndCountNewlines(normalized, ref keywordWhitespaceConsumed);
+            componentLine += keywordWhitespaceConsumed;
+
+            var separatorIndex = FindKotlinPropertyTypeSeparatorIndex(normalized);
+            if (separatorIndex <= 0)
+                return false;
+
+            var kotlinComponentName = normalized[..separatorIndex].Trim();
+            var kotlinComponentType = normalized[(separatorIndex + 1)..].Trim();
+            if (kotlinComponentName.Length == 0 || kotlinComponentType.Length == 0)
+                return false;
+
+            component = new RecordPrimaryComponent(kotlinComponentName, kotlinComponentType, normalized, componentLine, visibility);
+            return true;
+        }
+        else
+        {
+            var stripped = lang == "csharp"
+                ? StripLeadingCSharpRecordComponentAttributes(normalized)
+                : StripLeadingJavaRecordComponentAnnotations(normalized);
+            normalized = stripped.Text;
+            componentLine += stripped.ConsumedNewlines;
+
+            stripped = StripLeadingRecordComponentModifiers(lang, normalized);
+            normalized = stripped.Text;
+            componentLine += stripped.ConsumedNewlines;
+        }
         if (normalized.Length == 0)
             return false;
 
@@ -19707,7 +19808,7 @@ public static class SymbolExtractor
         if (componentName.Length == 0 || componentType.Length == 0)
             return false;
 
-        component = new RecordPrimaryComponent(componentName, componentType, normalized, componentLine);
+        component = new RecordPrimaryComponent(componentName, componentType, normalized, componentLine, visibility);
         return true;
     }
 
@@ -20121,6 +20222,15 @@ public static class SymbolExtractor
             while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
                 index++;
 
+            if (index < trimmed.Length && trimmed[index] == ':')
+            {
+                index++;
+                while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+                    index++;
+                while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
+                    index++;
+            }
+
             while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
                 index++;
 
@@ -20139,6 +20249,141 @@ public static class SymbolExtractor
 
         return new(trimmed, consumedNewlines);
     }
+
+    private static StrippedRecordComponentText StripLeadingKotlinConstructorPropertyModifiers(
+        string component,
+        out string? visibility)
+    {
+        visibility = null;
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
+        string[] modifiers = ["public", "private", "protected", "internal", "vararg"];
+        var removedModifier = true;
+        while (removedModifier)
+        {
+            removedModifier = false;
+            foreach (var modifier in modifiers)
+            {
+                if (trimmed.StartsWith(modifier, StringComparison.Ordinal)
+                    && trimmed.Length > modifier.Length
+                    && char.IsWhiteSpace(trimmed[modifier.Length]))
+                {
+                    if (modifier is "public" or "private" or "protected" or "internal")
+                        visibility ??= modifier;
+
+                    trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[(modifier.Length + 1)..], ref consumedNewlines);
+                    removedModifier = true;
+                    break;
+                }
+            }
+        }
+
+        return new(trimmed, consumedNewlines);
+    }
+
+    private static int FindKotlinPropertyTypeSeparatorIndex(string text)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case ':' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool StartsWithKotlinPropertyKeyword(string text, out int keywordLength)
+    {
+        if (text.StartsWith("val", StringComparison.Ordinal)
+            && (text.Length == 3 || !IsKotlinPropertyKeywordPart(text[3])))
+        {
+            keywordLength = 3;
+            return true;
+        }
+
+        if (text.StartsWith("var", StringComparison.Ordinal)
+            && (text.Length == 3 || !IsKotlinPropertyKeywordPart(text[3])))
+        {
+            keywordLength = 3;
+            return true;
+        }
+
+        keywordLength = 0;
+        return false;
+    }
+
+    private static bool IsKotlinPropertyKeywordPart(char ch) =>
+        char.IsLetterOrDigit(ch) || ch == '_';
 
     private static StrippedRecordComponentText StripLeadingRecordComponentModifiers(string lang, string component)
     {

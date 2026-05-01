@@ -11460,6 +11460,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerKind == "class" && s.ContainerName == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
@@ -11488,7 +11489,7 @@ public class SymbolExtractorTests
     public void Extract_Kotlin_DetectsSecondaryConstructors()
     {
         var content = """
-            class Person(val name: String) {
+            class Person(private val name: String) {
                 var age: Int = 0
 
                 constructor(name: String, age: Int) : this(name) { this.age = age }
@@ -11498,7 +11499,9 @@ public class SymbolExtractorTests
                 fun greet(): String = "Hi $name"
             }
 
-            class Box<T>(val value: T) {
+            class Box<T>(
+                val value: T
+            ) {
                 private constructor(list: List<T>) : this(list.first())
             }
             """;
@@ -11507,6 +11510,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerKind == "class" && s.ContainerName == "Person" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Box" && s.Visibility == "public");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Person" && s.ContainerName == "Person" && s.Signature == "constructor(name: String, age: Int) : this(name) { this.age = age }");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Person" && s.ContainerName == "Person" && s.Signature == "constructor() : this(\"anonymous\", 0)");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box" && s.ContainerName == "Box" && s.Visibility == "private" && s.Signature == "private constructor(list: List<T>) : this(list.first())");
@@ -11615,6 +11620,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SERVER_ERROR");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "RED");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "rgb" && s.ContainerKind == "enum" && s.ContainerName == "Color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isError" && s.ContainerKind == "enum" && s.ContainerName == "HttpStatus");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display" && s.Line == 18);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display" && s.Line == 21);
