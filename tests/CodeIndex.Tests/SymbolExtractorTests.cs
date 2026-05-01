@@ -10377,9 +10377,9 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NetworkManager");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserID");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Callback");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RemoteWorker");
     }
 
@@ -11818,7 +11818,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Key");
+        Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Key");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
     }
 
