@@ -11978,6 +11978,52 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_IgnoresEndInsidePercentLiteral()
+    {
+        var content = "class UserService\n  def quote\n    text = %Q{the word end should stay inside the literal}\n    text\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "UserService"
+            && s.StartLine == 1
+            && s.EndLine == 6
+            && s.BodyStartLine == 2
+            && s.BodyEndLine == 6);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "quote"
+            && s.StartLine == 2
+            && s.EndLine == 5
+            && s.BodyStartLine == 3
+            && s.BodyEndLine == 5);
+    }
+
+    [Fact]
+    public void Extract_Ruby_IgnoresEndInsideHeredoc()
+    {
+        var content = "class UserService\n  def query\n    sql = <<~SQL\n      select 'end' as word\n    SQL\n    sql\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "UserService"
+            && s.StartLine == 1
+            && s.EndLine == 8
+            && s.BodyStartLine == 2
+            && s.BodyEndLine == 8);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "query"
+            && s.StartLine == 2
+            && s.EndLine == 7
+            && s.BodyStartLine == 3
+            && s.BodyEndLine == 7);
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsFunctionsAndClasses()
     {
         // PHP: function, class, trait / PHP: 関数、クラス、トレイト
