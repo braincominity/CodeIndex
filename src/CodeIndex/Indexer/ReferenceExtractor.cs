@@ -54,10 +54,14 @@ public static class ReferenceExtractor
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    // Batch `goto :label` / `call :label` targets are line-oriented and do not use parentheses.
-    // batch の `goto :label` / `call :label` は行指向で、括弧を使わない。
-    private static readonly Regex BatchLabelTargetRegex = new(
-        @"^\s*@?\s*(?:goto|call)\s+:(?<name>[\w.\-]+)\b",
+    // Batch jump targets can appear as direct commands, chained commands, or inline `if` forms.
+    // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
+    private static readonly Regex BatchJumpTargetRegex = new(
+        @"\b(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex BatchConditionalJumpPrefixRegex = new(
+        @"^\s*@?\s*if\s+(?:not\s+)?(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
@@ -2320,13 +2324,16 @@ public static class ReferenceExtractor
 
             if (language is "batch" && !IsBatchCommentLine(originalLine))
             {
-                foreach (Match match in BatchLabelTargetRegex.Matches(preparedLine))
+                foreach (Match match in BatchJumpTargetRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
                     if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    var callIndex = match.Groups["name"].Index;
+                    var callIndex = match.Groups["command"].Index;
+                    if (!IsBatchJumpTargetContext(preparedLine, callIndex))
+                        continue;
+
                     var callContainer = ResolveContainerForCall(callIndex);
                     AddReference(references, seen, fileId, name, callIndex, "call", context, lineNumber, callContainer);
                 }
@@ -15039,5 +15046,44 @@ public static class ReferenceExtractor
             return true;
         var next = line[start + 3];
         return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
+    private static bool IsBatchJumpTargetContext(string line, int commandIndex)
+    {
+        var segmentStart = commandIndex;
+        while (segmentStart > 0 && char.IsWhiteSpace(line[segmentStart - 1]))
+            segmentStart--;
+
+        while (segmentStart > 0)
+        {
+            var previous = line[segmentStart - 1];
+            if (previous is '&' or '|' or '(' or ')')
+                break;
+            segmentStart--;
+        }
+
+        var prefix = line[segmentStart..commandIndex].TrimStart();
+        if (prefix.Length == 0)
+            return true;
+
+        if (prefix[0] == '@')
+        {
+            prefix = prefix[1..].TrimStart();
+            if (prefix.Length == 0)
+                return true;
+        }
+
+        if (prefix.StartsWith("if", StringComparison.OrdinalIgnoreCase))
+            return BatchConditionalJumpPrefixRegex.IsMatch(prefix);
+
+        if (prefix.Equals("else", StringComparison.OrdinalIgnoreCase) ||
+            prefix.StartsWith("else ", StringComparison.OrdinalIgnoreCase) ||
+            prefix.Equals("do", StringComparison.OrdinalIgnoreCase) ||
+            prefix.StartsWith("do ", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 }
