@@ -1270,6 +1270,14 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("import",   new Regex(@"^\s*(?:import|alias|use|require)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["commonlisp"] =
+        [
+            new("namespace", new Regex(@"^\s*\(\s*defpackage\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",     new Regex(@"^\s*\(\s*defclass\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("struct",    new Regex(@"^\s*\(\s*defstruct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("property",  new Regex(@"^\s*\(\s*(?:defparameter|defvar|defconstant)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function",  new Regex(@"^\s*\(\s*(?:defun|defmacro|defgeneric|defmethod)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["dart"] =
         [
             new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
