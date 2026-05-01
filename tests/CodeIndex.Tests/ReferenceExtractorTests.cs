@@ -162,6 +162,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsCommandStyleFunctionCalls()
+    {
+        const string content = """
+            function setup() {
+              :
+            }
+
+            cleanup() {
+              :
+            }
+
+            run() {
+              # setup should stay ignored here
+              setup && cleanup
+              setup=1
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "shell");
+        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "setup"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "cleanup"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CobolPerform_CapturesParagraphLevelCallReference()
     {
         const string content = """

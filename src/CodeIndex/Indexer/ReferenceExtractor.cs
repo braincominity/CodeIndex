@@ -26,7 +26,7 @@ public static class ReferenceExtractor
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol",
-        "r", "powershell", "haskell",
+        "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css"
     ];
@@ -187,6 +187,11 @@ public static class ReferenceExtractor
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "param", "begin", "process", "Write", "trap", "finally", "elseif",
+        },
+        // Shell keywords / Shell キーワード
+        ["shell"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "case", "esac", "time",
         },
         // Haskell keywords / Haskell キーワード
         ["haskell"] = new HashSet<string>(StringComparer.Ordinal)
@@ -437,6 +442,16 @@ public static class ReferenceExtractor
     private static readonly Regex PowerShellCallRegex = new(
         @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
         RegexOptions.Compiled | RegexOptions.Multiline);
+    // Shell command-style function calls such as `setup`, `setup && cleanup`, and
+    // `if setup; then ...` do not use trailing `(`, so the shared CallRegex misses them.
+    // Restrict the matcher to bare command heads and only emit references for function names
+    // that are actually defined in the current file.
+    // Shell のコマンド構文による関数呼び出し (`setup` / `setup && cleanup` / `if setup; then ...`)
+    // は末尾 `(` を持たないため、共通 CallRegex では拾えない。bare command head に限定し、
+    // さらに現在ファイルで定義された function 名だけを参照として出す。
+    private static readonly Regex ShellCommandCallRegex = new(
+        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_]\w*)(?=\s|$|[;|&}])",
+        RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -1133,6 +1148,7 @@ public static class ReferenceExtractor
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = BuildDockerfileStageNames(language, symbols);
+        var shellCallableNames = BuildShellCallableNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -2253,6 +2269,18 @@ public static class ReferenceExtractor
                 foreach (Match match in PowerShellCallRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    AddCallLikeReference(name, callIndex);
+                }
+            }
+            else if (language is "shell")
+            {
+                foreach (Match match in ShellCommandCallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (shellCallableNames == null || !shellCallableNames.Contains(name))
+                        continue;
+
                     var callIndex = match.Groups["name"].Index;
                     AddCallLikeReference(name, callIndex);
                 }
@@ -6112,6 +6140,23 @@ public static class ReferenceExtractor
                 : symbol.Name;
             if (!string.IsNullOrWhiteSpace(name))
                 names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static HashSet<string>? BuildShellCallableNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language != "shell")
+            return null;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            names.Add(symbol.Name);
         }
 
         return names;
@@ -14600,7 +14645,7 @@ public static class ReferenceExtractor
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
-            or "makefile" or "terraform" or "dockerfile" or "protobuf";
+            or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
