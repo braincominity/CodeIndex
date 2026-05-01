@@ -16046,6 +16046,12 @@ public class SymbolExtractorTests
               to { opacity: 1; }
             }
 
+            @property --accent-color {
+              syntax: "<color>";
+              inherits: true;
+              initial-value: #09f;
+            }
+
             .container {
               max-width: 1200px;
             }
@@ -16062,6 +16068,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shade-color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent-color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
     }
@@ -17675,6 +17682,36 @@ public class SymbolExtractorTests
         // Plain value field (no arrow) must not be mis-classified as a function.
         // 素の値フィールド（アロー関数ではない）は function として検出してはならない。
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsAutoAccessorWithInitializer()
+    {
+        var content = """
+            class Foo {
+                accessor theme: string = "dark";
+                accessor count = 1;
+                handleClick = () => { return this.count; };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var theme = symbols.FirstOrDefault(s => s.Kind == "property" && s.Name == "theme");
+        Assert.NotNull(theme);
+        Assert.Equal("class", theme.ContainerKind);
+        Assert.Equal("Foo", theme.ContainerName);
+        Assert.Equal("string", theme.ReturnType);
+
+        var count = symbols.FirstOrDefault(s => s.Kind == "property" && s.Name == "count");
+        Assert.NotNull(count);
+        Assert.Equal("class", count.ContainerKind);
+        Assert.Equal("Foo", count.ContainerName);
+        Assert.Null(count.ReturnType);
+
+        var handleClick = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleClick");
+        Assert.NotNull(handleClick);
+        Assert.Equal("class", handleClick.ContainerKind);
+        Assert.Equal("Foo", handleClick.ContainerName);
     }
 
     [Fact]

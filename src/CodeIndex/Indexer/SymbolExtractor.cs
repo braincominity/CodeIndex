@@ -1470,6 +1470,8 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @property / カスタムプロパティ登録
+            new("property", new Regex(@"^\s*@property\s+(?<name>--[\w-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @page / ページ規則
             new("namespace", new Regex(@"^\s*@page(?:\s+(?<name>:[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @namespace / 名前空間
@@ -9610,7 +9612,8 @@ public static class SymbolExtractor
                             out var accessorVisibility,
                             out var accessorTypeStartColumn,
                             out var accessorTypeEndColumn,
-                            out var accessorHeaderEndColumn))
+                            out var accessorHeaderEndColumn,
+                            out var accessorHasInitializer))
                     {
                         var accessorStartLine = i + 1;
                         if (seenMethodStarts.Add((accessorStartLine, column)))
@@ -9633,8 +9636,18 @@ public static class SymbolExtractor
                                 ContainerName = classScanTarget.ContainerName,
                                 Visibility = accessorVisibility,
                                 ReturnType = NormalizeMetadata(
-                                    line[(accessorTypeStartColumn + 1)..(accessorTypeEndColumn + 1)]),
+                                    accessorTypeStartColumn >= 0 && accessorTypeEndColumn >= accessorTypeStartColumn
+                                        ? line[(accessorTypeStartColumn + 1)..(accessorTypeEndColumn + 1)]
+                                        : null),
                             });
+                        }
+
+                        if (accessorHasInitializer)
+                        {
+                            inFieldInitializer = true;
+                            initializerParenDepth = 0;
+                            initializerBracketDepth = 0;
+                            initializerBraceDepth = 0;
                         }
 
                         column = accessorHeaderEndColumn + 1;
@@ -13937,13 +13950,15 @@ public static class SymbolExtractor
         out string? visibility,
         out int typeStartColumn,
         out int typeEndColumn,
-        out int headerEndColumn)
+        out int headerEndColumn,
+        out bool hasInitializer)
     {
         name = string.Empty;
         visibility = null;
         typeStartColumn = -1;
         typeEndColumn = -1;
         headerEndColumn = -1;
+        hasInitializer = false;
 
         var index = Math.Max(0, startColumn);
         var sawAccessor = false;
@@ -13994,21 +14009,123 @@ public static class SymbolExtractor
                 index++;
         }
 
-        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
-            return false;
-
-        typeStartColumn = index;
-        if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilSemicolon(sanitizedLine, ref index, out typeEndColumn))
-            return false;
-
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
             index++;
 
-        if (index >= sanitizedLine.Length || sanitizedLine[index] != ';')
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == ':')
+        {
+            typeStartColumn = index;
+            if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilAccessorTerminator(sanitizedLine, ref index, out typeEndColumn, out hasInitializer))
+                return false;
+
+            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                index++;
+        }
+        else if (sanitizedLine[index] == '=')
+        {
+            hasInitializer = true;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == '=')
+        {
+            hasInitializer = true;
+            headerEndColumn = index;
+            return true;
+        }
+
+        if (sanitizedLine[index] != ';')
             return false;
 
         headerEndColumn = index;
         return true;
+    }
+
+    // Walks a TypeScript accessor field type annotation from `:` to either a terminating `;` or
+    // a field initializer `=`. This mirrors the member-property helper but keeps the auto-accessor
+    // initializer boundary visible so the outer scanner can switch into field-initializer mode.
+    // TypeScript の accessor field 型注釈を `:` から終端 `;` または initializer `=` まで歩く。
+    // member-property 用 helper を踏襲しつつ、auto-accessor の initializer 境界を外側に見せることで、
+    // 呼び出し側が field-initializer モードへ切り替えられるようにする。
+    private static bool TrySkipJavaScriptTypeScriptTypeAnnotationUntilAccessorTerminator(
+        string sanitizedLine,
+        ref int index,
+        out int typeEndColumn,
+        out bool hasInitializer)
+    {
+        typeEndColumn = -1;
+        hasInitializer = false;
+
+        if (index >= sanitizedLine.Length || sanitizedLine[index] != ':')
+            return false;
+
+        var lastNonWs = index;
+        index++;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        while (index < sanitizedLine.Length)
+        {
+            var ch = sanitizedLine[index];
+
+            if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+            {
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                    lastNonWs = index + 1;
+                index += 2;
+                continue;
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+            {
+                if (ch == ';')
+                {
+                    typeEndColumn = lastNonWs;
+                    return true;
+                }
+
+                if (ch == '=')
+                {
+                    if (index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '=')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    typeEndColumn = lastNonWs;
+                    hasInitializer = true;
+                    return true;
+                }
+
+                if (!char.IsWhiteSpace(ch))
+                    lastNonWs = index;
+            }
+
+            if (ch == '(') parenDepth++;
+            else if (ch == ')' && parenDepth > 0) parenDepth--;
+            else if (ch == '[') bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0) bracketDepth--;
+            else if (ch == '{') braceDepth++;
+            else if (ch == '}' && braceDepth > 0) braceDepth--;
+            else if (ch == '<') angleDepth++;
+            else if (ch == '>' && angleDepth > 0) angleDepth--;
+
+            index++;
+        }
+
+        return false;
     }
 
     // Multi-line accumulating wrapper for class-field arrow functions. Mirrors

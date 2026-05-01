@@ -58,6 +58,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)", output);
+        Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd)", output);
         Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);
@@ -328,6 +329,21 @@ public class ConsoleUiTests
                 Console.SetOut(originalOut);
             }
         }
+    }
+
+    [Fact]
+    public void GetCompletionLangs_IncludesWindowsBatchAliases()
+    {
+        var method = typeof(ConsoleUi).GetMethod("GetCompletionLangs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var value = method!.Invoke(null, []);
+
+        var langs = value?.ToString() ?? string.Empty;
+        var tokens = langs.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("bat", tokens);
+        Assert.Contains("batch", tokens);
+        Assert.Contains("cmd", tokens);
     }
 
     [Theory]
