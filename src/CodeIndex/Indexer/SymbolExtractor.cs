@@ -157,6 +157,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlEventHandlerRegex = new(
         @"\b(?:Clicked|Tapped|Loaded|Unloaded|SelectionChanged|TextChanged|CheckedChanged|Unchecked|SelectedIndexChanged|PointerPressed|PointerReleased|PointerEntered|PointerExited|Drop|DragOver|Completed|Appearing|Disappearing|NavigatedTo|NavigatedFrom|SizeChanged)\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlBindingRegex = new(
+        @"\{(?<kind>Binding|x:Bind)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -5742,6 +5745,23 @@ private sealed class RubyMaskState
                 });
             }
 
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(line))
+            {
+                var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
             foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
             {
                 var value = handlerMatch.Groups["value"].Value.Trim();
@@ -5770,6 +5790,89 @@ private sealed class RubyMaskState
             return value;
 
         return NormalizeXamlMarkupExtensionContent(value[1..^1].Trim());
+    }
+
+    private static string NormalizeXamlBindingValue(string kind, string content)
+    {
+        kind = kind.Trim();
+        content = content.Trim();
+        if (content.Length == 0)
+            return content;
+
+        var payload = kind.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
+            ? $"x:Bind {content}"
+            : $"Binding {content}";
+
+        var firstPath = NormalizeXamlBindingPath(payload);
+        return firstPath.Length > 0 ? firstPath : content;
+    }
+
+    private static string NormalizeXamlBindingPath(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        var payloadStart = FindTopLevelMarkupPayloadStart(value);
+        if (payloadStart < 0)
+            return value;
+
+        var payload = value[(payloadStart + 1)..].TrimStart();
+        if (payload.Length == 0)
+            return value;
+
+        string? fallback = null;
+        foreach (var argument in SplitTopLevelMarkupArguments(payload))
+        {
+            var normalized = NormalizeXamlBindingArgument(argument);
+            if (normalized.Length == 0)
+                continue;
+
+            if (argument.IndexOf('=', StringComparison.Ordinal) >= 0)
+            {
+                var argumentName = argument[..argument.IndexOf('=')].Trim();
+                if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase))
+                    return normalized;
+            }
+
+            fallback ??= normalized;
+        }
+
+        return fallback ?? value;
+    }
+
+    private static string NormalizeXamlBindingArgument(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        var equalsIndex = IndexOfTopLevelEquals(value);
+        if (equalsIndex >= 0)
+        {
+            var name = value[..equalsIndex].Trim();
+            var normalized = value[(equalsIndex + 1)..].Trim();
+            if (string.Equals(name, "Path", StringComparison.OrdinalIgnoreCase))
+                return NormalizeXamlBindingPathValue(normalized);
+            if (normalized.Length > 0)
+                return NormalizeXamlMarkupValue(normalized);
+        }
+
+        return NormalizeXamlBindingPathValue(value);
+    }
+
+    private static string NormalizeXamlBindingPathValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return value;
+
+        value = NormalizeXamlMarkupValue(value);
+        var lastDot = value.LastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < value.Length)
+            value = value[(lastDot + 1)..];
+
+        return value.Trim();
     }
 
     private static string NormalizeXamlMarkupValue(string value)
