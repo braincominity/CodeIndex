@@ -1454,6 +1454,8 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // @property / カスタムプロパティ登録
+            new("property", new Regex(@"^\s*@property\s+(?<name>--[\w-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @page / ページ規則
             new("namespace", new Regex(@"^\s*@page(?:\s+(?<name>:[\w-]+))?", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @namespace / 名前空間
