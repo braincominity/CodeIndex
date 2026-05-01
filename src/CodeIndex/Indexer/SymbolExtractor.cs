@@ -1104,7 +1104,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*#include\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cpp"] =
         [
@@ -1120,7 +1120,7 @@ public static class SymbolExtractor
             new("struct",   new Regex(@"^\s*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*#include\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["php"] =
         [
