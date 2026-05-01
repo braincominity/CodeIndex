@@ -3882,6 +3882,8 @@ private sealed class RubyMaskState
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
+        if (lang == "python")
+            ExtractPythonAllExportSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
@@ -4020,8 +4022,10 @@ private sealed class RubyMaskState
     }
 
     private readonly record struct PythonImportSymbolEntry(string Name, int StartColumn);
+    private readonly record struct PythonExportSymbolEntry(string Name, int LineIndex, int StartColumn);
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string[] lines, int lineIndex, int absoluteStartColumn)
     {
@@ -4082,6 +4086,132 @@ private sealed class RubyMaskState
             entries,
             seenNames,
             treatAsFromImport: true);
+        return entries.Count > 0 ? entries : null;
+    }
+
+    private static void ExtractPythonAllExportSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var exports = TryExpandPythonAllExportSymbols(lines, i);
+            if (exports == null)
+                continue;
+
+            foreach (var export in exports)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    export.LineIndex + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = export.Name,
+                        Line = export.LineIndex + 1,
+                        StartLine = export.LineIndex + 1,
+                        StartColumn = export.StartColumn,
+                        EndLine = export.LineIndex + 1,
+                        Signature = lines[export.LineIndex].Trim(),
+                    },
+                    lines[export.LineIndex]);
+            }
+        }
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
+    {
+        var line = lines[lineIndex];
+        var match = PythonAllAssignmentRegex.Match(line);
+        if (!match.Success)
+            return null;
+
+        var valuesStartColumn = match.Groups["values"].Index;
+        if (valuesStartColumn < 0 || valuesStartColumn >= line.Length)
+            return null;
+
+        var entries = new List<PythonExportSymbolEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var currentLineIndex = lineIndex;
+        var currentColumn = valuesStartColumn;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
+            }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var name = currentLine[stringStartColumn..currentColumn].Trim();
+                    if (name.Length > 0 && seenNames.Add(name))
+                    {
+                        entries.Add(new PythonExportSymbolEntry(name, currentLineIndex, stringStartColumn));
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch == '\'' || ch == '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '[' or '(' or '{')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is ']' or ')' or '}')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
+        }
+
         return entries.Count > 0 ? entries : null;
     }
 
