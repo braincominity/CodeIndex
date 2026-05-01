@@ -9613,6 +9613,7 @@ public class SymbolExtractorTests
             "CREATE ROLE sales_writer AUTHORIZATION dbo;\n" +
             "CREATE DATABASE sales_db;\n" +
             "CREATE CERTIFICATE svc_cert WITH SUBJECT = 'svc';\n" +
+            "CREATE SECURITY POLICY SalesFilter ADD FILTER PREDICATE Security.fn_salesPredicate(SalesRep) ON dbo.Orders WITH (STATE = ON);\n" +
             "CREATE PARTITION FUNCTION pf_OrdersByYear (datetime2) AS RANGE RIGHT FOR VALUES ('2024-01-01');\n" +
             "CREATE PARTITION SCHEME ps_OrdersByYear AS PARTITION pf_OrdersByYear TO ([primary]);\n" +
             "CREATE FULLTEXT CATALOG ftc_sales WITH ACCENT_SENSITIVITY=OFF;\n" +
@@ -9626,6 +9627,7 @@ public class SymbolExtractorTests
             "ALTER SCHEMA sales TRANSFER dbo.Customers;\n" +
             "ALTER EXTENSION hstore UPDATE TO '1.5';\n" +
             "ALTER CERTIFICATE svc_cert WITH PRIVATE KEY (DECRYPTION BY PASSWORD = 'x');\n" +
+            "ALTER SECURITY POLICY SalesFilter WITH (STATE = OFF);\n" +
             "ALTER DOMAIN us_postal_code DROP NOT NULL;\n";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
@@ -9638,6 +9640,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_writer");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_db");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SalesFilter");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ps_OrdersByYear");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ftc_sales");
@@ -9658,6 +9661,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales" && s.Signature != null && s.Signature.StartsWith("ALTER SCHEMA", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "hstore");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert" && s.Signature != null && s.Signature.StartsWith("ALTER CERTIFICATE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SalesFilter" && s.Signature != null && s.Signature.StartsWith("ALTER SECURITY POLICY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "us_postal_code");
 
         // SQL `CREATE SCHEMA sales;` and `ALTER SCHEMA sales TRANSFER ...;` are body-less
