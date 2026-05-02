@@ -2,6 +2,7 @@
 category: fixed
 affected:
   - src/CodeIndex/Cli/QueryCommandRunner.cs
+  - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
 ---
 
