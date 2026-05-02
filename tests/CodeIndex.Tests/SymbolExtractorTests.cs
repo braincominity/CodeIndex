@@ -12834,6 +12834,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsAttributedFunctions()
+    {
+        var content = """
+            __attribute__((noreturn)) void die(void) {
+            }
+
+            static inline __attribute__((always_inline)) int add(int a, int b) {
+                return a + b;
+            }
+
+            __declspec(dllexport) int exported(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "die");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "exported");
+    }
+
+    [Fact]
     public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
     {
         // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
