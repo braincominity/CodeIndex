@@ -598,6 +598,9 @@ public partial class DbReader
         if (leafIndex >= 0)
             trimmed = trimmed[(leafIndex + 2)..].Trim();
 
+        if (trimmed.StartsWith("r#", StringComparison.Ordinal))
+            trimmed = trimmed[2..];
+
         return trimmed.Length == 0 ? null : trimmed;
     }
 
