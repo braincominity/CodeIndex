@@ -164,6 +164,7 @@ public class QueryCommandRunnerTests
     [InlineData("PY3", "python")]
     [InlineData("pyi", "python")]
     [InlineData("pyw", "python")]
+    [InlineData("yml", "yaml")]
     [InlineData("kt", "kotlin")]
     [InlineData("KTS", "kotlin")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
@@ -215,6 +216,41 @@ public class QueryCommandRunnerTests
         String marker = ""{queryToken}"";
     }}
 }}");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+    finally
+    {
+        TestProjectHelper.DeleteDirectory(projectRoot);
+    }
+}
+
+    [Theory]
+    [InlineData("yml")]
+    [InlineData("YML")]
+    public void RunSearch_NormalizesYamlLangAlias(string input)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_yaml_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "yaml_lang_alias_3d5a19";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "config/workflow.yml",
+                "yaml",
+                $@"name: demo
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ""{queryToken}""");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [queryToken, "--db", dbPath, "--lang", input, "--count"],

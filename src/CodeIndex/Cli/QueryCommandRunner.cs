@@ -31,6 +31,7 @@ public static class QueryCommandRunner
         ["py3"] = "python",
         ["pyi"] = "python",
         ["pyw"] = "python",
+        ["yml"] = "yaml",
         ["kt"] = "kotlin",
         ["kts"] = "kotlin",
         ["tsql"] = "sql",
