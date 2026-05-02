@@ -464,7 +464,7 @@ public partial class DbReader
     }
 
     private static string GetExactSearchTextSql(string valueSql, string langSql)
-        => $"CASE WHEN {langSql} = 'csharp' THEN sql_normalize_csharp_verbatim_name({valueSql}) " +
+        => $"CASE WHEN {langSql} IN ('csharp', 'java', 'kotlin') THEN sql_normalize_exact_source_name({valueSql}, {langSql}) " +
            $"WHEN {langSql} = 'sql' THEN sql_normalize_name({valueSql}) " +
            $"ELSE {valueSql} END";
 
