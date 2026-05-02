@@ -11311,6 +11311,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsMultilineFnHeaders()
+    {
+        var content = """
+            pub unsafe extern "C"
+            fn exported_api<T>(
+                value: T,
+            ) -> T
+            where
+                T: Copy,
+            {
+                value
+            }
+        """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var symbol = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "exported_api");
+        Assert.Equal(2, symbol.Line);
+        Assert.Equal(7, symbol.StartColumn);
+    }
+
+    [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
         var content = "type Handler struct {\n}\ntype ID = string\ntype Callback func(int) int\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
