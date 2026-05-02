@@ -1,20 +1,28 @@
 namespace CodeIndex.Database;
 
 /// <summary>
-/// Normalizes C# verbatim identifiers by stripping `@` only at identifier boundaries.
-/// C# の verbatim 識別子を正規化し、識別子境界の `@` だけを除去する。
+/// Normalizes C# verbatim identifiers by stripping `@` and `global::` at identifier boundaries.
+/// C# の verbatim 識別子を正規化し、識別子境界の `@` と `global::` を除去する。
 /// </summary>
 internal static class CSharpVerbatimNameNormalizer
 {
     internal static string Normalize(string text)
     {
-        if (text.Length == 0 || text.IndexOf('@') < 0)
+        if (text.Length == 0
+            || (text.IndexOf('@') < 0 && text.IndexOf("global::", StringComparison.Ordinal) < 0))
             return text;
 
         var sb = new System.Text.StringBuilder(text.Length);
         bool atBoundary = true;
         for (int i = 0; i < text.Length; i++)
         {
+            if (atBoundary && TryConsumeGlobalQualifier(text, i))
+            {
+                i += GlobalQualifier.Length - 1;
+                atBoundary = true;
+                continue;
+            }
+
             char c = text[i];
             if (atBoundary && c == '@'
                 && i + 1 < text.Length
@@ -37,7 +45,7 @@ internal static class CSharpVerbatimNameNormalizer
             }
             else
             {
-                atBoundary = false;
+                atBoundary = !IsCSharpIdentifierPartChar(c);
             }
         }
 
@@ -52,7 +60,7 @@ internal static class CSharpVerbatimNameNormalizer
             return text;
         }
 
-        if (text.IndexOf('@') < 0)
+        if (text.IndexOf('@') < 0 && text.IndexOf("global::", StringComparison.Ordinal) < 0)
         {
             rawIndexMap = BuildIdentityMap(text.Length);
             return text;
@@ -63,6 +71,13 @@ internal static class CSharpVerbatimNameNormalizer
         bool atBoundary = true;
         for (int i = 0; i < text.Length; i++)
         {
+            if (atBoundary && TryConsumeGlobalQualifier(text, i))
+            {
+                i += GlobalQualifier.Length - 1;
+                atBoundary = true;
+                continue;
+            }
+
             char c = text[i];
             if (atBoundary && c == '@'
                 && i + 1 < text.Length
@@ -86,7 +101,7 @@ internal static class CSharpVerbatimNameNormalizer
             }
             else
             {
-                atBoundary = false;
+                atBoundary = !IsCSharpIdentifierPartChar(c);
             }
         }
 
@@ -102,6 +117,15 @@ internal static class CSharpVerbatimNameNormalizer
         return map;
     }
 
+    private static bool TryConsumeGlobalQualifier(string text, int index) =>
+        index + GlobalQualifier.Length <= text.Length
+        && text.AsSpan(index, GlobalQualifier.Length).SequenceEqual(GlobalQualifier.AsSpan());
+
+    private const string GlobalQualifier = "global::";
+
     private static bool IsCSharpIdentifierStartChar(char c) =>
         c == '_' || char.IsLetter(c);
+
+    private static bool IsCSharpIdentifierPartChar(char c) =>
+        IsCSharpIdentifierStartChar(c) || char.IsDigit(c);
 }
