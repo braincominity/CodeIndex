@@ -168,6 +168,23 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_RustRawIdentifiersIgnoreRawPrefixAndReferences()
+    {
+        InsertIndexedFile(
+            "src/lib.rs",
+            "rust",
+            """
+            pub fn r#type() {}
+            """);
+
+        var results = _reader.SearchSymbols("r#type", lang: "rust", exact: true);
+
+        var symbol = Assert.Single(results);
+        Assert.Equal("type", symbol.Name);
+        Assert.Equal("src/lib.rs", symbol.Path);
+    }
+
+    [Fact]
     public void SearchSymbols_RustQualifiedQueriesResolveToLeafNames()
     {
         InsertIndexedFile(
