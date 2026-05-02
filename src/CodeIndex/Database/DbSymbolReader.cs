@@ -571,10 +571,10 @@ public partial class DbReader
             : new QueryCountResult(0, 0);
     }
 
-    private static string? NormalizeSymbolSearchQuery(string? query, string? lang)
+    private static string? NormalizeSymbolSearchQuery(string? query, string? lang, bool exact = false)
     {
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
-            return NormalizeRustSymbolSearchQuery(query);
+            return NormalizeRustSymbolSearchQuery(query, exact);
 
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
             return NormalizeJavaScriptSymbolSearchQuery(query);
@@ -611,7 +611,7 @@ public partial class DbReader
         return trimmed.Length == 0 ? null : trimmed;
     }
 
-    private static string? NormalizeRustSymbolSearchQuery(string? query)
+    private static string? NormalizeRustSymbolSearchQuery(string? query, bool exact = false)
     {
         if (query == null)
             return null;
@@ -620,20 +620,37 @@ public partial class DbReader
         if (trimmed.Length == 0)
             return null;
 
-        if (trimmed.EndsWith("!", StringComparison.Ordinal))
-            trimmed = trimmed[..^1].TrimEnd();
+        var macroQuery = trimmed;
+        var isMacroQuery = macroQuery.EndsWith("!", StringComparison.Ordinal);
+        if (isMacroQuery)
+            macroQuery = macroQuery[..^1].TrimEnd();
 
-        if (trimmed.Length == 0)
+        if (macroQuery.Length == 0)
             return null;
 
-        var leafIndex = trimmed.LastIndexOf("::", StringComparison.Ordinal);
+        if (exact && isMacroQuery && macroQuery.Contains("::", StringComparison.Ordinal) && macroQuery.Contains("r#", StringComparison.Ordinal))
+            return NormalizeRustQualifiedMacroQuery(macroQuery);
+
+        var leafIndex = macroQuery.LastIndexOf("::", StringComparison.Ordinal);
         if (leafIndex >= 0)
-            trimmed = trimmed[(leafIndex + 2)..].Trim();
+            macroQuery = macroQuery[(leafIndex + 2)..].Trim();
 
-        if (trimmed.StartsWith("r#", StringComparison.Ordinal))
-            trimmed = trimmed[2..];
+        if (macroQuery.StartsWith("r#", StringComparison.Ordinal))
+            macroQuery = macroQuery[2..];
 
-        return trimmed.Length == 0 ? null : trimmed;
+        return macroQuery.Length == 0 ? null : macroQuery;
+    }
+
+    private static string? NormalizeRustQualifiedMacroQuery(string query)
+    {
+        var segments = query
+            .Split("::", StringSplitOptions.None)
+            .Select(segment => segment.Trim())
+            .Where(segment => segment.Length > 0)
+            .Select(segment => segment.StartsWith("r#", StringComparison.Ordinal) ? segment[2..] : segment)
+            .ToList();
+
+        return segments.Count == 0 ? null : string.Join("::", segments);
     }
 
     /// <summary>
