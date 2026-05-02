@@ -386,6 +386,37 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsPythonQualifiedInitAllExports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_qualified_init_all_exports");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "package/subpkg/__init__.py",
+                "python",
+                """
+                __all__ = [
+                    "submodule",
+                ]
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.subpkg.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");

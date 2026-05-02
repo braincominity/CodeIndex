@@ -922,7 +922,7 @@ public static class IndexCommandRunner
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);

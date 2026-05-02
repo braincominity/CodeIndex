@@ -2851,8 +2851,9 @@ private sealed class RubyMaskState
     /// <param name="fileId">The file ID in the database / データベース上のファイルID</param>
     /// <param name="lang">Detected language / 検出された言語</param>
     /// <param name="content">Full file content / ファイル全体の内容</param>
+    /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
     /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
-    public static List<SymbolRecord> Extract(long fileId, string? lang, string content)
+    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null)
     {
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
@@ -2897,6 +2898,9 @@ private sealed class RubyMaskState
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
+        var pythonModulePrefix = lang == "python"
+            ? GetPythonModulePrefix(filePath)
+            : null;
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
         // "first match per line" semantics drop every additional symbol on the
@@ -4410,7 +4414,7 @@ private sealed class RubyMaskState
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "python")
-            ExtractPythonAllExportSymbols(fileId, lines, symbols);
+            ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         NormalizeKotlinSecondaryConstructorNames(symbols);
@@ -4621,7 +4625,11 @@ private sealed class RubyMaskState
         return entries.Count > 0 ? entries : null;
     }
 
-    private static void ExtractPythonAllExportSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractPythonAllExportSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        string? pythonModulePrefix)
     {
         for (var i = 0; i < lines.Length; i++)
         {
@@ -4647,6 +4655,28 @@ private sealed class RubyMaskState
                         Signature = lines[export.LineIndex].Trim(),
                     },
                     lines[export.LineIndex]);
+
+                if (!string.IsNullOrEmpty(pythonModulePrefix)
+                    && !string.Equals(export.Name, pythonModulePrefix, StringComparison.Ordinal)
+                    && !export.Name.StartsWith(pythonModulePrefix + ".", StringComparison.Ordinal))
+                {
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        export.LineIndex + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "import",
+                            Name = $"{pythonModulePrefix}.{export.Name}",
+                            Line = export.LineIndex + 1,
+                            StartLine = export.LineIndex + 1,
+                            StartColumn = export.StartColumn,
+                            EndLine = export.LineIndex + 1,
+                            Signature = lines[export.LineIndex].Trim(),
+                        },
+                        lines[export.LineIndex]);
+                }
             }
         }
     }
@@ -4977,6 +5007,25 @@ private sealed class RubyMaskState
 
             prefixStart = dotIndex + 1;
         }
+    }
+
+    private static string? GetPythonModulePrefix(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return null;
+
+        var normalizedPath = filePath.Replace('\\', '/');
+        if (!normalizedPath.EndsWith("/__init__.py", StringComparison.Ordinal)
+            && !string.Equals(normalizedPath, "__init__.py", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var modulePath = normalizedPath[..^"/__init__.py".Length];
+        if (modulePath.Length == 0)
+            return null;
+
+        return modulePath.Replace('/', '.').Trim('.');
     }
 
     private static int FindFirstNonWhitespaceColumn(string text)

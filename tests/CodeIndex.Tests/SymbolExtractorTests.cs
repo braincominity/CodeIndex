@@ -168,6 +168,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesQualifiedExportsFromInitModules()
+    {
+        var content = """
+            __all__ = [
+                "submodule",
+                "subpackage.tools",
+            ]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("submodule", exports);
+        Assert.Contains("package.subpkg.submodule", exports);
+        Assert.Contains("subpackage.tools", exports);
+        Assert.Contains("package.subpkg.subpackage.tools", exports);
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
