@@ -9984,6 +9984,7 @@ public class SymbolExtractorTests
                     items []T
                 }
                 Container[T comparable, U any] interface {
+                    io.Reader
                     Get() U
                 }
                 Alias[T any] string
@@ -10012,28 +10013,27 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
         Assert.DoesNotContain(symbols, s => s.Name == "items");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
     }
 
     [Fact]
-    public void Extract_Go_DetectsInterfaceMethodsInsideTypeBlocks()
+    public void Extract_Go_IndexesEmbeddedInterfaceTypesInsideInterfaceBodies()
     {
         var content = """
             package demo
 
-            type (
-                Reader interface {
-                    Read(p []byte) (int, error)
-                    Close() error
-                }
+            type Reader interface {
+                io.Reader
+                Close() error
+            }
 
-                Store interface { Put(key string, value []byte) error }
-            )
+            type Store interface { io.Writer }
             """;
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Read");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Close");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Put");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Writer");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Reader");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Store");
     }
