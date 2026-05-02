@@ -479,6 +479,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsXamlTypeArguments()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_type_arguments");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "GenericPage.xaml"),
+                """
+                <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                    xmlns:vm="clr-namespace:Sample.ViewModels"
+                                    xmlns:local="clr-namespace:Sample.Controls">
+                    <local:Pair x:TypeArguments="x:String, vm:PersonViewModel" />
+                </ResourceDictionary>
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["vm:PersonViewModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("vm:PersonViewModel", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameFindsPythonInitModuleAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_module_aliases");

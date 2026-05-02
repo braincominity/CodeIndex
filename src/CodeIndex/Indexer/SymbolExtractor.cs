@@ -198,6 +198,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlDataTypeRegex = new(
         @"\bx:DataType\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlTypeArgumentsRegex = new(
+        @"\bx:TypeArguments\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlTargetTypeRegex = new(
         @"\bTargetType\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -6543,6 +6546,23 @@ private sealed class RubyMaskState
                 });
             }
 
+            foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
+            {
+                foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
+                {
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
+            }
+
             foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
             {
                 var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
@@ -6768,6 +6788,20 @@ private sealed class RubyMaskState
         return value;
     }
 
+    private static IEnumerable<string> NormalizeXamlTypeArgumentsValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            yield break;
+
+        foreach (var argument in SplitTopLevelTypeArguments(value))
+        {
+            var normalized = NormalizeXamlMarkupArgument(argument);
+            if (normalized.Length > 0)
+                yield return normalized;
+        }
+    }
+
     private static string NormalizeXamlMarkupArgument(string value)
     {
         value = value.Trim();
@@ -6848,6 +6882,62 @@ private sealed class RubyMaskState
                 continue;
             }
             if (braceDepth == 0 && ch == ',')
+            {
+                var segment = value[start..i].Trim();
+                if (segment.Length > 0)
+                    yield return segment;
+                start = i + 1;
+            }
+        }
+
+        var tail = value[start..].Trim();
+        if (tail.Length > 0)
+            yield return tail;
+    }
+
+    private static IEnumerable<string> SplitTopLevelTypeArguments(string value)
+    {
+        var braceDepth = 0;
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var start = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+            if (ch == '<')
+            {
+                angleDepth++;
+                continue;
+            }
+            if (ch == '>')
+            {
+                if (angleDepth > 0)
+                    angleDepth--;
+                continue;
+            }
+            if (braceDepth == 0 && parenDepth == 0 && angleDepth == 0 && ch == ',')
             {
                 var segment = value[start..i].Trim();
                 if (segment.Length > 0)
