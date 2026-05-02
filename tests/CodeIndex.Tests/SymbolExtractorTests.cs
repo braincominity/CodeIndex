@@ -191,6 +191,7 @@ public class SymbolExtractorTests
     {
         var content = """
             import submodule as module_alias
+            import package.submodule as external_alias
             from . import helper as alias
             """;
 
@@ -201,6 +202,10 @@ public class SymbolExtractorTests
         Assert.Contains("package.subpkg.submodule", imports);
         Assert.Contains("module_alias", imports);
         Assert.Contains("package.subpkg.module_alias", imports);
+        Assert.Contains("package.submodule", imports);
+        Assert.DoesNotContain("package.subpkg.package.submodule", imports);
+        Assert.Contains("external_alias", imports);
+        Assert.Contains("package.subpkg.external_alias", imports);
         Assert.Contains("helper", imports);
         Assert.Contains("alias", imports);
         Assert.Contains("package.subpkg.alias", imports);
@@ -11322,6 +11327,27 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped" && s.Line == 7 && s.StartColumn == 5);
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Trait" && s.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_Rust_DetectsMultilineFnHeaders()
+    {
+        var content = """
+            pub unsafe extern "C"
+            fn exported_api<T>(
+                value: T,
+            ) -> T
+            where
+                T: Copy,
+            {
+                value
+            }
+        """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var symbol = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "exported_api");
+        Assert.Equal(2, symbol.Line);
+        Assert.Equal(7, symbol.StartColumn);
     }
 
     [Fact]

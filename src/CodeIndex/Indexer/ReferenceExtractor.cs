@@ -513,10 +513,10 @@ public static class ReferenceExtractor
     private static readonly Regex ShellCommandCallRegex = new(
         @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
         RegexOptions.Compiled);
-    // Shell `source` / `.` invocations load other scripts. Capture the operand as a
-    // `reference` edge so dependency-style search can find imported files too.
-    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込む。読み込まれる operand を
-    // `reference` エッジとして出すことで、依存関係ベースの検索でも辿れるようにする。
+    // Shell `source` / `.` invocations load other scripts, so surface the referenced path
+    // as a `reference` edge for dependency-style search.
+    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込むため、依存関係検索用に
+    // 参照エッジとして対象パスを出す。
     private static readonly Regex ShellSourceReferenceRegex = new(
         @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?:source|\.)\s+(?<name>(?:'[^']*'|""[^""]*""|[^;\s&#|}]+))",
         RegexOptions.Compiled);
