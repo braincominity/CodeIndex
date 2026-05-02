@@ -86,6 +86,19 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_NormalizesCSharpVerbatimQualifiedNamesInNonExactSearch()
+    {
+        const string content = "namespace Demo;\nusing @Foo.@Bar;\n";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Foo.Bar", absoluteStartLine: 1, maxLines: 4, caseSensitive: false, lang: "csharp");
+
+        Assert.Equal([2], excerpt.MatchLines);
+        Assert.Single(excerpt.Highlights);
+        Assert.Contains("Foo.Bar", excerpt.Highlights[0].Terms);
+        Assert.Contains("using @Foo.@Bar;", excerpt.Lines);
+    }
+
+    [Fact]
     public void Format_TruncatedAfterOnly_WhenMatchIsNearStart()
     {
         // Match on line 1 with maxLines=2 out of 6 — truncated after only
