@@ -893,7 +893,7 @@ public class FileIndexer
     internal static bool IsIgnoreFilePath(string path)
         => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
-    internal static LanguageDetectionResult TryDetectLanguage(string filePath)
+    internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a project language instead of the generic file type.
@@ -918,12 +918,83 @@ public class FileIndexer
 
         var ext = Path.GetExtension(filePath);
         if (LangMap.TryGetValue(ext, out var lang))
+        {
+            if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(content))
+            {
+                var cppHeaderLanguage = TryDetectCppHeaderLanguage(content);
+                if (cppHeaderLanguage != null)
+                    return new LanguageDetectionResult(FileProbeStatus.Supported, cppHeaderLanguage);
+            }
+
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
+        }
 
         if (!string.IsNullOrEmpty(ext))
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
         return TryDetectLanguageFromShebang(filePath);
+    }
+
+    private static string? TryDetectCppHeaderLanguage(string content)
+    {
+        const int maxLines = 200;
+        var remaining = content.AsSpan();
+        var inspectedLines = 0;
+
+        while (remaining.Length > 0 && inspectedLines < maxLines)
+        {
+            var newlineIndex = remaining.IndexOf('\n');
+            var line = newlineIndex >= 0 ? remaining[..newlineIndex] : remaining;
+            if (line.Length > 0 && line[^1] == '\r')
+                line = line[..^1];
+
+            if (LooksLikeCppHeaderLine(line))
+                return "cpp";
+
+            if (newlineIndex < 0)
+                break;
+
+            remaining = remaining[(newlineIndex + 1)..];
+            inspectedLines++;
+        }
+
+        return null;
+    }
+
+    private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line)
+    {
+        line = line.Trim();
+        if (line.IsEmpty)
+            return false;
+
+        if (line.StartsWith("//") || line.StartsWith("/*") || line.StartsWith("*"))
+            return false;
+
+        if (line.StartsWith("namespace ", StringComparison.Ordinal)
+            || line.StartsWith("template ", StringComparison.Ordinal)
+            || line.StartsWith("template<", StringComparison.Ordinal)
+            || line.StartsWith("using ", StringComparison.Ordinal)
+            || line.StartsWith("class ", StringComparison.Ordinal)
+            || line.StartsWith("enum class ", StringComparison.Ordinal)
+            || line.StartsWith("enum struct ", StringComparison.Ordinal)
+            || line.StartsWith("public:", StringComparison.Ordinal)
+            || line.StartsWith("private:", StringComparison.Ordinal)
+            || line.StartsWith("protected:", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (line.Contains("constexpr ", StringComparison.Ordinal)
+            || line.Contains("consteval ", StringComparison.Ordinal)
+            || line.Contains("constinit ", StringComparison.Ordinal)
+            || line.Contains("decltype(", StringComparison.Ordinal)
+            || line.Contains("friend ", StringComparison.Ordinal)
+            || line.Contains("std::", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     internal static bool CanIndexFile(string filePath)
@@ -1608,7 +1679,7 @@ public class FileIndexer
         var record = new FileRecord
         {
             Path = NormalizePathSeparators(relativePath),
-            Lang = TryDetectLanguage(absolutePath).Language,
+            Lang = TryDetectLanguage(absolutePath, content).Language,
             Size = info.Length,
             Lines = lineCount,
             Checksum = checksum,
