@@ -223,7 +223,7 @@ public static class ReferenceExtractor
         ["r"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
-            "invisible", "tryCatch", "withCallingHandlers", "next", "break", "repeat",
+            "invisible", "tryCatch", "withCallingHandlers", "requireNamespace", "next", "break", "repeat",
         },
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)

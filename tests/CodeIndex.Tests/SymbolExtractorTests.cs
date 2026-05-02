@@ -16080,6 +16080,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsQuotedLibraryAndRequireNamespaceImports()
+    {
+        // R: quoted package loads and requireNamespace should both index as imports.
+        // R: 引用付き package load と requireNamespace も import として索引する。
+        var content = """
+            library("ggplot2")
+            requireNamespace("jsonlite", quietly = TRUE)
+            require(dplyr)
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ggplot2");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "jsonlite");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "dplyr");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子

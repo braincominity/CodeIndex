@@ -7977,6 +7977,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_IgnoresRequireNamespaceLoaders()
+    {
+        const string content = """
+            library("ggplot2")
+            requireNamespace("jsonlite", quietly = TRUE)
+            require(dplyr)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "requireNamespace");
+        Assert.DoesNotContain(references, r => r.SymbolName == "library");
+        Assert.Contains(references, r => r.SymbolName == "require" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsCallSites()
     {
         const string content = """
