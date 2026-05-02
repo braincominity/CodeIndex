@@ -2745,7 +2745,7 @@ public static class ReferenceExtractor
                     var name = match.Groups["name"].Value;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, name, match.Index, "reference", context, lineNumber, container);
+                    AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
                 }
             }
         }
