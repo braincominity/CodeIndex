@@ -6968,6 +6968,7 @@ private sealed class RubyMaskState
         AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
         {
@@ -7200,6 +7201,53 @@ private sealed class RubyMaskState
                 EndLine = startLine,
                 Signature = lines[signatureIndex].Trim(),
             });
+        }
+    }
+
+    private static void AddXamlStaticMemberTypeSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var braceIndex = rawText.IndexOf("{x:Static", cursor, StringComparison.Ordinal);
+            if (braceIndex < 0)
+                break;
+
+            var closingBraceIndex = FindMatchingBrace(rawText, braceIndex);
+            if (closingBraceIndex < 0)
+            {
+                cursor = braceIndex + 1;
+                continue;
+            }
+
+            var value = NormalizeXamlMarkupValue(rawText[braceIndex..(closingBraceIndex + 1)]);
+            var lastDot = value.LastIndexOf('.');
+            if (lastDot > 0)
+            {
+                var typeName = value[..lastDot].Trim();
+                if (typeName.Length > 0)
+                {
+                    var startLine = FindHtmlLineNumber(lineStarts, braceIndex);
+                    var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = typeName,
+                        Line = startLine,
+                        StartLine = startLine,
+                        EndLine = startLine,
+                        Signature = lines[signatureIndex].Trim(),
+                    });
+                }
+            }
+
+            cursor = closingBraceIndex + 1;
         }
     }
 
