@@ -626,6 +626,9 @@ The database reflects the working tree at the time of the last index. After swit
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
 | VB.NET | `.vb`, `.vbs` | yes |
 | Razor/Blazor | `.cshtml`, `.razor` | yes (as C#) |
+
+`.h` ファイルは既定では C のままですが、`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーを含むヘッダーは、index 時に `cpp` へ昇格します。
+
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
@@ -653,6 +656,9 @@ The database reflects the working tree at the time of the last index. After swit
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | command-style function calls |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | function/filter (scope prefixes), configuration, workflow, class constructors/methods/properties, enum values, Import-Module, using module/namespace/assembly |
   | Batch | `.bat`, `.cmd` | labels + `goto`/`call` targets, including inline/chained control flow and `if` comparison forms |
+
+`.h` files stay on the C path by default, but headers that clearly look like C++ source are promoted to `cpp` at index time when they contain unmistakable markers such as `namespace`, `template`, `using`, `class`, or `std::`.
+
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 Query-time `--lang tsql` is accepted as an alias for the SQL bucket.
@@ -668,6 +674,8 @@ T-SQL `CREATE AGGREGATE` / `ALTER AGGREGATE` and `CREATE/ALTER ASSEMBLY` / `XML 
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
+
+`.h` files stay on the C path by default, but headers that clearly look like C++ source are promoted to `cpp` at index time when they contain unmistakable markers such as `namespace`, `template`, `using`, `class`, or `std::`.
 
 JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, `export type { User } from`, `export type * from`, and `export type * as ns from`, including commented forms, multiline named re-export clauses, multiline `export *` / `export * as ns` layouts, import-attributes suffixes such as `with { type: 'json' }` / `assert { type: 'json' }`, and valid minified forms such as `export*from` / `export{foo as bar}from`. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, including same-line and multiline parenthesized wrappers plus TypeScript generic arrow RHS such as `module.exports.fn = <T>(x: T) => x`, `module.exports.foo = <T>(\n  value: T\n) => value`, and constrained/async variants, while keeping identifier prefixes like `functionCall()` / `classyThing` as ordinary property values. Exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }` are also surfaced.
 
@@ -1624,6 +1632,9 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
 | VB.NET | `.vb`, `.vbs` | yes |
 | Razor/Blazor | `.cshtml`, `.razor` | yes (as C#) |
+
+`.h` ファイルは既定では C のままですが、`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーを含むヘッダーは、index 時に `cpp` へ昇格します。
+
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |

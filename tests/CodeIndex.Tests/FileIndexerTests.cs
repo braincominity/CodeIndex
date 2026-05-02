@@ -602,6 +602,79 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecordWithRawBytes_CppStyleHeaderContentIsDetectedAsCpp()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "widget.h");
+            var content = """
+                #pragma once
+
+                namespace demo {
+                template <typename T>
+                class Widget {
+                public:
+                    constexpr Widget() = default;
+                };
+                }
+                """;
+            File.WriteAllText(path, content);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
+
+            Assert.Equal("cpp", record.Lang);
+            Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
+
+            var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
+            Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo");
+            Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Widget");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecordWithRawBytes_CStyleHeaderContentStaysC()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "legacy.h");
+            var content = """
+                #ifndef LEGACY_H
+                #define LEGACY_H
+
+                struct legacy_point {
+                    int x;
+                    int y;
+                };
+
+                #endif
+                """;
+            File.WriteAllText(path, content);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
+
+            Assert.Equal("c", record.Lang);
+            Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
+
+            var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
+            Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning
