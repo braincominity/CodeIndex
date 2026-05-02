@@ -6528,6 +6528,8 @@ public class ReferenceExtractorTests
             function inspect(): void {
                 Config::rebuild();
                 Config::VERSION;
+                \App\Models\Config::class;
+                \App\Models\Config::rebuild();
                 Priority::Low;
             }
             ?>
@@ -6537,6 +6539,10 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "php", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "Config" && reference.ReferenceKind == "type_reference");
+        Assert.True(
+            references.Any(reference =>
+                reference.Context.Contains("Config::class", StringComparison.Ordinal)
+                && reference.Column == 6));
         Assert.Contains(references, reference => reference.SymbolName == "Priority" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "self" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "static" && reference.ReferenceKind == "type_reference");
