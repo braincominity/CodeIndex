@@ -1240,8 +1240,8 @@ public static class SymbolExtractor
             // Perl package declarations / Perl の package 宣言
             new("namespace", new Regex(@"^\s*package\s+(?<name>[\w:]+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             // Perl module imports / Perl の module import
-            new("import", new Regex(@"^\s*use\s+(?<name>[\w:]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(@"^\s*require\s+(?<name>[\w:]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(@"^\s*use\s+(?<name>[\p{L}_][\w:]*)", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(@"^\s*require\s+(?<name>[\p{L}_][\w:]*)", RegexOptions.Compiled), BodyStyle.None),
             // Perl subroutines / Perl の subroutine
             new("function", new Regex(@"^\s*sub\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
         ],
