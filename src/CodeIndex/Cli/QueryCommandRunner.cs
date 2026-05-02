@@ -23,12 +23,16 @@ public static class QueryCommandRunner
     private const string HotspotsGroupedByNameKind = "name_kind";
     private static readonly Dictionary<string, string> LangFilterAliases = new(StringComparer.Ordinal)
     {
+        ["c#"] = "csharp",
+        ["cs"] = "csharp",
         ["bat"] = "batch",
         ["cmd"] = "batch",
         ["py"] = "python",
         ["py3"] = "python",
         ["pyi"] = "python",
         ["pyw"] = "python",
+        ["kt"] = "kotlin",
+        ["kts"] = "kotlin",
         ["tsql"] = "sql",
     };
     private static readonly HashSet<string> ValueTakingOptions =
