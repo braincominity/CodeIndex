@@ -19770,6 +19770,7 @@ public class SymbolExtractorTests
                                 xmlns:local="clr-namespace:Sample.Controls">
                 <local:Pair x:TypeArguments="x:String, vm:PersonViewModel" />
                 <local:Factory x:TypeArguments="{x:Type vm:CustomButton}" />
+                <local:Nested x:TypeArguments="vm:Outer(x:String, vm:InnerModel)" />
             </ResourceDictionary>
             """;
 
@@ -19778,6 +19779,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
     }
 
     [Fact]

@@ -6969,7 +6969,58 @@ private sealed class RubyMaskState
         {
             var normalized = NormalizeXamlMarkupArgument(argument);
             if (normalized.Length > 0)
-                yield return normalized;
+            {
+                foreach (var expanded in ExpandXamlTypeArgument(normalized))
+                    yield return expanded;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExpandXamlTypeArgument(string value)
+    {
+        // Peel nested generic constructor shapes recursively so XAML type arguments like
+        // `Outer(Inner(A, B), C)` still surface every referenced type name.
+        value = value.Trim();
+        if (value.Length == 0)
+            yield break;
+
+        var payloadStart = FindTopLevelTypeConstructorStart(value);
+        if (payloadStart < 0)
+        {
+            yield return value;
+            yield break;
+        }
+
+        var payloadEnd = FindMatchingTypeConstructorEnd(value, payloadStart);
+        if (payloadEnd < 0)
+        {
+            yield return value;
+            yield break;
+        }
+
+        var prefix = value[..payloadStart].Trim();
+        if (prefix.Length > 0)
+            yield return prefix;
+
+        var payload = value[(payloadStart + 1)..payloadEnd].Trim();
+        if (payload.Length > 0)
+        {
+            foreach (var nestedArgument in SplitTopLevelTypeArguments(payload))
+            {
+                var nestedNormalized = NormalizeXamlMarkupArgument(nestedArgument);
+                if (nestedNormalized.Length == 0)
+                    continue;
+
+                foreach (var nestedExpanded in ExpandXamlTypeArgument(nestedNormalized))
+                    yield return nestedExpanded;
+            }
+        }
+
+        var suffix = value[(payloadEnd + 1)..].Trim();
+        if (suffix.Length > 0)
+        {
+            foreach (var expanded in ExpandXamlTypeArgument(suffix))
+                yield return expanded;
         }
     }
 
@@ -7005,6 +7056,92 @@ private sealed class RubyMaskState
             }
             if (braceDepth == 0 && (char.IsWhiteSpace(ch) || ch == ','))
                 return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelTypeConstructorStart(string value)
+    {
+        var braceDepth = 0;
+        var parenDepth = 0;
+        var angleDepth = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (ch == '(' || ch == '<')
+            {
+                if (braceDepth == 0 && parenDepth == 0 && angleDepth == 0)
+                    return i;
+
+                if (ch == '(')
+                    parenDepth++;
+                else
+                    angleDepth++;
+                continue;
+            }
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+            if (ch == '>')
+            {
+                if (angleDepth > 0)
+                    angleDepth--;
+                continue;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingTypeConstructorEnd(string value, int startIndex)
+    {
+        var open = value[startIndex];
+        var close = open == '(' ? ')' : '>';
+        var depth = 0;
+        var braceDepth = 0;
+        for (var i = startIndex; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                continue;
+            }
+            if (braceDepth > 0)
+                continue;
+
+            if (ch == open)
+            {
+                depth++;
+                continue;
+            }
+            if (ch == close)
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
         }
 
         return -1;
