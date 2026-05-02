@@ -3632,7 +3632,7 @@ public class McpServerTests : IDisposable
 
         // Verify a detection-only language / 検出のみの言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
-        Assert.False(markdown["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(markdown["symbol_extraction"]!.GetValue<bool>());
         Assert.False(markdown["graph_queries"]!.GetValue<bool>());
 
         // Pin #215: HTML must report symbol_extraction=true and list all four
