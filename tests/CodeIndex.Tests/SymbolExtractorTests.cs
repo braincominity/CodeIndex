@@ -19643,6 +19643,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesTargetTypeAndDataType()
+    {
+        var content = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:vm="clr-namespace:Sample.ViewModels">
+                <Style TargetType="Button">
+                    <Setter Property="Background" Value="Tomato" />
+                </Style>
+                <ControlTemplate TargetType="{x:Type vm:CustomButton}">
+                    <Grid />
+                </ControlTemplate>
+                <DataTemplate x:DataType="vm:PersonViewModel">
+                    <TextBlock Text="{Binding FullName}" />
+                </DataTemplate>
+            </ResourceDictionary>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesCommonEventHandlers()
     {
         var content = """
