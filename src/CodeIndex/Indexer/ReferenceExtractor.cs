@@ -513,6 +513,13 @@ public static class ReferenceExtractor
     private static readonly Regex ShellCommandCallRegex = new(
         @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
         RegexOptions.Compiled);
+    // Shell `source` / `.` invocations load other scripts. Capture the operand as a
+    // `reference` edge so dependency-style search can find imported files too.
+    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込む。読み込まれる operand を
+    // `reference` エッジとして出すことで、依存関係ベースの検索でも辿れるようにする。
+    private static readonly Regex ShellSourceReferenceRegex = new(
+        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?:source|\.)\s+(?<name>(?:'[^']*'|""[^""]*""|[^;\s&#|}]+))",
+        RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -2425,6 +2432,17 @@ public static class ReferenceExtractor
 
                     var callIndex = match.Groups["name"].Index;
                     AddCallLikeReference(name, callIndex);
+                }
+
+                var shellSourceLine = StripShellComment(originalLine);
+                foreach (Match match in ShellSourceReferenceRegex.Matches(shellSourceLine))
+                {
+                    var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+
+                    var sourceIndex = match.Groups["name"].Index;
+                    AddReference(references, seen, fileId, name, sourceIndex, "reference", context, lineNumber, ResolveContainerForCall(sourceIndex));
                 }
 
                 if (shellGlobalAliasNames != null && shellGlobalAliasNames.Count > 0)
@@ -8433,6 +8451,76 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static string NormalizeShellSourceTargetToken(string token)
+    {
+        var trimmed = token.Trim();
+        if (trimmed.Length >= 2)
+        {
+            var quote = trimmed[0];
+            if ((quote == '\'' || quote == '"') && trimmed[^1] == quote)
+                return trimmed[1..^1];
+        }
+
+        return trimmed;
+    }
+
+    private static string StripShellComment(string line)
+    {
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '"')
+                {
+                    inDoubleQuote = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                    escapeNext = true;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == '\\')
+                escapeNext = true;
+        }
+
+        return line;
+    }
 
     private static void EmitCssScssReferences(
         string preparedLine,
