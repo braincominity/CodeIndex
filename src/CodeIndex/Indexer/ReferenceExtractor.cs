@@ -8606,15 +8606,37 @@ public static class ReferenceExtractor
             if (shortName.Length == 0)
                 continue;
 
-            if (string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
+            var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
+            if (trimmedName.Length > shortName.Length)
             {
-                continue;
+                AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    trimmedName,
+                    qualifiedNameIndex,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    container);
             }
 
-            var nameIndex = nameGroup.Index + leadingBackslashCount + shortNameStart;
-            AddReference(references, seen, fileId, shortName, nameIndex, "type_reference", context, lineNumber, container);
+            if (!string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
+            {
+                var shortNameIndex = qualifiedNameIndex + shortNameStart;
+                AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    shortName,
+                    shortNameIndex,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
