@@ -947,6 +947,14 @@ public static class ReferenceExtractor
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
         RegexOptions.Compiled);
 
+    // R namespace references like `pkg::fun` and `pkg:::fun` should be searchable as
+    // references even when they are not invoked as calls.
+    // R の namespace 参照 `pkg::fun` / `pkg:::fun` は、呼び出しでなくても reference として
+    // 検索できるようにする。
+    private static readonly Regex RNamespaceReferenceRegex = new(
+        @"(?<![\w.])(?<package>[\w.]+)::(?::)?(?<name>[\w.]+)",
+        RegexOptions.Compiled);
+
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
     // should produce `annotation` reference rows rather than `call` rows (issue #293).
     // Swift uses `@available(...)`, `@objc`, `@MainActor`, etc. as compile-time metadata;
@@ -2727,6 +2735,17 @@ public static class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+                }
+            }
+
+            if (language == "r")
+            {
+                foreach (Match match in RNamespaceReferenceRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, name, match.Index, "reference", context, lineNumber, container);
                 }
             }
         }
