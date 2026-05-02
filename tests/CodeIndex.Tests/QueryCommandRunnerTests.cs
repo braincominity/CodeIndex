@@ -666,6 +666,50 @@ jobs:
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsXamlTypeMarkupExtensions()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_type_markup_extensions");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "GenericPage.xaml"),
+                """
+                <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:vm="clr-namespace:Sample.ViewModels">
+                    <ContentPage.Resources>
+                        <ControlTemplate TargetType="{x:Type vm:PersonViewModel}" />
+                        <TextBlock ToolTip="{x:TypeExtension TypeName=vm:CustomButton}" />
+                    </ContentPage.Resources>
+                </ContentPage>
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["vm:CustomButton", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("vm:CustomButton", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameFindsXamlStaticMemberTypeReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_static_member_types");
