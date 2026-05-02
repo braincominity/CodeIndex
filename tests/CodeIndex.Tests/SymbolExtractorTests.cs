@@ -19784,6 +19784,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesWrappedTypeArgumentsAcrossLines()
+    {
+        var content = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:vm="clr-namespace:Sample.ViewModels"
+                                xmlns:local="clr-namespace:Sample.Controls">
+                <local:Pair
+                    x:TypeArguments="x:String,
+                                     vm:Outer(
+                                         vm:InnerModel,
+                                         x:Int32)" />
+            </ResourceDictionary>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:Int32");
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesCommonEventHandlers()
     {
         var content = """
