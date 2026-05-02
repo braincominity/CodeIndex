@@ -1,8 +1,8 @@
 namespace CodeIndex.Database;
 
 /// <summary>
-/// Normalizes C# verbatim identifiers by stripping `@` and `global::` at identifier boundaries.
-/// C# の verbatim 識別子を正規化し、識別子境界の `@` と `global::` を除去する。
+/// Normalizes C# verbatim identifiers by stripping `@` and `global::` at valid name starts.
+/// C# の verbatim 識別子を正規化し、有効な名前開始位置の `@` と `global::` を除去する。
 /// </summary>
 internal static class CSharpVerbatimNameNormalizer
 {
@@ -119,7 +119,22 @@ internal static class CSharpVerbatimNameNormalizer
 
     private static bool TryConsumeGlobalQualifier(string text, int index) =>
         index + GlobalQualifier.Length <= text.Length
-        && text.AsSpan(index, GlobalQualifier.Length).SequenceEqual(GlobalQualifier.AsSpan());
+        && text.AsSpan(index, GlobalQualifier.Length).SequenceEqual(GlobalQualifier.AsSpan())
+        && IsGlobalQualifierNamespaceStart(text, index);
+
+    private static bool IsGlobalQualifierNamespaceStart(string text, int index)
+    {
+        for (int i = index - 1; i >= 0; i--)
+        {
+            char c = text[i];
+            if (char.IsWhiteSpace(c))
+                continue;
+
+            return c != '.' && c != ':';
+        }
+
+        return true;
+    }
 
     private const string GlobalQualifier = "global::";
 
