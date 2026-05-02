@@ -336,6 +336,7 @@ public static class ReferenceExtractor
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
+    private const string RustIdentifierPattern = @"(?:r#)?[_\p{L}][\w$]*";
     private const string FSharpIdentifierPattern = @"(?:``[^`]+``|[_\p{L}][\w']*)";
     private const string CSharpTypeExpressionPattern =
         @"(?:global::)?(?:"
@@ -366,7 +367,7 @@ public static class ReferenceExtractor
     // Rust の macro 呼び出しは共通の末尾 `(` ではなく `!` の後に `()` / `[]` / `{}` を取る。
     // `std::println!` / `log::info!` / `my_macro!` のような path-qualified 名も含めて拾い、
     // `macro_rules` 宣言キーワードは上の Rust ignore list で除外する。
-    private static readonly Regex RustMacroCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern}(?:::{FunctionalIdentifierPattern})*)(?:<[^>\n]+>)?!\s*[\(\[\{{]", RegexOptions.Compiled);
+    private static readonly Regex RustMacroCallRegex = new($@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:<[^>\n]+>)?!\s*[\(\[\{{]", RegexOptions.Compiled);
     // Rust raw identifiers such as `r#type()` are stored without the `r#` prefix, but the shared
     // call regex cannot see them because `#` is not an identifier character. Use a Rust-only
     // matcher for names that contain at least one raw segment and normalize the stored form below.
