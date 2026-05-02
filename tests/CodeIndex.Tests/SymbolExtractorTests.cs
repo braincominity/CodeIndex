@@ -19941,6 +19941,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesXStaticMemberTypeReferences()
+    {
+        var content = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:local="clr-namespace:Sample.ViewModels">
+                <SolidColorBrush x:Key="{x:Static local:Keys.AccentBrush}" Color="Tomato" />
+                <TextBlock Text="{x:Static local:App.DisplayName}" />
+                <Style x:Key="{x:Static Member={x:Type local:Keys}.PrimaryStyleKey}">
+                    <Setter Property="Background" Value="Tomato" />
+                </Style>
+            </ResourceDictionary>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "local:Keys");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "local:App");
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesCommonEventHandlers()
     {
         var content = """
