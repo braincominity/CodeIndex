@@ -576,7 +576,39 @@ public partial class DbReader
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
             return NormalizeRustSymbolSearchQuery(query);
 
+        if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
+            return NormalizeJavaScriptSymbolSearchQuery(query);
+
         return NormalizeCSharpVerbatimQuery(query, lang);
+    }
+
+    private static string? NormalizeJavaScriptSymbolSearchQuery(string? query)
+    {
+        if (query == null)
+            return null;
+
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        var commonJsPrefixLength = 0;
+        if (trimmed.StartsWith("module.exports.", StringComparison.Ordinal))
+            commonJsPrefixLength = "module.exports.".Length;
+        else if (trimmed.StartsWith("exports.", StringComparison.Ordinal))
+            commonJsPrefixLength = "exports.".Length;
+
+        if (commonJsPrefixLength == 0)
+            return trimmed;
+
+        trimmed = trimmed[commonJsPrefixLength..];
+        if (trimmed.Length == 0)
+            return null;
+
+        var leafIndex = trimmed.LastIndexOf('.');
+        if (leafIndex >= 0)
+            trimmed = trimmed[(leafIndex + 1)..];
+
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     private static string? NormalizeRustSymbolSearchQuery(string? query)

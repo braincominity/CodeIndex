@@ -168,6 +168,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_JavaScriptCommonJsExportQueriesResolveToLeafNames()
+    {
+        InsertIndexedFile(
+            "src/commonjs.js",
+            "javascript",
+            """
+            module.exports.foo = function foo() { return 1; };
+            function caller() {
+                foo();
+            }
+            exports.bar = 42;
+            """);
+
+        var foo = Assert.Single(_reader.SearchSymbols("module.exports.foo", lang: "javascript", exact: true));
+        Assert.Equal("foo", foo.Name);
+        Assert.Equal("src/commonjs.js", foo.Path);
+
+        var bar = Assert.Single(_reader.SearchSymbols("exports.bar", lang: "javascript", exact: true));
+        Assert.Equal("bar", bar.Name);
+        Assert.Equal("src/commonjs.js", bar.Path);
+
+        var references = _reader.SearchReferences("module.exports.foo", lang: "javascript", exact: true);
+        Assert.NotEmpty(references);
+        Assert.Contains(references, reference => reference.SymbolName == "foo" && reference.ContainerName == "caller" && reference.Path == "src/commonjs.js");
+    }
+
+    [Fact]
+    public void SearchSymbols_JavaScriptQualifiedQueriesOutsideCommonJsRemainExact()
+    {
+        InsertIndexedFile(
+            "src/logger.js",
+            "javascript",
+            """
+            const logger = {
+                log() {}
+            };
+            """);
+
+        Assert.Empty(_reader.SearchSymbols("logger.log", lang: "javascript", exact: true));
+    }
+
+    [Fact]
     public void SearchSymbols_RustRawIdentifiersIgnoreRawPrefixAndReferences()
     {
         InsertIndexedFile(
