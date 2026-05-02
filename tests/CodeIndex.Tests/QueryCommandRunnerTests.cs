@@ -1285,7 +1285,7 @@ public class QueryCommandRunnerTests
                 $"{searchOnly} must advertise graph_queries=false");
         }
 
-        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "perl", "solidity", "tcl" })
+        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "solidity", "tcl" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -1294,6 +1294,12 @@ public class QueryCommandRunnerTests
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
         }
+
+        Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
+        Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
+            "perl must advertise symbol_extraction=true");
+        Assert.True(languages["perl"].GetProperty("graph_queries").GetBoolean(),
+            "perl must advertise graph_queries=true");
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
