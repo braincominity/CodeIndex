@@ -783,6 +783,7 @@ public partial class DbReader
 
         var compact = lang.Replace("-", string.Empty, StringComparison.Ordinal).Replace(" ", string.Empty, StringComparison.Ordinal);
         return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(compact, "transactsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "sqlserver", StringComparison.OrdinalIgnoreCase)
             ? "sql"

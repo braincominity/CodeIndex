@@ -115,6 +115,15 @@ public class QueryCommandRunnerTests
         Assert.Contains("mssql", aliases);
     }
 
+    [Theory]
+    [InlineData("transact-sql")]
+    [InlineData("transact sql")]
+    public void NormalizeQueryLanguage_MapsTransactSqlToSql(string input)
+    {
+        Assert.Equal("sql", DbReader.NormalizeQueryLanguage(input));
+        Assert.True(DbReader.IsSqlLanguage(input));
+    }
+
     [Fact]
     public void ParseArgs_AllowsDashPrefixedPositionalQueryLiteral()
     {
