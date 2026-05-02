@@ -12857,6 +12857,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsKrStyleAndNestedAttributedFunctions()
+    {
+        var content = """
+            int legacy(a, b)
+                int a;
+                int b;
+            {
+                return a + b;
+            }
+
+            __attribute__((format(printf, 1, 2))) int log_message(const char *fmt, ...)
+            {
+                return 0;
+            }
+
+            __declspec(align(16)) int aligned_value(void)
+            {
+                return 1;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "legacy");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "log_message");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "aligned_value");
+    }
+
+    [Fact]
     public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
     {
         // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数

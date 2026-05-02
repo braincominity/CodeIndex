@@ -88,7 +88,7 @@ public static class SymbolExtractor
     // GCC/Clang/MSVC の attribute specifier は戻り値型の前や、戻り値型トークンの途中に現れる。
     // それらを戻り値型マッチャーに含めて、よくある注釈付き C 関数も `symbols` / `search` に出るようにする。
     private const string CAttributeSpecifierTokenPattern =
-        @"(?:__attribute__\s*\(\(.*?\)\)\s*|__declspec\s*\((?:[^()]|\([^()]*\))*\)\s*|_Noreturn\s+)";
+        @"(?:__attribute__\s*\(\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\)\s*|__declspec\s*\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\s*|_Noreturn\s+)";
     private const string CFunctionReturnTypePattern =
         @"(?<returnType>(?:(?:\w+[\s*]+)|" + CAttributeSpecifierTokenPattern + @")+)";
     private const string CSharpTypeSegmentPattern =
@@ -14860,6 +14860,8 @@ private sealed class RubyMaskState
         int bracketDepth = 0;
         bool inBlockComment = false;
         bool inString = false;
+        var allowKrParameterDeclarations = lang is "c" or "cpp";
+        bool sawTopLevelClosingParen = false;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -14978,13 +14980,21 @@ private sealed class RubyMaskState
                 if (c == '(')
                     parenDepth++;
                 else if (c == ')' && parenDepth > 0)
+                {
                     parenDepth--;
+                    if (allowKrParameterDeclarations && parenDepth == 0)
+                        sawTopLevelClosingParen = true;
+                }
                 else if (c == '[')
                     bracketDepth++;
                 else if (c == ']' && bracketDepth > 0)
                     bracketDepth--;
                 else if (c == ';' && !opened)
+                {
+                    if (allowKrParameterDeclarations && sawTopLevelClosingParen && i > startIndex)
+                        continue;
                     return (startIndex + 1, null, null);
+                }
                 else if (c == '{')
                 {
                     if (parenDepth > 0 || bracketDepth > 0)
