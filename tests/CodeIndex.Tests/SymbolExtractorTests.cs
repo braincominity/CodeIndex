@@ -13065,6 +13065,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsOperatorDefinitions()
+    {
+        var content = """
+            module MyApp.Operators
+
+            let (++) left right = left + right
+            let inline (>>=) value binder = binder value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ++");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator >>=");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsUnionCasesAndRecordFields()
     {
         var content = """

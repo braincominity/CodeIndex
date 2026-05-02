@@ -2910,6 +2910,9 @@ private sealed class RubyMaskState
             if (lang == "fsharp" && TryAddFSharpActivePatternSymbols(symbols, fileId, line, i + 1))
                 continue;
 
+            if (lang == "fsharp" && TryAddFSharpOperatorSymbols(symbols, fileId, line, i + 1))
+                continue;
+
             if (lang == "php")
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
@@ -24586,6 +24589,13 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         if (name.Length >= 4 && name.StartsWith("``", StringComparison.Ordinal) && name.EndsWith("``", StringComparison.Ordinal))
             return name[2..^2];
 
+        if (name.Length >= 2 && name[0] == '(' && name[^1] == ')')
+        {
+            var operatorName = name[1..^1].Trim();
+            if (operatorName.Length > 0)
+                return $"operator {operatorName}";
+        }
+
         return name;
     }
 
@@ -24607,6 +24617,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
     private static readonly Regex FSharpUnionCaseRegex = new(@"^\|?\s*(?<name>(?:``[^`]+``|[_\p{L}][\w']*))(?:\s+of\b.*)?$", RegexOptions.Compiled);
     private static readonly Regex FSharpActivePatternDefinitionRegex = new(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\(\|(?<cases>.+?)\|\)", RegexOptions.Compiled);
     private static readonly Regex FSharpActivePatternNameRegex = new(@"^(?:``[^`]+``|[_\p{L}][\w']*)$", RegexOptions.Compiled);
+    private static readonly Regex FSharpOperatorDefinitionRegex = new(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>\((?!\|)[^)\s]+\))(?:\s+(?:\w+|\())?", RegexOptions.Compiled);
 
     private static bool TryAddFSharpTypeMemberSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber, ref FSharpTypeBodyState state)
     {
@@ -24868,6 +24879,30 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         }
 
         return emittedAny;
+    }
+
+    private static bool TryAddFSharpOperatorSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
+    {
+        var match = FSharpOperatorDefinitionRegex.Match(line);
+        if (!match.Success)
+            return false;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = NormalizeFSharpSymbolName(match.Groups["name"].Value),
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+            },
+            rawLine: line);
+        return true;
     }
 
     private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
