@@ -24,7 +24,7 @@ public static class ReferenceExtractor
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
-        "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
+        "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol", "batch",
         "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
@@ -15764,7 +15764,7 @@ public static class ReferenceExtractor
     }
 
     private static bool UsesHashComments(string lang) =>
-        lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
+        lang is "python" or "ruby" or "perl" or "php" or "elixir" or "r" or "powershell"
             or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf";
 
     private static bool UsesSlashComments(string lang) =>

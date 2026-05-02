@@ -196,6 +196,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Perl_DetectsCallsAndIgnoresHashComments()
+    {
+        const string content = """
+            package Example::Widget;
+
+            sub setup {
+              return 1;
+            }
+
+            sub run {
+              setup();
+              # setup() should stay ignored here
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "perl");
+        Assert.Equal(1, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "setup"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsAliasCalls()
     {
         const string content = """

@@ -1223,6 +1223,13 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*module\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("import",   new Regex(@"^\s*require(?:_relative)?\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["perl"] =
+        [
+            // Perl package declarations / Perl の package 宣言
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w:]+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            // Perl subroutines / Perl の subroutine
+            new("function", new Regex(@"^\s*sub\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+        ],
         ["c"] =
         [
             new("function", new Regex(CFunctionStartBlacklistPattern + @"(?<returnType>(?:\w+[\s*]+)+)" + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),

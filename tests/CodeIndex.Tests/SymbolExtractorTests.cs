@@ -12571,6 +12571,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Perl_DetectsPackageAndSub()
+    {
+        var content = """
+            package Example::Widget;
+
+            sub build {
+                return 1;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Example::Widget");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+    }
+
+    [Fact]
     public void Extract_Ruby_IgnoresEndInsideStringsAndComments()
     {
         var content = "class UserService\n  def find_user(id)\n    puts \"the word end should not close this block\"\n    # end should not close this block either\n    id\n  end\nend";
