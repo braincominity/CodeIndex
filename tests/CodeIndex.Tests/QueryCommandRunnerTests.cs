@@ -429,6 +429,7 @@ public class QueryCommandRunnerTests
                 "python",
                 """
                 import submodule as module_alias
+                import package.submodule as external_alias
                 from . import helper as alias
                 """);
 
@@ -447,6 +448,22 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, moduleNameExitCode);
             Assert.Equal("1", moduleNameStdout.Trim());
             Assert.Equal(string.Empty, moduleNameStderr);
+
+            var (externalExitCode, externalStdout, externalStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, externalExitCode);
+            Assert.Equal("1", externalStdout.Trim());
+            Assert.Equal(string.Empty, externalStderr);
+
+            var (noisyExitCode, noisyStdout, noisyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.subpkg.package.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, noisyExitCode);
+            Assert.Equal("0", noisyStdout.Trim());
+            Assert.Equal(string.Empty, noisyStderr);
 
             var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["package.subpkg.alias", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],

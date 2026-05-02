@@ -5096,7 +5096,9 @@ private sealed class RubyMaskState
                         ref searchStartColumn);
                 }
 
-                if (!treatAsFromImport && !string.IsNullOrEmpty(pythonModulePrefix))
+                if (!treatAsFromImport
+                    && !string.IsNullOrEmpty(pythonModulePrefix)
+                    && !importedName.Contains('.'))
                 {
                     AddPythonImportEntry(
                         line,
