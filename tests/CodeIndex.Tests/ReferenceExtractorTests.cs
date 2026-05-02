@@ -7927,6 +7927,9 @@ public class ReferenceExtractorTests
             let build value =
                 value ++ value
 
+            let casted value =
+                value :> obj
+
             let compose value =
                 value >>= (fun next -> next + 1)
 
@@ -7941,6 +7944,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "operator ++" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "operator >>=" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "operator +" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator :>" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "operator ->" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "operator ++" && r.Line == 1);
         Assert.DoesNotContain(references, r => r.SymbolName == "operator >>=" && r.Line == 2);

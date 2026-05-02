@@ -463,7 +463,7 @@ public static class ReferenceExtractor
     private static readonly HashSet<string> FSharpIgnoredOperatorCallNames = new(StringComparer.Ordinal)
     {
         "->", "<-", "..", "<|", "<||", "<|||", "|>", "||>", "|||>", "|>>", "<<", ">>", "<<<", ">>>",
-        "&&", "||", "::", "<>", "<=", ">=", "**",
+        "&&", "&&&", "||", "|||", "::", "<>", "<=", ">=", "**", "@@", ":>", ":?", ":=",
     };
     // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
     // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
