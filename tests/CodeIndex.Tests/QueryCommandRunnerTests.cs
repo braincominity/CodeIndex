@@ -417,6 +417,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsPythonInitModuleAliases()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_module_aliases");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "package/subpkg/__init__.py",
+                "python",
+                """
+                import submodule as module_alias
+                from . import helper as alias
+                """);
+
+            var (moduleExitCode, moduleStdout, moduleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.subpkg.module_alias", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, moduleExitCode);
+            Assert.Equal("1", moduleStdout.Trim());
+            Assert.Equal(string.Empty, moduleStderr);
+
+            var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.subpkg.alias", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, aliasExitCode);
+            Assert.Equal("1", aliasStdout.Trim());
+            Assert.Equal(string.Empty, aliasStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");

@@ -3871,7 +3871,7 @@ private sealed class RubyMaskState
                     if (!suppressJavaStatementSymbol)
                     {
                         var pythonImportEntries = lang == "python" && pattern.Kind == "import"
-                            ? TryExpandPythonImportSymbols(lines, i, absoluteStartColumn)
+                            ? TryExpandPythonImportSymbols(lines, i, absoluteStartColumn, pythonModulePrefix)
                             : null;
                         var declaratorEntries = lang == "csharp"
                             && pattern.Kind == "property"
@@ -4630,7 +4630,11 @@ private sealed class RubyMaskState
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(string[] lines, int lineIndex, int absoluteStartColumn)
+    private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(
+        string[] lines,
+        int lineIndex,
+        int absoluteStartColumn,
+        string? pythonModulePrefix)
     {
         var line = lines[lineIndex];
         if (absoluteStartColumn < 0 || absoluteStartColumn >= line.Length)
@@ -4661,7 +4665,8 @@ private sealed class RubyMaskState
                 directImportSpecs,
                 entries,
                 seenNames,
-                treatAsFromImport: false);
+                treatAsFromImport: false,
+                pythonModulePrefix);
             return entries.Count > 0 ? entries : null;
         }
 
@@ -4679,7 +4684,8 @@ private sealed class RubyMaskState
                 modulePart,
                 fromImportSpecs,
                 entries,
-                seenNames))
+                seenNames,
+                pythonModulePrefix))
         {
             return entries.Count > 0 ? entries : null;
         }
@@ -4691,7 +4697,8 @@ private sealed class RubyMaskState
             fromImportSpecs,
             entries,
             seenNames,
-            treatAsFromImport: true);
+            treatAsFromImport: true,
+            pythonModulePrefix);
         return entries.Count > 0 ? entries : null;
     }
 
@@ -4854,7 +4861,8 @@ private sealed class RubyMaskState
         string modulePart,
         string importSpecs,
         List<PythonImportSymbolEntry> entries,
-        HashSet<string> seenNames)
+        HashSet<string> seenNames,
+        string? pythonModulePrefix)
     {
         if (!importSpecs.StartsWith('(') || importSpecs.EndsWith(')'))
             return false;
@@ -4905,7 +4913,8 @@ private sealed class RubyMaskState
                             fragment,
                             entries,
                             seenNames,
-                            treatAsFromImport: true);
+                            treatAsFromImport: true,
+                            pythonModulePrefix);
                     }
 
                     return true;
@@ -4918,7 +4927,8 @@ private sealed class RubyMaskState
                     fragment,
                     entries,
                     seenNames,
-                    treatAsFromImport: true);
+                    treatAsFromImport: true,
+                    pythonModulePrefix);
             }
 
             if (currentLineIndex + 1 >= lines.Length)
@@ -4937,7 +4947,8 @@ private sealed class RubyMaskState
         string importedNames,
         List<PythonImportSymbolEntry> entries,
         HashSet<string> seenNames,
-        bool treatAsFromImport)
+        bool treatAsFromImport,
+        string? pythonModulePrefix)
     {
         importedNames = importedNames.Trim();
         if (importedNames.Length == 0)
@@ -4994,6 +5005,20 @@ private sealed class RubyMaskState
                 && (!string.Equals(localName, importedName, StringComparison.Ordinal) || treatAsFromImport))
             {
                 AddPythonImportEntry(line, absoluteStartColumn, localName, entries, seenNames, ref searchStartColumn);
+            }
+
+            if (string.IsNullOrEmpty(pythonModulePrefix))
+                continue;
+
+            if (aliasIndex >= 0)
+            {
+                AddPythonImportEntry(
+                    line,
+                    absoluteStartColumn,
+                    $"{pythonModulePrefix}.{localName}",
+                    entries,
+                    seenNames,
+                    ref searchStartColumn);
             }
         }
     }

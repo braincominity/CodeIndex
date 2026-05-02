@@ -187,6 +187,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesQualifiedModuleAliasesFromInitModules()
+    {
+        var content = """
+            import submodule as module_alias
+            from . import helper as alias
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("submodule", imports);
+        Assert.Contains("module_alias", imports);
+        Assert.Contains("package.subpkg.module_alias", imports);
+        Assert.Contains("helper", imports);
+        Assert.Contains("alias", imports);
+        Assert.Contains("package.subpkg.alias", imports);
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
