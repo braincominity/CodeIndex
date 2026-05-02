@@ -307,6 +307,9 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex PhpStaticAccessRegex = new(
+        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -959,7 +962,7 @@ public static class ReferenceExtractor
     // R の namespace 参照 `pkg::fun` / `pkg:::fun` は、呼び出しでなくても reference として
     // 検索できるようにする。
     private static readonly Regex RNamespaceReferenceRegex = new(
-        @"(?<![\w.])(?<package>[\w.]+)::(?::)?(?<name>[\w.]+)",
+        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?<name>[\w.]+)",
         RegexOptions.Compiled);
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
@@ -2204,6 +2207,18 @@ public static class ReferenceExtractor
                     container);
             }
 
+            if (language == "php")
+            {
+                EmitPhpStaticAccessReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
             // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
             // Emit `instantiate` directly so graph queries do not treat them as unused code.
             // JavaScript / TypeScript では `new Foo;` のように `()` を省略できるため、
@@ -2434,7 +2449,8 @@ public static class ReferenceExtractor
                     AddCallLikeReference(name, callIndex);
                 }
 
-                foreach (Match match in ShellSourceReferenceRegex.Matches(preparedLine))
+                var shellSourceLine = StripShellComment(originalLine);
+                foreach (Match match in ShellSourceReferenceRegex.Matches(shellSourceLine))
                 {
                     var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
                     if (string.IsNullOrWhiteSpace(name))
@@ -2759,7 +2775,10 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in RNamespaceReferenceRegex.Matches(preparedLine))
                 {
+                    var package = match.Groups["package"].Value;
+                    var separator = match.Groups["sep"].Value;
                     var name = match.Groups["name"].Value;
+                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
@@ -8464,6 +8483,63 @@ public static class ReferenceExtractor
         return trimmed;
     }
 
+    private static string StripShellComment(string line)
+    {
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '"')
+                {
+                    inDoubleQuote = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                    escapeNext = true;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == '\\')
+                escapeNext = true;
+        }
+
+        return line;
+    }
+
     private static void EmitCssScssReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -8504,6 +8580,41 @@ public static class ReferenceExtractor
                 context,
                 lineNumber,
                 container);
+        }
+    }
+
+    private static void EmitPhpStaticAccessReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in PhpStaticAccessRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var rawName = nameGroup.Value;
+            var trimmedName = rawName.TrimStart('\\');
+            if (trimmedName.Length == 0)
+                continue;
+
+            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
+            var shortName = trimmedName[shortNameStart..];
+            if (shortName.Length == 0)
+                continue;
+
+            if (string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var nameIndex = nameGroup.Index + leadingBackslashCount + shortNameStart;
+            AddReference(references, seen, fileId, shortName, nameIndex, "type_reference", context, lineNumber, container);
         }
     }
 

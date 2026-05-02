@@ -156,16 +156,78 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("bat", "batch")]
     [InlineData("cmd", "batch")]
+    [InlineData("C#", "csharp")]
+    [InlineData("cs", "csharp")]
+    [InlineData("Java", "java")]
     [InlineData("Python", "python")]
     [InlineData("py", "python")]
     [InlineData("PY3", "python")]
     [InlineData("pyi", "python")]
     [InlineData("pyw", "python")]
+    [InlineData("kt", "kotlin")]
+    [InlineData("KTS", "kotlin")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
 
         Assert.Equal(expected, options.Lang);
+    }
+
+    [Theory]
+    [InlineData("c#")]
+    [InlineData("cs")]
+    [InlineData("Java")]
+    [InlineData("kt")]
+    [InlineData("kts")]
+    public void RunSearch_NormalizesCommonLanguageAliases(string input)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "lang_alias_91d4b3";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                $@"public class App
+{{
+    public void Run()
+    {{
+        var marker = ""{queryToken}"";
+    }}
+}}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.kt",
+                "kotlin",
+                $@"class App {{
+    fun run() {{
+        val marker = ""{queryToken}""
+    }}
+}}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                $@"class App {{
+    void run() {{
+        String marker = ""{queryToken}"";
+    }}
+}}");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
@@ -2004,6 +2066,59 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, inspectExit);
             Assert.Contains("bare verbatim prefixes", inspectStderr);
             Assert.Equal(string.Empty, inspectStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_ExactNameFindsXamlTargetType()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_target_type");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "MainPage.xaml"),
+                """
+                <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:vm="clr-namespace:Sample.ViewModels">
+                    <ContentPage.Resources>
+                        <Style TargetType="Button" />
+                        <ControlTemplate TargetType="{x:Type vm:CustomButton}" />
+                    </ContentPage.Resources>
+                </ContentPage>
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (buttonExitCode, buttonStdout, buttonStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Button", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+            var (customButtonExitCode, customButtonStdout, customButtonStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["vm:CustomButton", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+
+            var buttonRows = ParseJsonLines(buttonStdout);
+            var customButtonRows = ParseJsonLines(customButtonStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, buttonExitCode);
+            Assert.Equal(string.Empty, buttonStderr);
+            Assert.Single(buttonRows);
+            Assert.Equal("Button", buttonRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", buttonRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, customButtonExitCode);
+            Assert.Equal(string.Empty, customButtonStderr);
+            Assert.Single(customButtonRows);
+            Assert.Equal("vm:CustomButton", customButtonRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", customButtonRows[0].RootElement.GetProperty("kind").GetString());
         }
         finally
         {

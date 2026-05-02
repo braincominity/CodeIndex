@@ -12857,6 +12857,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_C_DetectsAttributedFunctions()
+    {
+        var content = """
+            __attribute__((noreturn)) void die(void) {
+            }
+
+            static inline __attribute__((always_inline)) int add(int a, int b) {
+                return a + b;
+            }
+
+            __declspec(dllexport) int exported(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "die");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "exported");
+    }
+
+    [Fact]
     public void Extract_C_DoesNotCapturePrimitiveTypesForFunctionPointerTypedefs()
     {
         // C: function-pointer typedefs and ordinary functions / C: 関数ポインタ typedef と通常関数
@@ -19663,6 +19686,32 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "local:Keys.AccentBrush");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryButtonStyle");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlCapturesTargetTypeAndDataType()
+    {
+        var content = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:vm="clr-namespace:Sample.ViewModels">
+                <Style TargetType="Button">
+                    <Setter Property="Background" Value="Tomato" />
+                </Style>
+                <ControlTemplate TargetType="{x:Type vm:CustomButton}">
+                    <Grid />
+                </ControlTemplate>
+                <DataTemplate x:DataType="vm:PersonViewModel">
+                    <TextBlock Text="{Binding FullName}" />
+                </DataTemplate>
+            </ResourceDictionary>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
     }
 
     [Fact]

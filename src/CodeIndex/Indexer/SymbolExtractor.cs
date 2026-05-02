@@ -82,6 +82,15 @@ public static class SymbolExtractor
     private const string CppDecltypePattern =
         @"decltype\s*\((?:(?>[^()]+)|\((?<CppDecltypeDepth>)|\)(?<-CppDecltypeDepth>))*(?(CppDecltypeDepth)(?!))\)";
     private const string CppFunctionReturnTypeAtomPattern = @"(?:" + CppDecltypePattern + @"|[\w:<>~]+)";
+    // GCC/Clang/MSVC attribute specifiers can appear before the return type or between return
+    // type tokens. Keep them inside the function return-type matcher so common annotated C
+    // functions still surface in `symbols` / `search`.
+    // GCC/Clang/MSVC の attribute specifier は戻り値型の前や、戻り値型トークンの途中に現れる。
+    // それらを戻り値型マッチャーに含めて、よくある注釈付き C 関数も `symbols` / `search` に出るようにする。
+    private const string CAttributeSpecifierTokenPattern =
+        @"(?:__attribute__\s*\(\(.*?\)\)\s*|__declspec\s*\((?:[^()]|\([^()]*\))*\)\s*|_Noreturn\s+)";
+    private const string CFunctionReturnTypePattern =
+        @"(?<returnType>(?:(?:\w+[\s*]+)|" + CAttributeSpecifierTokenPattern + @")+)";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
     private const string CSharpTypePattern =
@@ -188,6 +197,9 @@ public static class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlDataTypeRegex = new(
         @"\bx:DataType\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlTargetTypeRegex = new(
+        @"\bTargetType\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
@@ -1225,7 +1237,7 @@ public static class SymbolExtractor
         ],
         ["c"] =
         [
-            new("function", new Regex(CFunctionStartBlacklistPattern + @"(?<returnType>(?:\w+[\s*]+)+)" + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CFunctionStartBlacklistPattern + CFunctionReturnTypePattern + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
@@ -6681,6 +6693,23 @@ private sealed class RubyMaskState
             foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
             {
                 var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
+            foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
+            {
+                var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
                 if (value.Length == 0)
                     continue;
                 symbols.Add(new SymbolRecord

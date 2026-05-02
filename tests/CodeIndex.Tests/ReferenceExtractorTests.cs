@@ -273,6 +273,8 @@ public class ReferenceExtractorTests
         const string content = """
             run() {
               source ./env.sh
+              source "./quoted env.sh"
+              . ./lib/common.sh
               echo done
             }
             """;
@@ -280,9 +282,17 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "shell", content);
         var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
 
-        Assert.Single(references, reference => reference.ReferenceKind == "reference");
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "reference"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "./env.sh"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./quoted env.sh"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./lib/common.sh"
             && reference.ReferenceKind == "reference"
             && reference.ContainerName == "run");
     }
@@ -6494,6 +6504,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpStaticAccess_EmitsTypeReferencesForClassSide()
+    {
+        const string content = """
+            <?php
+            namespace App\Models;
+
+            class Config {
+                public const VERSION = '1.0';
+
+                public static function rebuild(): void {}
+
+                public function touch(): void {
+                    self::rebuild();
+                    static::rebuild();
+                }
+            }
+
+            enum Priority: int {
+                case Low = 1;
+            }
+
+            function inspect(): void {
+                Config::rebuild();
+                Config::VERSION;
+                Priority::Low;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Config" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Priority" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "self" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "static" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PhpLanguageConstructCalls_AreIgnored()
     {
         const string content = """
@@ -8060,13 +8109,45 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "r", content, symbols);
 
         Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
             r.SymbolName == "filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "base:::get"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "lookup");
         Assert.Contains(references, r =>
             r.SymbolName == "get"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "lookup");
+    }
+
+    [Fact]
+    public void Extract_R_PreservesQualifiedNamespaceReferencesWhenLeafIsDefinedLocally()
+    {
+        const string content = """
+            lookup <- function() {
+                filter <- dplyr::filter
+                base:::get
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "base:::get"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "get"
+            && r.ReferenceKind == "reference");
     }
 
     [Fact]
