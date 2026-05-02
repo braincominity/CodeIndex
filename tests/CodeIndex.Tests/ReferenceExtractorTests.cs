@@ -6577,6 +6577,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpObjectMemberAccess_EmitsReferencesForProperties()
+    {
+        const string content = """
+            <?php
+            class User {
+                public string $name;
+
+                public function greet(): string {
+                    return "hi";
+                }
+            }
+
+            function inspect(User $user): void {
+                $user->name;
+                $user?->profile->display_name;
+                $user->greet();
+                $user?->greet();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "profile" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "greet" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_PhpLanguageConstructCalls_AreIgnored()
     {
         const string content = """
