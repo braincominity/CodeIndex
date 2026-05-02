@@ -195,6 +195,21 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_JavaScriptQualifiedQueriesOutsideCommonJsRemainExact()
+    {
+        InsertIndexedFile(
+            "src/logger.js",
+            "javascript",
+            """
+            const logger = {
+                log() {}
+            };
+            """);
+
+        Assert.Empty(_reader.SearchSymbols("logger.log", lang: "javascript", exact: true));
+    }
+
+    [Fact]
     public void SearchSymbols_RustRawIdentifiersIgnoreRawPrefixAndReferences()
     {
         InsertIndexedFile(

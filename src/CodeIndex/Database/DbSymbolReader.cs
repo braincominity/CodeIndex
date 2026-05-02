@@ -591,11 +591,16 @@ public partial class DbReader
         if (trimmed.Length == 0)
             return null;
 
+        var commonJsPrefixLength = 0;
         if (trimmed.StartsWith("module.exports.", StringComparison.Ordinal))
-            trimmed = trimmed["module.exports.".Length..];
+            commonJsPrefixLength = "module.exports.".Length;
         else if (trimmed.StartsWith("exports.", StringComparison.Ordinal))
-            trimmed = trimmed["exports.".Length..];
+            commonJsPrefixLength = "exports.".Length;
 
+        if (commonJsPrefixLength == 0)
+            return trimmed;
+
+        trimmed = trimmed[commonJsPrefixLength..];
         if (trimmed.Length == 0)
             return null;
 
