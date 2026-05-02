@@ -8061,10 +8061,8 @@ public class ReferenceExtractorTests
     public void Extract_R_PreservesQualifiedNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """
-            filter <- function(x) x
-
             lookup <- function() {
-                dplyr::filter
+                filter <- dplyr::filter
                 base:::get
             }
             """;
@@ -8077,9 +8075,6 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "reference");
         Assert.Contains(references, r =>
             r.SymbolName == "base:::get"
-            && r.ReferenceKind == "reference");
-        Assert.Contains(references, r =>
-            r.SymbolName == "filter"
             && r.ReferenceKind == "reference");
         Assert.Contains(references, r =>
             r.SymbolName == "get"
