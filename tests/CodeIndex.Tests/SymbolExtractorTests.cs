@@ -11291,6 +11291,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsMultilineImplBlocks()
+    {
+        var content = """
+            struct Wrapped<T>(T);
+            trait Trait {}
+
+            unsafe impl<T>
+                Trait
+                for
+                Wrapped<T>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped" && s.Line == 7 && s.StartColumn == 5);
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Trait" && s.Line == 4);
+    }
+
+    [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
         var content = "type Handler struct {\n}\ntype ID = string\ntype Callback func(int) int\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
