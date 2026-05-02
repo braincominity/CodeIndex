@@ -156,16 +156,78 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("bat", "batch")]
     [InlineData("cmd", "batch")]
+    [InlineData("C#", "csharp")]
+    [InlineData("cs", "csharp")]
+    [InlineData("Java", "java")]
     [InlineData("Python", "python")]
     [InlineData("py", "python")]
     [InlineData("PY3", "python")]
     [InlineData("pyi", "python")]
     [InlineData("pyw", "python")]
+    [InlineData("kt", "kotlin")]
+    [InlineData("KTS", "kotlin")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
 
         Assert.Equal(expected, options.Lang);
+    }
+
+    [Theory]
+    [InlineData("c#")]
+    [InlineData("cs")]
+    [InlineData("Java")]
+    [InlineData("kt")]
+    [InlineData("kts")]
+    public void RunSearch_NormalizesCommonLanguageAliases(string input)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "lang_alias_91d4b3";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                $@"public class App
+{{
+    public void Run()
+    {{
+        var marker = ""{queryToken}"";
+    }}
+}}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.kt",
+                "kotlin",
+                $@"class App {{
+    fun run() {{
+        val marker = ""{queryToken}""
+    }}
+}}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                $@"class App {{
+    void run() {{
+        String marker = ""{queryToken}"";
+    }}
+}}");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
