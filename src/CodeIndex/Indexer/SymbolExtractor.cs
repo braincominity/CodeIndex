@@ -2931,6 +2931,10 @@ public static class SymbolExtractor
         "class", "struct", "interface", "namespace", "enum", "heading"
     ];
 
+    private static readonly Regex MarkdownLocalAnchorLinkRegex = new(@"(?<!\!)\[[^\]]+\]\(\s*(?<target>#[^) \t]+)\s*\)", RegexOptions.Compiled);
+    private static readonly Regex MarkdownLocalAnchorReferenceRegex = new(@"(?<!\!)\[[^\]]+\]:\s*(?<target>#[^\s>]+)", RegexOptions.Compiled);
+    private static readonly Regex MarkdownReferenceDefinitionRegex = new(@"^\s{0,3}\[(?<label>[^\]]+)\]:\s*(?<target>.+?)\s*$", RegexOptions.Compiled);
+    private static readonly Regex MarkdownReferenceLinkRegex = new(@"(?<!\!)\[[^\]]+\]\[(?<label>[^\]]*)\]", RegexOptions.Compiled);
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
 private enum RubyScanMode
@@ -6504,6 +6508,7 @@ private sealed class RubyMaskState
     {
         // Markdown headings are the closest thing to navigable symbols in docs files.
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
+        var referenceTargets = BuildMarkdownReferenceDefinitionTargets(lines);
         var symbols = new List<SymbolRecord>();
         var headingStack = new Stack<(int Level, int SymbolIndex)>();
         var inFence = false;
@@ -6523,8 +6528,48 @@ private sealed class RubyMaskState
             if (inFence)
                 continue;
 
-            if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
+            if (i + 1 < lines.Length
+                && TryParseMarkdownSetextHeading(lines[i], lines[i + 1], out var setextLevel, out var setextHeadingText))
+            {
+                while (headingStack.Count > 0 && headingStack.Peek().Level >= setextLevel)
+                {
+                    var closedHeading = headingStack.Pop();
+                    symbols[closedHeading.SymbolIndex].EndLine = i;
+                    symbols[closedHeading.SymbolIndex].BodyEndLine = i;
+                }
+
+                var setextSymbol = new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "heading",
+                    Name = setextHeadingText,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 2,
+                    BodyStartLine = i + 3,
+                    BodyEndLine = lines.Length,
+                    Signature = lines[i].TrimEnd(),
+                };
+
+                if (headingStack.Count > 0)
+                {
+                    var parent = symbols[headingStack.Peek().SymbolIndex];
+                    setextSymbol.ContainerKind = "heading";
+                    setextSymbol.ContainerName = parent.Name;
+                }
+
+                symbols.Add(setextSymbol);
+                headingStack.Push((setextLevel, symbols.Count - 1));
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                i++;
                 continue;
+            }
+
+            if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
+            {
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                continue;
+            }
 
             while (headingStack.Count > 0 && headingStack.Peek().Level >= level)
             {
@@ -6555,6 +6600,7 @@ private sealed class RubyMaskState
 
             symbols.Add(symbol);
             headingStack.Push((level, symbols.Count - 1));
+            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
         }
 
         while (headingStack.Count > 0)
@@ -6565,6 +6611,70 @@ private sealed class RubyMaskState
         }
 
         return symbols;
+    }
+
+    private static Dictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
+    {
+        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var inFence = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        foreach (var line in lines)
+        {
+            if (TryToggleMarkdownFence(line, inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength))
+            {
+                inFence = nextFenceLength > 0;
+                fenceChar = nextFenceChar;
+                fenceLength = nextFenceLength;
+                continue;
+            }
+
+            if (inFence)
+                continue;
+
+            foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
+                targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+        }
+
+        return targets;
+    }
+
+    private static void AddMarkdownReferenceSymbols(long fileId, string line, int lineNumber, List<SymbolRecord> symbols, IReadOnlyDictionary<string, string> referenceTargets)
+    {
+        foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
+            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+
+        foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
+            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+
+        foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
+        {
+            var label = match.Groups["label"].Value.Trim();
+            if (label.Length == 0)
+                continue;
+
+            if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
+                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, symbols);
+        }
+    }
+
+    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, List<SymbolRecord> symbols)
+    {
+        var normalizedTarget = NormalizeMarkdownAnchorTarget(target);
+        if (normalizedTarget.Length == 0)
+            return;
+
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "reference",
+            Name = normalizedTarget,
+            Line = lineNumber,
+            StartLine = lineNumber,
+            EndLine = lineNumber,
+            Signature = line.Trim(),
+        });
     }
 
     private static bool TryToggleMarkdownFence(
@@ -6609,6 +6719,37 @@ private sealed class RubyMaskState
         return false;
     }
 
+    private static bool TryParseMarkdownSetextHeading(string currentLine, string nextLine, out int level, out string headingText)
+    {
+        level = 0;
+        headingText = string.Empty;
+
+        var trimmedHeading = currentLine.Trim();
+        if (trimmedHeading.Length == 0)
+            return false;
+
+        if (TryParseMarkdownHeading(currentLine, out _, out _))
+            return false;
+
+        var trimmedUnderline = nextLine.Trim();
+        if (trimmedUnderline.Length < 3)
+            return false;
+
+        var underlineChar = trimmedUnderline[0];
+        if (underlineChar is not ('=' or '-'))
+            return false;
+
+        for (var i = 1; i < trimmedUnderline.Length; i++)
+        {
+            if (trimmedUnderline[i] != underlineChar)
+                return false;
+        }
+
+        level = underlineChar == '=' ? 1 : 2;
+        headingText = trimmedHeading;
+        return true;
+    }
+
     private static bool TryParseMarkdownHeading(string line, out int level, out string headingText)
     {
         level = 0;
@@ -6650,6 +6791,17 @@ private sealed class RubyMaskState
             headingText = headingText[..(closingHashesStart - 1)].TrimEnd();
 
         return headingText.Length > 0;
+    }
+
+    private static string NormalizeMarkdownAnchorTarget(string target)
+    {
+        var normalized = target.Trim();
+        if (normalized.Length >= 2 && normalized[0] == '<' && normalized[^1] == '>')
+            normalized = normalized[1..^1].Trim();
+
+        return normalized.StartsWith("#", StringComparison.Ordinal)
+            ? normalized[1..]
+            : normalized;
     }
 
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)
