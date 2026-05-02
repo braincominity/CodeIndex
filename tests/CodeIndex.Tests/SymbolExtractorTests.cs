@@ -19839,6 +19839,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesWrappedTypeBearingAttributesAcrossLines()
+    {
+        var content = """
+            <Window
+                x:Class=
+                    "Sample.MainWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:vm="clr-namespace:Sample.ViewModels">
+                <DataTemplate
+                    x:DataType=
+                        "vm:PersonViewModel">
+                    <Style
+                        TargetType=
+                            "{x:Type vm:CustomButton}" />
+                </DataTemplate>
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Sample.MainWindow");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesCommonEventHandlers()
     {
         var content = """

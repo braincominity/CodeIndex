@@ -520,25 +520,29 @@ jobs:
     }
 
     [Fact]
-    public void RunSymbols_ExactNameFindsWrappedXamlTypeArguments()
+    public void RunSymbols_ExactNameFindsWrappedXamlTypeBearingAttributes()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_wrapped_type_arguments");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_wrapped_type_bearing");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "GenericPage.xaml"),
                 """
-                <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                    xmlns:vm="clr-namespace:Sample.ViewModels"
-                                    xmlns:local="clr-namespace:Sample.Controls">
-                    <local:Pair
-                        x:TypeArguments="x:String,
-                                         vm:Outer(
-                                             vm:InnerModel,
-                                             x:Int32)" />
-                </ResourceDictionary>
+                <Window
+                    x:Class=
+                        "Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="clr-namespace:Sample.ViewModels">
+                    <DataTemplate
+                        x:DataType=
+                            "vm:PersonViewModel">
+                        <Style
+                            TargetType=
+                                "{x:Type vm:CustomButton}" />
+                    </DataTemplate>
+                </Window>
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -546,7 +550,7 @@ jobs:
                 [projectRoot, "--json"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["vm:InnerModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                ["vm:PersonViewModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
                 _jsonOptions));
 
             var rows = ParseJsonLines(stdout);
@@ -556,7 +560,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Single(rows);
-            Assert.Equal("vm:InnerModel", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("vm:PersonViewModel", rows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("class", rows[0].RootElement.GetProperty("kind").GetString());
         }
         finally
