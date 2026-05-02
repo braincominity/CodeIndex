@@ -8573,6 +8573,53 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_MarkdownSetextHeadings_ReturnNestedHeadingSymbols()
+    {
+        InsertIndexedFile(
+            "docs/setext.md",
+            "markdown",
+            """
+            Guide
+            =====
+
+            Details
+            -------
+
+            ### Deep Dive
+
+            Appendix
+            ========
+            """);
+
+        var outline = _reader.GetOutline("docs/setext.md");
+
+        Assert.NotNull(outline);
+        Assert.Equal("docs/setext.md", outline!.Path);
+        Assert.Equal(4, outline.SymbolCount);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("Guide", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Details", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Deep Dive", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Appendix", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            });
+    }
+
+    [Fact]
     public void GetOutline_NonexistentFile_ReturnsNull()
     {
         var outline = _reader.GetOutline("nonexistent/file.cs");

@@ -11467,6 +11467,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Markdown_DetectsSetextHeadingsAndLocalAnchorReferences()
+    {
+        const string content = """
+            Guide
+            =====
+
+            Intro text with a [jump](#details) reference.
+
+            Details
+            -------
+
+            A reference-style link also points at [guide][guide-anchor].
+
+            [guide-anchor]: #guide
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var headings = symbols.Where(s => s.Kind == "heading").ToList();
+        var references = symbols.Where(s => s.Kind == "reference").ToList();
+
+        Assert.Contains(headings, s => s.Name == "Guide" && s.Line == 1);
+        Assert.Contains(headings, s => s.Name == "Details" && s.Line == 6);
+        Assert.Equal(3, references.Count);
+        Assert.Contains(references, s => s.Name == "details");
+        Assert.Contains(references, s => s.Name == "guide");
+        Assert.Equal(2, references.Count(s => s.Name == "guide"));
+    }
+
+    [Fact]
     public void Extract_NullLang_ReturnsEmpty()
     {
         var symbols = SymbolExtractor.Extract(1, null, "some content");
