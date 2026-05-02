@@ -4821,17 +4821,16 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var csharpExactSearch = exact && string.Equals(fileLang, "csharp", StringComparison.OrdinalIgnoreCase);
-            var searchQuery = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(query) : query;
+            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
             {
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
                 int[]? rawIndexMap = null;
-                var searchLine = lineText;
-                if (csharpExactSearch)
-                    searchLine = StripCSharpVerbatimPrefixesForSearch(lineText, out rawIndexMap);
+                var searchLine = exact
+                    ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
+                    : lineText;
                 var snippetStart = Math.Max(1, lineNumber - before);
                 var snippetEnd = Math.Min(totalLines, lineNumber + after);
                 var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
@@ -4910,15 +4909,14 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var csharpExactSearch = exact && string.Equals(fileLang, "csharp", StringComparison.OrdinalIgnoreCase);
-            var searchQuery = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(query) : query;
+            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             var fileMatches = 0;
             for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
             {
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
-                var searchLine = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(lineText) : lineText;
+                var searchLine = exact ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang) : lineText;
                 for (int searchStart = 0; searchStart < searchLine.Length;)
                 {
                     var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
@@ -4938,16 +4936,6 @@ public partial class DbReader
         }
 
         return new QueryCountResult(count, fileCount);
-    }
-
-    private static string StripCSharpVerbatimPrefixesForSearch(string text)
-    {
-        return CSharpVerbatimNameNormalizer.Normalize(text);
-    }
-
-    private static string StripCSharpVerbatimPrefixesForSearch(string text, out int[]? rawIndexMap)
-    {
-        return CSharpVerbatimNameNormalizer.Normalize(text, out rawIndexMap);
     }
 
     /// <summary>

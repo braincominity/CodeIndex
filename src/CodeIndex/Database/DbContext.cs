@@ -352,6 +352,9 @@ public class DbContext : IDisposable
             "sql_normalize_csharp_verbatim_name",
             (string? text) => string.IsNullOrWhiteSpace(text) ? null : CSharpVerbatimNameNormalizer.Normalize(text));
         connection.CreateFunction(
+            "sql_normalize_exact_source_name",
+            (string? text, string? lang) => string.IsNullOrWhiteSpace(text) ? null : ExactSourceSearchNormalizer.Normalize(text, lang));
+        connection.CreateFunction(
             "sql_segment_count",
             (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
         connection.CreateFunction(
