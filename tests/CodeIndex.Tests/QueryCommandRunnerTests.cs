@@ -520,9 +520,9 @@ jobs:
     }
 
     [Fact]
-    public void RunSymbols_ExactNameFindsXamlTypeArguments()
+    public void RunSymbols_ExactNameFindsWrappedXamlTypeArguments()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_type_arguments");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_wrapped_type_arguments");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -533,7 +533,11 @@ jobs:
                                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                                     xmlns:vm="clr-namespace:Sample.ViewModels"
                                     xmlns:local="clr-namespace:Sample.Controls">
-                    <local:Pair x:TypeArguments="x:String, vm:Outer(vm:InnerModel, x:Int32)" />
+                    <local:Pair
+                        x:TypeArguments="x:String,
+                                         vm:Outer(
+                                             vm:InnerModel,
+                                             x:Int32)" />
                 </ResourceDictionary>
                 """);
 

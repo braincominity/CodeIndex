@@ -6806,6 +6806,8 @@ private sealed class RubyMaskState
             }
         }
 
+        AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
         {
             var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
@@ -6827,6 +6829,82 @@ private sealed class RubyMaskState
         }
 
         return symbols;
+    }
+
+    private static void AddWrappedXamlTypeArgumentSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var attributeIndex = rawText.IndexOf("x:TypeArguments", cursor, StringComparison.Ordinal);
+            if (attributeIndex < 0)
+                break;
+
+            var equalsIndex = rawText.IndexOf('=', attributeIndex);
+            if (equalsIndex < 0)
+            {
+                cursor = attributeIndex + 1;
+                continue;
+            }
+
+            var quoteIndex = equalsIndex + 1;
+            while (quoteIndex < rawText.Length && char.IsWhiteSpace(rawText[quoteIndex]))
+                quoteIndex++;
+
+            if (quoteIndex >= rawText.Length)
+                break;
+
+            var quote = rawText[quoteIndex];
+            if (quote is not ('"' or '\''))
+            {
+                cursor = quoteIndex + 1;
+                continue;
+            }
+
+            var valueStart = quoteIndex + 1;
+            var valueEnd = valueStart;
+            while (valueEnd < rawText.Length && rawText[valueEnd] != quote)
+                valueEnd++;
+
+            if (valueEnd >= rawText.Length)
+            {
+                cursor = valueStart;
+                continue;
+            }
+
+            if (FindHtmlLineNumber(lineStarts, valueEnd) == FindHtmlLineNumber(lineStarts, attributeIndex))
+            {
+                cursor = valueEnd + 1;
+                continue;
+            }
+
+            var value = rawText[valueStart..valueEnd];
+            if (value.Length > 0)
+            {
+                var startLine = FindHtmlLineNumber(lineStarts, attributeIndex);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                foreach (var normalized in NormalizeXamlTypeArgumentsValue(value))
+                {
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = normalized,
+                        Line = startLine,
+                        StartLine = startLine,
+                        EndLine = startLine,
+                        Signature = lines[signatureIndex].Trim(),
+                    });
+                }
+            }
+
+            cursor = valueEnd + 1;
+        }
     }
 
     private static string NormalizeXamlKeyValue(string value)
