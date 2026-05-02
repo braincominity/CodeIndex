@@ -145,9 +145,12 @@ public static class SymbolExtractor
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RustUseStartRegex = new(
+        @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RustUseStatementRegex = new(
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2387,7 +2390,10 @@ public static class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            var match = RustUseStatementRegex.Match(line);
+            if (!TryReadRustUseStatement(lines, i, out var statement, out var endLineIndex))
+                continue;
+
+            var match = RustUseStatementRegex.Match(statement);
             if (!match.Success)
                 continue;
 
@@ -2424,7 +2430,54 @@ public static class SymbolExtractor
                     },
                     line);
             }
+
+            i = endLineIndex;
         }
+    }
+
+    private static bool TryReadRustUseStatement(string[] lines, int startIndex, out string statement, out int endIndex)
+    {
+        statement = string.Empty;
+        endIndex = startIndex;
+
+        var firstLine = lines[startIndex];
+        if (!RustUseStartRegex.IsMatch(firstLine))
+            return false;
+
+        var builder = new StringBuilder(firstLine.Length + 32);
+        var braceDepth = 0;
+
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            var current = lines[i];
+            if (i > startIndex)
+                builder.Append('\n');
+            builder.Append(current);
+
+            foreach (var ch in current)
+            {
+                switch (ch)
+                {
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case ';':
+                        if (braceDepth == 0)
+                        {
+                            statement = builder.ToString();
+                            endIndex = i;
+                            return true;
+                        }
+                        break;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void CollectRustUseSymbolNames(string body, ISet<string> names, string? prefix = null)

@@ -11170,6 +11170,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsMultilineUseTrees()
+    {
+        var content = """
+            use std::{
+                fmt::Display,
+                io::{Result as IoResult, Write},
+            };
+            pub(crate) use crate::{
+                net::Client,
+                net::server::Server as NetServer,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::fmt::Display");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Display");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::io::Result as IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::io::Write");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Write");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::net::Client");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Client");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::net::server::Server as NetServer");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "NetServer");
+    }
+
+    [Fact]
     public void Extract_Rust_MapsImplBlocksToImplementingType()
     {
         var content = """
