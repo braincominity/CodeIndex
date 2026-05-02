@@ -4940,8 +4940,7 @@ private sealed class RubyMaskState
             if (string.IsNullOrEmpty(pythonModulePrefix))
                 continue;
 
-            if (aliasIndex >= 0
-                || (!treatAsFromImport && string.Equals(localName, importedName, StringComparison.Ordinal)))
+            if (aliasIndex >= 0)
             {
                 AddPythonImportEntry(
                     line,

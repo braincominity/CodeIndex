@@ -428,12 +428,12 @@ public class QueryCommandRunnerTests
                 "package/subpkg/__init__.py",
                 "python",
                 """
-                import submodule
+                import submodule as module_alias
                 from . import helper as alias
                 """);
 
             var (moduleExitCode, moduleStdout, moduleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["package.subpkg.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                ["package.subpkg.module_alias", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, moduleExitCode);
