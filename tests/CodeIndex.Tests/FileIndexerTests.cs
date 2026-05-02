@@ -126,6 +126,7 @@ public class FileIndexerTests
     [InlineData("GNUmakefile.am", "makefile")]
     [InlineData("kernel.cu", "cuda")]
     [InlineData("kernel.cuh", "cuda")]
+    [InlineData("header.hh", "cpp")]
     [InlineData("shader.glsl", "glsl")]
     [InlineData("shader.vert", "glsl")]
     [InlineData("shader.frag", "glsl")]
@@ -482,6 +483,7 @@ public class FileIndexerTests
         // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
         Assert.Equal("objc", map[".m"]);
         Assert.Equal("objc", map[".mm"]);
+        Assert.Equal("cpp", map[".hh"]);
     }
 
     [Fact]

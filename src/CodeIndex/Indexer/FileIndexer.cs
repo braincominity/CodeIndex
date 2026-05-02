@@ -116,6 +116,7 @@ public class FileIndexer
         [".cc"]     = "cpp",
         [".cxx"]    = "cpp",
         [".h"]      = "c",       // Could be C or C++; defaults to C for symbol extraction
+        [".hh"]     = "cpp",
         [".hpp"]    = "cpp",
         [".hxx"]    = "cpp",
         [".cs"]     = "csharp",

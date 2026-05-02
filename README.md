@@ -603,7 +603,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Kotlin | `.kt`, `.kts` | yes |
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
-| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Dart | `.dart` | yes |
@@ -1612,7 +1612,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Kotlin | `.kt`, `.kts` | yes |
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
-| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Dart | `.dart` | yes |
