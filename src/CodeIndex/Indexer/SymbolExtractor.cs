@@ -745,7 +745,6 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import",   new Regex($@"^\s*import\s+{JavaScriptTypeScriptIdentifierPattern}\s*=\s*require\s*\(\s*['""](?<name>[^'""]+)['""]\s*\)\s*;?\s*$", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["csharp"] =
@@ -3065,6 +3064,12 @@ private sealed class RubyMaskState
 
             if (lang is "javascript" or "typescript")
                 ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, line, structuralLine, i + 1, symbols);
+
+            if (lang is "javascript" or "typescript"
+                && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, line, i + 1, symbols))
+            {
+                continue;
+            }
 
             if (lang == "cpp" && TryAddCppIndentedAlias(fileId, line, i + 1, symbols))
                 continue;
@@ -8442,6 +8447,148 @@ private sealed class RubyMaskState
                 },
                 rawLine);
         }
+    }
+
+    private static bool TryHandleJavaScriptTypeScriptImportEqualsLine(
+        long fileId,
+        string rawLine,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var cursor = SkipWhitespace(rawLine, 0);
+        if (!rawLine.AsSpan(cursor).StartsWith("import", StringComparison.Ordinal))
+            return false;
+
+        var importEnd = cursor + "import".Length;
+        if (importEnd < rawLine.Length && (char.IsLetterOrDigit(rawLine[importEnd]) || rawLine[importEnd] is '_' or '$'))
+            return false;
+
+        cursor = SkipWhitespace(rawLine, importEnd);
+
+        var aliasStart = cursor;
+        if (aliasStart >= rawLine.Length
+            || !(char.IsLetter(rawLine[aliasStart]) || rawLine[aliasStart] is '_' or '$'))
+        {
+            return false;
+        }
+
+        cursor++;
+        while (cursor < rawLine.Length && (char.IsLetterOrDigit(rawLine[cursor]) || rawLine[cursor] is '_' or '$'))
+            cursor++;
+
+        var aliasName = rawLine[aliasStart..cursor];
+        cursor = SkipWhitespace(rawLine, cursor);
+        if (cursor >= rawLine.Length || rawLine[cursor] != '=')
+            return false;
+
+        cursor = SkipWhitespace(rawLine, cursor + 1);
+        if (!rawLine.AsSpan(cursor).StartsWith("require", StringComparison.Ordinal))
+            return false;
+
+        var requireEnd = cursor + "require".Length;
+        if (requireEnd < rawLine.Length && (char.IsLetterOrDigit(rawLine[requireEnd]) || rawLine[requireEnd] is '_' or '$'))
+            return false;
+
+        cursor = SkipWhitespace(rawLine, requireEnd);
+        if (cursor >= rawLine.Length || rawLine[cursor] != '(')
+            return false;
+
+        cursor = SkipWhitespace(rawLine, cursor + 1);
+        if (cursor >= rawLine.Length || rawLine[cursor] is not '\'' and not '"')
+            return false;
+
+        var quote = rawLine[cursor];
+        var moduleLiteralStart = cursor + 1;
+        cursor = moduleLiteralStart;
+        while (cursor < rawLine.Length)
+        {
+            if (rawLine[cursor] == '\\' && cursor + 1 < rawLine.Length)
+            {
+                cursor += 2;
+                continue;
+            }
+
+            if (rawLine[cursor] == quote)
+                break;
+
+            cursor++;
+        }
+
+        if (cursor >= rawLine.Length || rawLine[cursor] != quote)
+            return false;
+
+        var moduleName = rawLine[moduleLiteralStart..cursor];
+        cursor++;
+        cursor = SkipWhitespace(rawLine, cursor);
+        if (cursor >= rawLine.Length || rawLine[cursor] != ')')
+            return false;
+
+        cursor++;
+        cursor = SkipWhitespace(rawLine, cursor);
+        if (cursor < rawLine.Length && rawLine[cursor] == ';')
+        {
+            cursor++;
+            cursor = SkipWhitespace(rawLine, cursor);
+        }
+
+        if (cursor < rawLine.Length)
+        {
+            if (rawLine.AsSpan(cursor).StartsWith("//", StringComparison.Ordinal))
+            {
+                cursor = rawLine.Length;
+            }
+            else if (rawLine.AsSpan(cursor).StartsWith("/*", StringComparison.Ordinal))
+            {
+                var commentEnd = rawLine.IndexOf("*/", cursor, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return false;
+
+                cursor = SkipWhitespace(rawLine, commentEnd + 2);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        if (cursor < rawLine.Length)
+            return false;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = aliasName,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                StartColumn = aliasStart,
+                EndLine = lineNumber,
+                Signature = rawLine.Trim(),
+            },
+            rawLine);
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = moduleName,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                StartColumn = moduleLiteralStart,
+                EndLine = lineNumber,
+                Signature = rawLine.Trim(),
+            },
+            rawLine);
+
+        return true;
     }
 
     private static void ExtractJavaScriptTypeScriptQualifiedAssignments(

@@ -861,6 +861,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsImportEqualsAliasesAndTrailingComments()
+    {
+        var content = """
+            import nodeFs = require('fs'); // keep trailing comments
+            import aliasPath = require("./lib/util") /* keep block comments */
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "nodeFs");
+        Assert.Contains(imports, symbol => symbol.Name == "fs");
+        Assert.Contains(imports, symbol => symbol.Name == "aliasPath");
+        Assert.Contains(imports, symbol => symbol.Name == "./lib/util");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInterfaceAbstractMembersAndTypedArrowAssignments()
     {
         var content = """
