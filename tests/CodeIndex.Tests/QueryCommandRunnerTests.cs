@@ -7954,10 +7954,10 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void CSharpVerbatimNameNormalizer_StripsGlobalQualifierOnlyAtIdentifierBoundaries()
+    public void CSharpVerbatimNameNormalizer_StripsGlobalQualifierOnlyAtNamespaceStarts()
     {
         Assert.Equal("Foo.Bar", CSharpVerbatimNameNormalizer.Normalize("global::Foo.Bar"));
-        Assert.Equal("notglobal::Foo.Bar", CSharpVerbatimNameNormalizer.Normalize("notglobal::Foo.Bar"));
+        Assert.Equal("Foo.global::Bar", CSharpVerbatimNameNormalizer.Normalize("Foo.global::Bar"));
     }
 
     [Fact]
@@ -24922,6 +24922,48 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_ExactTreatsCSharpGlobalQualifiedNamesAsCanonical()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_csharp_global");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/global.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class GlobalQualified
+                {
+                    public void Match()
+                    {
+                        var value = global::Foo.Bar;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Foo.Bar", "--db", dbPath, "--path", "src/global.cs", "--json", "--exact", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
             Assert.Equal(1, json.GetProperty("file_count").GetInt32());
         }

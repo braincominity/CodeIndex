@@ -4942,94 +4942,13 @@ public partial class DbReader
 
     private static string StripCSharpVerbatimPrefixesForSearch(string text)
     {
-        if (text.Length == 0 || text.IndexOf('@') < 0)
-            return text;
-
-        var sb = new System.Text.StringBuilder(text.Length);
-        bool atBoundary = true;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (atBoundary && c == '@'
-                && i + 1 < text.Length
-                && IsCSharpIdentifierStartChar(text[i + 1]))
-            {
-                atBoundary = false;
-                continue;
-            }
-
-            sb.Append(c);
-            if (c == '.')
-            {
-                atBoundary = true;
-            }
-            else if (c == ':' && i + 1 < text.Length && text[i + 1] == ':')
-            {
-                sb.Append(':');
-                i++;
-                atBoundary = true;
-            }
-            else
-            {
-                atBoundary = false;
-            }
-        }
-
-        return sb.Length == text.Length ? text : sb.ToString();
+        return CSharpVerbatimNameNormalizer.Normalize(text);
     }
 
     private static string StripCSharpVerbatimPrefixesForSearch(string text, out int[]? rawIndexMap)
     {
-        if (text.Length == 0 || text.IndexOf('@') < 0)
-        {
-            rawIndexMap = null;
-            return text;
-        }
-
-        var sb = new System.Text.StringBuilder(text.Length);
-        var map = new List<int>(text.Length);
-        bool atBoundary = true;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (atBoundary && c == '@'
-                && i + 1 < text.Length
-                && IsCSharpIdentifierStartChar(text[i + 1]))
-            {
-                atBoundary = false;
-                continue;
-            }
-
-            sb.Append(c);
-            map.Add(i);
-            if (c == '.')
-            {
-                atBoundary = true;
-            }
-            else if (c == ':' && i + 1 < text.Length && text[i + 1] == ':')
-            {
-                sb.Append(':');
-                map.Add(++i);
-                atBoundary = true;
-            }
-            else
-            {
-                atBoundary = false;
-            }
-        }
-
-        if (sb.Length == text.Length)
-        {
-            rawIndexMap = null;
-            return text;
-        }
-
-        rawIndexMap = map.ToArray();
-        return sb.ToString();
+        return CSharpVerbatimNameNormalizer.Normalize(text, out rawIndexMap);
     }
-
-    private static bool IsCSharpIdentifierStartChar(char c) =>
-        c == '_' || char.IsLetter(c);
 
     /// <summary>
     /// Reconstruct one indexed file into an ordered line map.
