@@ -254,7 +254,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -339,7 +339,7 @@ public partial class McpServer
         if (namesProvided && names.Count == 0)
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -435,7 +435,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
@@ -493,7 +493,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -560,7 +560,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -624,7 +624,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -680,7 +680,7 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (query != null && query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
