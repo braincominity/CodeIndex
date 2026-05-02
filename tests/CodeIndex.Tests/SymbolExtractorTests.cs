@@ -198,6 +198,7 @@ public class SymbolExtractorTests
         var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
 
         Assert.Contains("submodule", imports);
+        Assert.Contains("package.subpkg.submodule", imports);
         Assert.Contains("module_alias", imports);
         Assert.Contains("package.subpkg.module_alias", imports);
         Assert.Contains("helper", imports);

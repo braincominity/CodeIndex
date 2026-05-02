@@ -5092,6 +5092,17 @@ private sealed class RubyMaskState
                         ref searchStartColumn);
                 }
 
+                if (!treatAsFromImport && !string.IsNullOrEmpty(pythonModulePrefix))
+                {
+                    AddPythonImportEntry(
+                        line,
+                        absoluteStartColumn,
+                        $"{pythonModulePrefix}.{importedName}",
+                        entries,
+                        seenNames,
+                        ref searchStartColumn);
+                }
+
                 if (treatAsFromImport && !string.IsNullOrEmpty(normalizedModulePart))
                 {
                     AddPythonImportEntry(
