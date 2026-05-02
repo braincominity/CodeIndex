@@ -136,6 +136,12 @@ public static class SymbolExtractor
     private static readonly Regex GoTypeBlockSpecRegex = new(
         @"^(?<name>\w+)(?:\[[^\]]+\])?\s+(?:(?<kind>struct|interface)\b|.+)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoInterfaceHeaderRegex = new(
+        @"^\s*(?:type\s+)?\w+(?:\[[^\]]+\])?\s+interface\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoInterfaceMethodRegex = new(
+        @"^\s*(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1915,6 +1921,152 @@ public static class SymbolExtractor
         return true;
     }
 
+    private static void ExtractGoInterfaceMethods(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var awaitingInterfaceBody = false;
+        var inInterfaceBody = false;
+        var interfaceBodyDepth = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var rawLine = lines[i];
+            var trimmed = rawLine.TrimStart();
+
+            if (!inInterfaceBody)
+            {
+                if (!awaitingInterfaceBody)
+                {
+                    if (!GoInterfaceHeaderRegex.IsMatch(trimmed))
+                        continue;
+                }
+                else if (trimmed.Length == 0
+                    || trimmed.StartsWith("//", StringComparison.Ordinal)
+                    || trimmed.StartsWith("/*", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var openBraceIndex = rawLine.IndexOf('{');
+                if (openBraceIndex < 0)
+                {
+                    awaitingInterfaceBody = true;
+                    continue;
+                }
+
+                inInterfaceBody = true;
+                awaitingInterfaceBody = false;
+                interfaceBodyDepth = CountGoBraceDelta(rawLine);
+
+                var sameLineBody = rawLine[(openBraceIndex + 1)..].TrimStart();
+                if (sameLineBody.Length > 0
+                    && !sameLineBody.StartsWith("//", StringComparison.Ordinal)
+                    && !sameLineBody.StartsWith("/*", StringComparison.Ordinal)
+                    && !sameLineBody.StartsWith("}", StringComparison.Ordinal))
+                {
+                    var bodySegment = sameLineBody;
+                    var sameLineClosingBraceIndex = bodySegment.IndexOf('}');
+                    if (sameLineClosingBraceIndex >= 0)
+                        bodySegment = bodySegment[..sameLineClosingBraceIndex].TrimEnd();
+
+                    var match = GoInterfaceMethodRegex.Match(bodySegment);
+                    if (match.Success)
+                    {
+                        var name = match.Groups["name"].Value.Trim();
+                        if (!HasGoSymbol(symbols, fileId, i + 1, "function", name))
+                        {
+                            var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+                            if (startColumn < 0)
+                                startColumn = rawLine.Length - trimmed.Length;
+
+                            AddSymbolRecord(
+                                symbols,
+                                cssSeenSymbols: null,
+                                i + 1,
+                                new SymbolRecord
+                                {
+                                    FileId = fileId,
+                                    Kind = "function",
+                                    Name = name,
+                                    Line = i + 1,
+                                    StartLine = i + 1,
+                                    StartColumn = startColumn,
+                                    EndLine = i + 1,
+                                    Signature = rawLine.Trim(),
+                                },
+                                rawLine);
+                        }
+                    }
+                }
+
+                if (interfaceBodyDepth <= 0)
+                {
+                    inInterfaceBody = false;
+                    interfaceBodyDepth = 0;
+                }
+
+                continue;
+            }
+
+            if (trimmed.Length == 0
+                || trimmed.StartsWith("//", StringComparison.Ordinal)
+                || trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                interfaceBodyDepth += CountGoBraceDelta(rawLine);
+                if (interfaceBodyDepth <= 0)
+                {
+                    inInterfaceBody = false;
+                    interfaceBodyDepth = 0;
+                }
+
+                continue;
+            }
+
+            var candidate = trimmed;
+            var trailingBraceIndex = candidate.IndexOf('}');
+            if (trailingBraceIndex >= 0)
+                candidate = candidate[..trailingBraceIndex].TrimEnd();
+
+            if (candidate.Length > 0 && !candidate.StartsWith("}", StringComparison.Ordinal))
+            {
+                var match = GoInterfaceMethodRegex.Match(candidate);
+                if (match.Success)
+                {
+                    var name = match.Groups["name"].Value.Trim();
+                    if (!HasGoSymbol(symbols, fileId, i + 1, "function", name))
+                    {
+                        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+                        if (startColumn < 0)
+                            startColumn = rawLine.Length - trimmed.Length;
+
+                        AddSymbolRecord(
+                            symbols,
+                            cssSeenSymbols: null,
+                            i + 1,
+                            new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = name,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                StartColumn = startColumn,
+                                EndLine = i + 1,
+                                Signature = rawLine.Trim(),
+                            },
+                            rawLine);
+                    }
+                }
+            }
+
+            interfaceBodyDepth += CountGoBraceDelta(rawLine);
+            if (interfaceBodyDepth <= 0)
+            {
+                inInterfaceBody = false;
+                interfaceBodyDepth = 0;
+            }
+        }
+    }
+
     private static void ExpandShellAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         for (var i = 0; i < lines.Length; i++)
@@ -2155,6 +2307,7 @@ public static class SymbolExtractor
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         string? blockKind = null;
+        ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
 
         for (var i = 0; i < lines.Length; i++)
