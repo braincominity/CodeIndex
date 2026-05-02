@@ -191,11 +191,12 @@ public static class SymbolExtractor
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private readonly record struct RustUseSymbolOccurrence(string Name, int Line, int Column);
+    private const string RustIdentifierPattern = @"(?:r#)?\w+";
     private static readonly Regex RustMultilineImplForRegex = new(
-        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?<name>\w+)\b",
+        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?<name>" + RustIdentifierPattern + @")\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex RustMultilineImplTypeRegex = new(
-        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>\w+)(?!\s+for\b)\b",
+        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>" + RustIdentifierPattern + @")(?!\s+for\b)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
@@ -1158,25 +1159,25 @@ public static class SymbolExtractor
         ["rust"] =
         [
             // macro_rules! / マクロ定義
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?macro_rules!\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?macro_rules!\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // const/static items / 定数・静的変数
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:const|static)\s+(?<name>\w+)\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:const|static)\s+(?<name>(?:r#)?\w+)\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // fn with expanded modifiers: async, const, unsafe, default, extern (ABI optional) /
             // 拡張修飾子: async, const, unsafe, default, extern（ABI は省略可）
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("struct",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:struct|union)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:struct|union)\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum variants / `Red`, `Ok(T)`, `Circle { radius: f64 }`, `Point`
             new("property", new Regex(@"^\s{4,}(?<name>[A-Z][A-Za-z0-9_]*)\s*(?:\([^()\r\n]*\)|\{[^{}\r\n]*\})?\s*,?\s*$", RegexOptions.Compiled), BodyStyle.None),
-            new("interface", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?trait\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // impl Trait for Type / `unsafe impl Trait for Type` should attach to the type being extended.
             // `impl Trait for Type` / `unsafe impl Trait for Type` は、拡張先の型に紐づける。
-            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>\w+)(?!\s+for\b)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>(?:r#)?\w+)(?!\s+for\b)", RegexOptions.Compiled), BodyStyle.Brace),
             // mod / モジュール
-            new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, "visibility"),
         ],
         ["java"] =
@@ -26029,6 +26030,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             "cobol" => NormalizeCobolSymbolName(name),
             "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            "rust" => NormalizeRustSymbolName(name),
             "swift" => NormalizeSwiftSymbolName(name),
             "sql" => NormalizeSqlSymbolName(name),
             _ => name,
@@ -26048,6 +26050,32 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         }
 
         return name;
+    }
+
+    private static string NormalizeRustSymbolName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return name;
+
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            return trimmed;
+
+        if (!trimmed.Contains("::", StringComparison.Ordinal))
+            return trimmed.StartsWith("r#", StringComparison.Ordinal)
+                ? trimmed[2..]
+                : trimmed;
+
+        var segments = trimmed.Split("::");
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i].Trim();
+            if (segment.StartsWith("r#", StringComparison.Ordinal))
+                segment = segment[2..];
+            segments[i] = segment;
+        }
+
+        return string.Join("::", segments);
     }
 
     private enum FSharpTypeBodyKind

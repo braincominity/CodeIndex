@@ -367,6 +367,13 @@ public static class ReferenceExtractor
     // `std::println!` / `log::info!` / `my_macro!` のような path-qualified 名も含めて拾い、
     // `macro_rules` 宣言キーワードは上の Rust ignore list で除外する。
     private static readonly Regex RustMacroCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern}(?:::{FunctionalIdentifierPattern})*)(?:<[^>\n]+>)?!\s*[\(\[\{{]", RegexOptions.Compiled);
+    // Rust raw identifiers such as `r#type()` are stored without the `r#` prefix, but the shared
+    // call regex cannot see them because `#` is not an identifier character. Use a Rust-only
+    // matcher for names that contain at least one raw segment and normalize the stored form below.
+    // Rust の raw identifier (`r#type()`) は保存時に `r#` を外すが、共通 CallRegex は `#` を
+    // 識別子文字として扱わないため見逃す。raw segment を含む Rust 専用 matcher を足し、
+    // 下で保存形式へ正規化する。
+    private static readonly Regex RustRawIdentifierCallRegex = new($@"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
     // omit the trailing `(` that the shared CallRegex requires.
     // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
@@ -2272,7 +2279,12 @@ public static class ReferenceExtractor
             {
                 var normalizedName = language == "fsharp" && IsFSharpOperatorCallName(name)
                     ? $"operator {name}"
-                    : NormalizeAtPrefixedIdentifier(name);
+                    : language == "rust"
+                        ? NormalizeRustIdentifier(name)
+                        : NormalizeAtPrefixedIdentifier(name);
+
+                if (language == "rust" && IsRustFunctionDeclarationCallSite(preparedLine, callIndex))
+                    return;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -2505,6 +2517,8 @@ public static class ReferenceExtractor
                 {
                     var name = match.Groups["name"].Value;
                     var callIndex = match.Groups["name"].Index;
+                    if (language == "rust" && IsRustRawIdentifierPrefix(preparedLine, callIndex))
+                        continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
@@ -2626,6 +2640,13 @@ public static class ReferenceExtractor
 
             if (language == "rust")
             {
+                foreach (Match match in RustRawIdentifierCallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    AddCallLikeReference(name, callIndex);
+                }
+
                 foreach (Match match in RustMacroCallRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
@@ -8481,6 +8502,36 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static string NormalizeRustIdentifier(string identifier)
+    {
+        if (identifier.Length == 0)
+            return identifier;
+
+        var segments = identifier.Split("::");
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            if (segment.StartsWith("r#", StringComparison.Ordinal))
+                segments[i] = segment[2..];
+        }
+
+        return string.Join("::", segments);
+    }
+
+    private static bool IsRustFunctionDeclarationCallSite(string line, int callIndex)
+    {
+        if (callIndex <= 0)
+            return false;
+
+        var prefix = line[..callIndex].TrimEnd();
+        return prefix.EndsWith("fn", StringComparison.Ordinal);
+    }
+
+    private static bool IsRustRawIdentifierPrefix(string line, int callIndex) =>
+        callIndex >= 2
+        && line[callIndex - 2] == 'r'
+        && line[callIndex - 1] == '#';
 
     private static string NormalizeShellSourceTargetToken(string token)
     {
