@@ -113,6 +113,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_ExpandsFromImportQualifiedNamesForSearchability()
+    {
+        var content = """
+            from package import submodule as alias
+            from .helpers import build
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+
+        Assert.Contains(imports, symbol => symbol.Name == "package");
+        Assert.Contains(imports, symbol => symbol.Name == "package.submodule");
+        Assert.Contains(imports, symbol => symbol.Name == "submodule");
+        Assert.Contains(imports, symbol => symbol.Name == "alias");
+        Assert.Contains(imports, symbol => symbol.Name == "helpers");
+        Assert.Contains(imports, symbol => symbol.Name == "helpers.build");
+        Assert.Contains(imports, symbol => symbol.Name == "build");
+    }
+
+    [Fact]
     public void Extract_Python_ExpandsDottedImportPrefixesForSearchability()
     {
         var content = """
