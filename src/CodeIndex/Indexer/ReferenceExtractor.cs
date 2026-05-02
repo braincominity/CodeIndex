@@ -8533,12 +8533,15 @@ public static class ReferenceExtractor
     {
         foreach (Match match in PhpStaticAccessRegex.Matches(preparedLine))
         {
-            var rawName = match.Groups["name"].Value.TrimStart('\\');
-            if (rawName.Length == 0)
+            var nameGroup = match.Groups["name"];
+            var rawName = nameGroup.Value;
+            var trimmedName = rawName.TrimStart('\\');
+            if (trimmedName.Length == 0)
                 continue;
 
-            var shortNameStart = rawName.LastIndexOf('\\') + 1;
-            var shortName = rawName[shortNameStart..];
+            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
+            var shortName = trimmedName[shortNameStart..];
             if (shortName.Length == 0)
                 continue;
 
@@ -8549,7 +8552,7 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            var nameIndex = match.Groups["name"].Index + shortNameStart;
+            var nameIndex = nameGroup.Index + leadingBackslashCount + shortNameStart;
             AddReference(references, seen, fileId, shortName, nameIndex, "type_reference", context, lineNumber, container);
         }
     }
