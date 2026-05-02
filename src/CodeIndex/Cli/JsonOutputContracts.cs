@@ -22,7 +22,8 @@ internal sealed record QueryCountJsonResult(
 
 internal sealed record QueryCountFilesJsonResult(
     [property: JsonPropertyName("count")] int Count,
-    [property: JsonPropertyName("files")] int Files);
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("query")] string Query);
 
 internal sealed record QueryFindCountJsonResult(
     [property: JsonPropertyName("count")] int Count,

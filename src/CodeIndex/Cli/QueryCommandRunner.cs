@@ -120,7 +120,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -181,7 +181,7 @@ public static class QueryCommandRunner
         if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(options.Json
-                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, options.Query), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                 : "0");
             return CommandExitCodes.Success;
         }
@@ -716,8 +716,9 @@ public static class QueryCommandRunner
         {
             if (exactBareVerbatimOnly && options.CountOnly)
             {
+                var countQuery = options.Query ?? string.Join(" ", options.ExtraNames);
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, countQuery), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
                     : "0");
                 return CommandExitCodes.Success;
             }
