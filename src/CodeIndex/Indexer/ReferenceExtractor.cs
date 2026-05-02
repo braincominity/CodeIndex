@@ -496,6 +496,13 @@ public static class ReferenceExtractor
     private static readonly Regex ShellCommandCallRegex = new(
         @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
         RegexOptions.Compiled);
+    // Shell `source` / `.` invocations load other scripts, so surface the referenced path
+    // as a `reference` edge for dependency-style search.
+    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込むため、依存関係検索用に
+    // 参照エッジとして対象パスを出す。
+    private static readonly Regex ShellSourceReferenceRegex = new(
+        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?:source|\.)\s+(?<name>(?:'[^']*'|""[^""]*""|[^;\s&#|}]+))",
+        RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -2384,6 +2391,16 @@ public static class ReferenceExtractor
 
                     var callIndex = match.Groups["name"].Index;
                     AddCallLikeReference(name, callIndex);
+                }
+
+                foreach (Match match in ShellSourceReferenceRegex.Matches(preparedLine))
+                {
+                    var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+
+                    var sourceIndex = match.Groups["name"].Index;
+                    AddReference(references, seen, fileId, name, sourceIndex, "reference", context, lineNumber, ResolveContainerForCall(sourceIndex));
                 }
 
                 if (shellGlobalAliasNames != null && shellGlobalAliasNames.Count > 0)
@@ -8363,6 +8380,19 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static string NormalizeShellSourceTargetToken(string token)
+    {
+        var trimmed = token.Trim();
+        if (trimmed.Length >= 2)
+        {
+            var quote = trimmed[0];
+            if ((quote == '\'' || quote == '"') && trimmed[^1] == quote)
+                return trimmed[1..^1];
+        }
+
+        return trimmed;
+    }
 
     private static void EmitCssScssReferences(
         string preparedLine,
