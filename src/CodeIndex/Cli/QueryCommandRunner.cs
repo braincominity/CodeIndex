@@ -40,7 +40,7 @@ public static class QueryCommandRunner
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["yaml"] = ["yml"],
-        ["sql"] = ["tsql", "t-sql", "transact-sql", "sqlserver", "mssql"],
+        ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
     };
     private static readonly HashSet<string> ValueTakingOptions =
     [

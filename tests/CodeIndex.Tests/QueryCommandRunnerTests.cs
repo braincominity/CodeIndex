@@ -111,8 +111,18 @@ public class QueryCommandRunnerTests
         Assert.Contains("tsql", aliases);
         Assert.Contains("t-sql", aliases);
         Assert.Contains("transact-sql", aliases);
+        Assert.Contains("transactsql", aliases);
         Assert.Contains("sqlserver", aliases);
         Assert.Contains("mssql", aliases);
+    }
+
+    [Theory]
+    [InlineData("transact-sql")]
+    [InlineData("transact sql")]
+    public void NormalizeQueryLanguage_MapsTransactSqlToSql(string input)
+    {
+        Assert.Equal("sql", DbReader.NormalizeQueryLanguage(input));
+        Assert.True(DbReader.IsSqlLanguage(input));
     }
 
     [Fact]
