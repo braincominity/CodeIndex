@@ -373,7 +373,7 @@ public static class ReferenceExtractor
     // Rust の raw identifier (`r#type()`) は保存時に `r#` を外すが、共通 CallRegex は `#` を
     // 識別子文字として扱わないため見逃す。raw segment を含む Rust 専用 matcher を足し、
     // 下で保存形式へ正規化する。
-    private static readonly Regex RustRawIdentifierCallRegex = new($@"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex RustRawIdentifierCallRegex = new($@"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
     // omit the trailing `(` that the shared CallRegex requires.
     // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
