@@ -7248,6 +7248,12 @@ private sealed class RubyMaskState
                 continue;
             }
 
+            if (ShouldSkipXamlMarkupExtensionSymbol(rawText, braceIndex))
+            {
+                cursor = closingBraceIndex + 1;
+                continue;
+            }
+
             var value = NormalizeXamlMarkupValue(rawText[braceIndex..(closingBraceIndex + 1)]);
             if (value.Length > 0)
             {
@@ -7267,6 +7273,29 @@ private sealed class RubyMaskState
 
             cursor = closingBraceIndex + 1;
         }
+    }
+
+    private static bool ShouldSkipXamlMarkupExtensionSymbol(string rawText, int braceIndex)
+    {
+        var tagStart = rawText.LastIndexOf('<', braceIndex);
+        if (tagStart < 0 || tagStart > braceIndex)
+            return false;
+
+        var tagEnd = rawText.IndexOf('>', tagStart);
+        if (tagEnd >= 0 && tagEnd < braceIndex)
+            return false;
+
+        var tagSlice = rawText[tagStart..braceIndex];
+        if (tagSlice.IndexOf("<x:Type", StringComparison.OrdinalIgnoreCase) >= 0
+            || tagSlice.IndexOf("<x:TypeExtension", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        if (tagSlice.IndexOf("TargetType=", StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+
+        return false;
     }
 
     private static void AddXamlStaticMemberTypeSymbols(
