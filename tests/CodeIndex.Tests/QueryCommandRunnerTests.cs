@@ -2074,6 +2074,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsXamlTargetType()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_target_type");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "MainPage.xaml"),
+                """
+                <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:vm="clr-namespace:Sample.ViewModels">
+                    <ContentPage.Resources>
+                        <Style TargetType="Button" />
+                        <ControlTemplate TargetType="{x:Type vm:CustomButton}" />
+                    </ContentPage.Resources>
+                </ContentPage>
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (buttonExitCode, buttonStdout, buttonStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Button", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+            var (customButtonExitCode, customButtonStdout, customButtonStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["vm:CustomButton", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
+                _jsonOptions));
+
+            var buttonRows = ParseJsonLines(buttonStdout);
+            var customButtonRows = ParseJsonLines(customButtonStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, buttonExitCode);
+            Assert.Equal(string.Empty, buttonStderr);
+            Assert.Single(buttonRows);
+            Assert.Equal("Button", buttonRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", buttonRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, customButtonExitCode);
+            Assert.Equal(string.Empty, customButtonStderr);
+            Assert.Single(customButtonRows);
+            Assert.Equal("vm:CustomButton", customButtonRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", customButtonRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_RejectsOversizedMultiNameBatches()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_oversize");
