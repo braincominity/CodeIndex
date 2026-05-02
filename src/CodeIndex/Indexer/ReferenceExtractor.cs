@@ -448,6 +448,23 @@ public static class ReferenceExtractor
             (?<name>{FSharpIdentifierPattern})\b
             (?=\s+(?:{FSharpIdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
+    // F# symbolic operator usages such as `x ++ y`, `x >>= f`, and `(++)` should also
+    // surface as searchable references. The matcher intentionally stays conservative by
+    // excluding standard F# operators that already have dedicated syntax or would create
+    // excessive noise in call graphs.
+    // F# の symbolic operator 使用 (`x ++ y` / `x >>= f` / `(++)`) も検索可能な reference として
+    // 出す。標準 F# operator は専用構文やノイズの多さを考慮して除外し、保守的に拾う。
+    private static readonly Regex FSharpOperatorCallRegex = new(
+        @"(?<![\w$])(?<name>[!%&*+\-./:<=>?@^|~]{2,})(?![\w$])",
+        RegexOptions.Compiled);
+    private static readonly Regex FSharpOperatorDefinitionCallRegex = new(
+        @"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\((?<name>[!%&*+\-./:<=>?@^|~]{2,})\)",
+        RegexOptions.Compiled);
+    private static readonly HashSet<string> FSharpIgnoredOperatorCallNames = new(StringComparer.Ordinal)
+    {
+        "->", "<-", "..", "<|", "<||", "<|||", "|>", "||>", "|||>", "|>>", "<<", ">>", "<<<", ">>>",
+        "&&", "&&&", "||", "|||", "::", "<>", "<=", ">=", "**", "@@", ":>", ":?", ":=",
+    };
     // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
     // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
     // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
@@ -2211,7 +2228,9 @@ public static class ReferenceExtractor
 
             void AddCallLikeReference(string name, int callIndex)
             {
-                var normalizedName = NormalizeAtPrefixedIdentifier(name);
+                var normalizedName = language == "fsharp" && IsFSharpOperatorCallName(name)
+                    ? $"operator {name}"
+                    : NormalizeAtPrefixedIdentifier(name);
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -2259,6 +2278,20 @@ public static class ReferenceExtractor
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
                 AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
+            }
+
+            static bool IsFSharpOperatorCallName(string name)
+            {
+                if (name.Length < 2)
+                    return false;
+
+                foreach (var ch in name)
+                {
+                    if ("!%&*+-./:<=>?@^|~".IndexOf(ch) < 0)
+                        return false;
+                }
+
+                return true;
             }
 
             void EmitRubyCommandTargetReferences(string name, int callIndex)
@@ -2470,6 +2503,24 @@ public static class ReferenceExtractor
                     foreach (Match match in FSharpSpaceApplicationCallRegex.Matches(preparedLine))
                     {
                         var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        AddCallLikeReference(name, callIndex);
+                    }
+
+                    foreach (Match match in FSharpOperatorCallRegex.Matches(preparedLine))
+                    {
+                        var name = match.Groups["name"].Value;
+                        if (FSharpIgnoredOperatorCallNames.Contains(name))
+                            continue;
+
+                        var definitionMatch = FSharpOperatorDefinitionCallRegex.Match(preparedLine);
+                        if (definitionMatch.Success
+                            && string.Equals(definitionMatch.Groups["name"].Value, name, StringComparison.Ordinal)
+                            && match.Groups["name"].Index == definitionMatch.Groups["name"].Index)
+                        {
+                            continue;
+                        }
+
                         var callIndex = match.Groups["name"].Index;
                         AddCallLikeReference(name, callIndex);
                     }

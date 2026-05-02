@@ -7918,6 +7918,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsOperatorCalls()
+    {
+        const string content = """
+            let (++) left right = left + right
+            let (>>=) value binder = binder value
+
+            let build value =
+                value ++ value
+
+            let casted value =
+                value :> obj
+
+            let compose value =
+                value >>= (fun next -> next + 1)
+
+            let lifted = (++ )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "operator ++" && r.ReferenceKind == "call"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "operator >>=" && r.ReferenceKind == "call"));
+        Assert.Contains(references, r => r.SymbolName == "operator ++" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "operator >>=" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator +" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator :>" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator ->" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator ++" && r.Line == 1);
+        Assert.DoesNotContain(references, r => r.SymbolName == "operator >>=" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsSpaceSeparatedApplicationCalls()
     {
         const string content = """
