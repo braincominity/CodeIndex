@@ -187,6 +187,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_RustRawIdentifiersIgnoreRawPrefix()
+    {
+        InsertIndexedFile(
+            "src/raw.rs",
+            "rust",
+            """
+            pub fn r#type() {}
+
+            pub fn caller() {
+                r#type();
+            }
+            """);
+
+        var symbolResults = _reader.SearchSymbols("r#type", lang: "rust", exact: true);
+        var symbol = Assert.Single(symbolResults);
+        Assert.Equal("type", symbol.Name);
+        Assert.Equal("src/raw.rs", symbol.Path);
+
+        var referenceResults = _reader.SearchReferences("r#type", lang: "rust", exact: true);
+        var reference = Assert.Single(referenceResults);
+        Assert.Equal("type", reference.SymbolName);
+        Assert.Equal("src/raw.rs", reference.Path);
+    }
+
+    [Fact]
     public void RustQualifiedQueriesResolveAcrossGraphCommands()
     {
         InsertIndexedFile(

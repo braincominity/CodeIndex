@@ -1158,7 +1158,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:const|static)\s+(?<name>\w+)\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // fn with expanded modifiers: async, const, unsafe, default, extern (ABI optional) /
             // 拡張修飾子: async, const, unsafe, default, extern（ABI は省略可）
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("struct",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:struct|union)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum variants / `Red`, `Ok(T)`, `Circle { radius: f64 }`, `Point`
@@ -26024,11 +26024,15 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             "cobol" => NormalizeCobolSymbolName(name),
             "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            "rust" => NormalizeRustSymbolName(name),
             "swift" => NormalizeSwiftSymbolName(name),
             "sql" => NormalizeSqlSymbolName(name),
             _ => name,
         };
     }
+
+    private static string NormalizeRustSymbolName(string name) =>
+        name.StartsWith("r#", StringComparison.Ordinal) ? name[2..] : name;
 
     private static string NormalizeFSharpSymbolName(string name)
     {
