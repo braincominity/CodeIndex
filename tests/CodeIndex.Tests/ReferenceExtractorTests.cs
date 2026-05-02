@@ -8027,6 +8027,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsNamespaceReferenceOperators()
+    {
+        const string content = """
+            lookup <- function() {
+                dplyr::filter
+                base:::get
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "get"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsCallSites()
     {
         const string content = """
