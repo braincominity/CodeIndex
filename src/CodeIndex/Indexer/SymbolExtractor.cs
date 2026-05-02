@@ -6959,6 +6959,7 @@ private sealed class RubyMaskState
         }
 
         AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
         {
@@ -7056,6 +7057,85 @@ private sealed class RubyMaskState
             }
 
             cursor = valueEnd + 1;
+        }
+    }
+
+    private static void AddWrappedXamlTypeBearingAttributeSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        // Handle XAML values that are split away from `=` onto later lines.
+        // `x:Class`, `x:DataType`, and `TargetType` are intentionally kept on the
+        // same normalization path as the line-based extractor so search results stay consistent.
+        foreach (var attributeName in new[] { "x:Class", "x:DataType", "TargetType" })
+        {
+            var cursor = 0;
+            while (cursor < rawText.Length)
+            {
+                var attributeIndex = rawText.IndexOf(attributeName, cursor, StringComparison.Ordinal);
+                if (attributeIndex < 0)
+                    break;
+
+                var equalsIndex = rawText.IndexOf('=', attributeIndex);
+                if (equalsIndex < 0)
+                {
+                    cursor = attributeIndex + 1;
+                    continue;
+                }
+
+                var quoteIndex = equalsIndex + 1;
+                while (quoteIndex < rawText.Length && char.IsWhiteSpace(rawText[quoteIndex]))
+                    quoteIndex++;
+
+                if (quoteIndex >= rawText.Length)
+                    break;
+
+                var quote = rawText[quoteIndex];
+                if (quote is not ('"' or '\''))
+                {
+                    cursor = quoteIndex + 1;
+                    continue;
+                }
+
+                var valueStart = quoteIndex + 1;
+                var valueEnd = valueStart;
+                while (valueEnd < rawText.Length && rawText[valueEnd] != quote)
+                    valueEnd++;
+
+                if (valueEnd >= rawText.Length)
+                {
+                    cursor = valueStart;
+                    continue;
+                }
+
+                if (FindHtmlLineNumber(lineStarts, valueEnd) == FindHtmlLineNumber(lineStarts, attributeIndex))
+                {
+                    cursor = valueEnd + 1;
+                    continue;
+                }
+
+                var value = NormalizeXamlKeyValue(rawText[valueStart..valueEnd]);
+                if (value.Length > 0)
+                {
+                    var startLine = FindHtmlLineNumber(lineStarts, attributeIndex);
+                    var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = startLine,
+                        StartLine = startLine,
+                        EndLine = startLine,
+                        Signature = lines[signatureIndex].Trim(),
+                    });
+                }
+
+                cursor = valueEnd + 1;
+            }
         }
     }
 
