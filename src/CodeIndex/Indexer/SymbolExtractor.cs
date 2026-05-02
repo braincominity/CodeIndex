@@ -177,6 +177,12 @@ public static class SymbolExtractor
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private readonly record struct RustUseSymbolOccurrence(string Name, int Line, int Column);
+    private static readonly Regex RustMultilineImplForRegex = new(
+        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?<name>\w+)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex RustMultilineImplTypeRegex = new(
+        @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>\w+)(?!\s+for\b)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2532,6 +2538,49 @@ public static class SymbolExtractor
         }
     }
 
+    private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!TryReadRustImplStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
+                continue;
+
+            if (endLineIndex <= i)
+                continue;
+
+            var match = RustMultilineImplForRegex.Match(statement);
+            if (!match.Success)
+                match = RustMultilineImplTypeRegex.Match(statement);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Value.Trim();
+            if (name.Length == 0)
+                continue;
+
+            var position = GetRustStatementPosition(match.Groups["name"].Index, lineStarts, i + 1);
+            if (HasRustSymbol(symbols, fileId, position.Line, "class", name))
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                position.Line,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = name,
+                    Line = position.Line,
+                    StartLine = position.Line,
+                    StartColumn = position.Column,
+                    EndLine = position.Line,
+                    Signature = statement.Trim(),
+                },
+                lines[position.Line - 1]);
+        }
+    }
+
     private static bool TryReadRustUseStatement(string[] lines, int startIndex, out string statement, out List<int> lineStarts, out int endIndex)
     {
         statement = string.Empty;
@@ -2580,6 +2629,58 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool TryReadRustImplStatement(string[] lines, int startIndex, out string statement, out List<int> lineStarts, out int endIndex)
+    {
+        statement = string.Empty;
+        lineStarts = [];
+        endIndex = startIndex;
+
+        var firstLine = lines[startIndex];
+        if (!firstLine.TrimStart().StartsWith("impl", StringComparison.Ordinal) && !firstLine.TrimStart().StartsWith("unsafe impl", StringComparison.Ordinal))
+            return false;
+
+        var builder = new StringBuilder(firstLine.Length + 32);
+        lineStarts.Add(0);
+
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            var current = lines[i];
+            if (i > startIndex)
+            {
+                builder.Append('\n');
+                lineStarts.Add(builder.Length);
+            }
+            builder.Append(current);
+
+            if (current.Contains('{'))
+            {
+                statement = builder.ToString();
+                endIndex = i;
+                return endIndex > startIndex;
+            }
+        }
+
+        return false;
+    }
+
+    private readonly record struct RustStatementPosition(int Line, int Column);
+
+    private static RustStatementPosition GetRustStatementPosition(int statementIndex, IReadOnlyList<int> lineStarts, int startLineNumber)
+    {
+        var lineIndex = 0;
+        for (var i = lineStarts.Count - 1; i >= 0; i--)
+        {
+            if (lineStarts[i] <= statementIndex)
+            {
+                lineIndex = i;
+                break;
+            }
+        }
+
+        var column = statementIndex - lineStarts[lineIndex] + 1;
+        return new RustStatementPosition(startLineNumber + lineIndex, column);
     }
 
     private static void CollectRustUseSymbolOccurrences(
@@ -4471,6 +4572,8 @@ private sealed class RubyMaskState
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
         if (lang == "rust")
             ExtractRustUseSymbols(fileId, lines, symbols);
+        if (lang == "rust")
+            ExtractRustMultilineImplSymbols(fileId, lines, symbols);
         if (lang == "go")
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
