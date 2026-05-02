@@ -310,6 +310,9 @@ public static class ReferenceExtractor
     private static readonly Regex PhpStaticAccessRegex = new(
         @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PhpObjectMemberAccessRegex = new(
+        @"(?:\?->|->)\s*(?<name>[A-Za-z_]\w*)(?!\s*\()",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -2210,6 +2213,15 @@ public static class ReferenceExtractor
             if (language == "php")
             {
                 EmitPhpStaticAccessReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+
+                EmitPhpObjectMemberAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -8637,6 +8649,31 @@ public static class ReferenceExtractor
                     lineNumber,
                     container);
             }
+        }
+    }
+
+    private static void EmitPhpObjectMemberAccessReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in PhpObjectMemberAccessRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
         }
     }
 
