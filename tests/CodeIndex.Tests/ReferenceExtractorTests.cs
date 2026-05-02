@@ -199,6 +199,10 @@ public class ReferenceExtractorTests
     public void Extract_Perl_DetectsCallsAndIgnoresHashComments()
     {
         const string content = """
+            =pod
+            setup();
+            =cut
+
             package Example::Widget;
 
             sub setup {
