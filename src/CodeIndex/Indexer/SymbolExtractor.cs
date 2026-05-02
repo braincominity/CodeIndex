@@ -4107,19 +4107,21 @@ private sealed class RubyMaskState
                                 symbols,
                                 cssSeenSymbols,
                                 startLine,
-                                new SymbolRecord
-                                {
-                                    FileId = fileId,
-                                    Kind = kind,
-                                    Name = name,
-                                    Line = startLine,
-                                    StartLine = startLine,
-                                    StartColumn = csharpSingleLineCollapsedMatch
-                                        ? csharpSignatureRawStartColumn
-                                        : absoluteStartColumn,
-                                    EndLine = Math.Max(startLine, endLine),
-                                    BodyStartLine = bodyStartLine,
-                                    BodyEndLine = bodyEndLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = lang == "rust" && pattern.Kind == "function"
+                                            ? match.Groups["name"].Index
+                                            : (csharpSingleLineCollapsedMatch
+                                                ? csharpSignatureRawStartColumn
+                                                : absoluteStartColumn),
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(rawReturnType),
