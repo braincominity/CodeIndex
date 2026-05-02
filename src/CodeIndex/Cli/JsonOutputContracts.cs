@@ -36,6 +36,7 @@ internal sealed record QueryPathErrorJsonResult(
 internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("lang")] string Lang,
     [property: JsonPropertyName("extensions")] List<string> Extensions,
+    [property: JsonPropertyName("aliases")] List<string> Aliases,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries);
 

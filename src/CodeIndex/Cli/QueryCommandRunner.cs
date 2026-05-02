@@ -36,6 +36,10 @@ public static class QueryCommandRunner
         ["kts"] = "kotlin",
         ["tsql"] = "sql",
     };
+    private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
+    {
+        ["yaml"] = ["yml"],
+    };
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -2570,13 +2574,13 @@ public static class QueryCommandRunner
 
         // Build a consolidated view: language -> (extensions, hasSymbols, hasGraph)
         // 統合ビュー: 言語 -> (拡張子, シンボル対応, グラフ対応)
-        var allLangs = new Dictionary<string, (List<string> Extensions, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
 
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = (new List<string>(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                info = (new List<string>(), GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -2590,6 +2594,7 @@ public static class QueryCommandRunner
             var entries = sorted.Select(kv => new LanguageEntryJsonResult(
                 kv.Key,
                 kv.Value.Extensions.OrderBy(e => e).ToList(),
+                kv.Value.Aliases.OrderBy(a => a).ToList(),
                 kv.Value.Symbols,
                 kv.Value.Graph)).ToList();
             Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContext.Default.LanguagesJsonResult));
@@ -2601,21 +2606,26 @@ public static class QueryCommandRunner
             // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
             // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
             const int ExtensionColumnWidth = 36;
-            Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Symbols",-9} {"Graph",-7}");
-            Console.WriteLine(new string('-', 66));
+            const int AliasColumnWidth = 12;
+            Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Graph",-7}");
+            Console.WriteLine(new string('-', 79));
             foreach (var (lang, info) in sorted)
             {
                 var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
+                var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
+                var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
                 var sym = info.Symbols ? "yes" : "-";
                 var graph = info.Graph ? "yes" : "-";
-                if (exts.Length <= ExtensionColumnWidth)
+                if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
                 {
-                    Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                    Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {graph,-7}");
                 }
                 else
                 {
-                    Console.WriteLine($"{lang,-14} {"",-36} {sym,-9} {graph,-7}");
+                    Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {graph,-7}");
                     Console.WriteLine($"  Extensions: {exts}");
+                    if (!string.IsNullOrWhiteSpace(aliases))
+                        Console.WriteLine($"  Aliases: {aliases}");
                 }
             }
             Console.Error.WriteLine($"\n({sorted.Count} languages)");
@@ -3005,6 +3015,12 @@ public static class QueryCommandRunner
         var normalized = langValue.ToLowerInvariant();
         return LangFilterAliases.TryGetValue(normalized, out var canonical) ? canonical : normalized;
     }
+
+    internal static IReadOnlyList<string> GetLanguageAliases(string lang)
+        => LanguageDisplayAliases.TryGetValue(lang, out var aliases) ? aliases : [];
+
+    internal static IReadOnlyCollection<string> GetCompletionLanguageAliases()
+        => LanguageDisplayAliases.Values.SelectMany(aliases => aliases).ToArray();
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
     {

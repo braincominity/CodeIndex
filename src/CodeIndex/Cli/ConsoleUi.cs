@@ -582,6 +582,7 @@ public static class ConsoleUi
         string.Join(" ", FileIndexer.GetLanguageExtensions().Values
             .Append("bat")
             .Append("cmd")
+            .Concat(QueryCommandRunner.GetCompletionLanguageAliases())
             .Distinct()
             .OrderBy(l => l));
 

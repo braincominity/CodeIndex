@@ -292,7 +292,7 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void GetCompletionLangs_IncludesWindowsBatchAliases()
+    public void GetCompletionLangs_IncludesWindowsBatchAndYamlAliases()
     {
         var method = typeof(ConsoleUi).GetMethod("GetCompletionLangs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
 
@@ -304,6 +304,7 @@ public class ConsoleUiTests
         Assert.Contains("bat", tokens);
         Assert.Contains("batch", tokens);
         Assert.Contains("cmd", tokens);
+        Assert.Contains("yml", tokens);
     }
 
     [Theory]
