@@ -2745,9 +2745,9 @@ public static class ReferenceExtractor
                     var package = match.Groups["package"].Value;
                     var separator = match.Groups["sep"].Value;
                     var name = match.Groups["name"].Value;
+                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
                     AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
                 }
             }

@@ -8058,6 +8058,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_PreservesQualifiedNamespaceReferencesWhenLeafIsDefinedLocally()
+    {
+        const string content = """
+            filter <- function(x) x
+
+            lookup <- function() {
+                dplyr::filter
+                base:::get
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "base:::get"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "filter"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "get"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsCallSites()
     {
         const string content = """
