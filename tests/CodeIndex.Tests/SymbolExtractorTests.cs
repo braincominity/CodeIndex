@@ -3343,6 +3343,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsExportAsNamespace()
+    {
+        var content = """
+            export as namespace LegacyWidgets;
+            export as namespace $Widgets;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "LegacyWidgets");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "$Widgets");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsDeclarationOnlyMembersInDeclareClassAndInterface()
     {
         var content = """
