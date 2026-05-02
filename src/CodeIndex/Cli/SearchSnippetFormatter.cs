@@ -67,7 +67,7 @@ public static class SearchSnippetFormatter
         }
 
         var normalizedQuery = query.Trim();
-        var normalizeCSharpVerbatimNames = caseSensitive && string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase);
+        var normalizeCSharpVerbatimNames = string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase);
         if (normalizeCSharpVerbatimNames)
             normalizedQuery = CSharpVerbatimNameNormalizer.Normalize(normalizedQuery);
 
