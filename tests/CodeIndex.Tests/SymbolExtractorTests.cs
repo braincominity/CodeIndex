@@ -10011,7 +10011,31 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Primary");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
         Assert.DoesNotContain(symbols, s => s.Name == "items");
-        Assert.DoesNotContain(symbols, s => s.Name == "Get");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsInterfaceMethodsInsideTypeBlocks()
+    {
+        var content = """
+            package demo
+
+            type (
+                Reader interface {
+                    Read(p []byte) (int, error)
+                    Close() error
+                }
+
+                Store interface { Put(key string, value []byte) error }
+            )
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Read");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Close");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Put");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Reader");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Store");
     }
 
     [Fact]
