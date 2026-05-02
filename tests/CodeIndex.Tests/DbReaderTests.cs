@@ -271,6 +271,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_RustRawMacroInvocationsIgnoreRawPrefixAndBang()
+    {
+        InsertIndexedFile(
+            "src/raw.rs",
+            "rust",
+            """
+            fn main() {
+                r#type!();
+            }
+            """);
+
+        var results = _reader.SearchReferences("r#type!", lang: "rust", exact: true);
+
+        var reference = Assert.Single(results);
+        Assert.Equal("type", reference.SymbolName);
+        Assert.Equal("src/raw.rs", reference.Path);
+    }
+
+    [Fact]
     public void RustQualifiedQueriesResolveAcrossGraphCommands()
     {
         InsertIndexedFile(

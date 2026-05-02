@@ -162,6 +162,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustMacroCalls_CaptureRawIdentifierNames()
+    {
+        const string content = """
+            fn main() {
+                r#type!();
+                crate::r#type!();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
+        Assert.Equal(2, callReferences.Count);
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "type"
+            && reference.ContainerName == "main");
+        Assert.Contains(callReferences, reference =>
+            reference.SymbolName == "crate::type"
+            && reference.ContainerName == "main");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsCommandStyleFunctionCalls()
     {
         const string content = """
