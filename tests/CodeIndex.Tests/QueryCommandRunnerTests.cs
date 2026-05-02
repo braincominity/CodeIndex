@@ -133,14 +133,19 @@ public class QueryCommandRunnerTests
                 """);
 
             var (msbuildExitCode, msbuildStdout, msbuildStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", "msbuild", "--count"],
+                [queryToken, "--db", dbPath, "--lang", "msbuild", "--json", "--count"],
                 _jsonOptions));
             var (xmlExitCode, xmlStdout, xmlStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [queryToken, "--db", dbPath, "--lang", "xml", "--count"],
                 _jsonOptions));
 
+            using var msbuildDocument = ParseJsonOutput(msbuildStdout);
+            var msbuildJson = msbuildDocument.RootElement;
+
             Assert.Equal(CommandExitCodes.Success, msbuildExitCode);
-            Assert.Equal("1", msbuildStdout.Trim());
+            Assert.Equal(1, msbuildJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, msbuildJson.GetProperty("files").GetInt32());
+            Assert.Equal(queryToken, msbuildJson.GetProperty("query").GetString());
             Assert.Equal(string.Empty, msbuildStderr);
 
             Assert.Equal(CommandExitCodes.Success, xmlExitCode);
