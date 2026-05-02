@@ -307,6 +307,9 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex PhpStaticAccessRegex = new(
+        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -2195,6 +2198,18 @@ public static class ReferenceExtractor
             if (language == "css")
             {
                 EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            if (language == "php")
+            {
+                EmitPhpStaticAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -8504,6 +8519,38 @@ public static class ReferenceExtractor
                 context,
                 lineNumber,
                 container);
+        }
+    }
+
+    private static void EmitPhpStaticAccessReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in PhpStaticAccessRegex.Matches(preparedLine))
+        {
+            var rawName = match.Groups["name"].Value.TrimStart('\\');
+            if (rawName.Length == 0)
+                continue;
+
+            var shortNameStart = rawName.LastIndexOf('\\') + 1;
+            var shortName = rawName[shortNameStart..];
+            if (shortName.Length == 0)
+                continue;
+
+            if (string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var nameIndex = match.Groups["name"].Index + shortNameStart;
+            AddReference(references, seen, fileId, shortName, nameIndex, "type_reference", context, lineNumber, container);
         }
     }
 

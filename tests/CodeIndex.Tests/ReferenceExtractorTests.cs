@@ -6494,6 +6494,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpStaticAccess_EmitsTypeReferencesForClassSide()
+    {
+        const string content = """
+            <?php
+            namespace App\Models;
+
+            class Config {
+                public const VERSION = '1.0';
+
+                public static function rebuild(): void {}
+
+                public function touch(): void {
+                    self::rebuild();
+                    static::rebuild();
+                }
+            }
+
+            enum Priority: int {
+                case Low = 1;
+            }
+
+            function inspect(): void {
+                Config::rebuild();
+                Config::VERSION;
+                Priority::Low;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Config" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Priority" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "self" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "static" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PhpLanguageConstructCalls_AreIgnored()
     {
         const string content = """
