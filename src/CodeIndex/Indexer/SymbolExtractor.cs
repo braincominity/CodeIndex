@@ -1287,7 +1287,7 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("associatedtype", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("typealias", new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate|package)?\s*typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("property", new Regex(@"^\s*(?<visibility>(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?)?\s*(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex(@"^\s*(?<visibility>(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?)?\s*(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)(?=\s*(?:[:=]|$))", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Extension declarations are important search anchors in Swift-heavy codebases.
             // A dedicated parser keeps nested generic targets searchable even when the
             // extension also carries protocol conformances or `where` clauses.

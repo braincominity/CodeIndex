@@ -4736,6 +4736,53 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_SwiftSetterRestrictedBacktickEscapedPropertiesRemainQueryable()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_swift_private_set_backtick_properties");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "settings.swift"),
+                """
+                public struct Settings {
+                    private(set) var `class`: Int = 0
+                    fileprivate(set) var `repeat`: Int = 1
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "property", "--name", "`class`", "--exact-name", "--count"],
+                _jsonOptions));
+            var (repeatExitCode, repeatStdout, repeatStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "property", "--name", "`repeat`", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var classDocument = ParseJsonOutput(classStdout);
+            using var repeatDocument = ParseJsonOutput(repeatStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, classExitCode);
+            Assert.Equal(string.Empty, classStderr);
+            Assert.Equal(1, classDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, repeatExitCode);
+            Assert.Equal(string.Empty, repeatStderr);
+            Assert.Equal(1, repeatDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_And_Definition_NormalizeCSharpVerbatimIdentifiers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_verbatim_query_normalization");
