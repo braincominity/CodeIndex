@@ -12783,6 +12783,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsAttributedDeclarations()
+    {
+        var content = """
+            @available(*, deprecated) public struct LegacyCache {}
+            @discardableResult public func load() -> Int { 1 }
+            @available(*, deprecated) public typealias LegacyHandler = Int
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "LegacyCache");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "LegacyHandler");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsExtensionsAndEscapedFunctionNames()
     {
         var content = """
