@@ -142,6 +142,31 @@ public static class SymbolExtractor
     private static readonly Regex GoInterfaceMethodRegex = new(
         @"^\s*(?<name>[A-Za-z_]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoInterfaceEmbeddedTypeRegex = new(
+        @"^\s*(?:~\s*)?(?<name>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)(?:\[[^\]\r\n]+\])?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> GoInterfaceEmbeddedTypeBlacklist = new(StringComparer.Ordinal)
+    {
+        "bool",
+        "byte",
+        "complex64",
+        "complex128",
+        "float32",
+        "float64",
+        "int",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "rune",
+        "string",
+        "uint",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "uintptr",
+    };
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1967,39 +1992,7 @@ public static class SymbolExtractor
                     && !sameLineBody.StartsWith("/*", StringComparison.Ordinal)
                     && !sameLineBody.StartsWith("}", StringComparison.Ordinal))
                 {
-                    var bodySegment = sameLineBody;
-                    var sameLineClosingBraceIndex = bodySegment.IndexOf('}');
-                    if (sameLineClosingBraceIndex >= 0)
-                        bodySegment = bodySegment[..sameLineClosingBraceIndex].TrimEnd();
-
-                    var match = GoInterfaceMethodRegex.Match(bodySegment);
-                    if (match.Success)
-                    {
-                        var name = match.Groups["name"].Value.Trim();
-                        if (!HasGoSymbol(symbols, fileId, i + 1, "function", name))
-                        {
-                            var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
-                            if (startColumn < 0)
-                                startColumn = rawLine.Length - trimmed.Length;
-
-                            AddSymbolRecord(
-                                symbols,
-                                cssSeenSymbols: null,
-                                i + 1,
-                                new SymbolRecord
-                                {
-                                    FileId = fileId,
-                                    Kind = "function",
-                                    Name = name,
-                                    Line = i + 1,
-                                    StartLine = i + 1,
-                                    StartColumn = startColumn,
-                                    EndLine = i + 1,
-                                    Signature = rawLine.Trim(),
-                                },
-                                rawLine);
-                        }
-                    }
+                    TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, sameLineBody);
                 }
 
                 if (interfaceBodyDepth <= 0)
@@ -2031,36 +2024,7 @@ public static class SymbolExtractor
                 candidate = candidate[..trailingBraceIndex].TrimEnd();
 
             if (candidate.Length > 0 && !candidate.StartsWith("}", StringComparison.Ordinal))
-            {
-                var match = GoInterfaceMethodRegex.Match(candidate);
-                if (match.Success)
-                {
-                    var name = match.Groups["name"].Value.Trim();
-                    if (!HasGoSymbol(symbols, fileId, i + 1, "function", name))
-                    {
-                        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
-                        if (startColumn < 0)
-                            startColumn = rawLine.Length - trimmed.Length;
-
-                        AddSymbolRecord(
-                            symbols,
-                            cssSeenSymbols: null,
-                            i + 1,
-                            new SymbolRecord
-                            {
-                                FileId = fileId,
-                                Kind = "function",
-                                Name = name,
-                                Line = i + 1,
-                                StartLine = i + 1,
-                                StartColumn = startColumn,
-                                EndLine = i + 1,
-                                Signature = rawLine.Trim(),
-                            },
-                            rawLine);
-                    }
-                }
-            }
+                TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, candidate);
 
             interfaceBodyDepth += CountGoBraceDelta(rawLine);
             if (interfaceBodyDepth <= 0)
@@ -2069,6 +2033,126 @@ public static class SymbolExtractor
                 interfaceBodyDepth = 0;
             }
         }
+    }
+
+    private static void TryAddGoInterfaceBodySymbols(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string bodyText)
+    {
+        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var candidate = segment;
+            var trailingBraceIndex = candidate.IndexOf('}');
+            if (trailingBraceIndex >= 0)
+                candidate = candidate[..trailingBraceIndex].TrimEnd();
+
+            var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
+            if (lineCommentIndex >= 0)
+                candidate = candidate[..lineCommentIndex].TrimEnd();
+
+            var blockCommentIndex = candidate.IndexOf("/*", StringComparison.Ordinal);
+            if (blockCommentIndex >= 0)
+                candidate = candidate[..blockCommentIndex].TrimEnd();
+
+            if (candidate.Length == 0
+                || candidate.StartsWith("//", StringComparison.Ordinal)
+                || candidate.StartsWith("/*", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (TryAddGoInterfaceMethodSymbol(fileId, rawLine, lineIndex, symbols, candidate))
+                continue;
+
+            TryAddGoInterfaceEmbeddedTypeSymbol(fileId, rawLine, lineIndex, symbols, candidate);
+        }
+    }
+
+    private static bool TryAddGoInterfaceMethodSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string candidate)
+    {
+        var match = GoInterfaceMethodRegex.Match(candidate);
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value.Trim();
+        if (HasGoSymbol(symbols, fileId, lineIndex + 1, "function", name))
+            return true;
+
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = rawLine.Trim(),
+            },
+            rawLine);
+        return true;
+    }
+
+    private static bool TryAddGoInterfaceEmbeddedTypeSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string candidate)
+    {
+        var match = GoInterfaceEmbeddedTypeRegex.Match(candidate);
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value.Trim();
+        if (name.Length == 0)
+            return false;
+
+        if (!name.Contains('.') && GoInterfaceEmbeddedTypeBlacklist.Contains(name))
+        {
+            return false;
+        }
+
+        if (HasGoSymbol(symbols, fileId, lineIndex + 1, "import", name))
+            return true;
+
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = rawLine.Trim(),
+            },
+            rawLine);
+        return true;
     }
 
     private static void ExpandShellAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
