@@ -1720,6 +1720,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsImportEqualsRequireSurfaceSymbols()
+    {
+        var content = """
+            import fs = require('node:fs');
+            import path = require('./path-utils');
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "node:fs");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./path-utils");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {
         var content = """
