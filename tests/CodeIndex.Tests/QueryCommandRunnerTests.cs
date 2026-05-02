@@ -111,6 +111,7 @@ public class QueryCommandRunnerTests
         Assert.Contains("tsql", aliases);
         Assert.Contains("t-sql", aliases);
         Assert.Contains("transact-sql", aliases);
+        Assert.Contains("transactsql", aliases);
         Assert.Contains("sqlserver", aliases);
         Assert.Contains("mssql", aliases);
     }
