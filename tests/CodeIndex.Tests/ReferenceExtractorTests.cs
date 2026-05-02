@@ -8040,7 +8040,15 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "r", content, symbols);
 
         Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
             r.SymbolName == "filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "base:::get"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "lookup");
         Assert.Contains(references, r =>

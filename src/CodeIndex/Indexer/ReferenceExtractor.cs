@@ -952,7 +952,7 @@ public static class ReferenceExtractor
     // R の namespace 参照 `pkg::fun` / `pkg:::fun` は、呼び出しでなくても reference として
     // 検索できるようにする。
     private static readonly Regex RNamespaceReferenceRegex = new(
-        @"(?<![\w.])(?<package>[\w.]+)::(?::)?(?<name>[\w.]+)",
+        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?<name>[\w.]+)",
         RegexOptions.Compiled);
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
@@ -2742,9 +2742,12 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in RNamespaceReferenceRegex.Matches(preparedLine))
                 {
+                    var package = match.Groups["package"].Value;
+                    var separator = match.Groups["sep"].Value;
                     var name = match.Groups["name"].Value;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
+                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
                     AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
                 }
             }

@@ -7,8 +7,8 @@ affected:
 
 ## English
 
-- **R namespace references now emit reference edges** — `pkg::fun` and `pkg:::fun` are now indexed as `reference` rows, so package-qualified symbols remain searchable even when they are not invoked as calls.
+- **R namespace references now emit package-qualified reference edges** — `pkg::fun` and `pkg:::fun` are now indexed both as leaf `reference` rows and as package-qualified `pkg::fun` / `pkg:::fun` rows, so namespace-specific searches can disambiguate same-named symbols.
 
 ## 日本語
 
-- **R の namespace 参照が reference edge として出るようになりました** — `pkg::fun` と `pkg:::fun` を `reference` 行として索引するため、package 修飾された symbol も call されていない場合に検索しやすくなります。
+- **R の namespace 参照が package 修飾つきの reference edge として出るようになりました** — `pkg::fun` と `pkg:::fun` を leaf の `reference` 行に加えて `pkg::fun` / `pkg:::fun` の package 修飾名でも索引するため、同名 symbol を namespace 単位で見分けながら検索できます。
