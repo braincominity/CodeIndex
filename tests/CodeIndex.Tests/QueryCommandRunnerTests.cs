@@ -440,6 +440,14 @@ public class QueryCommandRunnerTests
             Assert.Equal("1", moduleStdout.Trim());
             Assert.Equal(string.Empty, moduleStderr);
 
+            var (moduleNameExitCode, moduleNameStdout, moduleNameStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.subpkg.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, moduleNameExitCode);
+            Assert.Equal("1", moduleNameStdout.Trim());
+            Assert.Equal(string.Empty, moduleNameStderr);
+
             var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["package.subpkg.alias", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
                 _jsonOptions));
