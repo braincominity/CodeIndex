@@ -204,6 +204,9 @@ public static class SymbolExtractor
     private static readonly Regex XamlTargetTypeRegex = new(
         @"\bTargetType\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlTypeObjectElementRegex = new(
+        @"<\s*x:Type(?:Extension)?\b[^>]*\bTypeName\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex XamlNameRegex = new(
         @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -6960,6 +6963,7 @@ private sealed class RubyMaskState
 
         AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
         {
@@ -7136,6 +7140,34 @@ private sealed class RubyMaskState
 
                 cursor = valueEnd + 1;
             }
+        }
+    }
+
+    private static void AddXamlTypeObjectElementSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        foreach (Match typeMatch in XamlTypeObjectElementRegex.Matches(rawText))
+        {
+            var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
+            if (value.Length == 0)
+                continue;
+
+            var startLine = FindHtmlLineNumber(lineStarts, typeMatch.Index);
+            var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = value,
+                Line = startLine,
+                StartLine = startLine,
+                EndLine = startLine,
+                Signature = lines[signatureIndex].Trim(),
+            });
         }
     }
 
