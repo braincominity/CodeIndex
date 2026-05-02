@@ -330,6 +330,7 @@ cdidx search "TODO" --limit 50           # more results
 cdidx search "auth*"                     # trailing * acts as a prefix shorthand
 cdidx search "auth*" --fts               # raw FTS5 syntax when you need operators like NEAR/OR
 cdidx search "Run();" --exact-substring  # case-sensitive exact substring, no FTS5
+cdidx search "Foo.Bar" --lang csharp --exact-substring  # C# exact search also canonicalizes global:: / @ prefixes
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md  # search for an option-looking literal
 ```
@@ -1337,6 +1338,7 @@ cdidx search "TODO" --limit 50           # 結果数を増やす
 cdidx search "auth*"                     # 末尾の * は prefix 検索の shorthand
 cdidx search "auth*" --fts               # 生のFTS5構文。NEAR / OR などの演算子が必要なときだけ使う
 cdidx search "Run();" --exact-substring  # 大文字小文字区別の完全部分一致、FTS5 なし
+cdidx search "Foo.Bar" --lang csharp --exact-substring  # C# の exact 検索は global:: / @ の表記も正規化する
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md  # オプションに見えるリテラルを検索
 ```

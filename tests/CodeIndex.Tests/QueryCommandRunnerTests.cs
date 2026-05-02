@@ -7916,6 +7916,77 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void CSharpVerbatimNameNormalizer_StripsGlobalQualifierOnlyAtIdentifierBoundaries()
+    {
+        Assert.Equal("Foo.Bar", CSharpVerbatimNameNormalizer.Normalize("global::Foo.Bar"));
+        Assert.Equal("notglobal::Foo.Bar", CSharpVerbatimNameNormalizer.Normalize("notglobal::Foo.Bar"));
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringTreatsCSharpGlobalQualifiedNamesAsCanonical()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_global");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/global.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class GlobalQualified
+                {
+                    public void Match()
+                    {
+                        var value = global::Foo.Bar;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/plain.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class PlainQualified
+                {
+                    public void Match()
+                    {
+                        var value = Foo.Bar;
+                    }
+                }
+                """);
+
+            var (globalExitCode, globalStdout, globalStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Foo.Bar", "--db", dbPath, "--path", "src/global.cs", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+            using var globalDocument = ParseJsonOutput(globalStdout);
+
+            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["global::Foo.Bar", "--db", dbPath, "--path", "src/plain.cs", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+            using var qualifiedDocument = ParseJsonOutput(qualifiedStdout);
+
+            Assert.Equal(CommandExitCodes.Success, globalExitCode);
+            Assert.Equal(string.Empty, globalStderr);
+            Assert.Equal(1, globalDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, globalDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, qualifiedExitCode);
+            Assert.Equal(string.Empty, qualifiedStderr);
+            Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringKeepsNormalizationScopedToCSharp()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_scope");
