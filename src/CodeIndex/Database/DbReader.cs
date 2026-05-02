@@ -777,7 +777,17 @@ public partial class DbReader
         => string.Equals(NormalizeQueryLanguage(lang), "sql", StringComparison.OrdinalIgnoreCase);
 
     internal static string? NormalizeQueryLanguage(string? lang)
-        => string.Equals(lang, "tsql", StringComparison.OrdinalIgnoreCase) ? "sql" : lang;
+    {
+        if (lang == null)
+            return null;
+
+        var compact = lang.Replace("-", string.Empty, StringComparison.Ordinal).Replace(" ", string.Empty, StringComparison.Ordinal);
+        return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(compact, "sqlserver", StringComparison.OrdinalIgnoreCase)
+            ? "sql"
+            : lang;
+    }
 
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);

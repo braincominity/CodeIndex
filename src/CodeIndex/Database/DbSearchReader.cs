@@ -285,6 +285,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
+        lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -363,6 +364,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
 
+        lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
         string sql;
 

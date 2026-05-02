@@ -26296,8 +26296,12 @@ public class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunSymbolsAndReferences_AcceptTsqlAsSqlLanguageAlias()
+    [Theory]
+    [InlineData("tsql")]
+    [InlineData("t-sql")]
+    [InlineData("mssql")]
+    [InlineData("sqlserver")]
+    public void RunSearchSymbolsReferencesCallersAndCallees_AcceptCommonSqlServerLanguageAliases(string lang)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_tsql_lang_alias");
         try
@@ -26327,49 +26331,64 @@ public class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var (symbolsTsqlExitCode, symbolsTsqlStdout, symbolsTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CREATE PROCEDURE dbo.usp_Target", "--db", dbPath, "--json", "--lang", lang, "--exact-substring"],
                 _jsonOptions));
-            var (referencesTsqlExitCode, referencesTsqlStdout, referencesTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["--db", dbPath, "--json", "--lang", "tsql", "--exact-name", "dbo.usp_Target"],
+            var (searchCountExitCode, searchCountStdout, searchCountStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CREATE PROCEDURE dbo.usp_Target", "--db", dbPath, "--lang", lang, "--exact-substring", "--count"],
                 _jsonOptions));
-
-            var symbolsTsqlRows = ParseJsonLines(symbolsTsqlStdout).Select(document => document.RootElement).ToList();
-            var referencesTsqlRows = ParseJsonLines(referencesTsqlStdout).Select(document => document.RootElement).ToList();
-
-            Assert.Equal(CommandExitCodes.Success, symbolsTsqlExitCode);
-            Assert.Equal(CommandExitCodes.Success, referencesTsqlExitCode);
-            Assert.Equal(string.Empty, symbolsTsqlStderr);
-            Assert.Equal(string.Empty, referencesTsqlStderr);
-
-            Assert.Single(symbolsTsqlRows);
-            Assert.Equal("dbo.usp_Target", symbolsTsqlRows[0].GetProperty("name").GetString());
-
-            Assert.Single(referencesTsqlRows);
-            Assert.Equal("sales.usp_Caller", referencesTsqlRows[0].GetProperty("container_name").GetString());
-
-            var (callersTsqlExitCode, callersTsqlStdout, callersTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["dbo.usp_Target", "--db", dbPath, "--json", "--lang", "tsql", "--exact-name"],
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", lang, "--exact-name", "dbo.usp_Target"],
                 _jsonOptions));
-            var (calleesTsqlExitCode, calleesTsqlStdout, calleesTsqlStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
-                ["sales.usp_Caller", "--db", dbPath, "--json", "--lang", "tsql", "--exact-name"],
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["--db", dbPath, "--json", "--lang", lang, "--exact-name", "dbo.usp_Target"],
                 _jsonOptions));
 
-            var callersTsqlRows = ParseJsonLines(callersTsqlStdout).Select(document => document.RootElement).ToList();
-            var calleesTsqlRows = ParseJsonLines(calleesTsqlStdout).Select(document => document.RootElement).ToList();
+            var searchRows = ParseJsonLines(searchStdout).Select(document => document.RootElement).ToList();
+            var symbolsRows = ParseJsonLines(symbolsStdout).Select(document => document.RootElement).ToList();
+            var referencesRows = ParseJsonLines(referencesStdout).Select(document => document.RootElement).ToList();
 
-            Assert.Equal(CommandExitCodes.Success, callersTsqlExitCode);
-            Assert.Equal(CommandExitCodes.Success, calleesTsqlExitCode);
-            Assert.Equal(string.Empty, callersTsqlStderr);
-            Assert.Equal(string.Empty, calleesTsqlStderr);
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(CommandExitCodes.Success, searchCountExitCode);
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.Equal(string.Empty, searchStderr);
+            Assert.Equal(string.Empty, searchCountStderr);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(string.Empty, referencesStderr);
 
-            Assert.Single(callersTsqlRows);
-            Assert.Equal("sales.usp_Caller", callersTsqlRows[0].GetProperty("caller_name").GetString());
-            Assert.Equal("usp_Target", callersTsqlRows[0].GetProperty("callee_name").GetString());
+            Assert.Single(searchRows);
+            Assert.Equal("schema_target.tsql", searchRows[0].GetProperty("path").GetString());
+            Assert.Equal("1", searchCountStdout.Trim());
 
-            Assert.Single(calleesTsqlRows);
-            Assert.Equal("sales.usp_Caller", calleesTsqlRows[0].GetProperty("caller_name").GetString());
-            Assert.Equal("usp_Target", calleesTsqlRows[0].GetProperty("callee_name").GetString());
+            Assert.Single(symbolsRows);
+            Assert.Equal("dbo.usp_Target", symbolsRows[0].GetProperty("name").GetString());
+
+            Assert.Single(referencesRows);
+            Assert.Equal("sales.usp_Caller", referencesRows[0].GetProperty("container_name").GetString());
+
+            var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["dbo.usp_Target", "--db", dbPath, "--json", "--lang", lang, "--exact-name"],
+                _jsonOptions));
+            var (calleesExitCode, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["sales.usp_Caller", "--db", dbPath, "--json", "--lang", lang, "--exact-name"],
+                _jsonOptions));
+
+            var callersRows = ParseJsonLines(callersStdout).Select(document => document.RootElement).ToList();
+            var calleesRows = ParseJsonLines(calleesStdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal(string.Empty, calleesStderr);
+
+            Assert.Single(callersRows);
+            Assert.Equal("sales.usp_Caller", callersRows[0].GetProperty("caller_name").GetString());
+            Assert.Equal("usp_Target", callersRows[0].GetProperty("callee_name").GetString());
+
+            Assert.Single(calleesRows);
+            Assert.Equal("sales.usp_Caller", calleesRows[0].GetProperty("caller_name").GetString());
+            Assert.Equal("usp_Target", calleesRows[0].GetProperty("callee_name").GetString());
         }
         finally
         {
