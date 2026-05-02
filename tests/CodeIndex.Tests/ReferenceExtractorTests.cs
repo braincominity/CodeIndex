@@ -268,6 +268,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsSourcedFileReferences()
+    {
+        const string content = """
+            run() {
+              source ./env.sh
+              echo done
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Single(references, reference => reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./env.sh"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CobolPerform_CapturesParagraphLevelCallReference()
     {
         const string content = """
