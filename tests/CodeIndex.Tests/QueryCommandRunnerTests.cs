@@ -1378,6 +1378,10 @@ jobs:
                 $"{searchOnly} must advertise graph_queries=false");
         }
 
+        var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
+            .Select(alias => alias.GetString()).ToList();
+        Assert.Contains("yml", yamlAliases);
+
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
             "perl must advertise symbol_extraction=true");
@@ -1445,7 +1449,7 @@ jobs:
         // Sanity: short rows still fit the fixed-width layout on a single line.
         // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
         var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
-        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+yes\s+yes\s*$", csharpLine);
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+-\s+yes\s+yes\s*$", csharpLine);
 
         // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
         // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
@@ -1465,6 +1469,10 @@ jobs:
             var continuation = lines[headerIndex + 1];
             Assert.StartsWith("  Extensions: ", continuation);
         }
+
+        var yamlIndex = Array.FindIndex(lines, line => line.StartsWith("yaml ", StringComparison.Ordinal));
+        Assert.True(yamlIndex >= 0, "expected row for yaml");
+        Assert.Contains("yml", lines[yamlIndex]);
 
         // Spot-check: the continuation line for dockerfile contains both the bare filename and the
         // `<Prefix><suffix>` pseudo-entry added for Issue #189 follow-up.

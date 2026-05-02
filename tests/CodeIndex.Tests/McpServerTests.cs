@@ -3635,6 +3635,9 @@ public class McpServerTests : IDisposable
         Assert.True(markdown["symbol_extraction"]!.GetValue<bool>());
         Assert.False(markdown["graph_queries"]!.GetValue<bool>());
 
+        var yaml = languages.First(l => l!["lang"]!.GetValue<string>() == "yaml")!;
+        Assert.Contains("yml", yaml["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
+
         // Pin #215: HTML must report symbol_extraction=true and list all four
         // extensions so AI tools discover HTML support via the MCP languages tool.
         // #215 を pin: HTML は symbol_extraction=true で、.html / .htm / .xhtml / .shtml

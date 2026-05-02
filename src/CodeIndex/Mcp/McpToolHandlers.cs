@@ -1491,12 +1491,12 @@ public partial class McpServer
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
 
         // Build consolidated language info / 統合言語情報を構築
-        var allLangs = new Dictionary<string, (List<string> Extensions, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = (new List<string>(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                info = (new List<string>(), QueryCommandRunner.GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -1514,6 +1514,7 @@ public partial class McpServer
             {
                 ["lang"] = lang,
                 ["extensions"] = extArray,
+                ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias).Select(alias => JsonValue.Create(alias)).ToArray()),
                 ["symbol_extraction"] = info.Symbols,
                 ["graph_queries"] = info.Graph,
             });
