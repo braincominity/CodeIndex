@@ -108,7 +108,7 @@ public class DbReaderTests : IDisposable
 
         // Plain text file with no symbols for outline edge case
         // アウトラインのエッジケース用のシンボルなしプレーンテキストファイル
-        InsertIndexedFile("docs/notes.md", "markdown", "# Notes\n\nSome documentation text.");
+        InsertIndexedFile("docs/notes.md", "markdown", "Some documentation text.");
     }
 
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null, string? familyScopeKey = null)
@@ -8520,6 +8520,56 @@ public class DbReaderTests : IDisposable
         Assert.Equal("docs/notes.md", outline!.Path);
         Assert.Equal(0, outline.SymbolCount);
         Assert.Empty(outline.Symbols);
+    }
+
+    [Fact]
+    public void GetOutline_MarkdownHeadings_ReturnNestedHeadingSymbols()
+    {
+        InsertIndexedFile(
+            "docs/guide.md",
+            "markdown",
+            """
+            # Guide
+
+            Intro text.
+
+            ## Details
+
+            ```markdown
+            # Not a heading
+            ```
+
+            ### Deep Dive
+
+            # Appendix
+            """);
+
+        var outline = _reader.GetOutline("docs/guide.md");
+
+        Assert.NotNull(outline);
+        Assert.Equal("docs/guide.md", outline!.Path);
+        Assert.Equal(4, outline.SymbolCount);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("Guide", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Details", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Deep Dive", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Appendix", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            });
     }
 
     [Fact]

@@ -1763,7 +1763,7 @@ public static class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => PatternCache.Keys.Concat(new[] { "vue", "svelte" }).ToArray();
+      => PatternCache.Keys.Concat(new[] { "vue", "svelte", "markdown" }).ToArray();
 
     private static string? NormalizeLanguage(string? lang)
         => lang is "vue" or "svelte" ? "typescript" : lang;
@@ -2928,7 +2928,7 @@ public static class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum"
+        "class", "struct", "interface", "namespace", "enum", "heading"
     ];
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
@@ -3061,6 +3061,18 @@ private sealed class RubyMaskState
                 content = content.Replace("\r\n", "\n").Replace("\r", "\n");
             content = FileIndexer.StripLineLeadingBom(content);
             return ExtractXmlSymbols(fileId, content.Split('\n'));
+        }
+
+        if (lang == "markdown")
+        {
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingBom(content);
+            var markdownLines = content.Split('\n');
+            var markdownSymbols = ExtractMarkdownSymbols(fileId, markdownLines);
+            AssignContainers(markdownSymbols, markdownLines, null);
+            PopulateDeclaredContainerQualifiedNames(markdownSymbols);
+            return markdownSymbols;
         }
 
         if (!PatternCache.TryGetValue(lang, out var patterns))
@@ -6486,6 +6498,158 @@ private sealed class RubyMaskState
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
+    {
+        // Markdown headings are the closest thing to navigable symbols in docs files.
+        // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
+        var symbols = new List<SymbolRecord>();
+        var headingStack = new Stack<(int Level, int SymbolIndex)>();
+        var inFence = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (TryToggleMarkdownFence(lines[i], inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength))
+            {
+                inFence = nextFenceLength > 0;
+                fenceChar = nextFenceChar;
+                fenceLength = nextFenceLength;
+                continue;
+            }
+
+            if (inFence)
+                continue;
+
+            if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
+                continue;
+
+            while (headingStack.Count > 0 && headingStack.Peek().Level >= level)
+            {
+                var closedHeading = headingStack.Pop();
+                symbols[closedHeading.SymbolIndex].EndLine = i;
+                symbols[closedHeading.SymbolIndex].BodyEndLine = i;
+            }
+
+            var symbol = new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "heading",
+                Name = headingText,
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                BodyStartLine = i + 2,
+                BodyEndLine = lines.Length,
+                Signature = lines[i].Trim(),
+            };
+
+            if (headingStack.Count > 0)
+            {
+                var parent = symbols[headingStack.Peek().SymbolIndex];
+                symbol.ContainerKind = "heading";
+                symbol.ContainerName = parent.Name;
+            }
+
+            symbols.Add(symbol);
+            headingStack.Push((level, symbols.Count - 1));
+        }
+
+        while (headingStack.Count > 0)
+        {
+            var closedHeading = headingStack.Pop();
+            symbols[closedHeading.SymbolIndex].EndLine = lines.Length;
+            symbols[closedHeading.SymbolIndex].BodyEndLine = lines.Length;
+        }
+
+        return symbols;
+    }
+
+    private static bool TryToggleMarkdownFence(
+        string line,
+        bool inFence,
+        char fenceChar,
+        int fenceLength,
+        out char nextFenceChar,
+        out int nextFenceLength)
+    {
+        nextFenceChar = '\0';
+        nextFenceLength = 0;
+
+        var index = 0;
+        while (index < line.Length && index < 3 && line[index] == ' ')
+            index++;
+
+        if (index > 3 || index >= line.Length)
+            return false;
+
+        var marker = line[index];
+        if (marker is not ('`' or '~'))
+            return false;
+
+        var length = index;
+        while (length < line.Length && line[length] == marker)
+            length++;
+
+        if (length - index < 3)
+            return false;
+
+        if (inFence && marker == fenceChar && length - index >= fenceLength)
+            return true;
+
+        if (!inFence)
+        {
+            nextFenceChar = marker;
+            nextFenceLength = length - index;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseMarkdownHeading(string line, out int level, out string headingText)
+    {
+        level = 0;
+        headingText = string.Empty;
+
+        var index = 0;
+        while (index < line.Length && index < 3 && line[index] == ' ')
+            index++;
+
+        if (index > 3 || index >= line.Length || line[index] != '#')
+            return false;
+
+        var hashStart = index;
+        while (index < line.Length && line[index] == '#')
+            index++;
+
+        level = index - hashStart;
+        if (level is < 1 or > 6)
+            return false;
+
+        if (index < line.Length && !char.IsWhiteSpace(line[index]))
+            return false;
+
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        if (index >= line.Length)
+            return false;
+
+        headingText = line[index..].Trim();
+        if (headingText.Length == 0)
+            return false;
+
+        var closingHashesStart = headingText.Length;
+        while (closingHashesStart > 0 && headingText[closingHashesStart - 1] == '#')
+            closingHashesStart--;
+
+        if (closingHashesStart < headingText.Length && closingHashesStart > 0 && char.IsWhiteSpace(headingText[closingHashesStart - 1]))
+            headingText = headingText[..(closingHashesStart - 1)].TrimEnd();
+
+        return headingText.Length > 0;
     }
 
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)

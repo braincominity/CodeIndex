@@ -11435,12 +11435,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_UnknownLang_ReturnsEmpty()
+    public void Extract_Markdown_DetectsHeadingsOutsideCodeFences()
     {
-        // Unsupported languages return no symbols
-        // 未サポート言語は空を返す
-        var symbols = SymbolExtractor.Extract(1, "markdown", "# Heading");
-        Assert.Empty(symbols);
+        const string content = """
+            # Guide
+
+            Intro text.
+
+            ## Details
+
+            ```markdown
+            # Not a heading
+            ## Also ignored
+            ```
+
+            ### Deep Dive
+
+            # Appendix
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var headings = symbols.Where(s => s.Kind == "heading").ToList();
+
+        Assert.Equal(4, headings.Count);
+        Assert.Contains(headings, s => s.Name == "Guide" && s.ContainerName == null);
+        Assert.Contains(headings, s => s.Name == "Details" && s.ContainerName == "Guide");
+        Assert.Contains(headings, s => s.Name == "Deep Dive" && s.ContainerName == "Details");
+        Assert.Contains(headings, s => s.Name == "Appendix" && s.ContainerName == null);
+        Assert.DoesNotContain(headings, s => s.Name == "Not a heading");
+        Assert.DoesNotContain(headings, s => s.Name == "Also ignored");
     }
 
     [Fact]
