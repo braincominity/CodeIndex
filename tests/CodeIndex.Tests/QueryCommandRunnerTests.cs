@@ -2545,6 +2545,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+            Assert.Single(rows);
+            Assert.Equal("TARGET", rows[0].GetProperty("query").GetString());
             Assert.Contains(longLine, stdout);
             Assert.DoesNotContain("...(+", stdout);
         }
@@ -9760,6 +9763,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
             Assert.Equal(0, json.GetProperty("results").GetArrayLength());
             Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
             Assert.True(json.TryGetProperty("indexed_at", out _));
@@ -9788,6 +9792,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
             Assert.Equal(0, json.GetProperty("results").GetArrayLength());
             Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
             Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
@@ -9821,6 +9826,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
             Assert.Equal(0, json.GetProperty("files").GetInt32());
             Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
             Assert.True(json.TryGetProperty("indexed_at", out _));
@@ -9849,6 +9855,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
             Assert.Equal(0, json.GetProperty("files").GetInt32());
             Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
             Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);

@@ -34,6 +34,7 @@ public static class SearchSnippetFormatter
         var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang);
         return new CompactSearchResult
         {
+            Query = query,
             Path = result.Path,
             Lang = result.Lang,
             ChunkStartLine = result.StartLine,
@@ -311,6 +312,7 @@ public static class SearchSnippetFormatter
 
 public sealed class CompactSearchResult
 {
+    public string Query { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int ChunkStartLine { get; set; }

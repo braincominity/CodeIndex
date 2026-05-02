@@ -113,7 +113,7 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -128,7 +128,7 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results").ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No results found.");
@@ -3353,6 +3353,7 @@ public static class QueryCommandRunner
         DbReader reader,
         JsonSerializerOptions jsonOptions,
         string? resultsKey = null,
+        string? query = null,
         ExactZeroHintResult? exactZeroHint = null,
         bool includeFiles = false,
         bool? graphTableAvailable = null,
@@ -3365,6 +3366,8 @@ public static class QueryCommandRunner
             ["count"] = 0,
         };
 
+        if (query != null)
+            payload["query"] = query;
         if (resultsKey != null)
             payload[resultsKey] = new JsonArray();
         if (includeFiles)
