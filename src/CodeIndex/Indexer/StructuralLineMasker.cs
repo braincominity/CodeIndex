@@ -103,9 +103,47 @@ internal static class StructuralLineMasker
             case "scala":
                 MaskScalaTripleStringContents(maskedLines);
                 break;
+            case "perl":
+                MaskPerlPodSections(maskedLines);
+                break;
         }
 
         return maskedLines;
+    }
+
+    private static void MaskPerlPodSections(string[] lines)
+    {
+        var inPod = false;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var trimmed = line.TrimStart();
+            if (trimmed.Length == 0)
+            {
+                if (inPod)
+                    lines[i] = new string(' ', line.Length);
+                continue;
+            }
+
+            if (IsPerlPodDirectiveLine(trimmed))
+            {
+                lines[i] = new string(' ', line.Length);
+                inPod = !string.Equals(trimmed, "=cut", StringComparison.Ordinal);
+                continue;
+            }
+
+            if (inPod)
+                lines[i] = new string(' ', line.Length);
+        }
+    }
+
+    private static bool IsPerlPodDirectiveLine(string trimmedLine)
+    {
+        return trimmedLine.StartsWith("=", StringComparison.Ordinal)
+            && trimmedLine.Length > 1
+            && (trimmedLine[1] == 'c' && trimmedLine.Length >= 4 && string.Equals(trimmedLine[..4], "=cut", StringComparison.Ordinal)
+                || char.IsLetter(trimmedLine[1]));
     }
 
     private static void MaskCSharpRawStringContents(string[] lines)
