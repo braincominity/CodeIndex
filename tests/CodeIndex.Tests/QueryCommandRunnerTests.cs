@@ -310,6 +310,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameFindsPythonFromImportQualifiedNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_python_from_import_qualified");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.py",
+                "python",
+                """
+                from package import submodule as alias
+                from .helpers import build
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["package.submodule", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+
+            var (relativeExitCode, relativeStdout, relativeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["helpers.build", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, relativeExitCode);
+            Assert.Equal("1", relativeStdout.Trim());
+            Assert.Equal(string.Empty, relativeStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearchAndSymbols_ExactQueriesSeePythonInitAllExports()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_all_exports");

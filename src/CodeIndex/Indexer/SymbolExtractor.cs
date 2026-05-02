@@ -4292,6 +4292,7 @@ private sealed class RubyMaskState
             AddPythonImportSpecEntries(
                 line,
                 absoluteStartColumn,
+                modulePart: null,
                 directImportSpecs,
                 entries,
                 seenNames,
@@ -4310,6 +4311,7 @@ private sealed class RubyMaskState
                 lines,
                 lineIndex,
                 absoluteStartColumn + fromImportMatch.Groups["imports"].Index,
+                modulePart,
                 fromImportSpecs,
                 entries,
                 seenNames))
@@ -4320,6 +4322,7 @@ private sealed class RubyMaskState
         AddPythonImportSpecEntries(
             line,
             absoluteStartColumn + fromImportMatch.Groups["imports"].Index,
+            modulePart,
             fromImportSpecs,
             entries,
             seenNames,
@@ -4457,6 +4460,7 @@ private sealed class RubyMaskState
         string[] lines,
         int startLineIndex,
         int importsStartColumn,
+        string modulePart,
         string importSpecs,
         List<PythonImportSymbolEntry> entries,
         HashSet<string> seenNames)
@@ -4506,6 +4510,7 @@ private sealed class RubyMaskState
                         AddPythonImportSpecEntries(
                             currentLine,
                             fragmentStartColumn,
+                            modulePart,
                             fragment,
                             entries,
                             seenNames,
@@ -4518,6 +4523,7 @@ private sealed class RubyMaskState
                 AddPythonImportSpecEntries(
                     currentLine,
                     fragmentStartColumn,
+                    modulePart,
                     fragment,
                     entries,
                     seenNames,
@@ -4536,6 +4542,7 @@ private sealed class RubyMaskState
     private static void AddPythonImportSpecEntries(
         string line,
         int absoluteStartColumn,
+        string? modulePart,
         string importedNames,
         List<PythonImportSymbolEntry> entries,
         HashSet<string> seenNames,
@@ -4549,6 +4556,9 @@ private sealed class RubyMaskState
             importedNames = importedNames[1..^1].Trim();
 
         var searchStartColumn = absoluteStartColumn;
+        var normalizedModulePart = treatAsFromImport
+            ? modulePart?.Trim().TrimStart('.').TrimEnd('.')
+            : null;
         foreach (var rawSpec in importedNames.Split(','))
         {
             var spec = rawSpec.Trim();
@@ -4572,6 +4582,17 @@ private sealed class RubyMaskState
                         line,
                         absoluteStartColumn,
                         importedName,
+                        entries,
+                        seenNames,
+                        ref searchStartColumn);
+                }
+
+                if (treatAsFromImport && !string.IsNullOrEmpty(normalizedModulePart))
+                {
+                    AddPythonImportEntry(
+                        line,
+                        absoluteStartColumn,
+                        $"{normalizedModulePart}.{importedName}",
                         entries,
                         seenNames,
                         ref searchStartColumn);
