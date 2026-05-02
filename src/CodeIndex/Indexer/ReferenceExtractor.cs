@@ -2434,7 +2434,8 @@ public static class ReferenceExtractor
                     AddCallLikeReference(name, callIndex);
                 }
 
-                foreach (Match match in ShellSourceReferenceRegex.Matches(preparedLine))
+                var shellSourceLine = StripShellComment(originalLine);
+                foreach (Match match in ShellSourceReferenceRegex.Matches(shellSourceLine))
                 {
                     var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
                     if (string.IsNullOrWhiteSpace(name))
@@ -8465,6 +8466,63 @@ public static class ReferenceExtractor
         }
 
         return trimmed;
+    }
+
+    private static string StripShellComment(string line)
+    {
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '"')
+                {
+                    inDoubleQuote = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                    escapeNext = true;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == '\\')
+                escapeNext = true;
+        }
+
+        return line;
     }
 
     private static void EmitCssScssReferences(

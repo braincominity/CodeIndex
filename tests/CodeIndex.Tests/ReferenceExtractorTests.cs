@@ -273,6 +273,8 @@ public class ReferenceExtractorTests
         const string content = """
             run() {
               source ./env.sh
+              source "./quoted env.sh"
+              . ./lib/common.sh
               echo done
             }
             """;
@@ -280,9 +282,17 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "shell", content);
         var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
 
-        Assert.Single(references, reference => reference.ReferenceKind == "reference");
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "reference"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "./env.sh"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./quoted env.sh"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "./lib/common.sh"
             && reference.ReferenceKind == "reference"
             && reference.ContainerName == "run");
     }
