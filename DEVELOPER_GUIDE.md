@@ -41,6 +41,7 @@ src/CodeIndex/
     CssReferenceExtractor.cs  — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
     CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
     DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
+    FSharpReferenceExtractor.cs — F#-specific reference extraction for pipeline, space-application, and symbolic operator calls
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
     JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites and same-line constructor container recovery
     PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
@@ -1199,6 +1200,7 @@ src/CodeIndex/
     CssReferenceExtractor.cs  — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
     CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
     DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
+    FSharpReferenceExtractor.cs — F# 固有の pipeline、space application、symbolic operator call 参照抽出
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
     JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換えと same-line constructor container 復元
     PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出

@@ -254,7 +254,6 @@ public static class ReferenceExtractor
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
-    private const string FSharpIdentifierPattern = @"(?:``[^`]+``|[_\p{L}][\w']*)";
     private const string CSharpTypeExpressionPattern =
         @"(?:global::)?(?:"
         + CSharpIdentifierPattern
@@ -304,48 +303,6 @@ public static class ReferenceExtractor
     // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
     // issue #265 参照。
     private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
-    // F# pipeline forms such as `xs |> List.map f` / `xs ||> map2 f g` do not use the shared
-    // trailing `(` shape, so the generic CallRegex misses them. Emit the leaf function name
-    // after the pipeline operator so idiomatic `|>` chains stay searchable. Space-separated
-    // application remains intentionally out of scope for now.
-    // F# の pipeline 形 (`xs |> List.map f` / `xs ||> map2 f g`) は共通の末尾 `(` 形を使わないため、
-    // generic CallRegex では拾えない。pipeline 演算子の後ろにある leaf function 名を出すことで、
-    // 慣用的な `|>` 連鎖も検索可能にする。space-separated application は当面対象外。
-    private static readonly Regex FSharpPipelineCallRegex = new(
-        $@"(?<![\w$])(?:\|{{1,3}}>)\s*(?:(?:{FSharpIdentifierPattern})\s*\.\s*)*(?<name>{FSharpIdentifierPattern})\b",
-        RegexOptions.Compiled);
-    // F# also allows ordinary space-separated application such as `printfn "x"` or
-    // `List.map increment numbers`. Capture the callable leaf when the expression starts a
-    // statement or follows a small set of expression separators so common non-paren calls stay
-    // visible without trying to parse the full language. Match arms (`| Some x -> printfn ...`)
-    // are included because they are a very common F# search target.
-    // F# では `printfn "x"` や `List.map increment numbers` のような空白区切り application も普通に使う。
-    // 全体構文の解析はせず、文頭または少数の式区切りの後ろにある callable leaf を拾うことで、
-    // 慣用的な non-paren 呼び出しも可視化する。`| Some x -> printfn ...` のような match arm も
-    // F# の検索対象として重要なので含める。
-    private static readonly Regex FSharpSpaceApplicationCallRegex = new(
-        $@"(?:\b(?:then|do|else|in)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
-            (?:(?:{FSharpIdentifierPattern})\s*\.\s*)*
-            (?<name>{FSharpIdentifierPattern})\b
-            (?=\s+(?:{FSharpIdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
-        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
-    // F# symbolic operator usages such as `x ++ y`, `x >>= f`, and `(++)` should also
-    // surface as searchable references. The matcher intentionally stays conservative by
-    // excluding standard F# operators that already have dedicated syntax or would create
-    // excessive noise in call graphs.
-    // F# の symbolic operator 使用 (`x ++ y` / `x >>= f` / `(++)`) も検索可能な reference として
-    // 出す。標準 F# operator は専用構文やノイズの多さを考慮して除外し、保守的に拾う。
-    private static readonly Regex FSharpOperatorCallRegex = new(
-        @"(?<![\w$])(?<name>[!%&*+\-./:<=>?@^|~]{2,})(?![\w$])",
-        RegexOptions.Compiled);
-    private static readonly Regex FSharpOperatorDefinitionCallRegex = new(
-        @"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\((?<name>[!%&*+\-./:<=>?@^|~]{2,})\)",
-        RegexOptions.Compiled);
-    private static readonly HashSet<string> FSharpIgnoredOperatorCallNames = new(StringComparer.Ordinal)
-    {
-        "->", "<-", "..", "<|", "<||", "<|||", "|>", "||>", "|||>", "|>>", "<<", ">>", "<<<", ">>>",
-        "&&", "&&&", "||", "|||", "::", "<>", "<=", ">=", "**", "@@", ":>", ":?", ":=",
-    };
     // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
     // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
     // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
@@ -1550,7 +1507,7 @@ public static class ReferenceExtractor
 
             void AddCallLikeReference(string name, int callIndex)
             {
-                var normalizedName = language == "fsharp" && IsFSharpOperatorCallName(name)
+                var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
                     : language == "rust"
                         ? RustReferenceExtractor.NormalizeIdentifier(name)
@@ -1605,20 +1562,6 @@ public static class ReferenceExtractor
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
                 AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
-            }
-
-            static bool IsFSharpOperatorCallName(string name)
-            {
-                if (name.Length < 2)
-                    return false;
-
-                foreach (var ch in name)
-                {
-                    if ("!%&*+-./:<=>?@^|~".IndexOf(ch) < 0)
-                        return false;
-                }
-
-                return true;
             }
 
             if (language is "batch")
@@ -1706,37 +1649,9 @@ public static class ReferenceExtractor
 
                 if (language == "fsharp")
                 {
-                    foreach (Match match in FSharpPipelineCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
-
-                    foreach (Match match in FSharpSpaceApplicationCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
-
-                    foreach (Match match in FSharpOperatorCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        if (FSharpIgnoredOperatorCallNames.Contains(name))
-                            continue;
-
-                        var definitionMatch = FSharpOperatorDefinitionCallRegex.Match(preparedLine);
-                        if (definitionMatch.Success
-                            && string.Equals(definitionMatch.Groups["name"].Value, name, StringComparison.Ordinal)
-                            && match.Groups["name"].Index == definitionMatch.Groups["name"].Index)
-                        {
-                            continue;
-                        }
-
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    FSharpReferenceExtractor.EmitAdditionalCallReferences(
+                        preparedLine,
+                        AddCallLikeReference);
                 }
 
                 if (language == "scala")
