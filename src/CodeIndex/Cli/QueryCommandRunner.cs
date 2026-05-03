@@ -50,6 +50,7 @@ public static class QueryCommandRunner
         ["csharp"] = ["cshtml", "razor"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
+        ["rust"] = ["rs"],
         ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
         ["xml"] = ["xaml", "axaml"],
     };
