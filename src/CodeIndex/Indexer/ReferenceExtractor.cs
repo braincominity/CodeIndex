@@ -258,12 +258,6 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    private static readonly Regex PhpStaticAccessRegex = new(
-        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex PhpObjectMemberAccessRegex = new(
-        @"(?:\?->|->)\s*(?<name>[A-Za-z_]\w*)(?!\s*\()",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
@@ -421,17 +415,6 @@ public static class ReferenceExtractor
     private static readonly Regex GradleCommandCallRegex = new(
         @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\s+(?=(?:['""]|[_\p{L}]|\d|\.|:))",
         RegexOptions.Compiled);
-    // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
-    // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
-    // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
-    // after the hyphen, so PowerShell uses a dedicated pass. See issue #281.
-    // PowerShell の cmdlet / function 呼び出しは `Get-ChildItem -Path .` や
-    // `Write-Host "x"`、`$items | ForEach-Object { ... }` のような statement-start / pipeline 形。
-    // 共有 CallRegex は `(` 付きしか見えず、ハイフン入り cmdlet も hyphen の後ろで分断するため、
-    // PowerShell は専用パスを使う。issue #281 参照。
-    private static readonly Regex PowerShellCallRegex = new(
-        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
-        RegexOptions.Compiled | RegexOptions.Multiline);
     // Shell command-style function calls such as `setup`, `setup && cleanup`, and
     // `if setup; then ...` do not use trailing `(`, so the shared CallRegex misses them.
     // Restrict the matcher to bare command heads and only emit references for function names
@@ -705,22 +688,6 @@ public static class ReferenceExtractor
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
 
-    // Bare Python decorators like `@staticmethod` or `@pytest.fixture` are reference sites even
-    // without trailing parentheses. Keep them distinct from `call` rows so the graph can tell
-    // decoration apart from invocation.
-    // `@staticmethod` や `@pytest.fixture` のような Python の bare decorator は、括弧がなくても
-    // reference site として記録する。`call` とは別 kind にして、装飾と呼び出しを区別できるようにする。
-    private static readonly Regex PythonDecoratorRegex = new(
-        @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
-        RegexOptions.Compiled);
-
-    // R namespace references like `pkg::fun` and `pkg:::fun` should be searchable as
-    // references even when they are not invoked as calls.
-    // R の namespace 参照 `pkg::fun` / `pkg:::fun` は、呼び出しでなくても reference として
-    // 検索できるようにする。
-    private static readonly Regex RNamespaceReferenceRegex = new(
-        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?<name>[\w.]+)",
-        RegexOptions.Compiled);
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
     // should produce `annotation` reference rows rather than `call` rows (issue #293).
@@ -1607,7 +1574,7 @@ public static class ReferenceExtractor
 
             if (language == "php")
             {
-                EmitPhpStaticAccessReferences(
+                PhpReferenceExtractor.EmitStaticAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1616,7 +1583,7 @@ public static class ReferenceExtractor
                     lineNumber,
                     container);
 
-                EmitPhpObjectMemberAccessReferences(
+                PhpReferenceExtractor.EmitObjectMemberAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1819,12 +1786,7 @@ public static class ReferenceExtractor
             var matchedCallIndices = new HashSet<int>();
             if (language is "powershell")
             {
-                foreach (Match match in PowerShellCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
+                PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
             }
             else if (language is "shell")
             {
@@ -2146,29 +2108,29 @@ public static class ReferenceExtractor
 
             if (language == "python")
             {
-                foreach (Match match in PythonDecoratorRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    if (IsIgnoredCallName(language, name))
-                        continue;
-                    if (definitionNames != null && definitionNames.Contains(name))
-                        continue;
-                    AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
-                }
+                PythonReferenceExtractor.EmitDecoratorReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames,
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")
             {
-                foreach (Match match in RNamespaceReferenceRegex.Matches(preparedLine))
-                {
-                    var package = match.Groups["package"].Value;
-                    var separator = match.Groups["sep"].Value;
-                    var name = match.Groups["name"].Value;
-                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
-                    if (definitionNames != null && definitionNames.Contains(name))
-                        continue;
-                    AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
-                }
+                RReferenceExtractor.EmitNamespaceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 
@@ -7150,88 +7112,6 @@ public static class ReferenceExtractor
         }
 
         return line;
-    }
-
-    private static void EmitPhpStaticAccessReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        foreach (Match match in PhpStaticAccessRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            var rawName = nameGroup.Value;
-            var trimmedName = rawName.TrimStart('\\');
-            if (trimmedName.Length == 0)
-                continue;
-
-            var leadingBackslashCount = rawName.Length - trimmedName.Length;
-            var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
-            var shortName = trimmedName[shortNameStart..];
-            if (shortName.Length == 0)
-                continue;
-
-            var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
-            if (trimmedName.Length > shortName.Length)
-            {
-                AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    trimmedName,
-                    qualifiedNameIndex,
-                    "type_reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-
-            if (!string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
-            {
-                var shortNameIndex = qualifiedNameIndex + shortNameStart;
-                AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    shortName,
-                    shortNameIndex,
-                    "type_reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-        }
-    }
-
-    private static void EmitPhpObjectMemberAccessReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        foreach (Match match in PhpObjectMemberAccessRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "reference",
-                context,
-                lineNumber,
-                container);
-        }
     }
 
     private static string NormalizeCSharpQualifiedSegments(

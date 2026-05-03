@@ -42,6 +42,10 @@ src/CodeIndex/
     DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
     JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites and same-line constructor container recovery
+    PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
+    PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
+    PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
+    RReferenceExtractor.cs    — R-specific reference extraction for namespace references
     RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls and raw identifier normalization
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
     TypeScriptReferenceExtractor.cs — TypeScript-specific reference extraction entry point for type-position and declaration type references
@@ -1193,6 +1197,10 @@ src/CodeIndex/
     DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
     JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換えと same-line constructor container 復元
+    PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
+    PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
+    PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
+    RReferenceExtractor.cs    — R 固有の namespace 参照抽出
     RustReferenceExtractor.cs — Rust 固有の macro call と raw identifier 正規化の参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
     TypeScriptReferenceExtractor.cs — TypeScript 固有の型位置・宣言型参照抽出エントリポイント
