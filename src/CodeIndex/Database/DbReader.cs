@@ -802,6 +802,8 @@ public partial class DbReader
             return "typescript";
         if (string.Equals(compact, "typescript", StringComparison.OrdinalIgnoreCase))
             return "typescript";
+        if (string.Equals(compact, "jav", StringComparison.OrdinalIgnoreCase))
+            return "java";
         if (string.Equals(compact, "cshtml", StringComparison.OrdinalIgnoreCase))
             return "csharp";
         if (string.Equals(compact, "razor", StringComparison.OrdinalIgnoreCase))
