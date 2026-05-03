@@ -44,15 +44,15 @@ src/CodeIndex/
     FSharpReferenceExtractor.cs — F#-specific reference extraction for pipeline, space-application, and symbolic operator calls
     GradleReferenceExtractor.cs — Gradle/Groovy-specific reference extraction for block and command-style DSL calls
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
-    JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites and same-line constructor container recovery
-    KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls
+    JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites, same-line constructor container recovery, and method references
+    KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls and method references
     PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
     PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
     PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
     RReferenceExtractor.cs    — R-specific reference extraction for namespace references
     RubyReferenceExtractor.cs — Ruby-specific reference extraction for command-style calls, block calls, and DSL target references
     RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls and raw identifier normalization
-    ScalaReferenceExtractor.cs — Scala-specific reference extraction for trailing block calls
+    ScalaReferenceExtractor.cs — Scala-specific reference extraction for trailing block calls and method references
     ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
     SwiftReferenceExtractor.cs — Swift-specific reference extraction for trailing closure calls
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
@@ -1207,15 +1207,15 @@ src/CodeIndex/
     FSharpReferenceExtractor.cs — F# 固有の pipeline、space application、symbolic operator call 参照抽出
     GradleReferenceExtractor.cs — Gradle/Groovy 固有の block / command-style DSL call 参照抽出
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
-    JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換えと same-line constructor container 復元
-    KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call 参照抽出
+    JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換え、same-line constructor container 復元、method reference 参照抽出
+    KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call と method reference 参照抽出
     PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
     PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
     PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
     RReferenceExtractor.cs    — R 固有の namespace 参照抽出
     RubyReferenceExtractor.cs — Ruby 固有の command-style call、block call、DSL target 参照抽出
     RustReferenceExtractor.cs — Rust 固有の macro call と raw identifier 正規化の参照抽出
-    ScalaReferenceExtractor.cs — Scala 固有の trailing block call 参照抽出
+    ScalaReferenceExtractor.cs — Scala 固有の trailing block call と method reference 参照抽出
     ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
     SwiftReferenceExtractor.cs — Swift 固有の trailing closure call 参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出

@@ -284,9 +284,6 @@ public static class ReferenceExtractor
     private static readonly Regex MethodGroupReferenceRegex = new(
         $@"(?<![\w$])(?:(?:[=,]\s*|return\s+|=>\s+|(?<contextTarget>{FunctionalIdentifierPattern})(?:<[^>\n]+>)?\s*\(\s*))(?:(?:this|base|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*)\s*\.\s*)?(?<name>{FunctionalIdentifierPattern})(?!\s*\()(?!\s*`)(?=\s*(?:[;,)\]]|$))",
         RegexOptions.Compiled);
-    private static readonly Regex JavaMethodReferenceRegex = new(
-        $@"(?<![\w$])(?:(?<owner>(?:this|super|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*))\s*)?::\s*(?<name>{FunctionalIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
-        RegexOptions.Compiled);
     // JSX / TSX component element open tags. Capitalized tag names are treated as component
     // call sites, while lowercase intrinsic HTML tags stay excluded by design.
     // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
@@ -1659,9 +1656,31 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
             }
-            else if (language is "java" or "kotlin" or "scala")
+            else if (language is "java")
             {
-                EmitJavaMethodReferenceReferences(
+                JavaReferenceExtractor.EmitMethodReferenceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitMethodReferenceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language is "scala")
+            {
+                ScalaReferenceExtractor.EmitMethodReferenceReferences(
                     preparedLine,
                     references,
                     seen,
@@ -10842,36 +10861,6 @@ public static class ReferenceExtractor
 
             var container = resolveContainerForColumn(nameGroup.Index);
             AddChainReference(references, seen, fileId, name, nameGroup.Index, "call", context, lineNumber, container);
-        }
-    }
-
-    private static void EmitJavaMethodReferenceReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        foreach (Match match in JavaMethodReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            var container = resolveContainerForColumn(nameGroup.Index);
-
-            if (string.Equals(nameGroup.Value, "new", StringComparison.Ordinal))
-            {
-                var ownerGroup = match.Groups["owner"];
-                if (!ownerGroup.Success || ownerGroup.Value.Length == 0)
-                    continue;
-                if (ownerGroup.Value is "this" or "super")
-                    continue;
-
-                AddReference(references, seen, fileId, ownerGroup.Value, ownerGroup.Index, "instantiate", context, lineNumber, container);
-                continue;
-            }
-
-            AddChainReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "call", context, lineNumber, container);
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
@@ -30,4 +31,21 @@ internal static class ScalaReferenceExtractor
             addCallLikeReference(name, match.Groups["name"].Index);
         }
     }
+
+    public static void EmitMethodReferenceReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+        => JvmMethodReferenceExtractor.EmitMethodReferenceReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
 }
