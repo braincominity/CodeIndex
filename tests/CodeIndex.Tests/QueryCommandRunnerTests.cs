@@ -128,6 +128,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GetLanguageAliases_ReportsRustAlias()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("rust");
+
+        Assert.Contains("rs", aliases);
+    }
+
+    [Fact]
     public void GetLanguageAliases_ReportsXmlAliases()
     {
         var aliases = QueryCommandRunner.GetLanguageAliases("xml");
@@ -162,6 +170,15 @@ public class QueryCommandRunnerTests
     public void NormalizeQueryLanguage_MapsXamlShorthandsToXml(string input)
     {
         Assert.Equal("xml", DbReader.NormalizeQueryLanguage(input));
+    }
+
+    [Theory]
+    [InlineData("rs")]
+    [InlineData("r-s")]
+    [InlineData("r s")]
+    public void NormalizeQueryLanguage_MapsRustShorthand(string input)
+    {
+        Assert.Equal("rust", DbReader.NormalizeQueryLanguage(input));
     }
 
     [Fact]
@@ -240,6 +257,41 @@ public class QueryCommandRunnerTests
                         <TextBlock Text="{{queryToken}}" />
                     </Grid>
                 </Window>
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("rs")]
+    [InlineData("r-s")]
+    [InlineData("r s")]
+    public void RunSearch_RecognizesRustLanguageAlias(string lang)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_rust_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = $"rust_lang_alias_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/lib.rs",
+                "rust",
+                $$"""
+                pub fn hit() {
+                    let _ = "{{queryToken}}";
+                }
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(

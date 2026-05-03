@@ -798,6 +798,8 @@ public partial class DbReader
             return "xml";
         if (string.Equals(compact, "axaml", StringComparison.OrdinalIgnoreCase))
             return "xml";
+        if (string.Equals(compact, "rs", StringComparison.OrdinalIgnoreCase))
+            return "rust";
         return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "transactsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)
