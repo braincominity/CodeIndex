@@ -189,11 +189,13 @@ internal static class CssReferenceExtractor
         SymbolRecord? container)
     {
         var cursor = segmentStart;
-        while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
-            cursor++;
-
         while (cursor < segmentEnd)
         {
+            while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
+                cursor++;
+            if (cursor >= segmentEnd)
+                break;
+
             var tokenStart = cursor;
             while (cursor < segmentEnd && !char.IsWhiteSpace(value[cursor]))
                 cursor++;

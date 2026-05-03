@@ -603,6 +603,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_AnimationShorthand_IgnoresLeadingTimingTokens()
+    {
+        const string content = """
+            @keyframes fade-in {
+                from { opacity: 0; }
+                to   { opacity: 1; }
+            }
+
+            .duration-first {
+                animation: 250ms ease-in fade-in;
+            }
+
+            .keyword-only {
+                animation: none;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "fade-in"
+            && reference.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "none"
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_Css_MixedSelectorLists_KeepClassReferencesVisible()
     {
         const string content = """
