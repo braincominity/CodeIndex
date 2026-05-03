@@ -460,11 +460,6 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpDocCrefRegex = new(
         @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // Java type test (`instanceof Foo`).
-    // Java の型テスト (`instanceof Foo`)。
-    private static readonly Regex JavaInstanceofRegex = new(
-        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
-        RegexOptions.Compiled);
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
     // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
@@ -1173,7 +1168,7 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
-                EmitJavaTypePositionReferences(
+                JavaReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     references,
                     seen,
@@ -2836,38 +2831,6 @@ public static class ReferenceExtractor
             "csharp");
     }
 
-    private static void EmitJavaTypePositionReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
-    {
-        TryEmitJavaKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        TryEmitJavaKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-
-        foreach (Match match in JavaInstanceofRegex.Matches(preparedLine))
-        {
-            var typeGroup = match.Groups["type"];
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                typeGroup.Value,
-                typeGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
-                "java");
-        }
-    }
-
     internal static void EmitTypeScriptTypePositionReferences(
         IReadOnlyList<string> preparedLines,
         int lineIndex,
@@ -3062,276 +3025,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void TryEmitJavaKeywordTypeListReferences(
-        string line,
-        string keyword,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int keywordIndex = FindTopLevelKeyword(line, keyword);
-        if (keywordIndex < 0)
-            return;
-
-        int listStart = keywordIndex + keyword.Length;
-        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
-            listStart++;
-
-        int listEnd = FindJavaTypeListTerminator(line, listStart);
-        if (listEnd < 0)
-            listEnd = line.Length;
-        var typeList = line.Substring(listStart, listEnd - listStart);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
-        {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
-                continue;
-            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                rawSegment,
-                absoluteStart,
-                context,
-                lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                "java");
-        }
-    }
-
-    private static void EmitJavaGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        EmitJavaCallableGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-    }
-
-    private static void EmitJavaCallableGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        if (!TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
-            return;
-
-        var headerEnd = callableNameStart;
-        if (TryGetCallableReturnTypeSpan(line, callableNameStart, "java", out var typeStart, out _))
-            headerEnd = typeStart;
-
-        if (headerEnd <= 0)
-            return;
-
-        EmitJavaGenericBoundReferencesFromHeader(
-            line.Substring(0, headerEnd),
-            0,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-    }
-
-    private static void EmitJavaNamedTypeGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        var tokens = GetTopLevelTokenSpans(line);
-        if (tokens.Count < 2)
-            return;
-
-        int keywordIndex = -1;
-        int nameIndex = -1;
-        for (int i = 0; i < tokens.Count; i++)
-        {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is "class" or "interface" or "enum" or "record")
-            {
-                keywordIndex = i;
-                nameIndex = i + 1;
-                break;
-            }
-        }
-
-        if (keywordIndex < 0 || nameIndex < 0 || nameIndex >= tokens.Count)
-            return;
-
-        var nameToken = line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length);
-        EmitJavaGenericBoundReferencesFromHeader(
-            nameToken,
-            tokens[nameIndex].Start,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-    }
-
-    private static void EmitJavaGenericBoundReferencesFromHeader(
-        string header,
-        int headerStartInLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int openAngle = header.IndexOf('<');
-        if (openAngle < 0)
-            return;
-
-        int closeAngle = FindMatchingChar(header, openAngle, '<', '>');
-        if (closeAngle < 0)
-            return;
-
-        var parameterClauseText = header.Substring(openAngle + 1, closeAngle - openAngle - 1);
-        var genericParameterNames = CollectJavaGenericParameterNames(parameterClauseText);
-
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterClauseText))
-        {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
-                continue;
-
-            int extendsIndex = FindTopLevelKeyword(rawParameter, "extends");
-            if (extendsIndex < 0)
-                continue;
-
-            var boundsText = rawParameter.Substring(extendsIndex + "extends".Length).Trim();
-            if (boundsText.Length == 0)
-                continue;
-
-            foreach (var (boundStart, boundLength) in SplitTopLevelAmpersandSpans(boundsText))
-            {
-                var rawBound = boundsText.Substring(boundStart, boundLength).Trim();
-                if (rawBound.Length == 0)
-                    continue;
-
-                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + CountLeadingWhitespace(boundsText, boundStart, boundLength);
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    rawBound,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "java",
-                    genericParameterNames);
-            }
-        }
-    }
-
-    private static HashSet<string> CollectJavaGenericParameterNames(string parameterClauseText)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterClauseText))
-        {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
-                continue;
-
-            int extendsIndex = FindTopLevelKeyword(rawParameter, "extends");
-            var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
-            if (TryReadJavaGenericParameterName(nameFragment, out var name))
-                names.Add(name);
-        }
-
-        return names;
-    }
-
-    private static bool TryReadJavaGenericParameterName(string text, out string name)
-    {
-        name = string.Empty;
-        int i = 0;
-        while (i < text.Length)
-        {
-            while (i < text.Length && char.IsWhiteSpace(text[i]))
-                i++;
-            if (i >= text.Length)
-                return false;
-            if (text[i] == '@')
-            {
-                i = SkipJavaAnnotation(text, i);
-                continue;
-            }
-            break;
-        }
-
-        int start = i;
-        if (start >= text.Length || !IsJavaIdentifierPart(text[start]))
-            return false;
-
-        i++;
-        while (i < text.Length && IsJavaIdentifierPart(text[i]))
-            i++;
-
-        name = text.Substring(start, i - start);
-        return name.Length > 0;
-    }
-
-    private static void EmitJavaThrowsReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int keywordIndex = FindTopLevelKeyword(line, "throws");
-        if (keywordIndex < 0)
-            return;
-
-        int listStart = keywordIndex + "throws".Length;
-        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
-            listStart++;
-        int listEnd = FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
-        if (listEnd < 0)
-            listEnd = line.Length - listStart;
-        var typeList = line.Substring(listStart, listEnd);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
-        {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
-                continue;
-            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                rawSegment,
-                absoluteStart,
-                context,
-                lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                "java");
-        }
-    }
-
-    private static void EmitDeclarationTypeReferences(
+    internal static void EmitDeclarationTypeReferences(
         string language,
         string line,
         List<ReferenceRecord> references,
@@ -3523,7 +3217,7 @@ public static class ReferenceExtractor
         return line.Length;
     }
 
-    private static bool TryFindCallableParameterList(
+    internal static bool TryFindCallableParameterList(
         string line,
         string language,
         out int callableNameStart,
@@ -3590,7 +3284,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
+    internal static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
     {
         typeStart = -1;
         typeLength = 0;
@@ -4094,7 +3788,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static void AddTypeExpressionSegments(
+    internal static void AddTypeExpressionSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -4386,7 +4080,7 @@ public static class ReferenceExtractor
         return i;
     }
 
-    private static int SkipJavaAnnotation(string text, int start)
+    internal static int SkipJavaAnnotation(string text, int start)
     {
         int i = start + 1;
         while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
@@ -4401,7 +4095,7 @@ public static class ReferenceExtractor
         return i - 1;
     }
 
-    private static int FindMatchingChar(string text, int openIndex, char open, char close)
+    internal static int FindMatchingChar(string text, int openIndex, char open, char close)
     {
         int depth = 0;
         for (int i = openIndex; i < text.Length; i++)
@@ -4506,7 +4200,7 @@ public static class ReferenceExtractor
         return -1;
     }
 
-    private static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
+    internal static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
     {
         var tokens = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -4614,7 +4308,7 @@ public static class ReferenceExtractor
         return spans;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
     {
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -4670,7 +4364,7 @@ public static class ReferenceExtractor
         return count;
     }
 
-    private static int FindTypeListTerminator(string text, bool allowArrow)
+    internal static int FindTypeListTerminator(string text, bool allowArrow)
     {
         int brace = FindFirstTopLevelChar(text, '{');
         int semi = FindFirstTopLevelChar(text, ';');
@@ -4692,7 +4386,7 @@ public static class ReferenceExtractor
         return end >= 0 ? text.Substring(0, end) : text;
     }
 
-    private static int FindJavaTypeListTerminator(string text, int start)
+    internal static int FindJavaTypeListTerminator(string text, int start)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -4727,7 +4421,7 @@ public static class ReferenceExtractor
         return -1;
     }
 
-    private static int FindTopLevelKeyword(string text, string keyword)
+    internal static int FindTopLevelKeyword(string text, string keyword)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -11326,7 +11020,7 @@ public static class ReferenceExtractor
         return sb.ToString();
     }
 
-    private static bool IsJavaIdentifierPart(char c) =>
+    internal static bool IsJavaIdentifierPart(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
     private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword)
