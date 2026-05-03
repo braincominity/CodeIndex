@@ -277,41 +277,6 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:::)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
-    // omit the trailing `(` that the shared CallRegex requires.
-    // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
-    // は末尾 `(` を省略できるため、共通 CallRegex では拾えない。
-    private static readonly Regex RubyCommandCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)\s+(?![=<>!~+\-*/%&|^]|do\b|end\b|then\b|\()(?:[:'""\w])",
-        RegexOptions.Compiled);
-    // Ruby block-call forms such as `xs.each { |x| ... }`, `xs.each do |x| ... end`, and
-    // `with_transaction do ... end` do not have a trailing `(`, so the shared CallRegex misses
-    // them. The optional paren segment keeps `foo(bar) do`-style DSLs visible too.
-    // Ruby の block-call 形 (`xs.each { |x| ... }` / `xs.each do |x| ... end` /
-    // `with_transaction do ... end`) は末尾 `(` がないため、共通 CallRegex では拾えない。
-    // 任意の括弧 segment を許すことで `foo(bar) do` のような DSL 形も拾う。
-    private static readonly Regex RubyBlockCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)(?:\s*\([^\)\r\n]*\))?\s*(?:\{|do\b)",
-        RegexOptions.Compiled);
-    // Ruby DSL target arguments such as `include Shared`, `raise ArgumentError, ""bad""`,
-    // `attr_accessor :name`, and `before_action :authenticate` should become references even when
-    // the call name itself is ignored or the command form omits `(`.
-    // Ruby の DSL ターゲット引数 (`include Shared` / `raise ArgumentError, ""bad""` /
-    // `attr_accessor :name` / `before_action :authenticate`) は、呼び出し名が ignored でも
-    // `(` 省略でも reference として残す。
-    private static readonly HashSet<string> RubyCommandTargetReferenceNames = new(StringComparer.Ordinal)
-    {
-        "include", "extend", "require", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
-        "define_method", "before_action", "after_action", "around_action", "helper_method",
-        "has_many", "has_one", "belongs_to", "scope", "delegate", "validates",
-    };
-    private static readonly HashSet<string> RubyCommandTargetSingleTokenNames = new(StringComparer.Ordinal)
-    {
-        "require", "raise", "define_method",
-    };
-    private static readonly Regex RubyCommandTargetTokenRegex = new(
-        @"(?<![\w$@])(?<token>:(?:""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|[A-Za-z_]\w*[?!]?)|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*')",
-        RegexOptions.Compiled);
     // Method-group / method-reference handoffs do not have a trailing `(`, so the shared
     // CallRegex cannot see them. C# / JS / TS use a context gate plus a callable-name allowlist,
     // while Java / Kotlin / Scala use the unique `::` sigil.
@@ -1656,76 +1621,6 @@ public static class ReferenceExtractor
                 return true;
             }
 
-            void EmitRubyCommandTargetReferences(string name, int callIndex)
-            {
-                if (language != "ruby" || !RubyCommandTargetReferenceNames.Contains(name))
-                    return;
-
-                var argsStart = callIndex + name.Length;
-                while (argsStart < originalLine.Length && char.IsWhiteSpace(originalLine[argsStart]))
-                    argsStart++;
-
-                if (argsStart < originalLine.Length && originalLine[argsStart] == '(')
-                    argsStart++;
-
-                while (argsStart < originalLine.Length && char.IsWhiteSpace(originalLine[argsStart]))
-                    argsStart++;
-
-                if (argsStart >= originalLine.Length)
-                    return;
-
-                var tail = originalLine[argsStart..];
-                var commentIndex = tail.IndexOf('#');
-                if (commentIndex >= 0)
-                    tail = tail[..commentIndex];
-
-                var matchedAny = false;
-                foreach (Match match in RubyCommandTargetTokenRegex.Matches(tail))
-                {
-                    var rawToken = match.Groups["token"].Value;
-                    if (rawToken.Length == 0)
-                        continue;
-
-                    if (string.Equals(rawToken, "do", StringComparison.Ordinal)
-                        || string.Equals(rawToken, "end", StringComparison.Ordinal)
-                        || string.Equals(rawToken, "then", StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-
-                    if (string.Equals(name, "raise", StringComparison.Ordinal))
-                    {
-                        if (rawToken[0] == ':' || rawToken[0] == '\'' || rawToken[0] == '"')
-                            return;
-                        if (!IsRubyIdentifierStart(rawToken[0]))
-                            return;
-                    }
-                    else if (RubyCommandTargetSingleTokenNames.Contains(name) && matchedAny)
-                    {
-                        break;
-                    }
-                    else if (rawToken[0] == '\'' || rawToken[0] == '"')
-                    {
-                        if (!string.Equals(name, "require", StringComparison.Ordinal)
-                            && !string.Equals(name, "define_method", StringComparison.Ordinal))
-                        {
-                            continue;
-                        }
-                    }
-
-                    var token = NormalizeRubyCommandTargetToken(rawToken);
-                    if (string.IsNullOrWhiteSpace(token))
-                        continue;
-
-                    var targetContainer = ResolveContainerForCall(argsStart + match.Groups["token"].Index);
-                    AddReference(references, seen, fileId, token, argsStart + match.Groups["token"].Index, "reference", context, lineNumber, targetContainer);
-                    matchedAny = true;
-
-                    if (RubyCommandTargetSingleTokenNames.Contains(name))
-                        break;
-                }
-            }
-
             if (language is "batch")
                 BatchReferenceExtractor.EmitJumpTargetReferences(
                     originalLine,
@@ -1770,26 +1665,31 @@ public static class ReferenceExtractor
                     matchedCallIndices.Add(callIndex);
                     AddCallLikeReference(name, callIndex);
                     if (language == "ruby")
-                        EmitRubyCommandTargetReferences(name, callIndex);
+                        RubyReferenceExtractor.EmitCommandTargetReferences(
+                            name,
+                            callIndex,
+                            originalLine,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall);
                 }
 
                 if (language == "ruby")
                 {
-                    foreach (Match match in RubyCommandCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        matchedCallIndices.Add(callIndex);
-                        AddCallLikeReference(name, callIndex);
-                        EmitRubyCommandTargetReferences(name, callIndex);
-                    }
-
-                    foreach (Match match in RubyBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    RubyReferenceExtractor.EmitAdditionalCallReferences(
+                        preparedLine,
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        matchedCallIndices,
+                        AddCallLikeReference);
                 }
 
                 if (language is "swift" or "kotlin")
@@ -12079,33 +11979,6 @@ public static class ReferenceExtractor
 
         return LanguageSpecificIgnoredCallNames.TryGetValue(language, out var languageSpecificIgnoredNames)
             && languageSpecificIgnoredNames.Contains(name);
-    }
-
-    private static bool IsRubyIdentifierStart(char ch) => char.IsLetter(ch) || ch == '_';
-
-    private static string NormalizeRubyCommandTargetToken(string token)
-    {
-        if (token.Length == 0)
-            return token;
-
-        if (token[0] == ':')
-        {
-            token = token[1..];
-            if (token.Length >= 2
-                && ((token[0] == '\'' && token[^1] == '\'')
-                    || (token[0] == '"' && token[^1] == '"')))
-            {
-                token = token[1..^1];
-            }
-        }
-        else if (token.Length >= 2
-            && ((token[0] == '\'' && token[^1] == '\'')
-                || (token[0] == '"' && token[^1] == '"')))
-        {
-            token = token[1..^1];
-        }
-
-        return token;
     }
 
     private static bool IsConstructorCallName(string language, string preparedLine, int nameIndex)

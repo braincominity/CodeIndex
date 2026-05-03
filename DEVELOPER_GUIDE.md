@@ -47,6 +47,7 @@ src/CodeIndex/
     PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
     PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
     RReferenceExtractor.cs    — R-specific reference extraction for namespace references
+    RubyReferenceExtractor.cs — Ruby-specific reference extraction for command-style calls, block calls, and DSL target references
     RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls and raw identifier normalization
     ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
@@ -1204,6 +1205,7 @@ src/CodeIndex/
     PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
     PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
     RReferenceExtractor.cs    — R 固有の namespace 参照抽出
+    RubyReferenceExtractor.cs — Ruby 固有の command-style call、block call、DSL target 参照抽出
     RustReferenceExtractor.cs — Rust 固有の macro call と raw identifier 正規化の参照抽出
     ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
