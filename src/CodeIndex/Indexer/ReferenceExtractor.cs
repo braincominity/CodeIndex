@@ -10,17 +10,13 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class ReferenceExtractor
 {
-    private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
-    private readonly record struct CSharpMultiLineTypePatternState(
+    internal readonly record struct CSharpMultiLineTypePatternState(
         bool WaitingForHead,
         string? PendingTypeExpression,
         int PendingTypeIndex,
         int PendingTypeLineNumber,
         string? PendingContext,
         SymbolRecord? PendingContainer);
-    private const string SqlProcCallIdentifierPattern = @"(?:\[(?:[^\]\r\n]|\]\])+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*(?:;\d+)?)";
-    private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
-
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
@@ -31,100 +27,6 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
-    private static readonly Regex ScssVariableReferenceRegex = new(
-        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex ScssExtendReferenceRegex = new(
-        @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex DockerfileStageReferenceRegex = new(
-        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\w+)\s+AS\s+\w+\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static readonly Regex DockerfileCopyFromReferenceRegex = new(
-        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static readonly Regex CobolCallRegex = new(
-        @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolCopyRegex = new(
-        @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolGotoRegex = new(
-        @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolPerformRegex = new(
-        @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSetRegex = new(
-        @"^\s*SET\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s+\b(?:TO\s+TRUE|TO\b)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolOpenRegex = new(
-        @"^\s*OPEN\s+(?:INPUT|OUTPUT|I-O|EXTEND)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSearchRegex = new(
-        @"^\s*SEARCH\s+(?:(?:ALL|FIRST)\s+)?(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSimpleReferenceRegex = new(
-        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolMoveRegex = new(
-        @"^\s*MOVE\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolAddRegex = new(
-        @"^\s*ADD\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSubtractRegex = new(
-        @"^\s*SUBTRACT\b.*?\bFROM\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolMultiplyRegex = new(
-        @"^\s*MULTIPLY\b.*?\bBY\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolDivideRegex = new(
-        @"^\s*DIVIDE\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolComputeRegex = new(
-        @"^\s*COMPUTE\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s*=",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolStringRegex = new(
-        @"^\s*STRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolUnstringRegex = new(
-        @"^\s*UNSTRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    // Batch jump targets can appear as direct commands, chained commands, or inline `if`
-    // forms, including comparison-based conditions such as `if /i "%a%"=="b" goto :X`.
-    // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
-    // 比較式ベースの `if /i "%a%"=="b" goto :X` のような形も含めて扱う。
-    private static readonly Regex BatchJumpTargetRegex = new(
-        @"^\s*@?\s*(?:(?:if\s+(?:/i\s+)?(?:not\s+)?(?:(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)|(?:[^()\r\n]+?\s*(?:==|equ|neq|lss|leq|gtr|geq)\s*[^()\r\n]+?))\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    // Terraform dotted references are paren-less and therefore invisible to the shared CallRegex.
-    // Terraform の dotted reference は括弧を伴わないため、共有 CallRegex では見えない。
-    private static readonly Regex TerraformVarReferenceRegex = new(
-        @"(?<![\w.])var\.(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TerraformLocalReferenceRegex = new(
-        @"(?<![\w.])local\.(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TerraformModuleReferenceRegex = new(
-        @"(?<![\w.])module\.(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TerraformDataReferenceRegex = new(
-        @"(?<![\w.])data\.[A-Za-z_]\w*\.(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TerraformResourceReferenceRegex = new(
-        @"(?<![\w.])(?<type>[A-Za-z_]\w*_[A-Za-z_]\w*)\.(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled);
 
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
@@ -189,7 +91,7 @@ public static class ReferenceExtractor
         },
         // Java contextual keywords / Java 文脈キーワード
         // `this` is listed so generic CallRegex does not emit a phantom `call this` edge
-        // after EmitJavaCtorChainReferences rewrites the chain to the owning class.
+        // after JavaReferenceExtractor rewrites the chain to the owning class.
         // `this` も含めることで、連鎖書き換え後の generic CallRegex が `call this` を二重に出すのを防ぐ。
         ["java"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -349,37 +251,9 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    private static readonly Regex PhpStaticAccessRegex = new(
-        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex PhpObjectMemberAccessRegex = new(
-        @"(?:\?->|->)\s*(?<name>[A-Za-z_]\w*)(?!\s*\()",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
-    private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "ease", "ease-in", "ease-out", "ease-in-out", "linear",
-        "step-start", "step-end", "cubic-bezier", "steps",
-        "infinite", "normal", "reverse", "alternate", "alternate-reverse",
-        "none", "forwards", "backwards", "both", "running", "paused",
-        "initial", "inherit", "unset", "revert", "revert-layer",
-    };
-    // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
-    // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
-    // stay masked.
-    // SQL 専用の単引用符文字列リテラル除去。識別子引用（`[...]` / `` `...` `` / ANSI `"..."`）は
-    // 残しつつ、文字列リテラルだけを隠して SQL graph 抽出が実オブジェクト名を見失わないようにする。
-    private static readonly Regex SqlSingleQuotedStringLiteralRegex = new(
-        "'(?:''|\\\\.|[^'\\\\])*'",
-        RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
-    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
-    private const string RustIdentifierPattern = @"(?:r#)?[_\p{L}][\w$]*";
-    private const string FSharpIdentifierPattern = @"(?:``[^`]+``|[_\p{L}][\w']*)";
     private const string CSharpTypeExpressionPattern =
         @"(?:global::)?(?:"
         + CSharpIdentifierPattern
@@ -402,56 +276,6 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:::)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
-    // Capture the full path-qualified macro name so `std::println!`, `log::info!`, and
-    // `my_macro!` all surface as references. The `macro_rules` declaration keyword is filtered
-    // by the Rust ignore list above.
-    // Rust の macro 呼び出しは共通の末尾 `(` ではなく `!` の後に `()` / `[]` / `{}` を取る。
-    // `std::println!` / `log::info!` / `my_macro!` のような path-qualified 名も含めて拾い、
-    // `macro_rules` 宣言キーワードは上の Rust ignore list で除外する。
-    private static readonly Regex RustMacroCallRegex = new($@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:<[^>\n]+>)?!\s*[\(\[\{{]", RegexOptions.Compiled);
-    // Rust raw identifiers such as `r#type()` are stored without the `r#` prefix, but the shared
-    // call regex cannot see them because `#` is not an identifier character. Use a Rust-only
-    // matcher for names that contain at least one raw segment and normalize the stored form below.
-    // Rust の raw identifier (`r#type()`) は保存時に `r#` を外すが、共通 CallRegex は `#` を
-    // 識別子文字として扱わないため見逃す。raw segment を含む Rust 専用 matcher を足し、
-    // 下で保存形式へ正規化する。
-    private static readonly Regex RustRawIdentifierCallRegex = new($@"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    // Ruby command-syntax calls such as `puts "hi"`, `greet bob`, and `before_action :auth`
-    // omit the trailing `(` that the shared CallRegex requires.
-    // Ruby の command syntax 呼び出し (`puts "hi"` / `greet bob` / `before_action :auth`)
-    // は末尾 `(` を省略できるため、共通 CallRegex では拾えない。
-    private static readonly Regex RubyCommandCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)\s+(?![=<>!~+\-*/%&|^]|do\b|end\b|then\b|\()(?:[:'""\w])",
-        RegexOptions.Compiled);
-    // Ruby block-call forms such as `xs.each { |x| ... }`, `xs.each do |x| ... end`, and
-    // `with_transaction do ... end` do not have a trailing `(`, so the shared CallRegex misses
-    // them. The optional paren segment keeps `foo(bar) do`-style DSLs visible too.
-    // Ruby の block-call 形 (`xs.each { |x| ... }` / `xs.each do |x| ... end` /
-    // `with_transaction do ... end`) は末尾 `(` がないため、共通 CallRegex では拾えない。
-    // 任意の括弧 segment を許すことで `foo(bar) do` のような DSL 形も拾う。
-    private static readonly Regex RubyBlockCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)(?:\s*\([^\)\r\n]*\))?\s*(?:\{|do\b)",
-        RegexOptions.Compiled);
-    // Ruby DSL target arguments such as `include Shared`, `raise ArgumentError, ""bad""`,
-    // `attr_accessor :name`, and `before_action :authenticate` should become references even when
-    // the call name itself is ignored or the command form omits `(`.
-    // Ruby の DSL ターゲット引数 (`include Shared` / `raise ArgumentError, ""bad""` /
-    // `attr_accessor :name` / `before_action :authenticate`) は、呼び出し名が ignored でも
-    // `(` 省略でも reference として残す。
-    private static readonly HashSet<string> RubyCommandTargetReferenceNames = new(StringComparer.Ordinal)
-    {
-        "include", "extend", "require", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
-        "define_method", "before_action", "after_action", "around_action", "helper_method",
-        "has_many", "has_one", "belongs_to", "scope", "delegate", "validates",
-    };
-    private static readonly HashSet<string> RubyCommandTargetSingleTokenNames = new(StringComparer.Ordinal)
-    {
-        "require", "raise", "define_method",
-    };
-    private static readonly Regex RubyCommandTargetTokenRegex = new(
-        @"(?<![\w$@])(?<token>:(?:""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|[A-Za-z_]\w*[?!]?)|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*')",
-        RegexOptions.Compiled);
     // Method-group / method-reference handoffs do not have a trailing `(`, so the shared
     // CallRegex cannot see them. C# / JS / TS use a context gate plus a callable-name allowlist,
     // while Java / Kotlin / Scala use the unique `::` sigil.
@@ -460,121 +284,12 @@ public static class ReferenceExtractor
     private static readonly Regex MethodGroupReferenceRegex = new(
         $@"(?<![\w$])(?:(?:[=,]\s*|return\s+|=>\s+|(?<contextTarget>{FunctionalIdentifierPattern})(?:<[^>\n]+>)?\s*\(\s*))(?:(?:this|base|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*)\s*\.\s*)?(?<name>{FunctionalIdentifierPattern})(?!\s*\()(?!\s*`)(?=\s*(?:[;,)\]]|$))",
         RegexOptions.Compiled);
-    private static readonly Regex JavaMethodReferenceRegex = new(
-        $@"(?<![\w$])(?:(?<owner>(?:this|super|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*))\s*)?::\s*(?<name>{FunctionalIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
-        RegexOptions.Compiled);
     // JSX / TSX component element open tags. Capitalized tag names are treated as component
     // call sites, while lowercase intrinsic HTML tags stay excluded by design.
     // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
     // 小文字始まりの intrinsic HTML tag は意図的に除外する。
     private static readonly Regex JsxElementOpenRegex = new(
         @"<(?<name>[A-Z][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
-        RegexOptions.Compiled);
-    // Swift / Kotlin trailing-lambda calls such as `items.forEach { ... }`, `list.filter { ... }`,
-    // and `animate { ... } completion: { ... }` do not have a trailing `(`, so the shared CallRegex
-    // cannot see them. Emit the same `call` edge for these trailing-block forms so the call graph
-    // stays aligned with the idiomatic source form. See issue #265.
-    // Swift / Kotlin の trailing-lambda 呼び出し (`items.forEach { ... }`, `list.filter { ... }`,
-    // `animate { ... } completion: { ... }`) は末尾 `(` を持たないため、共通 CallRegex では拾えない。
-    // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
-    // issue #265 参照。
-    private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
-    // F# pipeline forms such as `xs |> List.map f` / `xs ||> map2 f g` do not use the shared
-    // trailing `(` shape, so the generic CallRegex misses them. Emit the leaf function name
-    // after the pipeline operator so idiomatic `|>` chains stay searchable. Space-separated
-    // application remains intentionally out of scope for now.
-    // F# の pipeline 形 (`xs |> List.map f` / `xs ||> map2 f g`) は共通の末尾 `(` 形を使わないため、
-    // generic CallRegex では拾えない。pipeline 演算子の後ろにある leaf function 名を出すことで、
-    // 慣用的な `|>` 連鎖も検索可能にする。space-separated application は当面対象外。
-    private static readonly Regex FSharpPipelineCallRegex = new(
-        $@"(?<![\w$])(?:\|{{1,3}}>)\s*(?:(?:{FSharpIdentifierPattern})\s*\.\s*)*(?<name>{FSharpIdentifierPattern})\b",
-        RegexOptions.Compiled);
-    // F# also allows ordinary space-separated application such as `printfn "x"` or
-    // `List.map increment numbers`. Capture the callable leaf when the expression starts a
-    // statement or follows a small set of expression separators so common non-paren calls stay
-    // visible without trying to parse the full language. Match arms (`| Some x -> printfn ...`)
-    // are included because they are a very common F# search target.
-    // F# では `printfn "x"` や `List.map increment numbers` のような空白区切り application も普通に使う。
-    // 全体構文の解析はせず、文頭または少数の式区切りの後ろにある callable leaf を拾うことで、
-    // 慣用的な non-paren 呼び出しも可視化する。`| Some x -> printfn ...` のような match arm も
-    // F# の検索対象として重要なので含める。
-    private static readonly Regex FSharpSpaceApplicationCallRegex = new(
-        $@"(?:\b(?:then|do|else|in)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
-            (?:(?:{FSharpIdentifierPattern})\s*\.\s*)*
-            (?<name>{FSharpIdentifierPattern})\b
-            (?=\s+(?:{FSharpIdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
-        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
-    // F# symbolic operator usages such as `x ++ y`, `x >>= f`, and `(++)` should also
-    // surface as searchable references. The matcher intentionally stays conservative by
-    // excluding standard F# operators that already have dedicated syntax or would create
-    // excessive noise in call graphs.
-    // F# の symbolic operator 使用 (`x ++ y` / `x >>= f` / `(++)`) も検索可能な reference として
-    // 出す。標準 F# operator は専用構文やノイズの多さを考慮して除外し、保守的に拾う。
-    private static readonly Regex FSharpOperatorCallRegex = new(
-        @"(?<![\w$])(?<name>[!%&*+\-./:<=>?@^|~]{2,})(?![\w$])",
-        RegexOptions.Compiled);
-    private static readonly Regex FSharpOperatorDefinitionCallRegex = new(
-        @"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\((?<name>[!%&*+\-./:<=>?@^|~]{2,})\)",
-        RegexOptions.Compiled);
-    private static readonly HashSet<string> FSharpIgnoredOperatorCallNames = new(StringComparer.Ordinal)
-    {
-        "->", "<-", "..", "<|", "<||", "<|||", "|>", "||>", "|||>", "|>>", "<<", ">>", "<<<", ">>>",
-        "&&", "&&&", "||", "|||", "::", "<>", "<=", ">=", "**", "@@", ":>", ":?", ":=",
-    };
-    // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
-    // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
-    // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
-    // Scala の `name { ... }` / `name { x => ... }` 形式は末尾 `(` を持たないため共通 CallRegex では拾えない。
-    // `foreach {}` / `Try {}` / `synchronized {}` のような慣用的なブロック呼び出しも `call` edge として出すため専用パスを使う。
-    private static readonly Regex ScalaTrailingBlockCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern})(?:\[[^\]\n]+\])?\s*\{{", RegexOptions.Compiled);
-    // Scala block-call syntax must not treat control-flow keywords such as `match {` or
-    // `catch {` as invocations.
-    // Scala の block-call 構文では `match {` / `catch {` のような制御フローキーワードを呼び出し扱いしない。
-    private static readonly HashSet<string> ScalaIgnoredBlockCallNames = new(StringComparer.Ordinal)
-    {
-        "match", "catch", "else", "finally",
-    };
-    // Gradle/Groovy block and command-style DSL calls such as `plugins { ... }`,
-    // `task buildJar(type: Jar) { ... }`, `apply plugin: 'java'`, and `println 'x'`
-    // do not use the shared `foo(...)` shape. Keep the matcher narrow to known DSL
-    // call forms so ordinary assignment lines stay out of the graph.
-    // Gradle/Groovy の block / command 型 DSL 呼び出し (`plugins { ... }`、
-    // `task buildJar(type: Jar) { ... }`、`apply plugin: 'java'`、`println 'x'`) は
-    // 共通の `foo(...)` 形では拾えない。代わりに、既知の DSL 呼び出し形に絞った
-    // 専用 matcher で取り込む。
-    private static readonly Regex GradleBlockCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\b(?:\s+[^\r\n{]+?)?\s*\{",
-        RegexOptions.Compiled);
-    private static readonly Regex GradleCommandCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\s+(?=(?:['""]|[_\p{L}]|\d|\.|:))",
-        RegexOptions.Compiled);
-    // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
-    // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
-    // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
-    // after the hyphen, so PowerShell uses a dedicated pass. See issue #281.
-    // PowerShell の cmdlet / function 呼び出しは `Get-ChildItem -Path .` や
-    // `Write-Host "x"`、`$items | ForEach-Object { ... }` のような statement-start / pipeline 形。
-    // 共有 CallRegex は `(` 付きしか見えず、ハイフン入り cmdlet も hyphen の後ろで分断するため、
-    // PowerShell は専用パスを使う。issue #281 参照。
-    private static readonly Regex PowerShellCallRegex = new(
-        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
-        RegexOptions.Compiled | RegexOptions.Multiline);
-    // Shell command-style function calls such as `setup`, `setup && cleanup`, and
-    // `if setup; then ...` do not use trailing `(`, so the shared CallRegex misses them.
-    // Restrict the matcher to bare command heads and only emit references for function names
-    // that are actually defined in the current file.
-    // Shell のコマンド構文による関数呼び出し (`setup` / `setup && cleanup` / `if setup; then ...`)
-    // は末尾 `(` を持たないため、共通 CallRegex では拾えない。bare command head に限定し、
-    // さらに現在ファイルで定義された function 名だけを参照として出す。
-    private static readonly Regex ShellCommandCallRegex = new(
-        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
-        RegexOptions.Compiled);
-    // Shell `source` / `.` invocations load other scripts, so surface the referenced path
-    // as a `reference` edge for dependency-style search.
-    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込むため、依存関係検索用に
-    // 参照エッジとして対象パスを出す。
-    private static readonly Regex ShellSourceReferenceRegex = new(
-        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?:source|\.)\s+(?<name>(?:'[^']*'|""[^""]*""|[^;\s&#|}]+))",
         RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
@@ -596,154 +311,9 @@ public static class ReferenceExtractor
     // an omitted database or schema part — `EXEC AdventureWorks..sp_GetCustomer;` /
     // `EXEC [AdventureWorks]..[proc-name];` — terminates on the real procedure name instead of
     // falling back to the first segment. Identifier alternatives also accept backtick-quoted
-    // names (`` `proc-name` ``) to cover MySQL / MariaDB identifier quoting.
-    // 角括弧識別子は `[` / `]` / 改行以外の任意文字を許可する。T-SQL では `#`（一時プロシージャ）、
-    // `-`（ハイフン名）、空白、Unicode 記号などが正当に現れるため、`[\w ]+` ではそれらの合法な
-    // 形を取りこぼし、修飾子 `[dbo]` を proc 名として誤発行してしまう。
-    // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
-    // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
-    // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
-    private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
-    private const string SqlQuotedIdentifierPattern =
-        @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
-    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
-    private const string SqlTempIdentifierPattern =
-        @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
-    private const string SqlQualifiedIdentifierNoCapturePattern =
-        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
-    private const string SqlQualifiedIdentifierPattern =
-        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
-    private const string SqlSourceAliasTailPattern =
-        @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + "))?";
-    private const string SqlSourceTableHintTailPattern =
-        @"(?:\s+WITH\s*\((?:[^()]|\([^()]*\))*\))?";
-    // Derived tables need to be skipped so later comma-separated sources still surface.
-    // derived table 本体は飛ばして、後続の comma-separated source を落とさないようにする。
-    private const string SqlParenthesizedSourcePattern =
-        @"\((?:[^()]|\((?<paren>)|\)(?<-paren>))*(?(paren)(?!))\)";
-    private const string SqlDerivedTableColumnAliasListPattern =
-        @"(?:\s*\(\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")(?:\s*,\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @"))*\s*\))?";
-    private const string SqlSourceListItemPattern =
-        @"(?:(?:ONLY|LATERAL)\b\s+)*(?:" +
-        SqlQualifiedIdentifierPattern + SqlSourceTableHintTailPattern + SqlSourceAliasTailPattern +
-        @"|" + SqlParenthesizedSourcePattern + SqlSourceAliasTailPattern + SqlDerivedTableColumnAliasListPattern +
-        @")";
-    private const string SqlTopTargetModifierPattern =
-        @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
-    private const string SqlMergeTargetHintPattern =
-        @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
-    private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // SQL named source references that should become `reference` edges rather than `call` edges.
-    // `FROM` now captures comma-separated source lists in a single pass so later tables such as
-    // `accounts` in `FROM users, accounts` are not dropped. `JOIN` / `APPLY` keep the single-source
-    // path. Bare `USING` stays excluded because SQL dialects also reuse it for non-source syntax
-    // such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
-    // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
-    // shared CallRegex already captures it as a function call. issues #284 / #695 / #802.
-    // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
-    // `FROM` は comma-separated な source list を 1 回で拾い、`FROM users, accounts` の
-    // `accounts` のような後続 table を落とさない。`JOIN` / `APPLY` は単一 source のまま。
-    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や `ALTER TABLE ... USING expr`
-    // のような非 source 構文にも使われるため意図的に除外する。
-    // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
-    // issues #284 / #695 / #802.
-    private static readonly Regex SqlFromSourceListRegex = new(
-        $@"(?<![\w$])FROM\b\s+{SqlSourceListItemPattern}(?:\s*,\s*{SqlSourceListItemPattern})*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlSourceReferenceRegex = new(
-        $@"(?<![\w$])(?:JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+{SqlSourceListItemPattern}",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlMergeUsingSourceRegex = new(
-        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlMergeUsingPrefixRegex = new(
-        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlDeleteUsingSourceRegex = new(
-        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?)*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlDeleteUsingPrefixRegex = new(
-        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
-        @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlFromListContinuationPrefixRegex = new(
-        @"(?<![\w$])FROM\b[\s\S]*,\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTargetReferencePrefixRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
-    // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
-    // CallRegex match at the same identifier when an opening `(` immediately follows the target.
-    // `INSERT INTO tbl (...)` / `UPDATE tbl` などの更新対象。
-    // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
-    // 同じ識別子の generic CallRegex を抑止する。
-    private static readonly Regex SqlTargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO\s+{SqlQualifiedIdentifierPattern}|UPDATE\b(?:\s+{SqlTopTargetModifierPattern})\s+{SqlQualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{SqlQualifiedIdentifierPattern}|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierPattern}|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierPattern})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex SqlTruncateTargetRegex = new(
-        $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern})*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTopCallSuppressionRegex = new(
-        @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
-        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
-    // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
-    // SQL Server の temp table 作成: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`。
-    // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
-    private static readonly Regex SqlSelectIntoTempTargetRegex = new(
-        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
-        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex SqlSelectIntoTempPrefixRegex = new(
-        @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlCreateTempTableRegex = new(
-        $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlUsingKeywordRegex = new(@"(?<![\w$])USING\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // T-SQL temp stored routines: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f`
-    // and `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` variants. Tracks the temp name as
-    // established evidence so later `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` calls keep their edge
-    // after the proc-call `#`-gate that was added for issue #656 to suppress MySQL `# comment`
-    // false positives when no T-SQL temp object exists.
-    // T-SQL の一時ストアド: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f` と、
-    // `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` 変種。issue #656 で proc 呼び出しに追加した
-    // `#` ゲート（MySQL `# comment` 誤検出を抑止するため）が有効でも、ファイル内で当該 temp 名を
-    // 確立したと見なすことで `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` の edge を保持する。
-    private static readonly Regex SqlCreateTempRoutineRegex = new(
-        $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTrailingTempIdentifierRegex = new(
-        $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{SqlTempIdentifierPattern}|{SqlQualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
-        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private readonly record struct SqlIdentifierScanState(
-        bool InBlockComment,
-        string? DollarQuoteDelimiter,
-        bool InSingleQuotedString);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
-    // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
-    // C# コンストラクタ連鎖イニシャライザ
-    private static readonly Regex CSharpCtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
-    // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`.
-    // Also matches single-line ctor bodies like `Leaf(int x){super(x);}` where `{` precedes the chain call.
-    // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
-    // single-line body 形式にも対応する。
-    private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
     // C# / Java parenless object / collection / dictionary / array initializer such as
     // `new Foo { X = 1 }`, `new List<int> { 1, 2, 3 }`, `new Dictionary<K, V> { [k] = v }`,
     // `new Foo[] { ... }`, `new Foo[N] { ... }`, `new Foo[,] { ... }`, `new Foo[][] { ... }`,
@@ -770,23 +340,6 @@ public static class ReferenceExtractor
     // `{` から始まる場合にだけ `instantiate` を発行する。issue #286 参照。
     private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
         $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
-        RegexOptions.Compiled);
-    // JavaScript / TypeScript allow zero-argument constructor calls without parentheses:
-    // `new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`.
-    // Keep this language-gated so Java / C# / other `new` forms still require either `(`
-    // or their own dedicated initializer path. The caller inspects the next significant
-    // token after the match: `(` / `.` / `?.` / `[` still mean "the expression continues",
-    // while ordinary delimiters/operators such as `;`, `:`, `??`, `||`, `&&`, `,`, or `)`
-    // are accepted as real zero-arg constructor sites. A line-end match still peeks at the
-    // next non-blank prepared line so `new Foo` followed by `.bar()` / `[0]` on the next
-    // line does not emit a phantom `instantiate Foo` edge. See issue #295.
-    // JavaScript / TypeScript では引数なしコンストラクタ呼び出しで括弧を省略できる
-    // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`)。他言語の
-    // `new` 形と混線しないよう JS/TS 限定にし、同一行では文終端系トークンのみ許可する。
-    // 行末一致時は次の非空 prepared line を覗き、`.bar()` / `[0]` 継続行による
-    // phantom `instantiate Foo` を防ぐ。issue #295 参照。
-    private static readonly Regex JsTsParenlessConstructorRegex = new(
-        $@"\bnew\s+(?:{CSharpIdentifierPattern}\s*\.\s*)*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?",
         RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
@@ -830,13 +383,6 @@ public static class ReferenceExtractor
         @"\bfixed\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*=",
         RegexOptions.Compiled);
     private static readonly Regex CSharpStaticModifierRegex = new(@"\bstatic\b", RegexOptions.Compiled);
-    // Java access/method modifier set used by the same-line ctor scanner.
-    // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
-    private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
-    {
-        "public", "private", "protected", "static", "final", "synchronized",
-        "strictfp", "abstract", "native", "default"
-    };
     // Inline `where` constraint in a C# type header; used to trim base-list parsing
     // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用
     private static readonly Regex CSharpWhereClauseRegex = new(@"\s+where\s+(?<name>[\w?.]+)\s*:", RegexOptions.Compiled);
@@ -879,29 +425,21 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpTypeKeywordIntroRegex = new(
         @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(",
         RegexOptions.Compiled);
-    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
-    // `.class` itself is a language keyword, but the type chain in front of it is a genuine
-    // reference. Emit each dot-segment as `type_reference`. See issue #253.
-    // Java の `T.class` は型リテラル。`.class` 自体はキーワードだが、前置の型チェーンは
-    // 正当な参照。各 dot-segment を type_reference として拾う。issue #253 参照。
-    private static readonly Regex JavaDotClassArgRegex = new(
-        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
-        RegexOptions.Compiled);
     // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
     // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
+    internal static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)\s*$",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
+    internal static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
         @"(?<![\w$])case(?:\s+not)?\s*$",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
+    internal static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
+    internal static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
         @"(?<![\w$])case(?:\s+not)?",
         RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
@@ -922,25 +460,6 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpDocCrefRegex = new(
         @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // Java type test (`instanceof Foo`).
-    // Java の型テスト (`instanceof Foo`)。
-    private static readonly Regex JavaInstanceofRegex = new(
-        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
-        RegexOptions.Compiled);
-    // JPMS module directives (`requires`, `uses`, and `provides`) are dependency edges, not calls.
-    // Emit them as `type_reference` rows so `references` / `impact` can see module-level edges.
-    // JPMS の module directive (`requires` / `uses` / `provides`) は呼び出しではなく依存エッジ。
-    // `references` / `impact` で module-level edge が見えるよう `type_reference` として発行する。
-    private static readonly Regex JavaModuleRequiresDirectiveReferenceRegex = new(
-        @"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex JavaModuleUsesDirectiveReferenceRegex = new(
-        @"^\s*uses\s+(?<name>[\w.]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex JavaModuleProvidesDirectiveReferenceRegex = new(
-        @"^\s*provides\s+(?<service>[\w.]+)\s+with\s+(?<implementations>[\w.,\s]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
     // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
@@ -1001,22 +520,6 @@ public static class ReferenceExtractor
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
 
-    // Bare Python decorators like `@staticmethod` or `@pytest.fixture` are reference sites even
-    // without trailing parentheses. Keep them distinct from `call` rows so the graph can tell
-    // decoration apart from invocation.
-    // `@staticmethod` や `@pytest.fixture` のような Python の bare decorator は、括弧がなくても
-    // reference site として記録する。`call` とは別 kind にして、装飾と呼び出しを区別できるようにする。
-    private static readonly Regex PythonDecoratorRegex = new(
-        @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
-        RegexOptions.Compiled);
-
-    // R namespace references like `pkg::fun` and `pkg:::fun` should be searchable as
-    // references even when they are not invoked as calls.
-    // R の namespace 参照 `pkg::fun` / `pkg:::fun` は、呼び出しでなくても reference として
-    // 検索できるようにする。
-    private static readonly Regex RNamespaceReferenceRegex = new(
-        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?<name>[\w.]+)",
-        RegexOptions.Compiled);
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
     // should produce `annotation` reference rows rather than `call` rows (issue #293).
@@ -1217,16 +720,14 @@ public static class ReferenceExtractor
                         names.Add(symbol.Name);
                         if (language == "sql")
                         {
-                            var leafName = SqlNameResolver.GetLeafName(symbol.Name);
-                            if (!string.IsNullOrWhiteSpace(leafName))
-                                names.Add(leafName);
+                            SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
                         }
                     }
 
                     return names;
                 });
         var sqlDefinitionLeafSpansByLine = language == "sql"
-            ? BuildSqlDefinitionLeafSpansByLine(lines, symbols)
+            ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
             : null;
         var cobolCallableSymbols = language == "cobol"
             ? symbols
@@ -1279,9 +780,9 @@ public static class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
-        var dockerfileStageNames = BuildDockerfileStageNames(language, symbols);
-        var shellCallableNames = BuildShellCallableNames(language, symbols);
-        var shellGlobalAliasNames = BuildShellGlobalAliasNames(language, symbols);
+        var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
+        var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
+        var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -1320,15 +821,8 @@ public static class ReferenceExtractor
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
-        HashSet<string>? sqlEstablishedTempObjectNames = null;
-        string? sqlStatementPrefix = null;
-        var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
-        if (language == "sql")
-        {
-            sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
-            sqlStatementPrefix = string.Empty;
-        }
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1372,7 +866,7 @@ public static class ReferenceExtractor
                                 lineNumber,
                                 docContainer)))
                     {
-                        EmitCSharpDocCrefReferences(
+                        CSharpReferenceExtractor.EmitDocCrefReferences(
                             csharpDocCommentText,
                             references,
                             seen,
@@ -1396,7 +890,7 @@ public static class ReferenceExtractor
                 }
 
                 if (language == "csharp")
-                    FlushPendingCSharpMultiLineTypePatternReference(
+                    CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
                         ref pendingCSharpMultiLineTypePattern,
                         csharpQualifiedConstantPatternMemberLookup,
                         csharpUsingAliases,
@@ -1426,7 +920,7 @@ public static class ReferenceExtractor
                         definitionNameIndices[definitionName] = definitionIndex;
                 }
             }
-            List<SqlDefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
+            List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = FindInnermostContainer(containerCandidates, lineNumber);
@@ -1443,7 +937,10 @@ public static class ReferenceExtractor
             (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)? javaSameLineCtor = null;
             if (language == "java")
             {
-                javaSameLineCtor = TryBuildJavaSameLineCtorSpan(preparedLine, lineNumber, enclosingTypeCandidates);
+                javaSameLineCtor = JavaReferenceExtractor.TryBuildSameLineCtorSpan(
+                    preparedLine,
+                    lineNumber,
+                    enclosingTypeCandidates);
             }
 
             // Per-call-site record primary-ctor override: only calls whose column sits inside the
@@ -1538,7 +1035,7 @@ public static class ReferenceExtractor
 
             if (language == "csharp")
             {
-                AdvanceCSharpMultiLineTypePatternState(
+                CSharpReferenceExtractor.AdvanceMultiLineTypePatternState(
                     preparedLine,
                     context,
                     lineNumber,
@@ -1569,20 +1066,7 @@ public static class ReferenceExtractor
                           && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
                           && callIndex == definitionIndex;
 
-                if (sqlDefinitionLeafSpans == null)
-                    return false;
-
-                foreach (var span in sqlDefinitionLeafSpans)
-                {
-                    if (callIndex >= span.StartIndex
-                        && callIndex < span.EndIndexExclusive
-                        && string.Equals(span.LeafName, resolvedName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
+                return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -1599,13 +1083,13 @@ public static class ReferenceExtractor
             // コンストラクタ連鎖呼び出しの書き換え
             if (language is "csharp")
             {
-                EmitCSharpCtorChainReferences(
+                CSharpReferenceExtractor.EmitCtorChainReferences(
                     preparedLine, enclosingTypeCandidates, containerCandidates,
                     structuralLines, references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "java")
             {
-                EmitJavaCtorChainReferences(
+                JavaReferenceExtractor.EmitCtorChainReferences(
                     preparedLine, enclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
@@ -1625,11 +1109,14 @@ public static class ReferenceExtractor
             }
             else if (language is "java")
             {
-                foreach (Match match in JavaDotClassArgRegex.Matches(preparedLine))
-                {
-                    var argGroup = match.Groups["arg"];
-                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
-                }
+                JavaReferenceExtractor.EmitDotClassTypeLiteralReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
 
             // Type-position references without an introducing keyword-call: base lists,
@@ -1641,7 +1128,7 @@ public static class ReferenceExtractor
             // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
             if (language == "csharp")
             {
-                EmitCSharpTypePositionReferences(
+                CSharpReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     originalLine,
                     csharpQualifiedConstantPatternMemberLookup,
@@ -1658,21 +1145,19 @@ public static class ReferenceExtractor
                     container,
                     ref pendingCSharpMultiLineTypePattern);
 
-                if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine)
-                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpIsAsTypePatternIntroContextRegex))
+                if (CSharpReferenceExtractor.HasTrailingIsAsTypePatternIntro(preparedLine, originalLine))
                 {
-                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                    CSharpReferenceExtractor.StartWaitingForMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
 
-                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine)
-                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpCaseTypePatternIntroContextRegex))
+                if (CSharpReferenceExtractor.HasTrailingCaseTypePatternIntro(preparedLine, originalLine))
                 {
-                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                    CSharpReferenceExtractor.StartWaitingForMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
             }
             else if (language == "java")
             {
-                EmitJavaModuleDirectiveReferences(
+                JavaReferenceExtractor.EmitModuleDirectiveReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1681,7 +1166,7 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
-                EmitJavaTypePositionReferences(
+                JavaReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1693,7 +1178,7 @@ public static class ReferenceExtractor
             }
             else if (language == "typescript")
             {
-                EmitTypeScriptTypePositionReferences(
+                TypeScriptReferenceExtractor.EmitTypePositionReferences(
                     preparedLines,
                     i,
                     preparedLine,
@@ -1705,7 +1190,7 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
-                EmitTypeScriptDeclarationTypeReferences(
+                TypeScriptReferenceExtractor.EmitDeclarationTypeReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1716,7 +1201,7 @@ public static class ReferenceExtractor
             }
             else if (language == "css")
             {
-                EmitCssReferences(
+                CssReferenceExtractor.EmitCss(
                     preparedLine,
                     context,
                     lineNumber,
@@ -1729,7 +1214,7 @@ public static class ReferenceExtractor
 
             if (language == "terraform")
             {
-                EmitTerraformReferences(
+                TerraformReferenceExtractor.Emit(
                     preparedLine,
                     context,
                     lineNumber,
@@ -1742,7 +1227,7 @@ public static class ReferenceExtractor
 
             if (language == "dockerfile")
             {
-                EmitDockerfileStageReferences(
+                DockerfileReferenceExtractor.EmitStageReferences(
                     preparedLine,
                     context,
                     lineNumber,
@@ -1755,7 +1240,7 @@ public static class ReferenceExtractor
 
             if (language == "cobol")
             {
-                EmitCobolReferences(
+                CobolReferenceExtractor.Emit(
                     lines[i],
                     context,
                     lineNumber,
@@ -1766,363 +1251,23 @@ public static class ReferenceExtractor
                     cobolCallableSymbols);
             }
 
-            var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
-
-            // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
-            // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
-            // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
-            // See issue #232.
-            // 末尾 `(` が無いため汎用 CallRegex で取れない SQL の `EXEC` / `EXECUTE` / `CALL` 形。
-            // 参照 kind は "call" で揃え、稀な `(...)` 付き形式との重複は dedupe で吸収する。issue #232 参照。
-            if (language is "sql")
-            {
-                // The shared PrepareLine strips backtick-quoted content because several other
-                // languages use backticks for string literals (shell command substitution,
-                // JavaScript template literals, Go raw strings). In SQL, backticks and double
-                // quotes can both quote identifiers, so we re-prepare the raw line with a
-                // SQL-aware stripper that only drops single-quoted literals and comments.
-                // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
-                // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
-                // ため、単引用符リテラル、複数行 block comment、PostgreSQL dollar quote、行コメント
-                // だけを除去する stateful sanitization を別途適用する。
-                var sqlLineFragment = PrepareSqlLineForIdentifierScan(
+            var sqlSuppressedCallIndices = language is "sql"
+                ? SqlReferenceExtractor.Emit(
                     structuralLines[i],
-                    sqlIdentifierScanState,
-                    sqlStatementPrefix,
-                    out var sqlLineEndedByLineComment,
-                    out sqlIdentifierScanState);
-                if (!string.IsNullOrWhiteSpace(sqlLineFragment))
-                {
-                    if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
-                    {
-                        CollectSqlTempObjectNamesFromStatement(sqlStatementPrefix!, sqlEstablishedTempObjectNames!);
-                        sqlStatementPrefix = string.Empty;
-                    }
-
-                    var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
-                    int sqlStatementStart = 0;
-
-                    while (true)
-                    {
-                        int terminatorIndex = FindSqlStatementTerminator(sqlCombinedLine, sqlStatementStart);
-                        int statementEnd = terminatorIndex >= 0 ? terminatorIndex + 1 : sqlCombinedLine.Length;
-                        var sqlStatement = sqlCombinedLine[sqlStatementStart..statementEnd];
-                        int sqlStatementLineOffset = Math.Max(0, sqlLineOffset - sqlStatementStart);
-
-                        if (!string.IsNullOrWhiteSpace(sqlStatement))
-                        {
-                            HashSet<int>? sqlUsingSourceIndices = null;
-                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-
-                                (sqlUsingSourceIndices ??= []).Add(nameGroup.Index);
-                            }
-
-                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-
-                                foreach (Capture capture in match.Groups["name"].Captures)
-                                {
-                                    if (capture.Index < sqlStatementLineOffset)
-                                        continue;
-
-                                    (sqlUsingSourceIndices ??= []).Add(capture.Index);
-                                }
-                            }
-
-                            foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
-                            {
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-
-                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
-                            }
-
-                            foreach (Match match in SqlAccessMethodCallSuppressionRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                if (sqlUsingSourceIndices != null && sqlUsingSourceIndices.Contains(nameGroup.Index))
-                                    continue;
-
-                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
-                            }
-
-                            foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-
-                                // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
-                                // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
-                                // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
-                                // `` CALL `order` `` is not silently dropped.
-                                // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
-                                // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-                                if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
-                                    continue;
-                                // issue #656: bare `#tempProc` / `##tempProc` after `EXEC` / `EXECUTE` / `CALL`
-                                // is ambiguous between a T-SQL temp stored procedure call and a MySQL /
-                                // MariaDB `#` line comment. Require same-file T-SQL evidence (prior
-                                // `CREATE TABLE #x`, `SELECT ... INTO #x`, mutation target of `#x`, or
-                                // `CREATE PROCEDURE|FUNCTION #x`) before emitting a call edge so MySQL
-                                // comments stop being misindexed as temp stored procedures.
-                                // Quoted forms (`EXEC [#tempProc]` / `` EXEC `#tempProc` ``) bypass the
-                                // gate because bracket/backtick quoting is unambiguously an identifier.
-                                // issue #656: `EXEC` / `EXECUTE` / `CALL` の直後に並ぶ bare な
-                                // `#tempProc` / `##tempProc` は T-SQL の一時ストアド呼び出しと MySQL /
-                                // MariaDB の `#` 行コメントのどちらにも見える。同一ファイル内で T-SQL
-                                // 側の確立（先行する `CREATE TABLE #x`、`SELECT ... INTO #x`、`#x` の
-                                // 変更対象、あるいは `CREATE PROCEDURE|FUNCTION #x`）がある場合だけ
-                                // call edge を出すことで、MySQL の `#` コメントを一時ストアドとして
-                                // 誤索引しないようにする。引用形 (`EXEC [#tempProc]` /
-                                // `` EXEC `#tempProc` ``) はブラケット / バッククォート引用が明確に
-                                // 識別子であるため、このゲートを通さず従来どおり edge を出す。
-                                if (!wasQuoted
-                                    && resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                    continue;
-
-                                var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddChainReference(
-                                    references, seen, fileId, resolvedName, nameColumn + 1,
-                                    "call", context, lineNumber, sqlCallContainer);
-                            }
-
-                            foreach (Match match in SqlFromSourceListRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                foreach (Capture capture in match.Groups["name"].Captures)
-                                {
-                                    if (capture.Index < sqlStatementLineOffset)
-                                        continue;
-                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
-                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                        continue;
-                                    if (followedByOpenParen)
-                                    {
-                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
-                                        AddChainReference(
-                                            references, seen, fileId, resolvedName, nameColumn + 1,
-                                            "call", context, lineNumber, sqlCallContainer);
-                                        if (!wasQuoted)
-                                        {
-                                            sqlSuppressedCallIndices?.Add(
-                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
-                                        }
-                                        continue;
-                                    }
-                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                        continue;
-
-                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
-                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                                }
-                            }
-
-                            foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                foreach (Capture capture in match.Groups["name"].Captures)
-                                {
-                                    if (capture.Index < sqlStatementLineOffset)
-                                        continue;
-                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
-                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                        continue;
-                                    if (followedByOpenParen)
-                                    {
-                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
-                                        AddChainReference(
-                                            references, seen, fileId, resolvedName, nameColumn + 1,
-                                            "call", context, lineNumber, sqlCallContainer);
-                                        if (!wasQuoted)
-                                        {
-                                            sqlSuppressedCallIndices?.Add(
-                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
-                                        }
-                                        continue;
-                                    }
-                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                        continue;
-
-                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
-                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                                }
-                            }
-
-                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-                                if (followedByOpenParen)
-                                {
-                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                                    AddChainReference(
-                                        references, seen, fileId, resolvedName, nameColumn + 1,
-                                        "call", context, lineNumber, sqlCallContainer);
-                                    if (!wasQuoted)
-                                    {
-                                        sqlSuppressedCallIndices?.Add(
-                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
-                                    }
-                                    continue;
-                                }
-                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                    continue;
-
-                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                            }
-
-                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-
-                                foreach (Capture capture in match.Groups["name"].Captures)
-                                {
-                                    if (capture.Index < sqlStatementLineOffset)
-                                        continue;
-                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
-                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                        continue;
-                                    if (followedByOpenParen)
-                                    {
-                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
-                                        AddChainReference(
-                                            references, seen, fileId, resolvedName, nameColumn + 1,
-                                            "call", context, lineNumber, sqlCallContainer);
-                                        if (!wasQuoted)
-                                        {
-                                            sqlSuppressedCallIndices?.Add(
-                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
-                                        }
-                                        continue;
-                                    }
-                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                        continue;
-
-                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
-                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                                }
-                            }
-
-                            foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-
-                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                            }
-
-                            foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-                                if (!wasQuoted
-                                    && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
-                                    && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
-                                    continue;
-
-                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                                if (IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length))
-                                {
-                                    sqlSuppressedCallIndices?.Add(
-                                        GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
-                                }
-                            }
-
-                            foreach (Match match in SqlTruncateTargetRegex.Matches(sqlStatement))
-                            {
-                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
-                                    continue;
-
-                                foreach (Capture capture in match.Groups["name"].Captures)
-                                {
-                                    if (capture.Index < sqlStatementLineOffset)
-                                        continue;
-                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                        continue;
-
-                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
-                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
-                                }
-                            }
-                        }
-
-                        if (terminatorIndex < 0)
-                            break;
-
-                        CollectSqlTempObjectNamesFromStatement(sqlStatement, sqlEstablishedTempObjectNames!);
-                        sqlStatementStart = terminatorIndex + 1;
-                        while (sqlStatementStart < sqlCombinedLine.Length && char.IsWhiteSpace(sqlCombinedLine[sqlStatementStart]))
-                            sqlStatementStart++;
-                    }
-
-                    sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
-                }
-            }
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    sqlState!,
+                    ResolveContainerForCall,
+                    name => IsIgnoredCallName(language, name),
+                    ShouldSuppressDefinitionCall)
+                : null;
 
             if (language == "css")
             {
-                EmitCssScssReferences(
+                CssReferenceExtractor.EmitScss(
                     preparedLine,
                     references,
                     seen,
@@ -2250,7 +1395,7 @@ public static class ReferenceExtractor
 
             if (language == "css")
             {
-                EmitCssScssReferences(
+                CssReferenceExtractor.EmitScss(
                     preparedLine,
                     references,
                     seen,
@@ -2262,7 +1407,7 @@ public static class ReferenceExtractor
 
             if (language == "php")
             {
-                EmitPhpStaticAccessReferences(
+                PhpReferenceExtractor.EmitStaticAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -2271,7 +1416,7 @@ public static class ReferenceExtractor
                     lineNumber,
                     container);
 
-                EmitPhpObjectMemberAccessReferences(
+                PhpReferenceExtractor.EmitObjectMemberAccessReferences(
                     preparedLine,
                     references,
                     seen,
@@ -2281,52 +1426,29 @@ public static class ReferenceExtractor
                     container);
             }
 
-            // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
-            // Emit `instantiate` directly so graph queries do not treat them as unused code.
-            // JavaScript / TypeScript では `new Foo;` のように `()` を省略できるため、
-            // 専用パスで `instantiate` を発行して graph query から取りこぼさないようにする。
             if (language is "javascript" or "typescript")
             {
-                foreach (Match match in JsTsParenlessConstructorRegex.Matches(preparedLine))
-                {
-                    var rawName = match.Groups["name"].Value;
-                    var nameIndex = match.Groups["name"].Index;
-                    var trailingProbe = match.Index + match.Length;
-                    while (trailingProbe < preparedLine.Length && char.IsWhiteSpace(preparedLine[trailingProbe]))
-                        trailingProbe++;
-
-                    if (trailingProbe >= preparedLine.Length)
-                    {
-                        if (NextNonEmptyPreparedLineStartsWithJsContinuation(preparedLines, i))
-                            continue;
-                    }
-                    else
-                    {
-                        if (preparedLine[trailingProbe] is '(' or '.' or '[')
-                            continue;
-
-                        if (preparedLine[trailingProbe] == '?'
-                            && trailingProbe + 1 < preparedLine.Length
-                            && preparedLine[trailingProbe + 1] == '.')
-                        {
-                            continue;
-                        }
-                    }
-
-                    var initContainer = ResolveContainerForCall(nameIndex);
-                    AddReference(references, seen, fileId, rawName, nameIndex, "instantiate", context, lineNumber, initContainer);
-                }
+                JavaScriptReferenceExtractor.EmitParenlessConstructorReferences(
+                    preparedLine,
+                    preparedLines,
+                    i,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             void AddCallLikeReference(string name, int callIndex)
             {
-                var normalizedName = language == "fsharp" && IsFSharpOperatorCallName(name)
+                var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
                     : language == "rust"
-                        ? NormalizeRustIdentifier(name)
+                        ? RustReferenceExtractor.NormalizeIdentifier(name)
                         : NormalizeAtPrefixedIdentifier(name);
 
-                if (language == "rust" && IsRustFunctionDeclarationCallSite(preparedLine, callIndex))
+                if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
@@ -2349,7 +1471,7 @@ public static class ReferenceExtractor
                   // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
                   // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
                   var isCSharpPatternHeadCallSite = language == "csharp"
-                      && IsCSharpPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
+                      && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
                   if (isCSharpPatternHeadCallSite)
                       return;
 
@@ -2377,182 +1499,36 @@ public static class ReferenceExtractor
                 AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
             }
 
-            static bool IsFSharpOperatorCallName(string name)
-            {
-                if (name.Length < 2)
-                    return false;
-
-                foreach (var ch in name)
-                {
-                    if ("!%&*+-./:<=>?@^|~".IndexOf(ch) < 0)
-                        return false;
-                }
-
-                return true;
-            }
-
-            void EmitRubyCommandTargetReferences(string name, int callIndex)
-            {
-                if (language != "ruby" || !RubyCommandTargetReferenceNames.Contains(name))
-                    return;
-
-                var argsStart = callIndex + name.Length;
-                while (argsStart < originalLine.Length && char.IsWhiteSpace(originalLine[argsStart]))
-                    argsStart++;
-
-                if (argsStart < originalLine.Length && originalLine[argsStart] == '(')
-                    argsStart++;
-
-                while (argsStart < originalLine.Length && char.IsWhiteSpace(originalLine[argsStart]))
-                    argsStart++;
-
-                if (argsStart >= originalLine.Length)
-                    return;
-
-                var tail = originalLine[argsStart..];
-                var commentIndex = tail.IndexOf('#');
-                if (commentIndex >= 0)
-                    tail = tail[..commentIndex];
-
-                var matchedAny = false;
-                foreach (Match match in RubyCommandTargetTokenRegex.Matches(tail))
-                {
-                    var rawToken = match.Groups["token"].Value;
-                    if (rawToken.Length == 0)
-                        continue;
-
-                    if (string.Equals(rawToken, "do", StringComparison.Ordinal)
-                        || string.Equals(rawToken, "end", StringComparison.Ordinal)
-                        || string.Equals(rawToken, "then", StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-
-                    if (string.Equals(name, "raise", StringComparison.Ordinal))
-                    {
-                        if (rawToken[0] == ':' || rawToken[0] == '\'' || rawToken[0] == '"')
-                            return;
-                        if (!IsRubyIdentifierStart(rawToken[0]))
-                            return;
-                    }
-                    else if (RubyCommandTargetSingleTokenNames.Contains(name) && matchedAny)
-                    {
-                        break;
-                    }
-                    else if (rawToken[0] == '\'' || rawToken[0] == '"')
-                    {
-                        if (!string.Equals(name, "require", StringComparison.Ordinal)
-                            && !string.Equals(name, "define_method", StringComparison.Ordinal))
-                        {
-                            continue;
-                        }
-                    }
-
-                    var token = NormalizeRubyCommandTargetToken(rawToken);
-                    if (string.IsNullOrWhiteSpace(token))
-                        continue;
-
-                    var targetContainer = ResolveContainerForCall(argsStart + match.Groups["token"].Index);
-                    AddReference(references, seen, fileId, token, argsStart + match.Groups["token"].Index, "reference", context, lineNumber, targetContainer);
-                    matchedAny = true;
-
-                    if (RubyCommandTargetSingleTokenNames.Contains(name))
-                        break;
-                }
-            }
-
-            if (language is "batch" && !IsBatchCommentLine(originalLine))
-            {
-                for (var segmentStart = 0; segmentStart < preparedLine.Length;)
-                {
-                    var segmentEnd = segmentStart;
-                    while (segmentEnd < preparedLine.Length && !IsBatchCommandSeparator(preparedLine, segmentEnd))
-                        segmentEnd++;
-
-                    ProcessBatchJumpSegment(
-                        preparedLine[segmentStart..segmentEnd],
-                        segmentStart,
-                        references,
-                        seen,
-                        context,
-                        fileId,
-                        lineNumber,
-                        ResolveContainerForCall);
-
-                    var segment = preparedLine[segmentStart..segmentEnd].TrimStart();
-                    if (segment.Length > 0)
-                    {
-                        if (segment[0] == '@')
-                            segment = segment[1..].TrimStart();
-                        if (segment.Length > 0 && (segment.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(segment, 0)))
-                            break;
-                    }
-
-                    segmentStart = segmentEnd;
-                    while (segmentStart < preparedLine.Length && (char.IsWhiteSpace(preparedLine[segmentStart]) || IsBatchCommandSeparator(preparedLine, segmentStart)))
-                        segmentStart++;
-                }
-            }
+            if (language is "batch")
+                BatchReferenceExtractor.EmitJumpTargetReferences(
+                    originalLine,
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
 
             var matchedCallIndices = new HashSet<int>();
             if (language is "powershell")
             {
-                foreach (Match match in PowerShellCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
+                PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
             }
             else if (language is "shell")
             {
-                foreach (Match match in ShellCommandCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    if (shellCallableNames == null || !shellCallableNames.Contains(name))
-                        continue;
-
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
-
-                var shellSourceLine = StripShellComment(originalLine);
-                foreach (Match match in ShellSourceReferenceRegex.Matches(shellSourceLine))
-                {
-                    var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
-                    if (string.IsNullOrWhiteSpace(name))
-                        continue;
-
-                    var sourceIndex = match.Groups["name"].Index;
-                    AddReference(references, seen, fileId, name, sourceIndex, "reference", context, lineNumber, ResolveContainerForCall(sourceIndex));
-                }
-
-                if (shellGlobalAliasNames != null && shellGlobalAliasNames.Count > 0)
-                {
-                    var trimmedPreparedLine = preparedLine.TrimStart();
-                    if (!trimmedPreparedLine.StartsWith("alias", StringComparison.Ordinal))
-                    {
-                        foreach (var aliasName in shellGlobalAliasNames)
-                        {
-                            var searchIndex = 0;
-                            while (searchIndex < preparedLine.Length)
-                            {
-                                var aliasIndex = preparedLine.IndexOf(aliasName, searchIndex, StringComparison.Ordinal);
-                                if (aliasIndex < 0)
-                                    break;
-
-                                if (!IsShellGlobalAliasReferenceBoundary(preparedLine, aliasIndex, aliasName.Length))
-                                {
-                                    searchIndex = aliasIndex + aliasName.Length;
-                                    continue;
-                                }
-
-                                AddCallLikeReference(aliasName, aliasIndex);
-                                searchIndex = aliasIndex + aliasName.Length;
-                            }
-                        }
-                    }
-                }
+                ShellReferenceExtractor.EmitReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    shellCallableNames,
+                    shellGlobalAliasNames,
+                    ResolveContainerForCall,
+                    AddCallLikeReference);
             }
             else
             {
@@ -2560,92 +1536,57 @@ public static class ReferenceExtractor
                 {
                     var name = match.Groups["name"].Value;
                     var callIndex = match.Groups["name"].Index;
-                    if (language == "rust" && IsRustRawIdentifierPrefix(preparedLine, callIndex))
+                    if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                         continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
                     AddCallLikeReference(name, callIndex);
                     if (language == "ruby")
-                        EmitRubyCommandTargetReferences(name, callIndex);
+                        RubyReferenceExtractor.EmitCommandTargetReferences(
+                            name,
+                            callIndex,
+                            originalLine,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall);
                 }
 
                 if (language == "ruby")
                 {
-                    foreach (Match match in RubyCommandCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        matchedCallIndices.Add(callIndex);
-                        AddCallLikeReference(name, callIndex);
-                        EmitRubyCommandTargetReferences(name, callIndex);
-                    }
-
-                    foreach (Match match in RubyBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    RubyReferenceExtractor.EmitAdditionalCallReferences(
+                        preparedLine,
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        matchedCallIndices,
+                        AddCallLikeReference);
                 }
 
-                if (language is "swift" or "kotlin")
-                {
-                    foreach (Match match in TrailingLambdaCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        if (IsTrailingLambdaInheritanceClause(preparedLine, callIndex))
-                            continue;
-                        AddCallLikeReference(name, callIndex);
-                    }
-                }
+                if (language == "swift")
+                    SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
+                else if (language == "kotlin")
+                    KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
 
                 if (language == "fsharp")
                 {
-                    foreach (Match match in FSharpPipelineCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
-
-                    foreach (Match match in FSharpSpaceApplicationCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
-
-                    foreach (Match match in FSharpOperatorCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        if (FSharpIgnoredOperatorCallNames.Contains(name))
-                            continue;
-
-                        var definitionMatch = FSharpOperatorDefinitionCallRegex.Match(preparedLine);
-                        if (definitionMatch.Success
-                            && string.Equals(definitionMatch.Groups["name"].Value, name, StringComparison.Ordinal)
-                            && match.Groups["name"].Index == definitionMatch.Groups["name"].Index)
-                        {
-                            continue;
-                        }
-
-                        var callIndex = match.Groups["name"].Index;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    FSharpReferenceExtractor.EmitAdditionalCallReferences(
+                        preparedLine,
+                        AddCallLikeReference);
                 }
 
                 if (language == "scala")
                 {
-                    foreach (Match match in ScalaTrailingBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        if (ScalaIgnoredBlockCallNames.Contains(name))
-                            continue;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
+                        preparedLine,
+                        AddCallLikeReference);
                 }
                 else if (language == "gradle")
                 {
@@ -2656,19 +1597,9 @@ public static class ReferenceExtractor
                         AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
                     }
 
-                    foreach (Match match in GradleBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddGradleDslReference(name, callIndex);
-                    }
-
-                    foreach (Match match in GradleCommandCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddGradleDslReference(name, callIndex);
-                    }
+                    GradleReferenceExtractor.EmitDslCallReferences(
+                        preparedLine,
+                        AddGradleDslReference);
                 }
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
@@ -2683,19 +1614,7 @@ public static class ReferenceExtractor
 
             if (language == "rust")
             {
-                foreach (Match match in RustRawIdentifierCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
-
-                foreach (Match match in RustMacroCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
+                RustReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
             }
 
             if (language == "csharp")
@@ -2711,9 +1630,31 @@ public static class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
             }
-            else if (language is "java" or "kotlin" or "scala")
+            else if (language is "java")
             {
-                EmitJavaMethodReferenceReferences(
+                JavaReferenceExtractor.EmitMethodReferenceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitMethodReferenceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language is "scala")
+            {
+                ScalaReferenceExtractor.EmitMethodReferenceReferences(
                     preparedLine,
                     references,
                     seen,
@@ -2735,7 +1676,7 @@ public static class ReferenceExtractor
             // `attribute` に落として runtime call-graph への混入を防ぐ (issue #293 / #492)。
             if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
             {
-                EmitCSharpQualifiedEnumMemberReferences(
+                CSharpReferenceExtractor.EmitQualifiedEnumMemberReferences(
                     preparedLine,
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
@@ -2836,35 +1777,35 @@ public static class ReferenceExtractor
 
             if (language == "python")
             {
-                foreach (Match match in PythonDecoratorRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    if (IsIgnoredCallName(language, name))
-                        continue;
-                    if (definitionNames != null && definitionNames.Contains(name))
-                        continue;
-                    AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
-                }
+                PythonReferenceExtractor.EmitDecoratorReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames,
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")
             {
-                foreach (Match match in RNamespaceReferenceRegex.Matches(preparedLine))
-                {
-                    var package = match.Groups["package"].Value;
-                    var separator = match.Groups["sep"].Value;
-                    var name = match.Groups["name"].Value;
-                    AddReference(references, seen, fileId, $"{package}{separator}{name}", match.Groups["package"].Index, "reference", context, lineNumber, container);
-                    if (definitionNames != null && definitionNames.Contains(name))
-                        continue;
-                    AddReference(references, seen, fileId, name, match.Groups["name"].Index, "reference", context, lineNumber, container);
-                }
+                RReferenceExtractor.EmitNamespaceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 
         if (language == "csharp")
         {
-            EmitCSharpSwitchExpressionTypePatternReferences(
+            CSharpReferenceExtractor.EmitSwitchExpressionTypePatternReferences(
                 lines,
                 preparedLines,
                 containerCandidates,
@@ -2877,7 +1818,7 @@ public static class ReferenceExtractor
                 seen,
                 fileId);
 
-            FlushPendingCSharpMultiLineTypePatternReference(
+            CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
                 ref pendingCSharpMultiLineTypePattern,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -2891,7 +1832,7 @@ public static class ReferenceExtractor
         return references;
     }
 
-    private static void AddReference(
+    internal static void AddReference(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2913,7 +1854,7 @@ public static class ReferenceExtractor
             container);
     }
 
-    private static void AddReference(
+    internal static void AddReference(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2942,284 +1883,6 @@ public static class ReferenceExtractor
         });
     }
 
-    private static void EmitCssReferences(
-        string preparedLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? definitionNames,
-        SymbolRecord? container)
-    {
-        foreach (Match match in CssCustomPropertyReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CssAnimationNameReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
-        {
-            EmitCssAnimationShorthandReferences(
-                match.Groups["value"].Value,
-                match.Groups["value"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
-        }
-
-        EmitCssClassSelectorReferences(
-            preparedLine,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            definitionNames,
-            container);
-    }
-
-    private static void EmitDockerfileStageReferences(
-        string preparedLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? stageNames,
-        SymbolRecord? container)
-    {
-        if (stageNames == null || stageNames.Count == 0)
-            return;
-
-        var fromMatch = DockerfileStageReferenceRegex.Match(preparedLine);
-        if (fromMatch.Success)
-        {
-            var name = fromMatch.Groups["name"].Value;
-            if (stageNames.Contains(name))
-                AddReference(references, seen, fileId, name, fromMatch.Groups["name"].Index, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in DockerfileCopyFromReferenceRegex.Matches(preparedLine))
-        {
-            var name = match.Groups["name"].Value;
-            if (!stageNames.Contains(name))
-                continue;
-
-            AddReference(references, seen, fileId, name, match.Groups["name"].Index, "call", context, lineNumber, container);
-        }
-    }
-
-    private static void EmitCobolReferences(
-        string rawLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        SymbolRecord? container,
-        IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
-    {
-        foreach (Match match in CobolCallRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolCopyRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolGotoRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSetRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolOpenRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSearchRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSimpleReferenceRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolMoveRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolAddRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSubtractRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolMultiplyRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolDivideRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolComputeRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolStringRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolUnstringRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolPerformRegex.Matches(rawLine))
-        {
-            var endName = match.Groups["end"].Value;
-            if (!string.IsNullOrWhiteSpace(endName)
-                && TryAddCobolPerformRangeReferences(
-                    cobolCallableSymbols,
-                    match.Groups["name"].Value,
-                    endName,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    container))
-            {
-                continue;
-            }
-
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-    }
-
-    private static void EmitCobolNamedReference(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        Match match,
-        string referenceKind,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        var name = match.Groups["name"].Value;
-        if (string.IsNullOrWhiteSpace(name))
-            return;
-
-        AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, referenceKind, context, lineNumber, container);
-    }
-
-    private static bool TryAddCobolPerformRangeReferences(
-        IReadOnlyList<SymbolRecord>? cobolCallableSymbols,
-        string startName,
-        string endName,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        SymbolRecord? container)
-    {
-        if (cobolCallableSymbols == null || cobolCallableSymbols.Count == 0)
-            return false;
-
-        var normalizedStartName = startName.Trim();
-        var normalizedEndName = endName.Trim();
-        if (normalizedStartName.Length == 0 || normalizedEndName.Length == 0)
-            return false;
-
-        var startSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedStartName);
-        if (startSymbol == null)
-            return false;
-
-        var startLine = startSymbol.Line;
-        var endSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedEndName, startLine);
-        if (endSymbol == null)
-            return false;
-
-        var lowerLine = Math.Min(startSymbol.Line, endSymbol.Line);
-        var upperLine = Math.Max(startSymbol.Line, endSymbol.Line);
-        var emittedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var emittedAny = false;
-
-        foreach (var symbol in cobolCallableSymbols)
-        {
-            if (symbol.Line < lowerLine || symbol.Line > upperLine)
-                continue;
-
-            if (!emittedNames.Add(symbol.Name))
-                continue;
-
-            var nameIndex = Math.Max(0, symbol.StartColumn.GetValueOrDefault() - 1);
-            AddReference(references, seen, fileId, symbol.Name, nameIndex, "call", context, lineNumber, container);
-            emittedAny = true;
-        }
-
-        return emittedAny;
-    }
-
-    private static SymbolRecord? FindCobolCallableSymbol(
-        IReadOnlyList<SymbolRecord> cobolCallableSymbols,
-        string targetName,
-        int? minimumLine = null)
-    {
-        SymbolRecord? fallback = null;
-
-        foreach (var symbol in cobolCallableSymbols)
-        {
-            if (!string.Equals(symbol.Name, targetName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (minimumLine == null || symbol.Line >= minimumLine.Value)
-                return symbol;
-
-            fallback ??= symbol;
-        }
-
-        return fallback;
-    }
-
     private static bool IsJsxFilePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -3230,653 +1893,12 @@ public static class ReferenceExtractor
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void EmitCssAnimationShorthandReferences(
-        string value,
-        int valueIndex,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? definitionNames,
-        SymbolRecord? container)
-    {
-        var segmentStart = 0;
-        var parenDepth = 0;
-        for (var i = 0; i <= value.Length; i++)
-        {
-            if (i < value.Length)
-            {
-                var ch = value[i];
-                if (ch == '(')
-                {
-                    parenDepth++;
-                    continue;
-                }
-
-                if (ch == ')' && parenDepth > 0)
-                {
-                    parenDepth--;
-                    continue;
-                }
-
-                if (ch != ',' || parenDepth > 0)
-                    continue;
-            }
-
-            EmitCssAnimationShorthandSegmentReference(
-                value,
-                valueIndex,
-                segmentStart,
-                i,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
-            segmentStart = i + 1;
-        }
-    }
-
-    private static void EmitCssAnimationShorthandSegmentReference(
-        string value,
-        int valueIndex,
-        int segmentStart,
-        int segmentEnd,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? definitionNames,
-        SymbolRecord? container)
-    {
-        var cursor = segmentStart;
-        while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
-            cursor++;
-
-        while (cursor < segmentEnd)
-        {
-            var tokenStart = cursor;
-            while (cursor < segmentEnd && !char.IsWhiteSpace(value[cursor]))
-                cursor++;
-
-            var token = value[tokenStart..cursor];
-            if (!IsCssAnimationNameToken(token))
-                continue;
-            if (definitionNames != null && definitionNames.Contains(token))
-                return;
-
-            AddReference(references, seen, fileId, token, valueIndex + tokenStart, "reference", context, lineNumber, container);
-            return;
-        }
-    }
-
-    private static void EmitCssClassSelectorReferences(
-        string preparedLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? definitionNames,
-        SymbolRecord? container)
-    {
-        var segmentStart = 0;
-        while (segmentStart < preparedLine.Length)
-        {
-            var braceIndex = preparedLine.IndexOf('{', segmentStart);
-            var segmentEnd = braceIndex >= 0 ? braceIndex : preparedLine.Length;
-            var trimmedStart = segmentStart;
-            while (trimmedStart < segmentEnd && char.IsWhiteSpace(preparedLine[trimmedStart]))
-                trimmedStart++;
-
-            if (trimmedStart < segmentEnd && preparedLine[trimmedStart] != '@')
-            {
-                var selectorSegment = preparedLine[trimmedStart..segmentEnd];
-                foreach (var (partStart, partEnd) in EnumerateCssSelectorListSegments(selectorSegment))
-                {
-                    var selectorPart = selectorSegment[partStart..partEnd];
-                    if (!ContainsCssClassSelectorReferenceCandidate(selectorPart))
-                        continue;
-
-                    var selectorPartTrimStart = 0;
-                    while (selectorPartTrimStart < selectorPart.Length && char.IsWhiteSpace(selectorPart[selectorPartTrimStart]))
-                        selectorPartTrimStart++;
-
-                    var selectorPartBody = selectorPart[selectorPartTrimStart..];
-                    foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorPartBody))
-                    {
-                        var nameGroup = match.Groups["name"];
-                        var name = "." + nameGroup.Value;
-                        if (definitionNames != null && definitionNames.Contains(name))
-                            continue;
-
-                        AddReference(
-                            references,
-                            seen,
-                            fileId,
-                            name,
-                            trimmedStart + partStart + selectorPartTrimStart + match.Groups["name"].Index - 1,
-                            "reference",
-                            context,
-                            lineNumber,
-                            container);
-                    }
-                }
-            }
-
-            if (braceIndex < 0)
-                break;
-
-            segmentStart = braceIndex + 1;
-        }
-    }
-
-    private static IEnumerable<(int Start, int End)> EnumerateCssSelectorListSegments(string selectorSegment)
-    {
-        var segmentStart = 0;
-        var parenDepth = 0;
-        var bracketDepth = 0;
-
-        for (var index = 0; index < selectorSegment.Length; index++)
-        {
-            var ch = selectorSegment[index];
-            if (ch == '(')
-            {
-                parenDepth++;
-                continue;
-            }
-
-            if (ch == ')' && parenDepth > 0)
-            {
-                parenDepth--;
-                continue;
-            }
-
-            if (ch == '[')
-            {
-                bracketDepth++;
-                continue;
-            }
-
-            if (ch == ']' && bracketDepth > 0)
-            {
-                bracketDepth--;
-                continue;
-            }
-
-            if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
-            {
-                yield return (segmentStart, index);
-                segmentStart = index + 1;
-            }
-        }
-
-        yield return (segmentStart, selectorSegment.Length);
-    }
-
-    private static bool ContainsCssClassSelectorReferenceCandidate(string selectorPart)
-    {
-        var bracketDepth = 0;
-        char quote = '\0';
-        for (var index = 0; index < selectorPart.Length; index++)
-        {
-            var ch = selectorPart[index];
-            if (quote != '\0')
-            {
-                if (ch == quote && (index == 0 || selectorPart[index - 1] != '\\'))
-                    quote = '\0';
-                continue;
-            }
-
-            if (ch is '\'' or '"')
-            {
-                quote = ch;
-                continue;
-            }
-
-            if (ch == '[')
-            {
-                bracketDepth++;
-                continue;
-            }
-
-            if (ch == ']' && bracketDepth > 0)
-            {
-                bracketDepth--;
-                continue;
-            }
-
-            if (bracketDepth == 0 && ch == '.')
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsCssAnimationNameToken(string token)
-    {
-        if (string.IsNullOrWhiteSpace(token))
-            return false;
-
-        if (CssAnimationShorthandIgnoredTokens.Contains(token))
-            return false;
-        if (token.IndexOf('(') >= 0 || token.IndexOf(')') >= 0 || token.IndexOf(',') >= 0
-            || token.IndexOf('/') >= 0 || token.IndexOf(':') >= 0 || token.IndexOf(';') >= 0)
-            return false;
-        if (IsCssAnimationTimeToken(token) || IsCssAnimationNumberToken(token))
-            return false;
-        if (token.StartsWith("--", StringComparison.Ordinal))
-            return false;
-        if (!(char.IsLetter(token[0]) || token[0] == '_' || token[0] == '-'))
-            return false;
-        if (token[0] == '-' && token.Length > 1 && (token[1] == '-' || char.IsDigit(token[1])))
-            return false;
-
-        for (var i = 1; i < token.Length; i++)
-        {
-            if (char.IsLetterOrDigit(token[i]) || token[i] == '_' || token[i] == '-')
-                continue;
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool IsCssAnimationTimeToken(string token)
-    {
-        if (token.Length < 2)
-            return false;
-
-        var unitLength = token.EndsWith("ms", StringComparison.OrdinalIgnoreCase)
-            ? 2
-            : token.EndsWith("s", StringComparison.OrdinalIgnoreCase)
-                ? 1
-                : 0;
-        if (unitLength == 0 || token.Length == unitLength)
-            return false;
-
-        var numberPart = token[..^unitLength];
-        var sawDigit = false;
-        var sawDot = false;
-        foreach (var ch in numberPart)
-        {
-            if (char.IsDigit(ch))
-            {
-                sawDigit = true;
-                continue;
-            }
-
-            if (ch == '.' && !sawDot)
-            {
-                sawDot = true;
-                continue;
-            }
-
-            return false;
-        }
-
-        return sawDigit;
-    }
-
-    private static bool IsCssAnimationNumberToken(string token)
-    {
-        if (token.Length == 0 || token.IndexOfAny(['(', ')', ',', '/', ':', ';']) >= 0)
-            return false;
-        if (!(char.IsDigit(token[0]) || token[0] == '.'))
-            return false;
-
-        var sawDigit = false;
-        var sawDot = false;
-        foreach (var ch in token)
-        {
-            if (char.IsDigit(ch))
-            {
-                sawDigit = true;
-                continue;
-            }
-
-            if (ch == '.' && !sawDot)
-            {
-                sawDot = true;
-                continue;
-            }
-
-            return false;
-        }
-
-        return sawDigit;
-    }
-
-    private static void NormalizeSqlIdentifier(
-        string rawName,
-        int rawIndex,
-        out string resolvedName,
-        out int resolvedIndex,
-        out bool wasQuoted)
-    {
-        if (rawName.Length >= 2
-            && ((rawName[0] == '[' && rawName[^1] == ']')
-                || (rawName[0] == '`' && rawName[^1] == '`')
-                || (rawName[0] == '"' && rawName[^1] == '"')))
-        {
-            // Normalize `[name]` / `` `name` `` / `"name"` to `name` so SQL-specific regexes and the shared
-            // CallRegex converge on the same symbol spelling and dedupe key.
-            // `[name]` / `` `name` `` / `"name"` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
-            // symbol 名と dedupe key を一致させる。
-            resolvedName = rawName.Substring(1, rawName.Length - 2);
-            if (rawName[0] == '"')
-                resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
-            else if (rawName[0] == '[')
-                resolvedName = resolvedName.Replace("]]", "]", StringComparison.Ordinal);
-            resolvedIndex = rawIndex + 1;
-            wasQuoted = true;
-            return;
-        }
-
-        resolvedName = rawName;
-        resolvedIndex = rawIndex;
-        wasQuoted = false;
-    }
-
-    private static bool IsFollowedByOpenParen(string line, int index)
-    {
-        while (index < line.Length && char.IsWhiteSpace(line[index]))
-            index++;
-
-        return index < line.Length && line[index] == '(';
-    }
-
-    private static int GetSqlCallLikeSuppressionIndex(string line, int index)
-    {
-        while (index < line.Length && line[index] == '#')
-            index++;
-
-        return index;
-    }
-
-    private static string CombineSqlStatementPrefix(string prefix, string line, out int lineOffset)
-    {
-        if (string.IsNullOrEmpty(prefix))
-        {
-            lineOffset = 0;
-            return line;
-        }
-
-        lineOffset = prefix.Length + 1;
-        return prefix + "\n" + line;
-    }
-
-    private static string AdvanceSqlStatementPrefix(
-        string combined,
-        int statementStart,
-        bool lineEndedByLineComment)
-    {
-        var remaining = statementStart == 0 ? combined : combined[statementStart..];
-        if (!lineEndedByLineComment)
-            return remaining;
-
-        return CanSqlStatementRequireLineCommentCarry(remaining) ? remaining : string.Empty;
-    }
-
-    private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
-        string prefix,
-        string nextLine)
-    {
-        if (string.IsNullOrWhiteSpace(prefix) || string.IsNullOrWhiteSpace(nextLine))
-            return false;
-        if (!CanSqlStatementEstablishTempObject(prefix))
-            return false;
-
-        return StartsSqlTopLevelStatement(nextLine);
-    }
-
-    private static bool CanSqlStatementEstablishTempObject(string statement)
-    {
-        if (statement.IndexOf('#') < 0)
-            return false;
-
-        return SqlTargetReferenceRegex.IsMatch(statement)
-            || SqlTruncateTargetRegex.IsMatch(statement)
-            || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
-            || SqlCreateTempTableRegex.IsMatch(statement)
-            || SqlCreateTempRoutineRegex.IsMatch(statement);
-    }
-
-    private static bool CanSqlStatementRequireLineCommentCarry(string statement)
-    {
-        if (string.IsNullOrWhiteSpace(statement))
-            return false;
-
-        return CanSqlStatementEstablishTempObject(statement)
-            || SqlTargetReferencePrefixRegex.IsMatch(statement)
-            || SqlFromListContinuationPrefixRegex.IsMatch(statement)
-            || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
-            || SqlDeleteUsingPrefixRegex.IsMatch(statement)
-            || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
-            || SqlMergeUsingPrefixRegex.IsMatch(statement)
-            || SqlMergeTargetHintContinuationPrefixRegex.IsMatch(statement);
-    }
-
-    private static bool StartsSqlTopLevelStatement(string line)
-    {
-        int index = 0;
-        while (index < line.Length && char.IsWhiteSpace(line[index]))
-            index++;
-        if (index >= line.Length || !char.IsLetter(line[index]))
-            return false;
-
-        int start = index;
-        while (index < line.Length && char.IsLetter(line[index]))
-            index++;
-
-        var keyword = line[start..index].ToUpperInvariant();
-        if (keyword == "WITH")
-        {
-            while (index < line.Length && char.IsWhiteSpace(line[index]))
-                index++;
-
-            return index >= line.Length || line[index] != '(';
-        }
-
-        return keyword switch
-        {
-            "SELECT" => true,
-            "INSERT" => true,
-            "UPDATE" => true,
-            "DELETE" => true,
-            "MERGE" => true,
-            "CREATE" => true,
-            "ALTER" => true,
-            "DROP" => true,
-            "TRUNCATE" => true,
-            "SET" => true,
-            "DECLARE" => true,
-            "IF" => true,
-            "WHILE" => true,
-            "DO" => true,
-            "BEGIN" => true,
-            "EXEC" => true,
-            "EXECUTE" => true,
-            "CALL" => true,
-            _ => false,
-        };
-    }
-
-    private static int FindSqlStatementTerminator(string text, int startIndex)
-    {
-        for (int i = startIndex; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (c == ';')
-                return i;
-            if (c == '`')
-            {
-                int closing = text.IndexOf('`', i + 1);
-                if (closing < 0)
-                    return -1;
-                i = closing;
-                continue;
-            }
-            if (c == '[')
-            {
-                int closing = text.IndexOf(']', i + 1);
-                if (closing < 0)
-                    return -1;
-                i = closing;
-                continue;
-            }
-            if (c == '"')
-            {
-                int closing = FindClosingSqlDoubleQuote(text, i + 1);
-                if (closing < 0)
-                    return -1;
-                i = closing;
-            }
-        }
-
-        return -1;
-    }
-
-    private static int FindClosingSqlDoubleQuote(string text, int startIndex)
-    {
-        for (int i = startIndex; i < text.Length; i++)
-        {
-            if (text[i] != '"')
-                continue;
-            if (i + 1 < text.Length && text[i + 1] == '"')
-            {
-                i++;
-                continue;
-            }
-
-            return i;
-        }
-
-        return -1;
-    }
-
-    private static int FindClosingSqlSingleQuote(string text, int startIndex)
-    {
-        for (int i = startIndex; i < text.Length; i++)
-        {
-            if (text[i] == '\\' && i + 1 < text.Length)
-            {
-                i++;
-                continue;
-            }
-            if (text[i] != '\'')
-                continue;
-            if (i + 1 < text.Length && text[i + 1] == '\'')
-            {
-                i++;
-                continue;
-            }
-
-            return i;
-        }
-
-        return -1;
-    }
-
-    private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
-    {
-        if (index <= 0)
-            return false;
-
-        bool inside = false;
-        for (int i = 0; i < index && i < text.Length; i++)
-        {
-            if (text[i] != '"')
-                continue;
-            if (inside && i + 1 < index && text[i + 1] == '"')
-            {
-                i++;
-                continue;
-            }
-
-            inside = !inside;
-        }
-
-        return inside;
-    }
-
-    private static bool TryReadSqlDollarQuoteDelimiter(
-        string line,
-        int index,
-        out string delimiter)
-    {
-        delimiter = string.Empty;
-        if (index < 0 || index >= line.Length || line[index] != '$')
-            return false;
-        if (index > 0 && (char.IsLetterOrDigit(line[index - 1]) || line[index - 1] == '_'))
-            return false;
-        if (index + 1 >= line.Length)
-            return false;
-        if (line[index + 1] == '$')
-        {
-            delimiter = "$$";
-            return true;
-        }
-        if (!(char.IsLetter(line[index + 1]) || line[index + 1] == '_'))
-            return false;
-
-        int probe = index + 2;
-        while (probe < line.Length && (char.IsLetterOrDigit(line[probe]) || line[probe] == '_'))
-            probe++;
-        if (probe >= line.Length || line[probe] != '$')
-            return false;
-
-        delimiter = line[index..(probe + 1)];
-        return true;
-    }
-
-    private static int SkipWhitespaceAhead(string text, int index)
-    {
-        while (index < text.Length && char.IsWhiteSpace(text[index]))
-            index++;
-        return index;
-    }
-
-    private static void CollectSqlTempObjectNamesFromStatement(
-        string statement,
-        HashSet<string> names)
-    {
-        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
-        CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
-        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
-        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
-        CollectSqlTempObjectNamesFromMatches(SqlCreateTempRoutineRegex.Matches(statement), statement, names);
-    }
-
-    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
-    {
-        foreach (Match match in matches)
-        {
-            if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
-                continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Captures.Count == 0)
-                continue;
-
-            foreach (Capture capture in nameGroup.Captures)
-            {
-                NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out _, out _);
-                if (resolvedName.StartsWith("#", StringComparison.Ordinal))
-                    names.Add(resolvedName);
-            }
-        }
-    }
-
     /// <summary>
     /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are
     /// computed relative to the original line so tooling can jump to the exact identifier.
     /// 捕捉した引数の dot-segment ごとに `type_reference` 行を発行する。列位置は元の行基準で計算する。
     /// </summary>
-    private static void AddTypeReferenceSegments(
+    internal static void AddTypeReferenceSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -4056,7 +2078,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void EmitCSharpTypePositionReferences(
+    internal static void EmitCSharpTypePositionReferences(
         string preparedLine,
         string originalLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
@@ -4157,7 +2179,7 @@ public static class ReferenceExtractor
             ref pendingCSharpMultiLineTypePattern);
     }
 
-    private static void AdvanceCSharpMultiLineTypePatternState(
+    internal static void AdvanceCSharpMultiLineTypePatternState(
         string preparedLine,
         string context,
         int lineNumber,
@@ -4285,7 +2307,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static void FlushPendingCSharpMultiLineTypePatternReference(
+    internal static void FlushPendingCSharpMultiLineTypePatternReference(
         ref CSharpMultiLineTypePatternState state,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -4334,7 +2356,7 @@ public static class ReferenceExtractor
         return SkipWhitespace(preparedLine, cursor) >= preparedLine.Length;
     }
 
-    private static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
+    internal static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
     {
         state = new CSharpMultiLineTypePatternState(
             WaitingForHead: true,
@@ -4587,7 +2609,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
+    internal static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
     {
         foreach (Match match in introRegex.Matches(text))
         {
@@ -4598,7 +2620,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static void EmitCSharpSwitchExpressionTypePatternReferences(
+    internal static void EmitCSharpSwitchExpressionTypePatternReferences(
         IReadOnlyList<string> lines,
         IReadOnlyList<string> preparedLines,
         IReadOnlyList<SymbolRecord> containerCandidates,
@@ -4807,39 +2829,7 @@ public static class ReferenceExtractor
             "csharp");
     }
 
-    private static void EmitJavaTypePositionReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
-    {
-        TryEmitJavaKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        TryEmitJavaKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-
-        foreach (Match match in JavaInstanceofRegex.Matches(preparedLine))
-        {
-            var typeGroup = match.Groups["type"];
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                typeGroup.Value,
-                typeGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
-                "java");
-        }
-    }
-
-    private static void EmitTypeScriptTypePositionReferences(
+    internal static void EmitTypeScriptTypePositionReferences(
         IReadOnlyList<string> preparedLines,
         int lineIndex,
         string preparedLine,
@@ -4904,98 +2894,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void EmitJavaModuleDirectiveReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        EmitJavaModuleDirectiveReference(
-            preparedLine,
-            JavaModuleRequiresDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-
-        EmitJavaModuleDirectiveReference(
-            preparedLine,
-            JavaModuleUsesDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-
-        foreach (Match match in JavaModuleProvidesDirectiveReferenceRegex.Matches(preparedLine))
-        {
-            var serviceGroup = match.Groups["service"];
-            AddTypeReferenceSegment(
-                references,
-                seen,
-                fileId,
-                serviceGroup.Value,
-                serviceGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(serviceGroup.Index),
-                "java");
-
-            var implementationsGroup = match.Groups["implementations"];
-            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(implementationsGroup.Value))
-            {
-                var rawSegment = implementationsGroup.Value.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0)
-                    continue;
-
-                var absoluteStart = implementationsGroup.Index + segmentStart + CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
-                AddTypeReferenceSegment(
-                    references,
-                    seen,
-                    fileId,
-                    rawSegment,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "java");
-            }
-        }
-    }
-
-    private static void EmitJavaModuleDirectiveReference(
-        string preparedLine,
-        Regex regex,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        foreach (Match match in regex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            AddTypeReferenceSegment(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(nameGroup.Index),
-                "java");
-        }
-    }
-
-    private static void EmitCSharpDocCrefReferences(
+    internal static void EmitCSharpDocCrefReferences(
         string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -5124,276 +3023,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void TryEmitJavaKeywordTypeListReferences(
-        string line,
-        string keyword,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int keywordIndex = FindTopLevelKeyword(line, keyword);
-        if (keywordIndex < 0)
-            return;
-
-        int listStart = keywordIndex + keyword.Length;
-        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
-            listStart++;
-
-        int listEnd = FindJavaTypeListTerminator(line, listStart);
-        if (listEnd < 0)
-            listEnd = line.Length;
-        var typeList = line.Substring(listStart, listEnd - listStart);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
-        {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
-                continue;
-            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                rawSegment,
-                absoluteStart,
-                context,
-                lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                "java");
-        }
-    }
-
-    private static void EmitJavaGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        EmitJavaCallableGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitJavaNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-    }
-
-    private static void EmitJavaCallableGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        if (!TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
-            return;
-
-        var headerEnd = callableNameStart;
-        if (TryGetCallableReturnTypeSpan(line, callableNameStart, "java", out var typeStart, out _))
-            headerEnd = typeStart;
-
-        if (headerEnd <= 0)
-            return;
-
-        EmitJavaGenericBoundReferencesFromHeader(
-            line.Substring(0, headerEnd),
-            0,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-    }
-
-    private static void EmitJavaNamedTypeGenericBoundReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        var tokens = GetTopLevelTokenSpans(line);
-        if (tokens.Count < 2)
-            return;
-
-        int keywordIndex = -1;
-        int nameIndex = -1;
-        for (int i = 0; i < tokens.Count; i++)
-        {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is "class" or "interface" or "enum" or "record")
-            {
-                keywordIndex = i;
-                nameIndex = i + 1;
-                break;
-            }
-        }
-
-        if (keywordIndex < 0 || nameIndex < 0 || nameIndex >= tokens.Count)
-            return;
-
-        var nameToken = line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length);
-        EmitJavaGenericBoundReferencesFromHeader(
-            nameToken,
-            tokens[nameIndex].Start,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-    }
-
-    private static void EmitJavaGenericBoundReferencesFromHeader(
-        string header,
-        int headerStartInLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int openAngle = header.IndexOf('<');
-        if (openAngle < 0)
-            return;
-
-        int closeAngle = FindMatchingChar(header, openAngle, '<', '>');
-        if (closeAngle < 0)
-            return;
-
-        var parameterClauseText = header.Substring(openAngle + 1, closeAngle - openAngle - 1);
-        var genericParameterNames = CollectJavaGenericParameterNames(parameterClauseText);
-
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterClauseText))
-        {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
-                continue;
-
-            int extendsIndex = FindTopLevelKeyword(rawParameter, "extends");
-            if (extendsIndex < 0)
-                continue;
-
-            var boundsText = rawParameter.Substring(extendsIndex + "extends".Length).Trim();
-            if (boundsText.Length == 0)
-                continue;
-
-            foreach (var (boundStart, boundLength) in SplitTopLevelAmpersandSpans(boundsText))
-            {
-                var rawBound = boundsText.Substring(boundStart, boundLength).Trim();
-                if (rawBound.Length == 0)
-                    continue;
-
-                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + CountLeadingWhitespace(boundsText, boundStart, boundLength);
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    rawBound,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "java",
-                    genericParameterNames);
-            }
-        }
-    }
-
-    private static HashSet<string> CollectJavaGenericParameterNames(string parameterClauseText)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterClauseText))
-        {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
-                continue;
-
-            int extendsIndex = FindTopLevelKeyword(rawParameter, "extends");
-            var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
-            if (TryReadJavaGenericParameterName(nameFragment, out var name))
-                names.Add(name);
-        }
-
-        return names;
-    }
-
-    private static bool TryReadJavaGenericParameterName(string text, out string name)
-    {
-        name = string.Empty;
-        int i = 0;
-        while (i < text.Length)
-        {
-            while (i < text.Length && char.IsWhiteSpace(text[i]))
-                i++;
-            if (i >= text.Length)
-                return false;
-            if (text[i] == '@')
-            {
-                i = SkipJavaAnnotation(text, i);
-                continue;
-            }
-            break;
-        }
-
-        int start = i;
-        if (start >= text.Length || !IsJavaIdentifierPart(text[start]))
-            return false;
-
-        i++;
-        while (i < text.Length && IsJavaIdentifierPart(text[i]))
-            i++;
-
-        name = text.Substring(start, i - start);
-        return name.Length > 0;
-    }
-
-    private static void EmitJavaThrowsReferences(
-        string line,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        int keywordIndex = FindTopLevelKeyword(line, "throws");
-        if (keywordIndex < 0)
-            return;
-
-        int listStart = keywordIndex + "throws".Length;
-        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
-            listStart++;
-        int listEnd = FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
-        if (listEnd < 0)
-            listEnd = line.Length - listStart;
-        var typeList = line.Substring(listStart, listEnd);
-        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
-        {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
-                continue;
-            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                rawSegment,
-                absoluteStart,
-                context,
-                lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                "java");
-        }
-    }
-
-    private static void EmitDeclarationTypeReferences(
+    internal static void EmitDeclarationTypeReferences(
         string language,
         string line,
         List<ReferenceRecord> references,
@@ -5447,7 +3077,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void EmitTypeScriptDeclarationTypeReferences(
+    internal static void EmitTypeScriptDeclarationTypeReferences(
         string line,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -5585,7 +3215,7 @@ public static class ReferenceExtractor
         return line.Length;
     }
 
-    private static bool TryFindCallableParameterList(
+    internal static bool TryFindCallableParameterList(
         string line,
         string language,
         out int callableNameStart,
@@ -5652,7 +3282,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
+    internal static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
     {
         typeStart = -1;
         typeLength = 0;
@@ -6156,7 +3786,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static void AddTypeExpressionSegments(
+    internal static void AddTypeExpressionSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -6448,7 +4078,7 @@ public static class ReferenceExtractor
         return i;
     }
 
-    private static int SkipJavaAnnotation(string text, int start)
+    internal static int SkipJavaAnnotation(string text, int start)
     {
         int i = start + 1;
         while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
@@ -6463,7 +4093,7 @@ public static class ReferenceExtractor
         return i - 1;
     }
 
-    private static int FindMatchingChar(string text, int openIndex, char open, char close)
+    internal static int FindMatchingChar(string text, int openIndex, char open, char close)
     {
         int depth = 0;
         for (int i = openIndex; i < text.Length; i++)
@@ -6568,7 +4198,7 @@ public static class ReferenceExtractor
         return -1;
     }
 
-    private static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
+    internal static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
     {
         var tokens = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -6628,7 +4258,7 @@ public static class ReferenceExtractor
         return tokens;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
     {
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -6676,7 +4306,7 @@ public static class ReferenceExtractor
         return spans;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
     {
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -6724,7 +4354,7 @@ public static class ReferenceExtractor
         return spans;
     }
 
-    private static int CountLeadingWhitespace(string text, int start, int length)
+    internal static int CountLeadingWhitespace(string text, int start, int length)
     {
         int count = 0;
         while (count < length && char.IsWhiteSpace(text[start + count]))
@@ -6732,7 +4362,7 @@ public static class ReferenceExtractor
         return count;
     }
 
-    private static int FindTypeListTerminator(string text, bool allowArrow)
+    internal static int FindTypeListTerminator(string text, bool allowArrow)
     {
         int brace = FindFirstTopLevelChar(text, '{');
         int semi = FindFirstTopLevelChar(text, ';');
@@ -6754,7 +4384,7 @@ public static class ReferenceExtractor
         return end >= 0 ? text.Substring(0, end) : text;
     }
 
-    private static int FindJavaTypeListTerminator(string text, int start)
+    internal static int FindJavaTypeListTerminator(string text, int start)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -6789,7 +4419,7 @@ public static class ReferenceExtractor
         return -1;
     }
 
-    private static int FindTopLevelKeyword(string text, string keyword)
+    internal static int FindTopLevelKeyword(string text, string keyword)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -7109,11 +4739,11 @@ public static class ReferenceExtractor
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
-    private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    internal sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    internal sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
-    private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
-    private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
+    internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
+    internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
     private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
     {
@@ -7469,79 +5099,6 @@ public static class ReferenceExtractor
 
         return names;
     }
-
-    private static HashSet<string>? BuildShellCallableNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "shell")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("function" or "alias") || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static HashSet<string>? BuildShellGlobalAliasNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "shell")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "alias" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
-                continue;
-
-            if (!Regex.IsMatch(signature, @"^alias(?:\s+-[^\s=]+)*\s+-g\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static HashSet<string>? BuildDockerfileStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "dockerfile")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static bool IsShellGlobalAliasReferenceBoundary(string text, int startIndex, int length)
-    {
-        if (startIndex < 0 || length <= 0 || startIndex + length > text.Length)
-            return false;
-
-        if (startIndex > 0 && !IsShellGlobalAliasBoundarySeparator(text[startIndex - 1]))
-            return false;
-
-        var endIndex = startIndex + length;
-        return endIndex >= text.Length || IsShellGlobalAliasBoundarySeparator(text[endIndex]);
-    }
-
-    private static bool IsShellGlobalAliasBoundarySeparator(char ch) =>
-        char.IsWhiteSpace(ch) || ch is '|' or ';' or '&' or '{' or '}' or '(' or ')' or '!';
 
     private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
     {
@@ -7921,7 +5478,7 @@ public static class ReferenceExtractor
             || symbol.Signature.StartsWith("const ", StringComparison.Ordinal);
     }
 
-    private static void EmitCSharpQualifiedEnumMemberReferences(
+    internal static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
@@ -8067,7 +5624,7 @@ public static class ReferenceExtractor
         return cursor;
     }
 
-      private static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+      internal static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
       {
           var whenOffset = FindTopLevelCSharpWhenKeywordOffset(preparedLine);
           if (whenOffset >= 0 && nameIndex > whenOffset)
@@ -8707,331 +6264,6 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
-
-    private static string NormalizeRustIdentifier(string identifier)
-    {
-        if (identifier.Length == 0)
-            return identifier;
-
-        var segments = identifier.Split("::");
-        for (var i = 0; i < segments.Length; i++)
-        {
-            var segment = segments[i];
-            if (segment.StartsWith("r#", StringComparison.Ordinal))
-                segments[i] = segment[2..];
-        }
-
-        return string.Join("::", segments);
-    }
-
-    private static bool IsRustFunctionDeclarationCallSite(string line, int callIndex)
-    {
-        if (callIndex <= 0)
-            return false;
-
-        var prefix = line[..callIndex].TrimEnd();
-        return prefix.EndsWith("fn", StringComparison.Ordinal);
-    }
-
-    private static bool IsRustRawIdentifierPrefix(string line, int callIndex) =>
-        callIndex >= 2
-        && line[callIndex - 2] == 'r'
-        && line[callIndex - 1] == '#';
-
-    private static string NormalizeShellSourceTargetToken(string token)
-    {
-        var trimmed = token.Trim();
-        if (trimmed.Length >= 2)
-        {
-            var quote = trimmed[0];
-            if ((quote == '\'' || quote == '"') && trimmed[^1] == quote)
-                return trimmed[1..^1];
-        }
-
-        return trimmed;
-    }
-
-    private static string StripShellComment(string line)
-    {
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
-        var escapeNext = false;
-
-        for (var i = 0; i < line.Length; i++)
-        {
-            var ch = line[i];
-            if (escapeNext)
-            {
-                escapeNext = false;
-                continue;
-            }
-
-            if (inSingleQuote)
-            {
-                if (ch == '\'')
-                    inSingleQuote = false;
-                continue;
-            }
-
-            if (inDoubleQuote)
-            {
-                if (ch == '"')
-                {
-                    inDoubleQuote = false;
-                    continue;
-                }
-
-                if (ch == '\\')
-                    escapeNext = true;
-                continue;
-            }
-
-            if (ch == '#')
-                return line[..i];
-
-            if (ch == '\'')
-            {
-                inSingleQuote = true;
-                continue;
-            }
-
-            if (ch == '"')
-            {
-                inDoubleQuote = true;
-                continue;
-            }
-
-            if (ch == '\\')
-                escapeNext = true;
-        }
-
-        return line;
-    }
-
-    private static void EmitCssScssReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        foreach (Match match in ScssVariableReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (ShouldSkipScssVariableReference(preparedLine, nameGroup.Index))
-                continue;
-
-            AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "call",
-                context,
-                lineNumber,
-                container);
-        }
-
-        foreach (Match match in ScssExtendReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "call",
-                context,
-                lineNumber,
-                container);
-        }
-    }
-
-    private static void EmitPhpStaticAccessReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        foreach (Match match in PhpStaticAccessRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            var rawName = nameGroup.Value;
-            var trimmedName = rawName.TrimStart('\\');
-            if (trimmedName.Length == 0)
-                continue;
-
-            var leadingBackslashCount = rawName.Length - trimmedName.Length;
-            var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
-            var shortName = trimmedName[shortNameStart..];
-            if (shortName.Length == 0)
-                continue;
-
-            var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
-            if (trimmedName.Length > shortName.Length)
-            {
-                AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    trimmedName,
-                    qualifiedNameIndex,
-                    "type_reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-
-            if (!string.Equals(shortName, "self", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(shortName, "static", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(shortName, "parent", StringComparison.OrdinalIgnoreCase))
-            {
-                var shortNameIndex = qualifiedNameIndex + shortNameStart;
-                AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    shortName,
-                    shortNameIndex,
-                    "type_reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-        }
-    }
-
-    private static void EmitPhpObjectMemberAccessReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        foreach (Match match in PhpObjectMemberAccessRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "reference",
-                context,
-                lineNumber,
-                container);
-        }
-    }
-
-    private static void EmitTerraformReferences(
-        string preparedLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? definitionNames,
-        SymbolRecord? container)
-    {
-        foreach (Match match in TerraformVarReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in TerraformLocalReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in TerraformModuleReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in TerraformDataReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in TerraformResourceReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
-                continue;
-
-            if (IsTerraformSpecialReferencePrefix(preparedLine, match.Index))
-                continue;
-
-            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
-        }
-    }
-
-    private static bool IsTerraformSpecialReferencePrefix(string line, int typeStartIndex)
-    {
-        return HasTerraformPrefix(line, typeStartIndex, "var")
-            || HasTerraformPrefix(line, typeStartIndex, "local")
-            || HasTerraformPrefix(line, typeStartIndex, "module")
-            || HasTerraformPrefix(line, typeStartIndex, "data");
-    }
-
-    private static bool HasTerraformPrefix(string line, int typeStartIndex, string prefix)
-    {
-        int prefixStart = typeStartIndex - prefix.Length - 1;
-        if (prefixStart < 0)
-            return false;
-
-        return line.AsSpan(prefixStart, prefix.Length).SequenceEqual(prefix)
-            && line[prefixStart + prefix.Length] == '.';
-    }
-
-    private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
-    {
-        var trimmed = preparedLine.TrimStart();
-        if (trimmed.StartsWith("$", StringComparison.Ordinal))
-        {
-            var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
-            if (declarationColonIndex >= 0)
-                return true;
-        }
-
-        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
-            || trimmed.StartsWith("@function", StringComparison.Ordinal))
-        {
-            var braceIndex = preparedLine.IndexOf('{');
-            if (braceIndex < 0)
-                return true;
-            if (variableIndex < braceIndex)
-                return true;
-        }
-
-        return false;
-    }
 
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,
@@ -12232,7 +9464,7 @@ public static class ReferenceExtractor
         return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
     }
 
-    private static void AddTypeReferenceSegment(
+    internal static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -13096,7 +10328,7 @@ public static class ReferenceExtractor
         _ => 7,
     };
 
-    private static SymbolRecord? FindInnermostClassLike(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    internal static SymbolRecord? FindInnermostClassLike(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
     {
         foreach (var candidate in candidates)
         {
@@ -13113,483 +10345,6 @@ public static class ReferenceExtractor
 
         return null;
     }
-
-    private static void EmitCSharpCtorChainReferences(
-        string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
-        IReadOnlyList<SymbolRecord> containerCandidates,
-        string[] structuralLines,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        var chainMatches = CSharpCtorChainRegex.Matches(preparedLine);
-        if (chainMatches.Count == 0)
-            return;
-
-        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
-        if (enclosingType == null)
-            return;
-
-        // For cross-line initializers such as:
-        //   public A(int x, int y)
-        //       : this(x, 0)
-        //   { }
-        // the chain line precedes the body, so the inner-most "body-covering" container lookup
-        // returns the class rather than the constructor. Fall back to a declaration-to-body-end
-        // lookup so the reference is attributed to the constructor that owns the chain.
-        // クロス行イニシャライザでは body よりも前に連鎖行が現れるため、body 範囲のみで
-        // 判定すると外側クラスが選ばれる。宣言〜body 終端の範囲で探し直す。
-        var chainContainer = container;
-        if (chainContainer == null || chainContainer.Kind != "function")
-        {
-            chainContainer = FindDeclarationRangeFunction(containerCandidates, lineNumber) ?? chainContainer;
-        }
-
-        foreach (Match match in chainMatches)
-        {
-            var kindToken = match.Groups["kind"].Value;
-            string? target;
-            if (kindToken == "this")
-            {
-                target = enclosingType.Name;
-            }
-            else
-            {
-                // `base(...)` needs the base type from the enclosing class's signature.
-                // SymbolRecord.Signature only captures the first declaration line, so multi-line
-                // base-lists (e.g. `class Child\n    : Parent`) lose the `: Parent` continuation.
-                // Reconstruct the joined header up to the first `;` or `{` from structuralLines.
-                // `base(...)` は外側クラスのシグネチャから基底型を解析する必要がある。
-                // SymbolRecord.Signature は宣言 1 行目しか持たないので複数行 base-list が欠落する。
-                // structuralLines から最初の `;` / `{` までを連結し直して渡す。
-                var (_, _, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
-                target = ParseCSharpBaseType(headerText);
-                if (string.IsNullOrWhiteSpace(target))
-                    target = ParseCSharpBaseType(enclosingType.Signature);
-                if (string.IsNullOrWhiteSpace(target))
-                    continue;
-            }
-
-            AddChainReference(
-                references, seen, fileId, target!, match.Groups["kind"].Index + 1,
-                "call", context, lineNumber, chainContainer);
-        }
-    }
-
-    private static SymbolRecord? FindDeclarationRangeFunction(
-        IReadOnlyList<SymbolRecord> candidates, int lineNumber)
-    {
-        foreach (var candidate in candidates)
-        {
-            if (candidate.Kind != "function")
-                continue;
-            if (candidate.StartLine <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
-                return candidate;
-        }
-
-        return null;
-    }
-
-    private static void EmitJavaCtorChainReferences(
-        string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
-        IReadOnlyList<SymbolRecord> symbols,
-        string[] structuralLines,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        var match = JavaCtorChainRegex.Match(preparedLine);
-        if (!match.Success)
-            return;
-
-        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
-        if (enclosingType == null)
-            return;
-
-        // Prefer the innermost container when it is already a constructor of the enclosing class.
-        // Otherwise, fall back to scanning all function-kind symbols by name match against the enclosing
-        // class. Package-private ctors like `Leaf(int x){super(x);}` can appear without body ranges in
-        // SymbolExtractor, so they are excluded from containerCandidates and the innermost container
-        // becomes the class itself. Same-line ctor bodies are not emitted as function symbols at all
-        // (the enum-member regex requires the line to end with `,`/`{`/`;`), so the final fallback
-        // synthesizes a container from the current line when it matches a ctor declaration shape.
-        // 外側クラスのコンストラクタが innermost container として既に見つかっていれば使う。
-        // そうでなければ、関数シンボル全体を走査して外側クラスと同名のコンストラクタを
-        // declaration StartLine ベースで引き直す。same-line body ctor は関数シンボル自体が
-        // 存在しないので、行の shape から合成 container を作る。
-        SymbolRecord? ctorContainer = null;
-        if (container != null && container.Kind == "function"
-            && string.Equals(container.Name, enclosingType.Name, StringComparison.Ordinal))
-        {
-            ctorContainer = container;
-        }
-        else
-        {
-            ctorContainer = FindEnclosingJavaConstructor(symbols, enclosingType, lineNumber)
-                ?? TrySynthesizeSameLineJavaCtor(preparedLine, enclosingType, lineNumber)
-                ?? FindEnclosingJavaConstructorFromStructure(structuralLines, enclosingType, lineNumber);
-        }
-
-        if (ctorContainer == null)
-            return;
-
-        var kindToken = match.Groups["kind"].Value;
-        string? target;
-        if (kindToken == "this")
-        {
-            target = enclosingType.Name;
-        }
-        else
-        {
-            // Java base-list can span multiple lines (`class Leaf\n    extends Base`).
-            // SymbolRecord.Signature only captures the first declaration line, so reconstruct
-            // the enclosing type header from structural lines (reusing the C# helper — the
-            // scanner stops at `;` / `{`, which also bounds Java class / record / enum headers).
-            // Java の base-list も複数行にまたがる (`class Leaf\n    extends Base`)。
-            // SymbolRecord.Signature は 1 行目しか持たないため、structural lines からヘッダを
-            // 再構築する (C# 用ヘルパーを流用。`;` / `{` 終端は Java にも適用可)。
-            var (_, _, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
-            target = ParseJavaBaseType(headerText);
-            if (string.IsNullOrWhiteSpace(target))
-                target = ParseJavaBaseType(enclosingType.Signature);
-            if (string.IsNullOrWhiteSpace(target))
-                return;
-        }
-
-        AddChainReference(
-            references, seen, fileId, target!, match.Groups["kind"].Index + 1,
-            "call", context, lineNumber, ctorContainer);
-    }
-
-    /// <summary>
-    /// Find the Java constructor symbol that encloses the given line number by name-matching
-    /// the enclosing class. Covers package-private ctors that SymbolExtractor records without
-    /// body ranges (so they are absent from containerCandidates).
-    /// 指定行を内包する Java コンストラクタを、外側クラス名との一致で走査して探す。
-    /// body 範囲を持たない package-private ctor でも declaration StartLine 起点で拾える。
-    /// </summary>
-    private static SymbolRecord? FindEnclosingJavaConstructor(
-        IReadOnlyList<SymbolRecord> symbols,
-        SymbolRecord enclosingType,
-        int lineNumber)
-    {
-        var classStart = enclosingType.BodyStartLine ?? enclosingType.StartLine;
-        var classEnd = enclosingType.BodyEndLine ?? enclosingType.EndLine;
-
-        // Collect all ctor-name function symbols declared inside the class body at or before
-        // `lineNumber`. When the symbol carries a body range, we can check the range directly.
-        // Otherwise we fall back to the most recent declaration line at or before `lineNumber`,
-        // bounded above by the next same-name ctor declaration (so the reference is still
-        // attributed to the constructor that actually owns the chain line).
-        // body 範囲があるシンボルは範囲判定、body 範囲の無い package-private ctor は
-        // 次の同名 ctor 宣言の直前までを占有範囲として扱う。
-        List<SymbolRecord>? candidates = null;
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function")
-                continue;
-            if (!string.Equals(symbol.Name, enclosingType.Name, StringComparison.Ordinal))
-                continue;
-            if (symbol.StartLine < classStart || symbol.StartLine > classEnd)
-                continue;
-            if (symbol.StartLine > lineNumber)
-                continue;
-            (candidates ??= new List<SymbolRecord>()).Add(symbol);
-        }
-
-        if (candidates == null)
-            return null;
-
-        candidates.Sort((a, b) => a.StartLine.CompareTo(b.StartLine));
-
-        SymbolRecord? best = null;
-        for (int i = 0; i < candidates.Count; i++)
-        {
-            var symbol = candidates[i];
-            var hasBodyRange = symbol.BodyStartLine != null && symbol.BodyEndLine != null;
-            int rangeEnd;
-            if (hasBodyRange)
-            {
-                rangeEnd = symbol.BodyEndLine!.Value;
-            }
-            else
-            {
-                // Extend to just before the next same-name ctor declaration, else to the end
-                // of the enclosing class body. This approximates the ctor's true range when
-                // SymbolExtractor could not parse the braces (e.g. package-private Java ctors).
-                // 次の同名 ctor 宣言の直前、もしくは外側クラス body の終端まで拡張する。
-                var nextStart = (i + 1 < candidates.Count) ? candidates[i + 1].StartLine : classEnd + 1;
-                rangeEnd = nextStart - 1;
-            }
-
-            if (rangeEnd < lineNumber)
-                continue;
-
-            // Innermost / most recent declaration wins.
-            // 一番近い宣言行を選ぶ。
-            if (best == null || symbol.StartLine > best.StartLine)
-                best = symbol;
-        }
-
-        return best;
-    }
-
-    /// <summary>
-    /// Walk structural lines within the enclosing type body to recover a Java constructor
-    /// whose header does not match SymbolExtractor's return-type-required method regex. Java
-    /// constructors have no return type, so plain forms like `Leaf() {` / `Shade(int code) {`
-    /// are not emitted as function symbols; this fallback parses them directly so chain calls
-    /// can still be attributed to the owning ctor. Handles Allman style (`Leaf()\n{`),
-    /// multi-line parameter lists, and multi-line `throws` clauses by delegating body range
-    /// resolution to <see cref="SymbolExtractor.FindJavaBraceRange"/> (paren/bracket/angle
-    /// depth aware, and string/comment/text-block aware).
-    /// 外側型の body 内を走査して、return 型を持たない Java コンストラクタ
-    /// （`Leaf() {` / `Shade(int code) {` / Allman 形式の `Leaf()\n{` / 複数行 parameter /
-    /// 複数行 `throws` など）を復元する。SymbolExtractor のメソッド regex は戻り値型を必須
-    /// とするため function シンボルが作られない。body 範囲の決定は FindJavaBraceRange に
-    /// 委譲し、`()` / `[]` / `<>` の深さと文字列・コメント・text block を考慮する。
-    /// </summary>
-    private static SymbolRecord? FindEnclosingJavaConstructorFromStructure(
-        string[] structuralLines,
-        SymbolRecord enclosingType,
-        int lineNumber)
-    {
-        var classBodyStart = enclosingType.BodyStartLine ?? enclosingType.StartLine;
-        var classBodyEnd = enclosingType.BodyEndLine ?? enclosingType.EndLine;
-        if (classBodyStart <= 0 || classBodyEnd < classBodyStart)
-            return null;
-        if (lineNumber < classBodyStart || lineNumber > classBodyEnd)
-            return null;
-
-        int i = classBodyStart - 1; // 0-based
-        var lastIndex = Math.Min(structuralLines.Length - 1, classBodyEnd - 1);
-        while (i <= lastIndex)
-        {
-            if (!TryMatchJavaCtorHeaderStart(structuralLines, i, lastIndex, enclosingType.Name))
-            {
-                i++;
-                continue;
-            }
-
-            int declStart = i + 1; // 1-based
-
-            // Let FindJavaBraceRange scan the entire header + body from the ctor start line.
-            // It tracks paren / bracket / angle depth (so multi-line parameter lists,
-            // annotations, and bounded generics don't mislead the body scan) and returns the
-            // matching `}` as BodyEndLine. A `;`-terminated line without `{` yields
-            // BodyEndLine == null; that shape is not a constructor body and is skipped.
-            // FindJavaBraceRange がヘッダ + body を一気に走査する。`()`/`[]`/`<>` 深さを追跡
-            // するため、複数行の parameter / annotation / bounded generic で誤検出しない。
-            var (endLine, _, bodyEndLine) = SymbolExtractor.FindJavaBraceRange(structuralLines, i, 0);
-            if (bodyEndLine is null)
-            {
-                // Not a body: advance past whatever the scanner consumed to avoid re-scanning.
-                // body を持たない宣言（`;` 終端など）は ctor ではないので scanner が消費した
-                // 範囲だけ進めて次行へ。
-                i = Math.Max(i + 1, endLine);
-                continue;
-            }
-
-            int bodyEnd = bodyEndLine.Value;
-            if (lineNumber >= declStart && lineNumber <= bodyEnd)
-            {
-                return new SymbolRecord
-                {
-                    Kind = "function",
-                    Name = enclosingType.Name,
-                    Line = declStart,
-                    StartLine = declStart,
-                    EndLine = bodyEnd,
-                    BodyStartLine = declStart,
-                    BodyEndLine = bodyEnd,
-                    ContainerKind = enclosingType.Kind,
-                    ContainerName = enclosingType.Name,
-                    ContainerQualifiedName = enclosingType.ContainerQualifiedName,
-                    Visibility = enclosingType.Visibility,
-                };
-            }
-
-            // Skip past this ctor's body to avoid re-parsing nested declarations inside it.
-            // この ctor の body 以降に飛ばし、内部の宣言を誤って拾わないようにする。
-            i = Math.Max(i + 1, bodyEnd);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Return true when line <paramref name="startIndex"/> starts a Java constructor header
-    /// for <paramref name="ctorName"/>. Accepts both same-line forms (`Leaf() {`) and
-    /// multi-line forms (Allman `Leaf()\n{`, multi-line parameter lists, multi-line `throws`).
-    /// The detector confirms that after modifiers / annotations / optional generics, the ctor
-    /// name appears immediately followed by `(` (possibly on the next non-blank line). The
-    /// body resolver downstream (<see cref="SymbolExtractor.FindJavaBraceRange"/>) rejects
-    /// `;`-terminated declarations without a body, so false positives like enum constants
-    /// `Shade(1);` would still be discarded there even if this detector returns true.
-    /// 指定行が Java コンストラクタヘッダの先頭かを判定する。modifier / annotation /
-    /// optional generics を消費したあと ctor 名が続き、その直後（または次の非空行）に `(`
-    /// が現れるかを検査する。body 側の判定は FindJavaBraceRange が担うため、`;` 終端の
-    /// enum 定数 `Shade(1);` のような偽陽性は下流で落ちる。
-    /// </summary>
-    private static bool TryMatchJavaCtorHeaderStart(
-        string[] lines,
-        int startIndex,
-        int endIndex,
-        string ctorName)
-    {
-        if (startIndex < 0 || startIndex >= lines.Length)
-            return false;
-
-        var line = lines[startIndex];
-        int i = 0;
-        int n = line.Length;
-
-        SkipWhitespace(line, ref i);
-
-        // Consume modifiers and @annotations in any order (mirrors TryExtractJavaSameLineCtorSpan).
-        // modifier と annotation は順不同で交互に現れ得るため、両方を同一ループで消費する。
-        while (true)
-        {
-            SkipWhitespace(line, ref i);
-            if (i < n && line[i] == '@')
-            {
-                i++;
-                if (!ConsumeQualifiedIdentifier(line, ref i))
-                    return false;
-                SkipWhitespace(line, ref i);
-                if (i < n && line[i] == '(')
-                {
-                    if (!SkipBalancedParens(line, ref i))
-                        return false;
-                }
-                continue;
-            }
-
-            int wordStart = i;
-            while (i < n && char.IsLetter(line[i]))
-                i++;
-            if (i == wordStart)
-                break;
-            var word = line.Substring(wordStart, i - wordStart);
-            if (!JavaCtorModifiers.Contains(word))
-            {
-                i = wordStart;
-                break;
-            }
-        }
-
-        SkipWhitespace(line, ref i);
-
-        if (i < n && line[i] == '<')
-        {
-            if (!SkipBalancedAngles(line, ref i))
-                return false;
-            SkipWhitespace(line, ref i);
-        }
-
-        int nameStart = i;
-        if (!ConsumeIdentifier(line, ref i))
-            return false;
-        var name = line.Substring(nameStart, i - nameStart);
-        if (!string.Equals(name, ctorName, StringComparison.Ordinal))
-            return false;
-
-        // The next non-whitespace token (possibly on a later line) must be `(`. Anything else
-        // means this is not a ctor header — e.g. `Leaf leaf = ...` (field/variable) or
-        // `Leaf method() ...` (method with Leaf as return type).
-        // ctor 名の直後の非空白（次行以降でも可）は `(` でなければならない。
-        SkipWhitespace(line, ref i);
-        if (i < n)
-            return line[i] == '(';
-
-        for (int j = startIndex + 1; j <= endIndex && j < lines.Length; j++)
-        {
-            var next = lines[j];
-            int k = 0;
-            while (k < next.Length && char.IsWhiteSpace(next[k]))
-                k++;
-            if (k == next.Length)
-                continue;
-            return next[k] == '(';
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// When the current line itself carries a same-line Java constructor body (for example
-    /// `Leaf(int x) { super(x); }`), synthesize a function-kind container so the chain rewrite
-    /// still attaches the edge to the owning constructor. SymbolExtractor does not emit a
-    /// function symbol for this shape because the enum-member regex requires the line to end
-    /// with `,`, `{`, or `;`.
-    /// same-line body の Java コンストラクタ（`Leaf(int x){super(x);}` など）では SymbolExtractor
-    /// が function 化しないため、行自体を直接スキャンして合成 container を作る。
-    /// </summary>
-    private static SymbolRecord? TrySynthesizeSameLineJavaCtor(
-        string preparedLine,
-        SymbolRecord enclosingType,
-        int lineNumber)
-    {
-        var name = TryExtractJavaCtorNameFromLine(preparedLine);
-        if (name is null)
-            return null;
-        if (!string.Equals(name, enclosingType.Name, StringComparison.Ordinal))
-            return null;
-
-        return BuildSameLineJavaCtorContainer(enclosingType, lineNumber);
-    }
-
-    /// <summary>
-    /// Per-line Java same-line ctor span resolved against the enclosing class. Returns the
-    /// synthetic function-kind container paired with the 0-based indices of the ctor name,
-    /// body-opening `{`, and body-closing `}` on the current line. Used by the main loop to
-    /// (1) attribute body-level calls inside the `{ ... }` block to the synthetic ctor and
-    /// (2) suppress the bogus declarator self-call on the ctor name.
-    /// 同一行 Java ctor の span を外側クラスと突き合わせた結果を返す。合成 function コンテナと、
-    /// ctor 名・body `{`・body `}` の 0-based 位置をセットで返し、call 帰属の振り向けと宣言子
-    /// の自己 call 抑止に使う。
-    /// </summary>
-    private static (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)?
-        TryBuildJavaSameLineCtorSpan(
-            string preparedLine,
-            int lineNumber,
-            IReadOnlyList<SymbolRecord> enclosingTypeCandidates)
-    {
-        var span = TryExtractJavaSameLineCtorSpan(preparedLine);
-        if (span is null)
-            return null;
-        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
-        if (enclosingType == null)
-            return null;
-        if (!string.Equals(span.Value.Name, enclosingType.Name, StringComparison.Ordinal))
-            return null;
-
-        var synthetic = BuildSameLineJavaCtorContainer(enclosingType, lineNumber);
-        return (synthetic, span.Value.NameIndex, span.Value.OpenBraceIndex, span.Value.CloseBraceIndex);
-    }
-
-    private static SymbolRecord BuildSameLineJavaCtorContainer(SymbolRecord enclosingType, int lineNumber)
-        => new SymbolRecord
-        {
-            Kind = "function",
-            Name = enclosingType.Name,
-            Line = lineNumber,
-            StartLine = lineNumber,
-            EndLine = lineNumber,
-            BodyStartLine = lineNumber,
-            BodyEndLine = lineNumber,
-            ContainerKind = enclosingType.Kind,
-            ContainerName = enclosingType.Name,
-            ContainerQualifiedName = enclosingType.ContainerQualifiedName,
-            Visibility = enclosingType.Visibility,
-        };
 
     /// <summary>
     /// Same-line Java ctor span capturing the declarator name plus the 0-based indices of the
@@ -13615,7 +10370,7 @@ public static class ReferenceExtractor
     /// same-line ctor 宣言を depth-aware にスキャンして ctor 名を返すヘルパー。
     /// </summary>
     internal static string? TryExtractJavaCtorNameFromLine(string line)
-        => TryExtractJavaSameLineCtorSpan(line)?.Name;
+        => JavaReferenceExtractor.TryExtractCtorNameFromLine(line);
 
     /// <summary>
     /// Same as <see cref="TryExtractJavaCtorNameFromLine"/> but also returns the ctor name
@@ -13624,228 +10379,7 @@ public static class ReferenceExtractor
     /// `}` 位置もまとめて返すバリアント。
     /// </summary>
     internal static JavaSameLineCtorSpan? TryExtractJavaSameLineCtorSpan(string line)
-    {
-        int i = 0;
-        int n = line.Length;
-
-        SkipWhitespace(line, ref i);
-
-        // Consume annotations and access / misc modifiers in any order so that forms such as
-        // `public @Deprecated Leaf(...)` and `@demo.Ann private Leaf(...)` are both accepted
-        // instead of bailing when an annotation appears after a modifier keyword.
-        // アノテーションと access modifier は順不同で交互に現れ得るため、両方を 1 つのループで
-        // 反復消費する。途中でどちらでもないトークンが来たら ctor 名（または `<...>`）へ遷移する。
-        while (true)
-        {
-            SkipWhitespace(line, ref i);
-            if (i < n && line[i] == '@')
-            {
-                i++;
-                if (!ConsumeQualifiedIdentifier(line, ref i))
-                    return null;
-                SkipWhitespace(line, ref i);
-                if (i < n && line[i] == '(')
-                {
-                    if (!SkipBalancedParens(line, ref i))
-                        return null;
-                }
-                continue;
-            }
-
-            int wordStart = i;
-            while (i < n && char.IsLetter(line[i]))
-                i++;
-            if (i == wordStart)
-                break;
-            var word = line.Substring(wordStart, i - wordStart);
-            if (!JavaCtorModifiers.Contains(word))
-            {
-                i = wordStart;
-                break;
-            }
-        }
-
-        SkipWhitespace(line, ref i);
-
-        if (i < n && line[i] == '<')
-        {
-            if (!SkipBalancedAngles(line, ref i))
-                return null;
-            SkipWhitespace(line, ref i);
-        }
-
-        int nameStart = i;
-        if (!ConsumeIdentifier(line, ref i))
-            return null;
-        var name = line.Substring(nameStart, i - nameStart);
-
-        SkipWhitespace(line, ref i);
-        if (i >= n || line[i] != '(')
-            return null;
-        if (!SkipBalancedParens(line, ref i))
-            return null;
-        SkipWhitespace(line, ref i);
-
-        if (i + 6 <= n && string.CompareOrdinal(line, i, "throws", 0, 6) == 0 &&
-            (i + 6 == n || char.IsWhiteSpace(line[i + 6])))
-        {
-            i += 6;
-            while (i < n && line[i] != '{')
-                i++;
-        }
-
-        SkipWhitespace(line, ref i);
-        if (i >= n || line[i] != '{')
-            return null;
-
-        int openBrace = i;
-        int closeBrace = FindMatchingBraceClose(line, openBrace);
-        return new JavaSameLineCtorSpan(name, nameStart, openBrace, closeBrace);
-    }
-
-    /// <summary>
-    /// Find the `}` that closes the block opened at <paramref name="openBrace"/>, respecting
-    /// string / char literals and nested `{ ... }` pairs. Returns -1 when no matching close is
-    /// on the same line. Used to bound per-line Java same-line ctor body ranges.
-    /// 同一行内で `{` と対応する `}` を探す。文字列・文字リテラルと入れ子の `{}` を尊重する。
-    /// </summary>
-    private static int FindMatchingBraceClose(string line, int openBrace)
-    {
-        int depth = 0;
-        int n = line.Length;
-        for (int i = openBrace; i < n; i++)
-        {
-            var c = line[i];
-            if (c == '"' || c == '\'')
-            {
-                var quote = c;
-                i++;
-                while (i < n)
-                {
-                    var ch = line[i];
-                    if (ch == '\\' && i + 1 < n) { i += 2; continue; }
-                    if (ch == quote) break;
-                    i++;
-                }
-                if (i >= n) return -1;
-                continue;
-            }
-            if (c == '{') depth++;
-            else if (c == '}')
-            {
-                depth--;
-                if (depth == 0) return i;
-            }
-        }
-        return -1;
-    }
-
-    private static void SkipWhitespace(string text, ref int i)
-    {
-        while (i < text.Length && char.IsWhiteSpace(text[i]))
-            i++;
-    }
-
-    private static bool ConsumeIdentifier(string text, ref int i)
-    {
-        if (i >= text.Length)
-            return false;
-        var c = text[i];
-        if (!(char.IsLetter(c) || c == '_' || c == '$'))
-            return false;
-        i++;
-        while (i < text.Length)
-        {
-            c = text[i];
-            if (char.IsLetterOrDigit(c) || c == '_' || c == '$')
-                i++;
-            else
-                break;
-        }
-        return true;
-    }
-
-    private static bool ConsumeQualifiedIdentifier(string text, ref int i)
-    {
-        if (!ConsumeIdentifier(text, ref i))
-            return false;
-        while (i < text.Length && text[i] == '.')
-        {
-            int save = i;
-            i++;
-            if (!ConsumeIdentifier(text, ref i))
-            {
-                i = save;
-                break;
-            }
-        }
-        return true;
-    }
-
-    private static bool SkipBalancedParens(string text, ref int i)
-    {
-        if (i >= text.Length || text[i] != '(')
-            return false;
-        int depth = 0;
-        for (; i < text.Length; i++)
-        {
-            var c = text[i];
-            // Skip string / char literals so an embedded `)` inside `@Ann(text=")")` does not
-            // prematurely close the annotation argument list.
-            // 文字列・文字リテラル内の `)` で annotation 引数を早期終了しないようスキップする。
-            if (c == '"' || c == '\'')
-            {
-                var quote = c;
-                i++;
-                while (i < text.Length)
-                {
-                    var ch = text[i];
-                    if (ch == '\\' && i + 1 < text.Length) { i += 2; continue; }
-                    if (ch == quote) break;
-                    i++;
-                }
-                if (i >= text.Length) return false;
-                continue;
-            }
-            if (c == '(') depth++;
-            else if (c == ')')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    i++;
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static bool SkipBalancedAngles(string text, ref int i)
-    {
-        if (i >= text.Length || text[i] != '<')
-            return false;
-        int depth = 0;
-        for (; i < text.Length; i++)
-        {
-            var c = text[i];
-            if (c == '<') depth++;
-            else if (c == '>')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    i++;
-                    return true;
-                }
-            }
-            else if (c == '{' || c == ';')
-            {
-                return false;
-            }
-        }
-        return false;
-    }
+        => JavaReferenceExtractor.TryExtractSameLineCtorSpan(line);
 
     private static void AddChainReference(
         List<ReferenceRecord> references,
@@ -13909,36 +10443,6 @@ public static class ReferenceExtractor
 
             var container = resolveContainerForColumn(nameGroup.Index);
             AddChainReference(references, seen, fileId, name, nameGroup.Index, "call", context, lineNumber, container);
-        }
-    }
-
-    private static void EmitJavaMethodReferenceReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        foreach (Match match in JavaMethodReferenceRegex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            var container = resolveContainerForColumn(nameGroup.Index);
-
-            if (string.Equals(nameGroup.Value, "new", StringComparison.Ordinal))
-            {
-                var ownerGroup = match.Groups["owner"];
-                if (!ownerGroup.Success || ownerGroup.Value.Length == 0)
-                    continue;
-                if (ownerGroup.Value is "this" or "super")
-                    continue;
-
-                AddReference(references, seen, fileId, ownerGroup.Value, ownerGroup.Index, "instantiate", context, lineNumber, container);
-                continue;
-            }
-
-            AddChainReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "call", context, lineNumber, container);
         }
     }
 
@@ -14514,7 +11018,7 @@ public static class ReferenceExtractor
         return sb.ToString();
     }
 
-    private static bool IsJavaIdentifierPart(char c) =>
+    internal static bool IsJavaIdentifierPart(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
     private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword)
@@ -14648,491 +11152,6 @@ public static class ReferenceExtractor
 
         segment = segment.Trim();
         return segment.Length > 0 ? segment : null;
-    }
-
-    private static Dictionary<int, List<SqlDefinitionLeafSpan>> BuildSqlDefinitionLeafSpansByLine(string[] lines, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var spansByLine = new Dictionary<int, List<SqlDefinitionLeafSpan>>();
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Line < 1 || symbol.Line > lines.Length)
-                continue;
-            if (!TryFindSqlDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, out var span))
-                continue;
-
-            if (!spansByLine.TryGetValue(symbol.Line, out var spans))
-            {
-                spans = [];
-                spansByLine[symbol.Line] = spans;
-            }
-
-            spans.Add(span);
-        }
-
-        return spansByLine;
-    }
-
-    private static bool TryFindSqlDefinitionLeafSpan(string line, string qualifiedName, out SqlDefinitionLeafSpan span)
-    {
-        span = default;
-        if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(qualifiedName))
-            return false;
-
-        var leafName = SqlNameResolver.GetLeafName(qualifiedName);
-        if (string.IsNullOrWhiteSpace(leafName))
-            return false;
-
-        var rawSegments = SplitSqlQualifiedNameSourceSegments(qualifiedName);
-        if (rawSegments.Count == 0)
-            return false;
-
-        var pattern = new StringBuilder();
-        for (var i = 0; i < rawSegments.Count; i++)
-        {
-            if (i > 0)
-                pattern.Append(@"\s*\.\s*");
-
-            var escaped = Regex.Escape(rawSegments[i]);
-            if (i == rawSegments.Count - 1)
-                pattern.Append("(?<leaf>").Append(escaped).Append(')');
-            else
-                pattern.Append(escaped);
-        }
-
-        var match = Regex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!match.Success)
-            return false;
-
-        var leafGroup = match.Groups["leaf"];
-        if (!leafGroup.Success)
-            return false;
-
-        span = new SqlDefinitionLeafSpan(leafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
-        return true;
-    }
-
-    private static List<string> SplitSqlQualifiedNameSourceSegments(string qualifiedName)
-    {
-        var trimmed = qualifiedName.Trim();
-        var segments = new List<string>();
-        var current = new StringBuilder();
-        char quote = '\0';
-
-        for (var i = 0; i < trimmed.Length; i++)
-        {
-            var ch = trimmed[i];
-            if (quote != '\0')
-            {
-                current.Append(ch);
-                if (quote == '[')
-                {
-                    if (ch == ']')
-                    {
-                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
-                        {
-                            current.Append(trimmed[i + 1]);
-                            i++;
-                        }
-                        else
-                        {
-                            quote = '\0';
-                        }
-                    }
-
-                    continue;
-                }
-
-                if (ch == quote)
-                {
-                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
-                    {
-                        current.Append(trimmed[i + 1]);
-                        i++;
-                    }
-                    else
-                    {
-                        quote = '\0';
-                    }
-                }
-
-                continue;
-            }
-
-            if (ch is '[' or '"' or '`')
-            {
-                quote = ch;
-                current.Append(ch);
-                continue;
-            }
-
-            if (ch == '.')
-            {
-                AppendSqlQualifiedNameSourceSegment(segments, current);
-                continue;
-            }
-
-            current.Append(ch);
-        }
-
-        AppendSqlQualifiedNameSourceSegment(segments, current);
-        return segments;
-    }
-
-    private static void AppendSqlQualifiedNameSourceSegment(List<string> segments, StringBuilder current)
-    {
-        var value = current.ToString().Trim();
-        if (value.Length > 0)
-            segments.Add(value);
-        current.Clear();
-    }
-
-    // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
-    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
-    // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
-    // `$tag$...$tag$` bodies, and line comments so non-code regions cannot leak phantom references
-    // into the graph.
-    // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
-    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列
-    // （複数行本体を含む）、複数行 `/* ... */` コメント、PostgreSQL の `$$...$$` /
-    // `$tag$...$tag$` 本体、行コメントを空白化し、非コード領域から phantom reference が
-    // 漏れないようにする。
-    private static string PrepareSqlLineForIdentifierScan(
-        string line,
-        SqlIdentifierScanState state,
-        string? statementPrefix,
-        out bool lineEndedByLineComment,
-        out SqlIdentifierScanState nextState)
-    {
-        lineEndedByLineComment = false;
-        if (string.IsNullOrEmpty(line))
-        {
-            nextState = state;
-            return line;
-        }
-
-        var sanitized = line.ToCharArray();
-        bool inBlockComment = state.InBlockComment;
-        string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
-        bool inSingleQuotedString = state.InSingleQuotedString;
-
-        void BlankRange(int start, int endExclusive)
-        {
-            start = Math.Max(0, start);
-            endExclusive = Math.Min(sanitized.Length, endExclusive);
-            for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
-                sanitized[blankIndex] = ' ';
-        }
-
-        for (int i = 0; i < line.Length;)
-        {
-            if (inBlockComment)
-            {
-                int closing = line.IndexOf("*/", i, StringComparison.Ordinal);
-                int end = closing >= 0 ? closing + 2 : line.Length;
-                BlankRange(i, end);
-                if (closing < 0)
-                    break;
-                i = end;
-                inBlockComment = false;
-                continue;
-            }
-            if (!string.IsNullOrEmpty(dollarQuoteDelimiter))
-            {
-                int closing = line.IndexOf(dollarQuoteDelimiter, i, StringComparison.Ordinal);
-                if (closing < 0)
-                {
-                    BlankRange(i, line.Length);
-                    break;
-                }
-
-                int nextContent = SkipWhitespaceAhead(line, closing + dollarQuoteDelimiter.Length);
-                if (nextContent < line.Length
-                    && line[nextContent] != ';'
-                    && line[nextContent] != ','
-                    && line[nextContent] != ')'
-                    && line[nextContent] != ']')
-                {
-                    int nestedClosing = line.IndexOf(
-                        dollarQuoteDelimiter,
-                        closing + dollarQuoteDelimiter.Length,
-                        StringComparison.Ordinal);
-                    if (nestedClosing >= 0)
-                    {
-                        int end = nestedClosing + dollarQuoteDelimiter.Length;
-                        BlankRange(i, end);
-                        i = end;
-                        continue;
-                    }
-                }
-
-                int closingEnd = closing + dollarQuoteDelimiter.Length;
-                BlankRange(i, closingEnd);
-                i = closingEnd;
-                dollarQuoteDelimiter = null;
-                continue;
-            }
-            if (inSingleQuotedString)
-            {
-                int closing = FindClosingSqlSingleQuote(line, i);
-                int end = closing >= 0 ? closing + 1 : line.Length;
-                BlankRange(i, end);
-                i = end;
-                if (closing >= 0)
-                {
-                    inSingleQuotedString = false;
-                    continue;
-                }
-
-                break;
-            }
-
-            char c = line[i];
-            if (c == '"')
-            {
-                int closing = FindClosingSqlDoubleQuote(line, i + 1);
-                if (closing < 0)
-                    break;
-                i = closing + 1;
-                continue;
-            }
-            if (c == '`')
-            {
-                int closing = line.IndexOf('`', i + 1);
-                if (closing < 0)
-                    break;
-                i = closing + 1;
-                continue;
-            }
-            if (c == '[')
-            {
-                int closing = line.IndexOf(']', i + 1);
-                if (closing < 0)
-                    break;
-                i = closing + 1;
-                continue;
-            }
-            if (c == '\'')
-            {
-                int closing = FindClosingSqlSingleQuote(line, i + 1);
-                int end = closing >= 0 ? closing + 1 : line.Length;
-                BlankRange(i, end);
-                i = end;
-                if (closing < 0)
-                    inSingleQuotedString = true;
-                continue;
-            }
-            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
-            {
-                BlankRange(i, i + 2);
-                i += 2;
-                inBlockComment = true;
-                continue;
-            }
-            if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
-            {
-                lineEndedByLineComment = true;
-                BlankRange(i, line.Length);
-                break;
-            }
-            if (c == '#')
-            {
-                if (ShouldTreatHashAsSqlComment(line, i, statementPrefix))
-                {
-                    lineEndedByLineComment = true;
-                    BlankRange(i, line.Length);
-                    break;
-                }
-            }
-            if (c == '$' && TryReadSqlDollarQuoteDelimiter(line, i, out var delimiter))
-            {
-                BlankRange(i, i + delimiter.Length);
-                i += delimiter.Length;
-                dollarQuoteDelimiter = delimiter;
-                continue;
-            }
-
-            i++;
-        }
-
-        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
-        return new string(sanitized);
-    }
-
-    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex, string? statementPrefix)
-    {
-        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
-            return false;
-
-        int probe = hashIndex - 1;
-        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-            probe--;
-        if (probe < 0 && !string.IsNullOrWhiteSpace(statementPrefix))
-        {
-            var combined = statementPrefix + "\n" + line;
-            return ShouldTreatHashAsSqlCommentCore(combined, statementPrefix.Length + 1 + hashIndex);
-        }
-
-        return ShouldTreatHashAsSqlCommentCore(line, hashIndex);
-    }
-
-    private static bool ShouldTreatHashAsSqlCommentCore(string line, int hashIndex)
-    {
-        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
-            return false;
-
-        int next = hashIndex + 1;
-        if (hashIndex > 0
-            && line[hashIndex - 1] == '#'
-            && next < line.Length
-            && (char.IsLetterOrDigit(line[next]) || line[next] == '_'))
-            return false;
-        if (next + 1 < line.Length
-            && line[next] == '#'
-            && (char.IsLetterOrDigit(line[next + 1]) || line[next + 1] == '_'))
-            return false;
-        if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
-            return true;
-
-        int probe = hashIndex - 1;
-        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-            probe--;
-        while (probe >= 0 && line[probe] == ',')
-        {
-            var priorListItem = line[..probe];
-            int sourceStart = FindLastSqlCommaOutsideQuotedIdentifiers(priorListItem);
-            if (sourceStart >= 0)
-                sourceStart++;
-            else
-            {
-                var usingMatches = SqlUsingKeywordRegex.Matches(priorListItem);
-                if (usingMatches.Count > 0)
-                    sourceStart = usingMatches[^1].Index + usingMatches[^1].Length;
-                else
-                {
-                    sourceStart = priorListItem.LastIndexOf('#');
-                    if (sourceStart < 0)
-                        return true;
-                }
-            }
-            while (sourceStart < priorListItem.Length && char.IsWhiteSpace(priorListItem[sourceStart]))
-                sourceStart++;
-
-            var listMatch = SqlTrailingTempIdentifierRegex.Match(priorListItem[sourceStart..]);
-            if (!listMatch.Success)
-                return true;
-
-            probe = sourceStart - 1;
-            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-                probe--;
-        }
-        if (probe < 0)
-            return true;
-        if (line[probe] == '.')
-            return false;
-        if (line[probe] == ')')
-        {
-            int depth = 1;
-            probe--;
-            while (probe >= 0 && depth > 0)
-            {
-                if (line[probe] == ')')
-                    depth++;
-                else if (line[probe] == '(')
-                    depth--;
-                probe--;
-            }
-            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-                probe--;
-            if (probe < 0)
-                return true;
-
-            int modifierEnd = probe;
-            while (probe >= 0 && char.IsLetter(line[probe]))
-                probe--;
-            int modifierStart = probe + 1;
-            if (modifierStart <= modifierEnd
-                && string.Equals(line[modifierStart..(modifierEnd + 1)], "TOP", StringComparison.OrdinalIgnoreCase))
-            {
-                while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-                    probe--;
-                if (probe < 0)
-                    return true;
-            }
-        }
-
-        int tokenEnd = probe;
-        while (probe >= 0 && char.IsLetter(line[probe]))
-            probe--;
-        int tokenStart = probe + 1;
-        if (tokenStart > tokenEnd)
-            return true;
-
-        var token = line[tokenStart..(tokenEnd + 1)];
-        // issue #656: keep `#name` as a temp-object identifier after keywords that precede an object
-        // name in T-SQL. MySQL `# comment` false positives introduced by treating the call-keyword
-        // positions as identifier prefixes are then caught downstream by the proc-call / source-ref
-        // establishment gate, which requires the same file to first establish `#name` via
-        // `CREATE TABLE #x`, `SELECT ... INTO #x`, a mutation target of `#x`, or
-        // `CREATE PROCEDURE|FUNCTION #x`. `CALL`, `PROCEDURE`, `PROC`, and `FUNCTION` are added so
-        // established temp routines stay callable (`CREATE PROCEDURE #sp ... CALL #sp;`) without
-        // reopening the unestablished MySQL-comment regression.
-        // issue #656: T-SQL でオブジェクト名の直前に来るキーワードの後ろでは `#name` を識別子として
-        // 残し、`EXEC` / `EXECUTE` / `CALL` や FROM/JOIN 側の establishment ゲートに判定を委ねる。
-        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 / `CREATE PROCEDURE|FUNCTION #x`
-        // のいずれかで同一ファイル内に establish した `#name` だけを後段で有効な edge として残す。
-        // `CALL` / `PROCEDURE` / `PROC` / `FUNCTION` を加えるのは、establish した一時ストアドを
-        // `CREATE PROCEDURE #sp ... CALL #sp;` のように呼び戻せるようにするためで、非 establish の
-        // MySQL コメント誤索引は establishment ゲートで引き続き抑止する。
-        return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "CALL", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "PROCEDURE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "PROC", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "FUNCTION", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static int FindLastSqlCommaOutsideQuotedIdentifiers(string text)
-    {
-        int lastComma = -1;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (c == '"')
-            {
-                int closing = FindClosingSqlDoubleQuote(text, i + 1);
-                if (closing < 0)
-                    break;
-                i = closing;
-                continue;
-            }
-            if (c == '`')
-            {
-                int closing = text.IndexOf('`', i + 1);
-                if (closing < 0)
-                    break;
-                i = closing;
-                continue;
-            }
-            if (c == '[')
-            {
-                int closing = text.IndexOf(']', i + 1);
-                if (closing < 0)
-                    break;
-                i = closing;
-                continue;
-            }
-            if (c == ',')
-                lastComma = i;
-        }
-
-        return lastComma;
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
@@ -15390,33 +11409,6 @@ public static class ReferenceExtractor
             && languageSpecificIgnoredNames.Contains(name);
     }
 
-    private static bool IsRubyIdentifierStart(char ch) => char.IsLetter(ch) || ch == '_';
-
-    private static string NormalizeRubyCommandTargetToken(string token)
-    {
-        if (token.Length == 0)
-            return token;
-
-        if (token[0] == ':')
-        {
-            token = token[1..];
-            if (token.Length >= 2
-                && ((token[0] == '\'' && token[^1] == '\'')
-                    || (token[0] == '"' && token[^1] == '"')))
-            {
-                token = token[1..^1];
-            }
-        }
-        else if (token.Length >= 2
-            && ((token[0] == '\'' && token[^1] == '\'')
-                || (token[0] == '"' && token[^1] == '"')))
-        {
-            token = token[1..^1];
-        }
-
-        return token;
-    }
-
     private static bool IsConstructorCallName(string language, string preparedLine, int nameIndex)
     {
         var probe = nameIndex - 1;
@@ -15470,32 +11462,6 @@ public static class ReferenceExtractor
         return language == "php"
             ? string.Equals(token, "new", StringComparison.OrdinalIgnoreCase)
             : string.Equals(token, "new", StringComparison.Ordinal);
-    }
-
-    private static bool IsTrailingLambdaInheritanceClause(string preparedLine, int nameIndex)
-    {
-        var probe = nameIndex - 1;
-        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
-            probe--;
-
-        return probe >= 0 && preparedLine[probe] == ':';
-    }
-
-    private static bool NextNonEmptyPreparedLineStartsWithJsContinuation(string[] preparedLines, int currentLineIndex)
-    {
-        for (var next = currentLineIndex + 1; next < preparedLines.Length; next++)
-        {
-            var trimmed = preparedLines[next].TrimStart();
-            if (trimmed.Length == 0)
-                continue;
-
-            return trimmed.StartsWith(".", StringComparison.Ordinal)
-                || trimmed.StartsWith("?.", StringComparison.Ordinal)
-                || trimmed.StartsWith("[", StringComparison.Ordinal)
-                || trimmed.StartsWith("(", StringComparison.Ordinal);
-        }
-
-        return false;
     }
 
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
@@ -16268,117 +12234,4 @@ public static class ReferenceExtractor
         return (backslashCount & 1) == 1;
     }
 
-    /// <summary>
-    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
-    /// `@rem` (with optional leading whitespace and case-insensitive `rem`).
-    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
-    /// true を返す。
-    /// </summary>
-    private static bool IsBatchCommentLine(string line)
-    {
-        var i = 0;
-        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
-            i++;
-
-        if (i >= line.Length)
-            return false;
-
-        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
-            return true;
-
-        if (line[i] == '@')
-        {
-            var j = i + 1;
-            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
-                j++;
-            return IsBatchRemKeyword(line, j);
-        }
-
-        return IsBatchRemKeyword(line, i);
-    }
-
-    private static bool IsBatchRemKeyword(string line, int start)
-    {
-        if (start + 3 > line.Length)
-            return false;
-        if ((line[start] | 0x20) != 'r')
-            return false;
-        if ((line[start + 1] | 0x20) != 'e')
-            return false;
-        if ((line[start + 2] | 0x20) != 'm')
-            return false;
-        if (start + 3 == line.Length)
-            return true;
-        var next = line[start + 3];
-        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
-    }
-
-    private static bool IsBatchCommandSeparator(string line, int index)
-    {
-        var c = line[index];
-        if (c is not '&' and not '|')
-            return false;
-
-        var caretCount = 0;
-        for (var i = index - 1; i >= 0 && line[i] == '^'; i--)
-            caretCount++;
-
-        return (caretCount & 1) == 0;
-    }
-
-    private static void ProcessBatchJumpSegment(
-        string segment,
-        int segmentOffset,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        string context,
-        long fileId,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForCall)
-    {
-        var trimmed = segment.TrimStart();
-        if (trimmed.Length == 0)
-            return;
-
-        if (trimmed[0] == '@')
-        {
-            trimmed = trimmed[1..].TrimStart();
-            if (trimmed.Length == 0)
-                return;
-        }
-
-        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(trimmed, 0))
-            return;
-
-        if (StartsWithBatchWord(trimmed, "else") || StartsWithBatchWord(trimmed, "do"))
-        {
-            var keywordEnd = 0;
-            while (keywordEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[keywordEnd]))
-                keywordEnd++;
-            while (keywordEnd < trimmed.Length && char.IsWhiteSpace(trimmed[keywordEnd]))
-                keywordEnd++;
-            if (keywordEnd >= trimmed.Length)
-                return;
-            trimmed = trimmed[keywordEnd..].TrimStart();
-        }
-
-        var match = BatchJumpTargetRegex.Match(trimmed);
-        if (!match.Success)
-            return;
-
-        var name = match.Groups["name"].Value;
-        if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        var commandIndex = segmentOffset + match.Groups["command"].Index;
-        var callContainer = resolveContainerForCall(commandIndex);
-        AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
-    }
-
-    private static bool StartsWithBatchWord(string text, string word)
-    {
-        if (!text.StartsWith(word, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return text.Length == word.Length || char.IsWhiteSpace(text[word.Length]);
-    }
 }

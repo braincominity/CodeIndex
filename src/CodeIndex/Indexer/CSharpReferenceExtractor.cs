@@ -1,0 +1,270 @@
+using System.Text.RegularExpressions;
+using CodeIndex.Models;
+using CSharpContainingTypeValueReceiverNames = CodeIndex.Indexer.ReferenceExtractor.CSharpContainingTypeValueReceiverNames;
+using CSharpFunctionValueReceiverNameRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpFunctionValueReceiverNameRecord;
+using CSharpMultiLineTypePatternState = CodeIndex.Indexer.ReferenceExtractor.CSharpMultiLineTypePatternState;
+using CSharpUsingAliasRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingAliasRecord;
+using CSharpUsingStaticRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingStaticRecord;
+
+namespace CodeIndex.Indexer;
+
+internal static class CSharpReferenceExtractor
+{
+    // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
+    // C# コンストラクタ連鎖イニシャライザ
+    private static readonly Regex CtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
+
+    public static void EmitCtorChainReferences(
+        string preparedLine,
+        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        string[] structuralLines,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var chainMatches = CtorChainRegex.Matches(preparedLine);
+        if (chainMatches.Count == 0)
+            return;
+
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        if (enclosingType == null)
+            return;
+
+        // For cross-line initializers such as:
+        //   public A(int x, int y)
+        //       : this(x, 0)
+        //   { }
+        // the chain line precedes the body, so the inner-most "body-covering" container lookup
+        // returns the class rather than the constructor. Fall back to a declaration-to-body-end
+        // lookup so the reference is attributed to the constructor that owns the chain.
+        // クロス行イニシャライザでは body よりも前に連鎖行が現れるため、body 範囲のみで
+        // 判定すると外側クラスが選ばれる。宣言〜body 終端の範囲で探し直す。
+        var chainContainer = container;
+        if (chainContainer == null || chainContainer.Kind != "function")
+        {
+            chainContainer = FindDeclarationRangeFunction(containerCandidates, lineNumber) ?? chainContainer;
+        }
+
+        foreach (Match match in chainMatches)
+        {
+            var kindToken = match.Groups["kind"].Value;
+            string? target;
+            if (kindToken == "this")
+            {
+                target = enclosingType.Name;
+            }
+            else
+            {
+                // `base(...)` needs the base type from the enclosing class's signature.
+                // SymbolRecord.Signature only captures the first declaration line, so multi-line
+                // base-lists (e.g. `class Child\n    : Parent`) lose the `: Parent` continuation.
+                // Reconstruct the joined header up to the first `;` or `{` from structuralLines.
+                // `base(...)` は外側クラスのシグネチャから基底型を解析する必要がある。
+                // SymbolRecord.Signature は宣言 1 行目しか持たないので複数行 base-list が欠落する。
+                // structuralLines から最初の `;` / `{` までを連結し直して渡す。
+                var (_, _, headerText) = ReferenceExtractor.CollectCSharpRecordHeader(
+                    structuralLines,
+                    enclosingType.StartLine);
+                target = ReferenceExtractor.ParseCSharpBaseType(headerText);
+                if (string.IsNullOrWhiteSpace(target))
+                    target = ReferenceExtractor.ParseCSharpBaseType(enclosingType.Signature);
+                if (string.IsNullOrWhiteSpace(target))
+                    continue;
+            }
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                target!,
+                match.Groups["kind"].Index,
+                "call",
+                context,
+                lineNumber,
+                chainContainer);
+        }
+    }
+
+    public static void AdvanceMultiLineTypePatternState(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        ref CSharpMultiLineTypePatternState state)
+        => ReferenceExtractor.AdvanceCSharpMultiLineTypePatternState(
+            preparedLine,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId,
+            ref state);
+
+    public static void EmitTypePositionReferences(
+        string preparedLine,
+        string originalLine,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container,
+        ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
+        => ReferenceExtractor.EmitCSharpTypePositionReferences(
+            preparedLine,
+            originalLine,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            container,
+            ref pendingCSharpMultiLineTypePattern);
+
+    public static bool HasTrailingIsAsTypePatternIntro(string preparedLine, string originalLine)
+        => ReferenceExtractor.CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine)
+           && ReferenceExtractor.HasTrailingCSharpTypePatternIntro(originalLine, ReferenceExtractor.CSharpIsAsTypePatternIntroContextRegex);
+
+    public static bool HasTrailingCaseTypePatternIntro(string preparedLine, string originalLine)
+        => ReferenceExtractor.CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine)
+           && ReferenceExtractor.HasTrailingCSharpTypePatternIntro(originalLine, ReferenceExtractor.CSharpCaseTypePatternIntroContextRegex);
+
+    public static void StartWaitingForMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
+        => ReferenceExtractor.StartWaitingForCSharpMultiLineTypePatternHead(ref state);
+
+    public static void FlushPendingMultiLineTypePatternReference(
+        ref CSharpMultiLineTypePatternState state,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId)
+        => ReferenceExtractor.FlushPendingCSharpMultiLineTypePatternReference(
+            ref state,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId);
+
+    public static void EmitSwitchExpressionTypePatternReferences(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId)
+        => ReferenceExtractor.EmitCSharpSwitchExpressionTypePatternReferences(
+            lines,
+            preparedLines,
+            containerCandidates,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId);
+
+    public static void EmitDocCrefReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        int columnOffset,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+        => ReferenceExtractor.EmitCSharpDocCrefReferences(
+            originalLine,
+            references,
+            seen,
+            fileId,
+            columnOffset,
+            context,
+            lineNumber,
+            container);
+
+    public static bool IsPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+        => ReferenceExtractor.IsCSharpPatternHeadCallSite(preparedLines, lineIndex, preparedLine, nameIndex);
+
+    public static void EmitQualifiedEnumMemberReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
+        IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+        => ReferenceExtractor.EmitCSharpQualifiedEnumMemberReferences(
+            preparedLine,
+            enumMemberLookup,
+            csharpAttrRangesOnLine,
+            usingAliases,
+            valueReceiverNamesByContainingType,
+            valueReceiverNamesByFunctionStartLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
+    private static SymbolRecord? FindDeclarationRangeFunction(
+        IReadOnlyList<SymbolRecord> candidates,
+        int lineNumber)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind != "function")
+                continue;
+            if (candidate.StartLine <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
+                return candidate;
+        }
+
+        return null;
+    }
+}
