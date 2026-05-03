@@ -265,7 +265,7 @@ public static class ReferenceExtractor
         @"(?:\?->|->)\s*(?<name>[A-Za-z_]\w*)(?!\s*\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
-    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
     private const string RustIdentifierPattern = @"(?:r#)?[_\p{L}][\w$]*";
     private const string FSharpIdentifierPattern = @"(?:``[^`]+``|[_\p{L}][\w']*)";
@@ -517,23 +517,6 @@ public static class ReferenceExtractor
     // `{` から始まる場合にだけ `instantiate` を発行する。issue #286 参照。
     private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
         $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
-        RegexOptions.Compiled);
-    // JavaScript / TypeScript allow zero-argument constructor calls without parentheses:
-    // `new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`.
-    // Keep this language-gated so Java / C# / other `new` forms still require either `(`
-    // or their own dedicated initializer path. The caller inspects the next significant
-    // token after the match: `(` / `.` / `?.` / `[` still mean "the expression continues",
-    // while ordinary delimiters/operators such as `;`, `:`, `??`, `||`, `&&`, `,`, or `)`
-    // are accepted as real zero-arg constructor sites. A line-end match still peeks at the
-    // next non-blank prepared line so `new Foo` followed by `.bar()` / `[0]` on the next
-    // line does not emit a phantom `instantiate Foo` edge. See issue #295.
-    // JavaScript / TypeScript では引数なしコンストラクタ呼び出しで括弧を省略できる
-    // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`)。他言語の
-    // `new` 形と混線しないよう JS/TS 限定にし、同一行では文終端系トークンのみ許可する。
-    // 行末一致時は次の非空 prepared line を覗き、`.bar()` / `[0]` 継続行による
-    // phantom `instantiate Foo` を防ぐ。issue #295 参照。
-    private static readonly Regex JsTsParenlessConstructorRegex = new(
-        $@"\bnew\s+(?:{CSharpIdentifierPattern}\s*\.\s*)*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?",
         RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
@@ -1662,41 +1645,18 @@ public static class ReferenceExtractor
                     container);
             }
 
-            // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
-            // Emit `instantiate` directly so graph queries do not treat them as unused code.
-            // JavaScript / TypeScript では `new Foo;` のように `()` を省略できるため、
-            // 専用パスで `instantiate` を発行して graph query から取りこぼさないようにする。
             if (language is "javascript" or "typescript")
             {
-                foreach (Match match in JsTsParenlessConstructorRegex.Matches(preparedLine))
-                {
-                    var rawName = match.Groups["name"].Value;
-                    var nameIndex = match.Groups["name"].Index;
-                    var trailingProbe = match.Index + match.Length;
-                    while (trailingProbe < preparedLine.Length && char.IsWhiteSpace(preparedLine[trailingProbe]))
-                        trailingProbe++;
-
-                    if (trailingProbe >= preparedLine.Length)
-                    {
-                        if (NextNonEmptyPreparedLineStartsWithJsContinuation(preparedLines, i))
-                            continue;
-                    }
-                    else
-                    {
-                        if (preparedLine[trailingProbe] is '(' or '.' or '[')
-                            continue;
-
-                        if (preparedLine[trailingProbe] == '?'
-                            && trailingProbe + 1 < preparedLine.Length
-                            && preparedLine[trailingProbe + 1] == '.')
-                        {
-                            continue;
-                        }
-                    }
-
-                    var initContainer = ResolveContainerForCall(nameIndex);
-                    AddReference(references, seen, fileId, rawName, nameIndex, "instantiate", context, lineNumber, initContainer);
-                }
+                JavaScriptReferenceExtractor.EmitParenlessConstructorReferences(
+                    preparedLine,
+                    preparedLines,
+                    i,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             void AddCallLikeReference(string name, int callIndex)
@@ -12678,23 +12638,6 @@ public static class ReferenceExtractor
             probe--;
 
         return probe >= 0 && preparedLine[probe] == ':';
-    }
-
-    private static bool NextNonEmptyPreparedLineStartsWithJsContinuation(string[] preparedLines, int currentLineIndex)
-    {
-        for (var next = currentLineIndex + 1; next < preparedLines.Length; next++)
-        {
-            var trimmed = preparedLines[next].TrimStart();
-            if (trimmed.Length == 0)
-                continue;
-
-            return trimmed.StartsWith(".", StringComparison.Ordinal)
-                || trimmed.StartsWith("?.", StringComparison.Ordinal)
-                || trimmed.StartsWith("[", StringComparison.Ordinal)
-                || trimmed.StartsWith("(", StringComparison.Ordinal);
-        }
-
-        return false;
     }
 
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);

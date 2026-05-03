@@ -39,6 +39,7 @@ src/CodeIndex/
     CssReferenceExtractor.cs  — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
     CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
     DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
+    JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
     JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites and same-line constructor container recovery
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
     SqlReferenceExtractor.cs  — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
@@ -1186,6 +1187,7 @@ src/CodeIndex/
     CssReferenceExtractor.cs  — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
     CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
     DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
+    JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
     JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換えと same-line constructor container 復元
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
     SqlReferenceExtractor.cs  — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出
