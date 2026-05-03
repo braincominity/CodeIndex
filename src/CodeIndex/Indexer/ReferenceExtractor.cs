@@ -303,33 +303,6 @@ public static class ReferenceExtractor
     // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
     // issue #265 参照。
     private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
-    // Scala's `name { ... }` / `name { x => ... }` block-call form does not use trailing `(`,
-    // so the shared CallRegex cannot see it. Use a Scala-specific pass so idiomatic block calls
-    // such as `foreach {}`, `Try {}`, and `synchronized {}` still contribute `call` edges.
-    // Scala の `name { ... }` / `name { x => ... }` 形式は末尾 `(` を持たないため共通 CallRegex では拾えない。
-    // `foreach {}` / `Try {}` / `synchronized {}` のような慣用的なブロック呼び出しも `call` edge として出すため専用パスを使う。
-    private static readonly Regex ScalaTrailingBlockCallRegex = new($@"(?<![\w$])(?<name>{FunctionalIdentifierPattern})(?:\[[^\]\n]+\])?\s*\{{", RegexOptions.Compiled);
-    // Scala block-call syntax must not treat control-flow keywords such as `match {` or
-    // `catch {` as invocations.
-    // Scala の block-call 構文では `match {` / `catch {` のような制御フローキーワードを呼び出し扱いしない。
-    private static readonly HashSet<string> ScalaIgnoredBlockCallNames = new(StringComparer.Ordinal)
-    {
-        "match", "catch", "else", "finally",
-    };
-    // Gradle/Groovy block and command-style DSL calls such as `plugins { ... }`,
-    // `task buildJar(type: Jar) { ... }`, `apply plugin: 'java'`, and `println 'x'`
-    // do not use the shared `foo(...)` shape. Keep the matcher narrow to known DSL
-    // call forms so ordinary assignment lines stay out of the graph.
-    // Gradle/Groovy の block / command 型 DSL 呼び出し (`plugins { ... }`、
-    // `task buildJar(type: Jar) { ... }`、`apply plugin: 'java'`、`println 'x'`) は
-    // 共通の `foo(...)` 形では拾えない。代わりに、既知の DSL 呼び出し形に絞った
-    // 専用 matcher で取り込む。
-    private static readonly Regex GradleBlockCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\b(?:\s+[^\r\n{]+?)?\s*\{",
-        RegexOptions.Compiled);
-    private static readonly Regex GradleCommandCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\s+(?=(?:['""]|[_\p{L}]|\d|\.|:))",
-        RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -1656,14 +1629,9 @@ public static class ReferenceExtractor
 
                 if (language == "scala")
                 {
-                    foreach (Match match in ScalaTrailingBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        if (ScalaIgnoredBlockCallNames.Contains(name))
-                            continue;
-                        AddCallLikeReference(name, callIndex);
-                    }
+                    ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
+                        preparedLine,
+                        AddCallLikeReference);
                 }
                 else if (language == "gradle")
                 {
@@ -1674,19 +1642,9 @@ public static class ReferenceExtractor
                         AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
                     }
 
-                    foreach (Match match in GradleBlockCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddGradleDslReference(name, callIndex);
-                    }
-
-                    foreach (Match match in GradleCommandCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        AddGradleDslReference(name, callIndex);
-                    }
+                    GradleReferenceExtractor.EmitDslCallReferences(
+                        preparedLine,
+                        AddGradleDslReference);
                 }
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
