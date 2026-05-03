@@ -316,6 +316,7 @@ public class DbReaderTests : IDisposable
             pub mod macros {
                 pub fn build() {}
             }
+
             """);
 
         var results = _reader.SearchSymbols("crate::macros::build", lang: "rust", exact: true);
