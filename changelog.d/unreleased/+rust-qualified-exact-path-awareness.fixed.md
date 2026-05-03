@@ -8,8 +8,8 @@ affected:
 
 ## English
 
-- **Rust qualified exact-search contract remains leaf-based outside macro invocations (#1357)** — Rust macro invocations keep their existing path-aware exact behavior, while other qualified Rust exact lookups continue to collapse to the leaf name for compatibility. The regression tests now document that contract explicitly.
+- **Rust qualified exact-search now preserves the full symbol path for exact symbol lookups (#1357)** — Qualified Rust symbol queries now match against the qualified container path instead of collapsing to the leaf name first, so exact searches disambiguate same-named symbols in different modules. The regression test covers the path-aware contract.
 
 ## 日本語
 
-- **Rust の qualified exact-search 契約は macro 以外では leaf-based のままです (#1357)** — Rust の macro invocation は既存の path-aware exact behavior を維持し、それ以外の qualified Rust exact lookup は互換性のため leaf 名へ畳み込む挙動を継続します。regression test でその契約を明示しました。
+- **Rust の qualified exact-search は exact symbol lookup で完全な symbol path を保つようになりました (#1357)** — qualified Rust symbol query は leaf 名へ畳み込むのではなく、qualified container path に対して照合されるため、異なる module にある同名 symbol を exact search で区別できます。regression test で path-aware 契約を確認しています。

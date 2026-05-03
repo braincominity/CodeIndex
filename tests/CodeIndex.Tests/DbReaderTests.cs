@@ -307,7 +307,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void SearchSymbols_RustQualifiedQueriesResolveToLeafNames()
+    public void SearchSymbols_RustQualifiedQueriesStayPathAware()
     {
         InsertIndexedFile(
             "src/lib.rs",
@@ -316,7 +316,15 @@ public class DbReaderTests : IDisposable
             pub mod macros {
                 pub fn build() {}
             }
+            """);
 
+        InsertIndexedFile(
+            "src/other.rs",
+            "rust",
+            """
+            pub mod other {
+                pub fn build() {}
+            }
             """);
 
         var results = _reader.SearchSymbols("crate::macros::build", lang: "rust", exact: true);
@@ -324,6 +332,8 @@ public class DbReaderTests : IDisposable
         var symbol = Assert.Single(results);
         Assert.Equal("build", symbol.Name);
         Assert.Equal("src/lib.rs", symbol.Path);
+        Assert.Equal(1, _reader.CountSearchSymbols("crate::macros::build", lang: "rust", exact: true));
+        Assert.Equal(1, _reader.CountDefinitionsTotal("crate::macros::build", lang: "rust", exact: true).Count);
     }
 
     [Fact]
