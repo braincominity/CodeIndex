@@ -38,6 +38,7 @@ public static class QueryCommandRunner
         ["pyw"] = "python",
         ["yml"] = "yaml",
         ["razor"] = "csharp",
+        ["jav"] = "java",
         ["kt"] = "kotlin",
         ["kts"] = "kotlin",
         ["ts"] = "typescript",
@@ -53,6 +54,7 @@ public static class QueryCommandRunner
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
         ["csharp"] = ["cshtml", "razor"],
+        ["java"] = ["jav"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
         ["rust"] = ["rs"],

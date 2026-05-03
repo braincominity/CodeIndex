@@ -136,6 +136,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GetLanguageAliases_ReportsJavaAlias()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("java");
+
+        Assert.Contains("jav", aliases);
+    }
+
+    [Fact]
     public void GetLanguageAliases_ReportsJavascriptAliases()
     {
         var aliases = QueryCommandRunner.GetLanguageAliases("javascript");
@@ -190,6 +198,15 @@ public class QueryCommandRunnerTests
     public void NormalizeQueryLanguage_MapsRustShorthand(string input)
     {
         Assert.Equal("rust", DbReader.NormalizeQueryLanguage(input));
+    }
+
+    [Theory]
+    [InlineData("jav")]
+    [InlineData("j-a-v")]
+    [InlineData("j av")]
+    public void NormalizeQueryLanguage_MapsJavaShorthand(string input)
+    {
+        Assert.Equal("java", DbReader.NormalizeQueryLanguage(input));
     }
 
     [Fact]
@@ -8833,6 +8850,39 @@ jobs:
                 Assert.Equal("1", stdout.Trim());
                 Assert.Equal(string.Empty, stderr);
             }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_WithJavaLangAliasFiltersJavaFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_java_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                """
+                public class App {
+                    String hit() {
+                        return "Java";
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Java", "--db", dbPath, "--lang", "jav", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
