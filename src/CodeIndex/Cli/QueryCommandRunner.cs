@@ -25,6 +25,7 @@ public static class QueryCommandRunner
     {
         ["c#"] = "csharp",
         ["cs"] = "csharp",
+        ["cshtml"] = "csharp",
         ["bat"] = "batch",
         ["cmd"] = "batch",
         ["py"] = "python",
@@ -32,6 +33,7 @@ public static class QueryCommandRunner
         ["pyi"] = "python",
         ["pyw"] = "python",
         ["yml"] = "yaml",
+        ["razor"] = "csharp",
         ["kt"] = "kotlin",
         ["kts"] = "kotlin",
         ["ts"] = "typescript",

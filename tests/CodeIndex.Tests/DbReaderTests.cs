@@ -466,6 +466,25 @@ public class DbReaderTests : IDisposable
         Assert.Empty(pyResults);
     }
 
+    [Theory]
+    [InlineData("cshtml")]
+    [InlineData("razor")]
+    public void Search_FiltersByCSharpRazorAliases(string lang)
+    {
+        var queryToken = $"razor_lang_alias_{Guid.NewGuid():N}";
+        InsertIndexedFile(
+            "web/Views/Home/Index.cshtml",
+            "csharp",
+            $@"@{{
+    var marker = ""{queryToken}"";
+}}");
+
+        var results = _reader.Search(queryToken, lang: lang);
+
+        Assert.Single(results);
+        Assert.Equal("web/Views/Home/Index.cshtml", results[0].Path);
+    }
+
     [Fact]
     public void Search_RespectsLimit()
     {

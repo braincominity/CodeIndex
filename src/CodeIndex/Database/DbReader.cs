@@ -790,6 +790,10 @@ public partial class DbReader
             return "typescript";
         if (string.Equals(compact, "mts", StringComparison.OrdinalIgnoreCase))
             return "typescript";
+        if (string.Equals(compact, "cshtml", StringComparison.OrdinalIgnoreCase))
+            return "csharp";
+        if (string.Equals(compact, "razor", StringComparison.OrdinalIgnoreCase))
+            return "csharp";
         return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "transactsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)

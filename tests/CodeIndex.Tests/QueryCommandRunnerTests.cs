@@ -232,9 +232,11 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("c#")]
     [InlineData("cs")]
+    [InlineData("cshtml")]
     [InlineData("Java")]
     [InlineData("kt")]
     [InlineData("kts")]
+    [InlineData("razor")]
     public void RunSearch_NormalizesCommonLanguageAliases(string input)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lang_alias");
