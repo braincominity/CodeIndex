@@ -202,9 +202,11 @@ public class QueryCommandRunnerTests
 
     [Theory]
     [InlineData("jav")]
+    [InlineData("Java")]
+    [InlineData("JAVA")]
     [InlineData("j-a-v")]
     [InlineData("j av")]
-    public void NormalizeQueryLanguage_MapsJavaShorthand(string input)
+    public void NormalizeQueryLanguage_MapsJavaSpelling(string input)
     {
         Assert.Equal("java", DbReader.NormalizeQueryLanguage(input));
     }
