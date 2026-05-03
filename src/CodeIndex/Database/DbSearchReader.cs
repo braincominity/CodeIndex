@@ -286,6 +286,7 @@ public partial class DbReader
             return [];
 
         lang = NormalizeQueryLanguage(lang);
+        var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -305,7 +306,7 @@ public partial class DbReader
         }
         else
         {
-            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
+            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery);
             sql = @"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank
@@ -326,8 +327,8 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (exact)
             cmd.Parameters.AddWithValue("@exactQuery", query);
-        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
+        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
@@ -365,6 +366,7 @@ public partial class DbReader
             return new QueryCountResult(0, 0);
 
         lang = NormalizeQueryLanguage(lang);
+        var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -382,7 +384,7 @@ public partial class DbReader
         }
         else
         {
-            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
+            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery);
             sql = @"
                 SELECT f.path, c.start_line, c.end_line,
                        rank
@@ -403,8 +405,8 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (exact)
             cmd.Parameters.AddWithValue("@exactQuery", query);
-        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
+        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
@@ -454,6 +456,11 @@ public partial class DbReader
 
         return new QueryCountResult(count, fileCount);
     }
+
+    private static string NormalizeLiteralSearchQuery(string query, string? lang) =>
+        string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
+            ? ExactSourceSearchNormalizer.Normalize(query, lang)
+            : query;
 
     private static bool IsFtsQuerySyntaxError(SqliteException ex)
     {

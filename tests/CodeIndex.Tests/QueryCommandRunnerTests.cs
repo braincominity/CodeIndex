@@ -9089,6 +9089,56 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_TreatsCSharpVerbatimQualifiedNamesAsCanonicalInLiteralSafeSearch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_csharp_literal_safe_canonical");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class CanonicalQualified
+                {
+                    public void Match()
+                    {
+                        var first = Foo.Bar;
+                        var second = Foo.Bar;
+                    }
+                }
+                """);
+
+            var (globalExitCode, globalStdout, globalStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["global::Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--lang", "csharp", "--json", "--count"],
+                _jsonOptions));
+            using var globalDocument = ParseJsonOutput(globalStdout);
+
+            var (verbatimExitCode, verbatimStdout, verbatimStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["@Foo.@Bar", "--db", dbPath, "--path", "src/app.cs", "--lang", "csharp", "--json", "--count"],
+                _jsonOptions));
+            using var verbatimDocument = ParseJsonOutput(verbatimStdout);
+
+            Assert.Equal(CommandExitCodes.Success, globalExitCode);
+            Assert.Equal(string.Empty, globalStderr);
+            Assert.Equal(1, globalDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, globalDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, verbatimExitCode);
+            Assert.Equal(string.Empty, verbatimStderr);
+            Assert.Equal(1, verbatimDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, verbatimDocument.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringKeepsNormalizationScopedToCSharp()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_scope");
