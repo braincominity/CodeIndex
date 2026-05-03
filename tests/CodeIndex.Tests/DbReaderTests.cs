@@ -290,6 +290,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_RustQualifiedRawMacroInvocationsStayPathAware()
+    {
+        InsertIndexedFile(
+            "src/raw.rs",
+            "rust",
+            """
+            fn main() {
+                crate::r#type!();
+            }
+            """);
+
+        var results = _reader.SearchReferences("crate::r#type!", lang: "rust", exact: true);
+
+        var reference = Assert.Single(results);
+        Assert.Equal("crate::type", reference.SymbolName);
+        Assert.Equal("src/raw.rs", reference.Path);
+    }
+
+    [Fact]
     public void RustQualifiedQueriesResolveAcrossGraphCommands()
     {
         InsertIndexedFile(
