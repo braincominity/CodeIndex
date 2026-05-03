@@ -47,55 +47,6 @@ public static class ReferenceExtractor
         @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly Regex CobolCallRegex = new(
-        @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolCopyRegex = new(
-        @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolGotoRegex = new(
-        @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolPerformRegex = new(
-        @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSetRegex = new(
-        @"^\s*SET\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s+\b(?:TO\s+TRUE|TO\b)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolOpenRegex = new(
-        @"^\s*OPEN\s+(?:INPUT|OUTPUT|I-O|EXTEND)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSearchRegex = new(
-        @"^\s*SEARCH\s+(?:(?:ALL|FIRST)\s+)?(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSimpleReferenceRegex = new(
-        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolMoveRegex = new(
-        @"^\s*MOVE\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolAddRegex = new(
-        @"^\s*ADD\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolSubtractRegex = new(
-        @"^\s*SUBTRACT\b.*?\bFROM\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolMultiplyRegex = new(
-        @"^\s*MULTIPLY\b.*?\bBY\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolDivideRegex = new(
-        @"^\s*DIVIDE\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolComputeRegex = new(
-        @"^\s*COMPUTE\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s*=",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolStringRegex = new(
-        @"^\s*STRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CobolUnstringRegex = new(
-        @"^\s*UNSTRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     // Batch jump targets can appear as direct commands, chained commands, or inline `if`
     // forms, including comparison-based conditions such as `if /i "%a%"=="b" goto :X`.
     // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
@@ -1755,7 +1706,7 @@ public static class ReferenceExtractor
 
             if (language == "cobol")
             {
-                EmitCobolReferences(
+                CobolReferenceExtractor.Emit(
                     lines[i],
                     context,
                     lineNumber,
@@ -2891,7 +2842,7 @@ public static class ReferenceExtractor
         return references;
     }
 
-    private static void AddReference(
+    internal static void AddReference(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2913,7 +2864,7 @@ public static class ReferenceExtractor
             container);
     }
 
-    private static void AddReference(
+    internal static void AddReference(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -3024,200 +2975,6 @@ public static class ReferenceExtractor
 
             AddReference(references, seen, fileId, name, match.Groups["name"].Index, "call", context, lineNumber, container);
         }
-    }
-
-    private static void EmitCobolReferences(
-        string rawLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        SymbolRecord? container,
-        IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
-    {
-        foreach (Match match in CobolCallRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolCopyRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolGotoRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSetRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolOpenRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSearchRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSimpleReferenceRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolMoveRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolAddRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolSubtractRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolMultiplyRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolDivideRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolComputeRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolStringRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolUnstringRegex.Matches(rawLine))
-        {
-            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-        }
-
-        foreach (Match match in CobolPerformRegex.Matches(rawLine))
-        {
-            var endName = match.Groups["end"].Value;
-            if (!string.IsNullOrWhiteSpace(endName)
-                && TryAddCobolPerformRangeReferences(
-                    cobolCallableSymbols,
-                    match.Groups["name"].Value,
-                    endName,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    container))
-            {
-                continue;
-            }
-
-            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
-        }
-    }
-
-    private static void EmitCobolNamedReference(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        Match match,
-        string referenceKind,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
-        var name = match.Groups["name"].Value;
-        if (string.IsNullOrWhiteSpace(name))
-            return;
-
-        AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, referenceKind, context, lineNumber, container);
-    }
-
-    private static bool TryAddCobolPerformRangeReferences(
-        IReadOnlyList<SymbolRecord>? cobolCallableSymbols,
-        string startName,
-        string endName,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        SymbolRecord? container)
-    {
-        if (cobolCallableSymbols == null || cobolCallableSymbols.Count == 0)
-            return false;
-
-        var normalizedStartName = startName.Trim();
-        var normalizedEndName = endName.Trim();
-        if (normalizedStartName.Length == 0 || normalizedEndName.Length == 0)
-            return false;
-
-        var startSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedStartName);
-        if (startSymbol == null)
-            return false;
-
-        var startLine = startSymbol.Line;
-        var endSymbol = FindCobolCallableSymbol(cobolCallableSymbols, normalizedEndName, startLine);
-        if (endSymbol == null)
-            return false;
-
-        var lowerLine = Math.Min(startSymbol.Line, endSymbol.Line);
-        var upperLine = Math.Max(startSymbol.Line, endSymbol.Line);
-        var emittedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var emittedAny = false;
-
-        foreach (var symbol in cobolCallableSymbols)
-        {
-            if (symbol.Line < lowerLine || symbol.Line > upperLine)
-                continue;
-
-            if (!emittedNames.Add(symbol.Name))
-                continue;
-
-            var nameIndex = Math.Max(0, symbol.StartColumn.GetValueOrDefault() - 1);
-            AddReference(references, seen, fileId, symbol.Name, nameIndex, "call", context, lineNumber, container);
-            emittedAny = true;
-        }
-
-        return emittedAny;
-    }
-
-    private static SymbolRecord? FindCobolCallableSymbol(
-        IReadOnlyList<SymbolRecord> cobolCallableSymbols,
-        string targetName,
-        int? minimumLine = null)
-    {
-        SymbolRecord? fallback = null;
-
-        foreach (var symbol in cobolCallableSymbols)
-        {
-            if (!string.Equals(symbol.Name, targetName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (minimumLine == null || symbol.Line >= minimumLine.Value)
-                return symbol;
-
-            fallback ??= symbol;
-        }
-
-        return fallback;
     }
 
     private static bool IsJsxFilePath(string? path)
