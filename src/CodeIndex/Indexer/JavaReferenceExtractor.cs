@@ -5,6 +5,24 @@ namespace CodeIndex.Indexer;
 
 internal static class JavaReferenceExtractor
 {
+    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
+    private static readonly Regex DotClassArgRegex = new(
+        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
+        RegexOptions.Compiled);
+
+    // JPMS module directives (`requires`, `uses`, and `provides`) are dependency edges, not calls.
+    private static readonly Regex ModuleRequiresDirectiveReferenceRegex = new(
+        @"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ModuleUsesDirectiveReferenceRegex = new(
+        @"^\s*uses\s+(?<name>[\w.]+)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ModuleProvidesDirectiveReferenceRegex = new(
+        @"^\s*provides\s+(?<service>[\w.]+)\s+with\s+(?<implementations>[\w.,\s]+)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`.
     // Also matches single-line ctor bodies like `Leaf(int x){super(x);}` where `{` precedes the chain call.
     // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
@@ -670,4 +688,122 @@ internal static class JavaReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+
+    public static void EmitDotClassTypeLiteralReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in DotClassArgRegex.Matches(preparedLine))
+        {
+            var argGroup = match.Groups["arg"];
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                argGroup.Value,
+                argGroup.Index,
+                context,
+                lineNumber,
+                container,
+                "java");
+        }
+    }
+
+    public static void EmitModuleDirectiveReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        EmitModuleDirectiveReference(
+            preparedLine,
+            ModuleRequiresDirectiveReferenceRegex,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+
+        EmitModuleDirectiveReference(
+            preparedLine,
+            ModuleUsesDirectiveReferenceRegex,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+
+        foreach (Match match in ModuleProvidesDirectiveReferenceRegex.Matches(preparedLine))
+        {
+            var serviceGroup = match.Groups["service"];
+            ReferenceExtractor.AddTypeReferenceSegment(
+                references,
+                seen,
+                fileId,
+                serviceGroup.Value,
+                serviceGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(serviceGroup.Index),
+                "java");
+
+            var implementationsGroup = match.Groups["implementations"];
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(implementationsGroup.Value))
+            {
+                var rawSegment = implementationsGroup.Value.Substring(segmentStart, segmentLength).Trim();
+                if (rawSegment.Length == 0)
+                    continue;
+
+                var absoluteStart = implementationsGroup.Index
+                    + segmentStart
+                    + ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                ReferenceExtractor.AddTypeReferenceSegment(
+                    references,
+                    seen,
+                    fileId,
+                    rawSegment,
+                    absoluteStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart),
+                    "java");
+            }
+        }
+    }
+
+    private static void EmitModuleDirectiveReference(
+        string preparedLine,
+        Regex regex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in regex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            ReferenceExtractor.AddTypeReferenceSegment(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(nameGroup.Index),
+                "java");
+        }
+    }
 }

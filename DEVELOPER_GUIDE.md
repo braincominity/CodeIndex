@@ -44,7 +44,7 @@ src/CodeIndex/
     FSharpReferenceExtractor.cs — F#-specific reference extraction for pipeline, space-application, and symbolic operator calls
     GradleReferenceExtractor.cs — Gradle/Groovy-specific reference extraction for block and command-style DSL calls
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
-    JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites, same-line constructor container recovery, and method references
+    JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites, same-line constructor container recovery, method references, `.class` literals, and module directives
     KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls and method references
     PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
     PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
@@ -1207,7 +1207,7 @@ src/CodeIndex/
     FSharpReferenceExtractor.cs — F# 固有の pipeline、space application、symbolic operator call 参照抽出
     GradleReferenceExtractor.cs — Gradle/Groovy 固有の block / command-style DSL call 参照抽出
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
-    JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換え、same-line constructor container 復元、method reference 参照抽出
+    JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換え、same-line constructor container 復元、method reference、`.class` literal、module directive 参照抽出
     KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call と method reference 参照抽出
     PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
     PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出

@@ -425,14 +425,6 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpTypeKeywordIntroRegex = new(
         @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(",
         RegexOptions.Compiled);
-    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
-    // `.class` itself is a language keyword, but the type chain in front of it is a genuine
-    // reference. Emit each dot-segment as `type_reference`. See issue #253.
-    // Java の `T.class` は型リテラル。`.class` 自体はキーワードだが、前置の型チェーンは
-    // 正当な参照。各 dot-segment を type_reference として拾う。issue #253 参照。
-    private static readonly Regex JavaDotClassArgRegex = new(
-        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
-        RegexOptions.Compiled);
     // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
     // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
@@ -473,20 +465,6 @@ public static class ReferenceExtractor
     private static readonly Regex JavaInstanceofRegex = new(
         @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
         RegexOptions.Compiled);
-    // JPMS module directives (`requires`, `uses`, and `provides`) are dependency edges, not calls.
-    // Emit them as `type_reference` rows so `references` / `impact` can see module-level edges.
-    // JPMS の module directive (`requires` / `uses` / `provides`) は呼び出しではなく依存エッジ。
-    // `references` / `impact` で module-level edge が見えるよう `type_reference` として発行する。
-    private static readonly Regex JavaModuleRequiresDirectiveReferenceRegex = new(
-        @"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex JavaModuleUsesDirectiveReferenceRegex = new(
-        @"^\s*uses\s+(?<name>[\w.]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex JavaModuleProvidesDirectiveReferenceRegex = new(
-        @"^\s*provides\s+(?<service>[\w.]+)\s+with\s+(?<implementations>[\w.,\s]+)\s*;",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
     // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
@@ -1136,11 +1114,14 @@ public static class ReferenceExtractor
             }
             else if (language is "java")
             {
-                foreach (Match match in JavaDotClassArgRegex.Matches(preparedLine))
-                {
-                    var argGroup = match.Groups["arg"];
-                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
-                }
+                JavaReferenceExtractor.EmitDotClassTypeLiteralReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
 
             // Type-position references without an introducing keyword-call: base lists,
@@ -1183,7 +1164,7 @@ public static class ReferenceExtractor
             }
             else if (language == "java")
             {
-                EmitJavaModuleDirectiveReferences(
+                JavaReferenceExtractor.EmitModuleDirectiveReferences(
                     preparedLine,
                     references,
                     seen,
@@ -1924,7 +1905,7 @@ public static class ReferenceExtractor
     /// computed relative to the original line so tooling can jump to the exact identifier.
     /// 捕捉した引数の dot-segment ごとに `type_reference` 行を発行する。列位置は元の行基準で計算する。
     /// </summary>
-    private static void AddTypeReferenceSegments(
+    internal static void AddTypeReferenceSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2949,97 +2930,6 @@ public static class ReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(expressionStart),
                 "typescript");
-        }
-    }
-
-    private static void EmitJavaModuleDirectiveReferences(
-        string preparedLine,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        EmitJavaModuleDirectiveReference(
-            preparedLine,
-            JavaModuleRequiresDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-
-        EmitJavaModuleDirectiveReference(
-            preparedLine,
-            JavaModuleUsesDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
-
-        foreach (Match match in JavaModuleProvidesDirectiveReferenceRegex.Matches(preparedLine))
-        {
-            var serviceGroup = match.Groups["service"];
-            AddTypeReferenceSegment(
-                references,
-                seen,
-                fileId,
-                serviceGroup.Value,
-                serviceGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(serviceGroup.Index),
-                "java");
-
-            var implementationsGroup = match.Groups["implementations"];
-            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(implementationsGroup.Value))
-            {
-                var rawSegment = implementationsGroup.Value.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0)
-                    continue;
-
-                var absoluteStart = implementationsGroup.Index + segmentStart + CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
-                AddTypeReferenceSegment(
-                    references,
-                    seen,
-                    fileId,
-                    rawSegment,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "java");
-            }
-        }
-    }
-
-    private static void EmitJavaModuleDirectiveReference(
-        string preparedLine,
-        Regex regex,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string context,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
-    {
-        foreach (Match match in regex.Matches(preparedLine))
-        {
-            var nameGroup = match.Groups["name"];
-            AddTypeReferenceSegment(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(nameGroup.Index),
-                "java");
         }
     }
 
@@ -4676,7 +4566,7 @@ public static class ReferenceExtractor
         return tokens;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
     {
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
@@ -4772,7 +4662,7 @@ public static class ReferenceExtractor
         return spans;
     }
 
-    private static int CountLeadingWhitespace(string text, int start, int length)
+    internal static int CountLeadingWhitespace(string text, int start, int length)
     {
         int count = 0;
         while (count < length && char.IsWhiteSpace(text[start + count]))
@@ -9882,7 +9772,7 @@ public static class ReferenceExtractor
         return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
     }
 
-    private static void AddTypeReferenceSegment(
+    internal static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
