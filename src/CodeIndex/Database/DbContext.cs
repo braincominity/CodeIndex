@@ -127,9 +127,9 @@ public class DbContext : IDisposable
             {
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
+                Execute("PRAGMA busy_timeout=5000");
                 RegisterConnectionFunctions(_connection);
                 _isReadOnly = true;
-                Execute("PRAGMA busy_timeout=5000");
                 return;
             }
 
@@ -151,6 +151,7 @@ public class DbContext : IDisposable
                 () => new SqliteConnection(builder.ConnectionString),
                 static connection => connection.Open(),
                 static milliseconds => System.Threading.Thread.Sleep(milliseconds));
+            Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
@@ -170,13 +171,10 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
+            Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctions(_connection);
             _isReadOnly = true;
         }
-
-        // Set busy timeout to avoid immediate SQLITE_BUSY errors on concurrent access
-        // 同時アクセス時の即座のSQLITE_BUSYエラーを回避するためビジータイムアウトを設定
-        Execute("PRAGMA busy_timeout=5000");
 
         if (!_isReadOnly)
         {
