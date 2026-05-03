@@ -36,6 +36,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
+    CSharpReferenceExtractor.cs — C#-specific reference extraction for constructor-chain rewrites
     CssReferenceExtractor.cs  — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
     CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
     DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
@@ -1184,6 +1185,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
+    CSharpReferenceExtractor.cs — C# 固有の constructor-chain 書き換え参照抽出
     CssReferenceExtractor.cs  — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
     CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
     DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
