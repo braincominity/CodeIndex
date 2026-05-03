@@ -45,6 +45,7 @@ src/CodeIndex/
     GradleReferenceExtractor.cs — Gradle/Groovy-specific reference extraction for block and command-style DSL calls
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
     JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites and same-line constructor container recovery
+    KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls
     PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
     PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
     PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
@@ -53,6 +54,7 @@ src/CodeIndex/
     RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls and raw identifier normalization
     ScalaReferenceExtractor.cs — Scala-specific reference extraction for trailing block calls
     ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
+    SwiftReferenceExtractor.cs — Swift-specific reference extraction for trailing closure calls
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
     TypeScriptReferenceExtractor.cs — TypeScript-specific reference extraction entry point for type-position and declaration type references
     SqlReferenceExtractor.cs  — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
@@ -1206,6 +1208,7 @@ src/CodeIndex/
     GradleReferenceExtractor.cs — Gradle/Groovy 固有の block / command-style DSL call 参照抽出
     JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
     JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換えと same-line constructor container 復元
+    KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call 参照抽出
     PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
     PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
     PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
@@ -1214,6 +1217,7 @@ src/CodeIndex/
     RustReferenceExtractor.cs — Rust 固有の macro call と raw identifier 正規化の参照抽出
     ScalaReferenceExtractor.cs — Scala 固有の trailing block call 参照抽出
     ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
+    SwiftReferenceExtractor.cs — Swift 固有の trailing closure call 参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
     TypeScriptReferenceExtractor.cs — TypeScript 固有の型位置・宣言型参照抽出エントリポイント
     SqlReferenceExtractor.cs  — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出

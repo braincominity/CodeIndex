@@ -294,15 +294,6 @@ public static class ReferenceExtractor
     private static readonly Regex JsxElementOpenRegex = new(
         @"<(?<name>[A-Z][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
         RegexOptions.Compiled);
-    // Swift / Kotlin trailing-lambda calls such as `items.forEach { ... }`, `list.filter { ... }`,
-    // and `animate { ... } completion: { ... }` do not have a trailing `(`, so the shared CallRegex
-    // cannot see them. Emit the same `call` edge for these trailing-block forms so the call graph
-    // stays aligned with the idiomatic source form. See issue #265.
-    // Swift / Kotlin の trailing-lambda 呼び出し (`items.forEach { ... }`, `list.filter { ... }`,
-    // `animate { ... } completion: { ... }`) は末尾 `(` を持たないため、共通 CallRegex では拾えない。
-    // これらも同じ `call` edge として発行し、慣用的な記法でも call graph が欠けないようにする。
-    // issue #265 参照。
-    private static readonly Regex TrailingLambdaCallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:<[^>\n]+>)?\s*\{{", RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -1608,17 +1599,10 @@ public static class ReferenceExtractor
                         AddCallLikeReference);
                 }
 
-                if (language is "swift" or "kotlin")
-                {
-                    foreach (Match match in TrailingLambdaCallRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        if (IsTrailingLambdaInheritanceClause(preparedLine, callIndex))
-                            continue;
-                        AddCallLikeReference(name, callIndex);
-                    }
-                }
+                if (language == "swift")
+                    SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
+                else if (language == "kotlin")
+                    KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
 
                 if (language == "fsharp")
                 {
@@ -11907,15 +11891,6 @@ public static class ReferenceExtractor
         return language == "php"
             ? string.Equals(token, "new", StringComparison.OrdinalIgnoreCase)
             : string.Equals(token, "new", StringComparison.Ordinal);
-    }
-
-    private static bool IsTrailingLambdaInheritanceClause(string preparedLine, int nameIndex)
-    {
-        var probe = nameIndex - 1;
-        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
-            probe--;
-
-        return probe >= 0 && preparedLine[probe] == ':';
     }
 
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
