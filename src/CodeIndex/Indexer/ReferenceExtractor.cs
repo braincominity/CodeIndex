@@ -39,14 +39,6 @@ public static class ReferenceExtractor
         @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
-    private static readonly Regex DockerfileStageReferenceRegex = new(
-        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\w+)\s+AS\s+\w+\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static readonly Regex DockerfileCopyFromReferenceRegex = new(
-        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
     // Batch jump targets can appear as direct commands, chained commands, or inline `if`
     // forms, including comparison-based conditions such as `if /i "%a%"=="b" goto :X`.
     // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
@@ -1230,7 +1222,7 @@ public static class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
-        var dockerfileStageNames = BuildDockerfileStageNames(language, symbols);
+        var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var shellCallableNames = BuildShellCallableNames(language, symbols);
         var shellGlobalAliasNames = BuildShellGlobalAliasNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
@@ -1693,7 +1685,7 @@ public static class ReferenceExtractor
 
             if (language == "dockerfile")
             {
-                EmitDockerfileStageReferences(
+                DockerfileReferenceExtractor.EmitStageReferences(
                     preparedLine,
                     context,
                     lineNumber,
@@ -2944,37 +2936,6 @@ public static class ReferenceExtractor
             fileId,
             definitionNames,
             container);
-    }
-
-    private static void EmitDockerfileStageReferences(
-        string preparedLine,
-        string context,
-        int lineNumber,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        HashSet<string>? stageNames,
-        SymbolRecord? container)
-    {
-        if (stageNames == null || stageNames.Count == 0)
-            return;
-
-        var fromMatch = DockerfileStageReferenceRegex.Match(preparedLine);
-        if (fromMatch.Success)
-        {
-            var name = fromMatch.Groups["name"].Value;
-            if (stageNames.Contains(name))
-                AddReference(references, seen, fileId, name, fromMatch.Groups["name"].Index, "call", context, lineNumber, container);
-        }
-
-        foreach (Match match in DockerfileCopyFromReferenceRegex.Matches(preparedLine))
-        {
-            var name = match.Groups["name"].Value;
-            if (!stageNames.Contains(name))
-                continue;
-
-            AddReference(references, seen, fileId, name, match.Groups["name"].Index, "call", context, lineNumber, container);
-        }
     }
 
     private static bool IsJsxFilePath(string? path)
@@ -7260,23 +7221,6 @@ public static class ReferenceExtractor
                 continue;
 
             if (!Regex.IsMatch(signature, @"^alias(?:\s+-[^\s=]+)*\s+-g\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static HashSet<string>? BuildDockerfileStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "dockerfile")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             names.Add(symbol.Name);
