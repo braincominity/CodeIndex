@@ -969,6 +969,46 @@ jobs:
     }
 
     [Theory]
+    [InlineData("cshtml")]
+    [InlineData("razor")]
+    public void RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases(string lang)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_lang_alias_publish");
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_lang_alias_publish_{Guid.NewGuid():N}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = $"TrimmedPublishLangAliasNeedle_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "web/Views/Home/Index.cshtml",
+                "csharp",
+                $$"""
+                @{
+                    var marker = "{{queryToken}}";
+                }
+                """);
+
+            var publishedDll = PublishTrimmedCli(publishDir);
+
+            var (exitCode, stdout, stderr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--lang", lang, "--count", "--json");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, document.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(publishDir);
+        }
+    }
+
+    [Theory]
     [InlineData("definition", "--focus-column", "10")]
     [InlineData("definition", "--max-line-width", "10")]
     [InlineData("search", "--focus-column", "10")]
@@ -1615,6 +1655,23 @@ jobs:
     }
 
     [Fact]
+    public void RunLanguages_JsonListsCSharpRazorAliases()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var csharp = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "csharp");
+        var aliases = csharp.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()).ToList();
+
+        Assert.Contains("cshtml", aliases);
+        Assert.Contains("razor", aliases);
+    }
+
+    [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside the Python / CSS extractors
@@ -1726,7 +1783,7 @@ jobs:
         // Sanity: short rows still fit the fixed-width layout on a single line.
         // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
         var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
-        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+-\s+yes\s+yes\s*$", csharpLine);
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+cshtml\s+razor\s+yes\s+yes\s*$", csharpLine);
 
         // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
         // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
