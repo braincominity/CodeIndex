@@ -10,7 +10,7 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class ReferenceExtractor
 {
-    private readonly record struct CSharpMultiLineTypePatternState(
+    internal readonly record struct CSharpMultiLineTypePatternState(
         bool WaitingForHead,
         string? PendingTypeExpression,
         int PendingTypeIndex,
@@ -430,16 +430,16 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
+    internal static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)\s*$",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
+    internal static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
         @"(?<![\w$])case(?:\s+not)?\s*$",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
+    internal static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
+    internal static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
         @"(?<![\w$])case(?:\s+not)?",
         RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
@@ -866,7 +866,7 @@ public static class ReferenceExtractor
                                 lineNumber,
                                 docContainer)))
                     {
-                        EmitCSharpDocCrefReferences(
+                        CSharpReferenceExtractor.EmitDocCrefReferences(
                             csharpDocCommentText,
                             references,
                             seen,
@@ -890,7 +890,7 @@ public static class ReferenceExtractor
                 }
 
                 if (language == "csharp")
-                    FlushPendingCSharpMultiLineTypePatternReference(
+                    CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
                         ref pendingCSharpMultiLineTypePattern,
                         csharpQualifiedConstantPatternMemberLookup,
                         csharpUsingAliases,
@@ -1035,7 +1035,7 @@ public static class ReferenceExtractor
 
             if (language == "csharp")
             {
-                AdvanceCSharpMultiLineTypePatternState(
+                CSharpReferenceExtractor.AdvanceMultiLineTypePatternState(
                     preparedLine,
                     context,
                     lineNumber,
@@ -1128,7 +1128,7 @@ public static class ReferenceExtractor
             // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
             if (language == "csharp")
             {
-                EmitCSharpTypePositionReferences(
+                CSharpReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     originalLine,
                     csharpQualifiedConstantPatternMemberLookup,
@@ -1145,16 +1145,14 @@ public static class ReferenceExtractor
                     container,
                     ref pendingCSharpMultiLineTypePattern);
 
-                if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine)
-                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpIsAsTypePatternIntroContextRegex))
+                if (CSharpReferenceExtractor.HasTrailingIsAsTypePatternIntro(preparedLine, originalLine))
                 {
-                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                    CSharpReferenceExtractor.StartWaitingForMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
 
-                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine)
-                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpCaseTypePatternIntroContextRegex))
+                if (CSharpReferenceExtractor.HasTrailingCaseTypePatternIntro(preparedLine, originalLine))
                 {
-                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                    CSharpReferenceExtractor.StartWaitingForMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
             }
             else if (language == "java")
@@ -1473,7 +1471,7 @@ public static class ReferenceExtractor
                   // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
                   // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
                   var isCSharpPatternHeadCallSite = language == "csharp"
-                      && IsCSharpPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
+                      && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
                   if (isCSharpPatternHeadCallSite)
                       return;
 
@@ -1678,7 +1676,7 @@ public static class ReferenceExtractor
             // `attribute` に落として runtime call-graph への混入を防ぐ (issue #293 / #492)。
             if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
             {
-                EmitCSharpQualifiedEnumMemberReferences(
+                CSharpReferenceExtractor.EmitQualifiedEnumMemberReferences(
                     preparedLine,
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
@@ -1807,7 +1805,7 @@ public static class ReferenceExtractor
 
         if (language == "csharp")
         {
-            EmitCSharpSwitchExpressionTypePatternReferences(
+            CSharpReferenceExtractor.EmitSwitchExpressionTypePatternReferences(
                 lines,
                 preparedLines,
                 containerCandidates,
@@ -1820,7 +1818,7 @@ public static class ReferenceExtractor
                 seen,
                 fileId);
 
-            FlushPendingCSharpMultiLineTypePatternReference(
+            CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
                 ref pendingCSharpMultiLineTypePattern,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -2080,7 +2078,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void EmitCSharpTypePositionReferences(
+    internal static void EmitCSharpTypePositionReferences(
         string preparedLine,
         string originalLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
@@ -2181,7 +2179,7 @@ public static class ReferenceExtractor
             ref pendingCSharpMultiLineTypePattern);
     }
 
-    private static void AdvanceCSharpMultiLineTypePatternState(
+    internal static void AdvanceCSharpMultiLineTypePatternState(
         string preparedLine,
         string context,
         int lineNumber,
@@ -2309,7 +2307,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static void FlushPendingCSharpMultiLineTypePatternReference(
+    internal static void FlushPendingCSharpMultiLineTypePatternReference(
         ref CSharpMultiLineTypePatternState state,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -2358,7 +2356,7 @@ public static class ReferenceExtractor
         return SkipWhitespace(preparedLine, cursor) >= preparedLine.Length;
     }
 
-    private static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
+    internal static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
     {
         state = new CSharpMultiLineTypePatternState(
             WaitingForHead: true,
@@ -2611,7 +2609,7 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
+    internal static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
     {
         foreach (Match match in introRegex.Matches(text))
         {
@@ -2622,7 +2620,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static void EmitCSharpSwitchExpressionTypePatternReferences(
+    internal static void EmitCSharpSwitchExpressionTypePatternReferences(
         IReadOnlyList<string> lines,
         IReadOnlyList<string> preparedLines,
         IReadOnlyList<SymbolRecord> containerCandidates,
@@ -2896,7 +2894,7 @@ public static class ReferenceExtractor
         }
     }
 
-    private static void EmitCSharpDocCrefReferences(
+    internal static void EmitCSharpDocCrefReferences(
         string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -4741,11 +4739,11 @@ public static class ReferenceExtractor
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
-    private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    internal sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    internal sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
-    private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
-    private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
+    internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
+    internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
     private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
     {
@@ -5480,7 +5478,7 @@ public static class ReferenceExtractor
             || symbol.Signature.StartsWith("const ", StringComparison.Ordinal);
     }
 
-    private static void EmitCSharpQualifiedEnumMemberReferences(
+    internal static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
@@ -5626,7 +5624,7 @@ public static class ReferenceExtractor
         return cursor;
     }
 
-      private static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+      internal static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
       {
           var whenOffset = FindTopLevelCSharpWhenKeywordOffset(preparedLine);
           if (whenOffset >= 0 && nameIndex > whenOffset)
