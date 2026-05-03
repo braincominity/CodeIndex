@@ -103,6 +103,20 @@ public class QueryCommandRunnerTests
         Assert.Equal("myquery", options.Query);
     }
 
+    [Theory]
+    [InlineData("c#", "csharp")]
+    [InlineData("c++", "cpp")]
+    [InlineData("py3", "python")]
+    [InlineData("python3", "python")]
+    [InlineData("sqlserver", "sql")]
+    public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--lang", input], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunSearch", options.Query);
+        Assert.Equal(expected, options.Lang);
+    }
+
     [Fact]
     public void GetLanguageAliases_ReportsSqlDialectAliases()
     {
@@ -164,12 +178,20 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("transact-sql")]
-    [InlineData("transact sql")]
-    public void NormalizeQueryLanguage_MapsTransactSqlToSql(string input)
+    [InlineData("transact-sql", "sql")]
+    [InlineData("transact sql", "sql")]
+    [InlineData("sqlserver", "sql")]
+    [InlineData("mssql", "sql")]
+    [InlineData("c#", "csharp")]
+    [InlineData("c++", "cpp")]
+    [InlineData("f#", "fsharp")]
+    [InlineData("vb.net", "vb")]
+    [InlineData("py3", "python")]
+    public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
-        Assert.Equal("sql", DbReader.NormalizeQueryLanguage(input));
-        Assert.True(DbReader.IsSqlLanguage(input));
+        Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
+        Assert.Equal(expected, QueryCommandRunner.NormalizeLangFilterValue(input));
+        Assert.Equal(expected == "sql", DbReader.IsSqlLanguage(input));
     }
 
     [Theory]
@@ -1997,14 +2019,10 @@ jobs:
 
         var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
 
-        // Sanity: short rows still fit the fixed-width layout on a single line.
-        // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
-        var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
-        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+cshtml\s+razor\s+yes\s+yes\s*$", csharpLine);
-
-        // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
-        // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
-        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "msbuild" };
+        // Rows with long extension / alias lists must spill onto a continuation line so the
+        // Symbols / Graph columns stay readable.
+        // 拡張子や alias が長い行は継続行に退避し、Symbols / Graph 列の可読性を保つ。
+        var wideLangs = new[] { "csharp", "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
