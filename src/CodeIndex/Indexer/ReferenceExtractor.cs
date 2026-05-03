@@ -3218,7 +3218,7 @@ public static class ReferenceExtractor
                 foreach (var (partStart, partEnd) in EnumerateCssSelectorListSegments(selectorSegment))
                 {
                     var selectorPart = selectorSegment[partStart..partEnd];
-                    if (!LooksLikeCssSelectorSegment(selectorPart))
+                    if (!ContainsCssClassSelectorReferenceCandidate(selectorPart))
                         continue;
 
                     var selectorPartTrimStart = 0;
@@ -3252,17 +3252,6 @@ public static class ReferenceExtractor
 
             segmentStart = braceIndex + 1;
         }
-    }
-
-    private static bool LooksLikeCssSelectorSegment(string line)
-    {
-        var index = 0;
-        while (index < line.Length && char.IsWhiteSpace(line[index]))
-            index++;
-        if (index >= line.Length)
-            return false;
-
-        return line[index] is '.' or '#' or '[' or '*' or ':' or '&';
     }
 
     private static IEnumerable<(int Start, int End)> EnumerateCssSelectorListSegments(string selectorSegment)
@@ -3306,6 +3295,45 @@ public static class ReferenceExtractor
         }
 
         yield return (segmentStart, selectorSegment.Length);
+    }
+
+    private static bool ContainsCssClassSelectorReferenceCandidate(string selectorPart)
+    {
+        var bracketDepth = 0;
+        char quote = '\0';
+        for (var index = 0; index < selectorPart.Length; index++)
+        {
+            var ch = selectorPart[index];
+            if (quote != '\0')
+            {
+                if (ch == quote && (index == 0 || selectorPart[index - 1] != '\\'))
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (bracketDepth == 0 && ch == '.')
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsCssAnimationNameToken(string token)
