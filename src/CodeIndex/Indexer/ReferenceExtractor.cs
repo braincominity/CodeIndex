@@ -27,13 +27,6 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
-    // Batch jump targets can appear as direct commands, chained commands, or inline `if`
-    // forms, including comparison-based conditions such as `if /i "%a%"=="b" goto :X`.
-    // batch のジャンプ先は、直書き・連結コマンド・`if` 併用の inline 形として現れうる。
-    // 比較式ベースの `if /i "%a%"=="b" goto :X` のような形も含めて扱う。
-    private static readonly Regex BatchJumpTargetRegex = new(
-        @"^\s*@?\s*(?:(?:if\s+(?:/i\s+)?(?:not\s+)?(?:(?:errorlevel\s+\d+|defined\s+\S+|exist\s+\S+|cmdextversion\s+\d+)|(?:[^()\r\n]+?\s*(?:==|equ|neq|lss|leq|gtr|geq)\s*[^()\r\n]+?))\s+(?:\(\s*)?)?)?(?<command>goto|call)\s+:(?<name>[\w.\-]+)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
@@ -414,23 +407,6 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex GradleCommandCallRegex = new(
         @"(?<![\w$@])(?<name>[A-Za-z_]\w*)\s+(?=(?:['""]|[_\p{L}]|\d|\.|:))",
-        RegexOptions.Compiled);
-    // Shell command-style function calls such as `setup`, `setup && cleanup`, and
-    // `if setup; then ...` do not use trailing `(`, so the shared CallRegex misses them.
-    // Restrict the matcher to bare command heads and only emit references for function names
-    // that are actually defined in the current file.
-    // Shell のコマンド構文による関数呼び出し (`setup` / `setup && cleanup` / `if setup; then ...`)
-    // は末尾 `(` を持たないため、共通 CallRegex では拾えない。bare command head に限定し、
-    // さらに現在ファイルで定義された function 名だけを参照として出す。
-    private static readonly Regex ShellCommandCallRegex = new(
-        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?<name>[A-Za-z_][A-Za-z0-9_-]*)(?=\s|$|[;|&}])",
-        RegexOptions.Compiled);
-    // Shell `source` / `.` invocations load other scripts, so surface the referenced path
-    // as a `reference` edge for dependency-style search.
-    // Shell の `source` / `.` 呼び出しは他スクリプトを読み込むため、依存関係検索用に
-    // 参照エッジとして対象パスを出す。
-    private static readonly Regex ShellSourceReferenceRegex = new(
-        @"(?:^\s*(?!(?:if|then|do|else|elif|while|until|time|fi)\b)|[|;&{]\s*|&&\s*|\|\|\s*|!\s+|\b(?:if|then|do|else|elif|while|until|time)\s+)(?:source|\.)\s+(?<name>(?:'[^']*'|""[^""]*""|[^;\s&#|}]+))",
         RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
@@ -949,8 +925,8 @@ public static class ReferenceExtractor
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
-        var shellCallableNames = BuildShellCallableNames(language, symbols);
-        var shellGlobalAliasNames = BuildShellGlobalAliasNames(language, symbols);
+        var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
+        var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -1750,38 +1726,16 @@ public static class ReferenceExtractor
                 }
             }
 
-            if (language is "batch" && !IsBatchCommentLine(originalLine))
-            {
-                for (var segmentStart = 0; segmentStart < preparedLine.Length;)
-                {
-                    var segmentEnd = segmentStart;
-                    while (segmentEnd < preparedLine.Length && !IsBatchCommandSeparator(preparedLine, segmentEnd))
-                        segmentEnd++;
-
-                    ProcessBatchJumpSegment(
-                        preparedLine[segmentStart..segmentEnd],
-                        segmentStart,
-                        references,
-                        seen,
-                        context,
-                        fileId,
-                        lineNumber,
-                        ResolveContainerForCall);
-
-                    var segment = preparedLine[segmentStart..segmentEnd].TrimStart();
-                    if (segment.Length > 0)
-                    {
-                        if (segment[0] == '@')
-                            segment = segment[1..].TrimStart();
-                        if (segment.Length > 0 && (segment.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(segment, 0)))
-                            break;
-                    }
-
-                    segmentStart = segmentEnd;
-                    while (segmentStart < preparedLine.Length && (char.IsWhiteSpace(preparedLine[segmentStart]) || IsBatchCommandSeparator(preparedLine, segmentStart)))
-                        segmentStart++;
-                }
-            }
+            if (language is "batch")
+                BatchReferenceExtractor.EmitJumpTargetReferences(
+                    originalLine,
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
 
             var matchedCallIndices = new HashSet<int>();
             if (language is "powershell")
@@ -1790,53 +1744,18 @@ public static class ReferenceExtractor
             }
             else if (language is "shell")
             {
-                foreach (Match match in ShellCommandCallRegex.Matches(preparedLine))
-                {
-                    var name = match.Groups["name"].Value;
-                    if (shellCallableNames == null || !shellCallableNames.Contains(name))
-                        continue;
-
-                    var callIndex = match.Groups["name"].Index;
-                    AddCallLikeReference(name, callIndex);
-                }
-
-                var shellSourceLine = StripShellComment(originalLine);
-                foreach (Match match in ShellSourceReferenceRegex.Matches(shellSourceLine))
-                {
-                    var name = NormalizeShellSourceTargetToken(match.Groups["name"].Value);
-                    if (string.IsNullOrWhiteSpace(name))
-                        continue;
-
-                    var sourceIndex = match.Groups["name"].Index;
-                    AddReference(references, seen, fileId, name, sourceIndex, "reference", context, lineNumber, ResolveContainerForCall(sourceIndex));
-                }
-
-                if (shellGlobalAliasNames != null && shellGlobalAliasNames.Count > 0)
-                {
-                    var trimmedPreparedLine = preparedLine.TrimStart();
-                    if (!trimmedPreparedLine.StartsWith("alias", StringComparison.Ordinal))
-                    {
-                        foreach (var aliasName in shellGlobalAliasNames)
-                        {
-                            var searchIndex = 0;
-                            while (searchIndex < preparedLine.Length)
-                            {
-                                var aliasIndex = preparedLine.IndexOf(aliasName, searchIndex, StringComparison.Ordinal);
-                                if (aliasIndex < 0)
-                                    break;
-
-                                if (!IsShellGlobalAliasReferenceBoundary(preparedLine, aliasIndex, aliasName.Length))
-                                {
-                                    searchIndex = aliasIndex + aliasName.Length;
-                                    continue;
-                                }
-
-                                AddCallLikeReference(aliasName, aliasIndex);
-                                searchIndex = aliasIndex + aliasName.Length;
-                            }
-                        }
-                    }
-                }
+                ShellReferenceExtractor.EmitReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    shellCallableNames,
+                    shellGlobalAliasNames,
+                    ResolveContainerForCall,
+                    AddCallLikeReference);
             }
             else
             {
@@ -5823,62 +5742,6 @@ public static class ReferenceExtractor
         return names;
     }
 
-    private static HashSet<string>? BuildShellCallableNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "shell")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("function" or "alias") || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static HashSet<string>? BuildShellGlobalAliasNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "shell")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "alias" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
-                continue;
-
-            if (!Regex.IsMatch(signature, @"^alias(?:\s+-[^\s=]+)*\s+-g\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    private static bool IsShellGlobalAliasReferenceBoundary(string text, int startIndex, int length)
-    {
-        if (startIndex < 0 || length <= 0 || startIndex + length > text.Length)
-            return false;
-
-        if (startIndex > 0 && !IsShellGlobalAliasBoundarySeparator(text[startIndex - 1]))
-            return false;
-
-        var endIndex = startIndex + length;
-        return endIndex >= text.Length || IsShellGlobalAliasBoundarySeparator(text[endIndex]);
-    }
-
-    private static bool IsShellGlobalAliasBoundarySeparator(char ch) =>
-        char.IsWhiteSpace(ch) || ch is '|' or ';' or '&' or '{' or '}' or '(' or ')' or '!';
-
     private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
     {
         var normalizedTarget = NormalizeCSharpAliasTargetForTypeLookup(targetQualifiedName);
@@ -7043,76 +6906,6 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
-
-    private static string NormalizeShellSourceTargetToken(string token)
-    {
-        var trimmed = token.Trim();
-        if (trimmed.Length >= 2)
-        {
-            var quote = trimmed[0];
-            if ((quote == '\'' || quote == '"') && trimmed[^1] == quote)
-                return trimmed[1..^1];
-        }
-
-        return trimmed;
-    }
-
-    private static string StripShellComment(string line)
-    {
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
-        var escapeNext = false;
-
-        for (var i = 0; i < line.Length; i++)
-        {
-            var ch = line[i];
-            if (escapeNext)
-            {
-                escapeNext = false;
-                continue;
-            }
-
-            if (inSingleQuote)
-            {
-                if (ch == '\'')
-                    inSingleQuote = false;
-                continue;
-            }
-
-            if (inDoubleQuote)
-            {
-                if (ch == '"')
-                {
-                    inDoubleQuote = false;
-                    continue;
-                }
-
-                if (ch == '\\')
-                    escapeNext = true;
-                continue;
-            }
-
-            if (ch == '#')
-                return line[..i];
-
-            if (ch == '\'')
-            {
-                inSingleQuote = true;
-                continue;
-            }
-
-            if (ch == '"')
-            {
-                inDoubleQuote = true;
-                continue;
-            }
-
-            if (ch == '\\')
-                escapeNext = true;
-        }
-
-        return line;
-    }
 
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,
@@ -13149,117 +12942,4 @@ public static class ReferenceExtractor
         return (backslashCount & 1) == 1;
     }
 
-    /// <summary>
-    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
-    /// `@rem` (with optional leading whitespace and case-insensitive `rem`).
-    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
-    /// true を返す。
-    /// </summary>
-    private static bool IsBatchCommentLine(string line)
-    {
-        var i = 0;
-        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
-            i++;
-
-        if (i >= line.Length)
-            return false;
-
-        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
-            return true;
-
-        if (line[i] == '@')
-        {
-            var j = i + 1;
-            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
-                j++;
-            return IsBatchRemKeyword(line, j);
-        }
-
-        return IsBatchRemKeyword(line, i);
-    }
-
-    private static bool IsBatchRemKeyword(string line, int start)
-    {
-        if (start + 3 > line.Length)
-            return false;
-        if ((line[start] | 0x20) != 'r')
-            return false;
-        if ((line[start + 1] | 0x20) != 'e')
-            return false;
-        if ((line[start + 2] | 0x20) != 'm')
-            return false;
-        if (start + 3 == line.Length)
-            return true;
-        var next = line[start + 3];
-        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
-    }
-
-    private static bool IsBatchCommandSeparator(string line, int index)
-    {
-        var c = line[index];
-        if (c is not '&' and not '|')
-            return false;
-
-        var caretCount = 0;
-        for (var i = index - 1; i >= 0 && line[i] == '^'; i--)
-            caretCount++;
-
-        return (caretCount & 1) == 0;
-    }
-
-    private static void ProcessBatchJumpSegment(
-        string segment,
-        int segmentOffset,
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        string context,
-        long fileId,
-        int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForCall)
-    {
-        var trimmed = segment.TrimStart();
-        if (trimmed.Length == 0)
-            return;
-
-        if (trimmed[0] == '@')
-        {
-            trimmed = trimmed[1..].TrimStart();
-            if (trimmed.Length == 0)
-                return;
-        }
-
-        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsBatchRemKeyword(trimmed, 0))
-            return;
-
-        if (StartsWithBatchWord(trimmed, "else") || StartsWithBatchWord(trimmed, "do"))
-        {
-            var keywordEnd = 0;
-            while (keywordEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[keywordEnd]))
-                keywordEnd++;
-            while (keywordEnd < trimmed.Length && char.IsWhiteSpace(trimmed[keywordEnd]))
-                keywordEnd++;
-            if (keywordEnd >= trimmed.Length)
-                return;
-            trimmed = trimmed[keywordEnd..].TrimStart();
-        }
-
-        var match = BatchJumpTargetRegex.Match(trimmed);
-        if (!match.Success)
-            return;
-
-        var name = match.Groups["name"].Value;
-        if (string.Equals(name, "eof", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        var commandIndex = segmentOffset + match.Groups["command"].Index;
-        var callContainer = resolveContainerForCall(commandIndex);
-        AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
-    }
-
-    private static bool StartsWithBatchWord(string text, string word)
-    {
-        if (!text.StartsWith(word, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return text.Length == word.Length || char.IsWhiteSpace(text[word.Length]);
-    }
 }

@@ -36,6 +36,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
+    BatchReferenceExtractor.cs — Batch-specific reference extraction for `goto` / `call` label targets
     CSharpReferenceExtractor.cs — C#-specific reference extraction for constructor-chain rewrites
     CssReferenceExtractor.cs  — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
     CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
@@ -47,6 +48,7 @@ src/CodeIndex/
     PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
     RReferenceExtractor.cs    — R-specific reference extraction for namespace references
     RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls and raw identifier normalization
+    ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
     TypeScriptReferenceExtractor.cs — TypeScript-specific reference extraction entry point for type-position and declaration type references
     SqlReferenceExtractor.cs  — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
@@ -1191,6 +1193,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
+    BatchReferenceExtractor.cs — Batch 固有の `goto` / `call` label target 参照抽出
     CSharpReferenceExtractor.cs — C# 固有の constructor-chain 書き換え参照抽出
     CssReferenceExtractor.cs  — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
     CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
@@ -1202,6 +1205,7 @@ src/CodeIndex/
     PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
     RReferenceExtractor.cs    — R 固有の namespace 参照抽出
     RustReferenceExtractor.cs — Rust 固有の macro call と raw identifier 正規化の参照抽出
+    ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
     TypeScriptReferenceExtractor.cs — TypeScript 固有の型位置・宣言型参照抽出エントリポイント
     SqlReferenceExtractor.cs  — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出
