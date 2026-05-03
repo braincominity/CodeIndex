@@ -52,6 +52,62 @@ public class DbReaderTests : IDisposable
         Assert.Equal(expected, DbReader.BuildPathLikePattern(input));
     }
 
+    [Fact]
+    public void CountSearchResults_NormalizesJavascriptLangSpelling()
+    {
+        const string query = "JavaScriptAliasToken";
+
+        InsertIndexedFile(
+            "src/javascript-alias.js",
+            "javascript",
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: "Javascript");
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
+    [Theory]
+    [InlineData("js")]
+    [InlineData("JS")]
+    [InlineData("jsx")]
+    [InlineData("JSX")]
+    [InlineData("cjs")]
+    [InlineData("MJS")]
+    public void CountSearchResults_NormalizesJavascriptShorthandLangSpellings(string lang)
+    {
+        const string query = "JavaScriptShorthandToken";
+
+        InsertIndexedFile(
+            "src/javascript-shorthand.js",
+            "javascript",
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: lang);
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
+    [Theory]
+    [InlineData("TypeScript")]
+    [InlineData("typescript")]
+    public void CountSearchResults_NormalizesTypeScriptSpelling(string lang)
+    {
+        const string query = "TypeScriptToken";
+
+        InsertIndexedFile(
+            "src/typescript-alias.ts",
+            "typescript",
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: lang);
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
     private void SeedData()
     {
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";
