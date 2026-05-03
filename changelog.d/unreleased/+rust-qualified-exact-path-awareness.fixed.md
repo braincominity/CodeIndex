@@ -1,5 +1,5 @@
 ---
-category: docs
+category: fixed
 issues:
   - 1357
 affected:
