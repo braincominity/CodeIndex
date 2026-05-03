@@ -508,6 +508,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_MixedSelectorLists_KeepClassReferencesVisible()
+    {
+        const string content = """
+            .container {
+                button, .card {
+                    color: red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == ".card"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_Terraform_DottedReferences_AreReferenced()
     {
         const string content = """

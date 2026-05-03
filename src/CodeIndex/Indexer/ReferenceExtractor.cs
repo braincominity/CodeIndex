@@ -3208,30 +3208,42 @@ public static class ReferenceExtractor
         {
             var braceIndex = preparedLine.IndexOf('{', segmentStart);
             var segmentEnd = braceIndex >= 0 ? braceIndex : preparedLine.Length;
-            if (LooksLikeCssSelectorSegment(preparedLine, segmentStart, segmentEnd))
-            {
-                var trimmedStart = segmentStart;
-                while (trimmedStart < segmentEnd && char.IsWhiteSpace(preparedLine[trimmedStart]))
-                    trimmedStart++;
+            var trimmedStart = segmentStart;
+            while (trimmedStart < segmentEnd && char.IsWhiteSpace(preparedLine[trimmedStart]))
+                trimmedStart++;
 
+            if (trimmedStart < segmentEnd && preparedLine[trimmedStart] != '@')
+            {
                 var selectorSegment = preparedLine[trimmedStart..segmentEnd];
-                foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorSegment))
+                foreach (var (partStart, partEnd) in EnumerateCssSelectorListSegments(selectorSegment))
                 {
-                    var nameGroup = match.Groups["name"];
-                    var name = "." + nameGroup.Value;
-                    if (definitionNames != null && definitionNames.Contains(name))
+                    var selectorPart = selectorSegment[partStart..partEnd];
+                    if (!LooksLikeCssSelectorSegment(selectorPart))
                         continue;
 
-                    AddReference(
-                        references,
-                        seen,
-                        fileId,
-                        name,
-                        trimmedStart + nameGroup.Index - 1,
-                        "reference",
-                        context,
-                        lineNumber,
-                        container);
+                    var selectorPartTrimStart = 0;
+                    while (selectorPartTrimStart < selectorPart.Length && char.IsWhiteSpace(selectorPart[selectorPartTrimStart]))
+                        selectorPartTrimStart++;
+
+                    var selectorPartBody = selectorPart[selectorPartTrimStart..];
+                    foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorPartBody))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        var name = "." + nameGroup.Value;
+                        if (definitionNames != null && definitionNames.Contains(name))
+                            continue;
+
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            name,
+                            trimmedStart + partStart + selectorPartTrimStart + match.Groups["name"].Index - 1,
+                            "reference",
+                            context,
+                            lineNumber,
+                            container);
+                    }
                 }
             }
 
@@ -3242,15 +3254,58 @@ public static class ReferenceExtractor
         }
     }
 
-    private static bool LooksLikeCssSelectorSegment(string line, int segmentStart, int segmentEnd)
+    private static bool LooksLikeCssSelectorSegment(string line)
     {
-        var index = segmentStart;
-        while (index < segmentEnd && char.IsWhiteSpace(line[index]))
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
             index++;
-        if (index >= segmentEnd)
+        if (index >= line.Length)
             return false;
 
         return line[index] is '.' or '#' or '[' or '*' or ':' or '&';
+    }
+
+    private static IEnumerable<(int Start, int End)> EnumerateCssSelectorListSegments(string selectorSegment)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        for (var index = 0; index < selectorSegment.Length; index++)
+        {
+            var ch = selectorSegment[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
+            {
+                yield return (segmentStart, index);
+                segmentStart = index + 1;
+            }
+        }
+
+        yield return (segmentStart, selectorSegment.Length);
     }
 
     private static bool IsCssAnimationNameToken(string token)
