@@ -109,19 +109,19 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -136,7 +136,7 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
 
@@ -151,14 +151,20 @@ public partial class DbReader
         if (validQueries != null && validQueries.Count == 1)
         {
             var allowLeafFallback = !SqlNameResolver.HasQualifier(validQueries[0]);
+            var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(validQueries[0], lang, exact);
+            var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(validQueries[0]) : default;
             innerSql += exact
-                ? _foldReady
-                    ? allowLeafFallback
-                        ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
-                        : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded))"
-                    : allowLeafFallback
-                        ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
-                        : " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
+                ? rustQualifiedParts.QualifiedPath != null
+                    ? _foldReady
+                        ? " AND ((s.container_qualified_name = @query0RustContainer COLLATE NOCASE OR s.container_name = @query0RustContainer COLLATE NOCASE) AND s.name_folded = @query0RustLeafFolded)"
+                        : " AND ((s.container_qualified_name = @query0RustContainer COLLATE NOCASE OR s.container_name = @query0RustContainer COLLATE NOCASE) AND s.name = @query0RustLeaf COLLATE NOCASE)"
+                    : _foldReady
+                        ? allowLeafFallback
+                            ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
+                            : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded))"
+                        : allowLeafFallback
+                            ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                            : " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
                 : " AND (s.name LIKE @query0 ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query0NormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
@@ -174,6 +180,8 @@ public partial class DbReader
         if (validQueries != null && validQueries.Count == 1)
         {
             var value = validQueries[0];
+            var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(value, lang, exact);
+            var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(value) : default;
             var paramValue = !exact
                 ? $"%{EscapeLikeQuery(value)}%"
                 : _foldReady
@@ -186,6 +194,12 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@query0LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
             cmd.Parameters.AddWithValue("@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
             cmd.Parameters.AddWithValue("@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
+            if (rustQualifiedParts.QualifiedPath != null)
+            {
+                cmd.Parameters.AddWithValue("@query0RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                cmd.Parameters.AddWithValue("@query0RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                cmd.Parameters.AddWithValue("@query0RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+            }
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -202,7 +216,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchSymbolsTotal(string? query = null, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        return CountSearchSymbolsTotal(query == null ? null : new[] { query }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        return CountSearchSymbolsTotal(query == null ? null : new[] { NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
@@ -218,12 +232,14 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Select(query => NormalizeSymbolSearchQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
                 ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
+                    var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(queryValue, lang, exact);
+                    var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     var swiftBacktickAlias = ComputeSwiftBacktickAlias(queryValue, lang);
                     var swiftBacktickClause = swiftBacktickAlias != null
@@ -231,6 +247,10 @@ public partial class DbReader
                             ? $" OR s.name_folded = @query{idx}SwiftBacktickAlias"
                             : $" OR s.name = @query{idx}SwiftBacktickAlias COLLATE NOCASE"
                         : string.Empty;
+                    if (rustQualifiedParts.QualifiedPath != null)
+                        return _foldReady
+                            ? $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name_folded = @query{idx}RustLeafFolded)"
+                            : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
                             ? $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
@@ -307,7 +327,7 @@ public partial class DbReader
         // public `limit` contract stays "Max total results", not per-name.
         // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
         // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
@@ -367,6 +387,8 @@ public partial class DbReader
             var orClauses = exact
                 ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
+                    var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(queryValue, lang, exact);
+                    var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     var swiftBacktickAlias = ComputeSwiftBacktickAlias(queryValue, lang);
                     var swiftBacktickClause = swiftBacktickAlias != null
@@ -374,6 +396,10 @@ public partial class DbReader
                             ? $" OR s.name_folded = @query{idx}SwiftBacktickAlias"
                             : $" OR s.name = @query{idx}SwiftBacktickAlias COLLATE NOCASE"
                         : string.Empty;
+                    if (rustQualifiedParts.QualifiedPath != null)
+                        return _foldReady
+                            ? $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name_folded = @query{idx}RustLeafFolded)"
+                            : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
                             ? $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
@@ -407,6 +433,8 @@ public partial class DbReader
             for (int idx = 0; idx < effectiveQueries.Count; idx++)
             {
                 string paramValue;
+                var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(effectiveQueries[idx], lang, exact);
+                var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(effectiveQueries[idx]) : default;
                 if (!exact)
                     paramValue = $"%{EscapeLikeQuery(effectiveQueries[idx])}%";
                 else if (_foldReady)
@@ -420,6 +448,12 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
+                if (rustQualifiedParts.QualifiedPath != null)
+                {
+                    cmd.Parameters.AddWithValue($"@query{idx}RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                    cmd.Parameters.AddWithValue($"@query{idx}RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                    cmd.Parameters.AddWithValue($"@query{idx}RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+                }
                 var swiftBacktickAlias = ComputeSwiftBacktickAlias(effectiveQueries[idx], lang);
                 if (swiftBacktickAlias != null)
                 {
@@ -526,7 +560,7 @@ public partial class DbReader
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
+        var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -539,15 +573,21 @@ public partial class DbReader
 
         if (!string.IsNullOrWhiteSpace(normalizedQuery))
         {
+            var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(normalizedQuery, lang, exact);
+            var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(normalizedQuery) : default;
             var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
             sql += exact
-                ? _foldReady
-                    ? allowLeafFallback
-                        ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
-                        : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
-                    : allowLeafFallback
-                        ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
-                        : " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                ? rustQualifiedParts.QualifiedPath != null
+                    ? _foldReady
+                        ? " AND ((s.container_qualified_name = @queryRustContainer COLLATE NOCASE OR s.container_name = @queryRustContainer COLLATE NOCASE) AND s.name_folded = @queryRustLeafFolded)"
+                        : " AND ((s.container_qualified_name = @queryRustContainer COLLATE NOCASE OR s.container_name = @queryRustContainer COLLATE NOCASE) AND s.name = @queryRustLeaf COLLATE NOCASE)"
+                    : _foldReady
+                        ? allowLeafFallback
+                            ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                            : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
+                        : allowLeafFallback
+                            ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                            : " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
                 : " AND (s.name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @queryNormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
@@ -570,6 +610,8 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (!string.IsNullOrWhiteSpace(normalizedQuery))
         {
+            var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(normalizedQuery, lang, exact);
+            var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(normalizedQuery) : default;
             var paramValue = !exact
                 ? $"%{EscapeLikeQuery(normalizedQuery)}%"
                 : _foldReady
@@ -582,6 +624,12 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
             cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
             cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(normalizedQuery))}%");
+            if (rustQualifiedParts.QualifiedPath != null)
+            {
+                cmd.Parameters.AddWithValue("@queryRustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                cmd.Parameters.AddWithValue("@queryRustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                cmd.Parameters.AddWithValue("@queryRustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+            }
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -704,6 +752,54 @@ public partial class DbReader
             .ToList();
 
         return segments.Count == 0 ? null : string.Join("::", segments);
+    }
+
+    private static bool ShouldPreserveRustQualifiedExactQuery(string? query, string? lang, bool exact)
+    {
+        return exact
+            && !string.IsNullOrWhiteSpace(lang)
+            && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(query)
+            && query.Contains("::", StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeSymbolSearchQueryForSymbolSearch(string? query, string? lang, bool exact)
+    {
+        if (ShouldPreserveRustQualifiedExactQuery(query, lang, exact))
+            return query?.Trim();
+
+        return NormalizeSymbolSearchQuery(query, lang) ?? query;
+    }
+
+    private static (string? QualifiedPath, string? ContainerPath, string? LeafName) NormalizeRustQualifiedExactQueryParts(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return (null, null, null);
+
+        if (trimmed.EndsWith("!", StringComparison.Ordinal))
+            trimmed = trimmed[..^1].TrimEnd();
+
+        var normalized = NormalizeRustQualifiedMacroQuery(trimmed);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return (null, null, null);
+
+        normalized = normalized.Replace("::", ".");
+        while (normalized.StartsWith("crate.", StringComparison.Ordinal)
+            || normalized.StartsWith("self.", StringComparison.Ordinal)
+            || normalized.StartsWith("super.", StringComparison.Ordinal))
+        {
+            var dotIndex = normalized.IndexOf('.');
+            if (dotIndex < 0 || dotIndex == normalized.Length - 1)
+                break;
+
+            normalized = normalized[(dotIndex + 1)..];
+        }
+        var lastDot = normalized.LastIndexOf('.');
+        if (lastDot < 0)
+            return (normalized, string.Empty, normalized);
+
+        return (normalized, normalized[..lastDot], normalized[(lastDot + 1)..]);
     }
 
     /// <summary>
