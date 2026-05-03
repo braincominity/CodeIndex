@@ -16,14 +16,13 @@ internal static class CssReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
 
     private static readonly ReferencePattern[] CssReferencePatterns =
     [
         new(CssCustomPropertyReferenceRegex, "reference"),
-        new(CssAnimationNameReferenceRegex, "reference"),
     ];
 
     private static readonly ReferencePattern[] ScssReferencePatterns =
@@ -53,6 +52,20 @@ internal static class CssReferenceExtractor
     {
         foreach (var pattern in CssReferencePatterns)
             EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
+
+        foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+        {
+            EmitCssAnimationNameReferences(
+                match.Groups["value"].Value,
+                match.Groups["value"].Index,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+        }
 
         foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
         {
@@ -123,6 +136,80 @@ internal static class CssReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static void EmitCssAnimationNameReferences(
+        string value,
+        int valueIndex,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var segmentStart = 0;
+        for (var i = 0; i <= value.Length; i++)
+        {
+            if (i < value.Length && value[i] != ',')
+                continue;
+
+            EmitCssAnimationNameSegmentReference(
+                value,
+                valueIndex,
+                segmentStart,
+                i,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+            segmentStart = i + 1;
+        }
+    }
+
+    private static void EmitCssAnimationNameSegmentReference(
+        string value,
+        int valueIndex,
+        int segmentStart,
+        int segmentEnd,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var cursor = segmentStart;
+        while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
+            cursor++;
+        if (cursor >= segmentEnd)
+            return;
+
+        var tokenStart = cursor;
+        while (cursor < segmentEnd && !char.IsWhiteSpace(value[cursor]))
+            cursor++;
+
+        var token = value[tokenStart..cursor];
+        if (!IsCssAnimationNameToken(token))
+            return;
+        if (definitionNames != null && definitionNames.Contains(token))
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            token,
+            valueIndex + tokenStart,
+            "reference",
+            context,
+            lineNumber,
+            container);
     }
 
     private static void EmitCssAnimationShorthandReferences(

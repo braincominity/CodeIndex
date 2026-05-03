@@ -632,6 +632,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_AnimationNameList_CapturesEachKeyframeReference()
+    {
+        const string content = """
+            @keyframes fade-in {
+                from { opacity: 0; }
+                to   { opacity: 1; }
+            }
+
+            @keyframes slide-up {
+                from { transform: translateY(1rem); }
+                to   { transform: translateY(0); }
+            }
+
+            .modal {
+                animation-name: fade-in, none, slide-up;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "fade-in"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "slide-up"
+            && reference.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "none"
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_Css_MixedSelectorLists_KeepClassReferencesVisible()
     {
         const string content = """
