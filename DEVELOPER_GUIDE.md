@@ -40,6 +40,7 @@ src/CodeIndex/
     CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
     DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
     TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
+    SqlReferenceExtractor.cs  — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
     SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
     ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, Rust macro invocations (`name!(...)` / `name![...]` / `name!{...}`), type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
@@ -1185,6 +1186,7 @@ src/CodeIndex/
     CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
     DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
     TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
+    SqlReferenceExtractor.cs  — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出
     SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property、Java は generic type-parameter prefix と statement keyword のガード、C/C++ のクラス外 member 定義・operator・concept・inline namespace・module、CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出（型位置の `type_reference` エッジと nested generic 呼び出し向け depth-aware fallback を含む）
   Mcp/
