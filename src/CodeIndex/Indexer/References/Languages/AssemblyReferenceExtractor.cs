@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class AssemblyReferenceExtractor
 {
     private static readonly Regex InstructionRegex = new(
-        @"^\s*(?:[A-Za-z_.$?@][A-Za-z0-9_.$?@]*\s*:\s*)?(?<mnemonic>[A-Za-z.][A-Za-z0-9.]*)\b(?<operands>.*)$",
+        @"^\s*(?:(?:[A-Za-z_.$?@][A-Za-z0-9_.$?@]*|\d+)\s*:\s*)?(?<mnemonic>[A-Za-z.][A-Za-z0-9.]*)\b(?<operands>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex TargetNameRegex = new(

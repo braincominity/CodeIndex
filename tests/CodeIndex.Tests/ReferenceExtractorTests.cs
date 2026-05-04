@@ -256,6 +256,7 @@ public class ReferenceExtractorTests
             section .text
             _start:
                 call printf@PLT
+            1:  call helper
                 jmp .done
             .loop:
                 bl helper
@@ -279,9 +280,13 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
 
         Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "assembly");
-        Assert.Equal(5, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(6, references.Count(reference => reference.ReferenceKind == "call"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "printf"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "_start");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "helper"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "_start");
         Assert.Contains(references, reference =>
