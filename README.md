@@ -40,6 +40,7 @@ and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 cdidx .
+cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx mcp
@@ -55,6 +56,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
 - Incremental refreshes with `--files` and `--commits`.
+- Exact DB/worktree freshness checks with `status --check`.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
 
@@ -115,6 +117,7 @@ details.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 cdidx .
+cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx mcp
@@ -130,6 +133,7 @@ cdidx mcp
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
 - `--files` と `--commits` による差分更新。
+- `status --check` による DB と作業ツリーの完全一致確認。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
 

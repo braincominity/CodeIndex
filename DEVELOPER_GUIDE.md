@@ -24,6 +24,7 @@ src/CodeIndex/
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     GlobalToolLog.cs          — Best-effort persistent stderr/lifecycle log for distributed installs, with 30-file retention
     IndexCommandRunner.cs     — Index command execution, ignore-aware update/full-scan flows, backfill-fold upgrade path
+    IndexFreshnessChecker.cs  — status --check DB/worktree checksum comparison using FileIndexer path filtering
     QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
     WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
@@ -221,7 +222,7 @@ On small projects, `grep` works fine. But as a codebase grows to tens of thousan
 | Factor | `grep -r` | cdidx (SQLite FTS5) |
 |---|---|---|
 | **Search algorithm** | Linear scan of every file, every time | Token lookup in inverted index |
-| **Repeated searches** | Same full cost each time | Near-instant after initial index |
+| **Repeated searches** | Same full cost each time | Near-instant after initial index; `status --check` can verify whether the DB still matches the workspace before reindexing |
 | **Startup cost** | None | One-time indexing (incremental updates after) |
 | **What is stored** | Nothing — reads files on the fly | Source text in chunks + inverted index of tokens |
 | **Structured queries** | Text matching only | Filter by language, path, symbol kind, line range |

@@ -11,4 +11,5 @@ public static class CommandExitCodes
     public const int NotFound = 2;
     public const int DatabaseError = 3;
     public const int FeatureUnavailable = 4;
+    public const int StaleIndex = 5;
 }

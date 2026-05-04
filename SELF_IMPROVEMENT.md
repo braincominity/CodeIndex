@@ -38,7 +38,7 @@ The loop is not just "suggest ideas". It is:
 - Keep **one task per commit**.
 - Before every commit, explicitly work through `.codex/workflows/precommit.md`.
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
-- After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
+- After every commit, rebuild `cdidx` from the latest local source, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json`, and refresh `.cdidx/codeindex.db` with that freshly built binary only when the check does not report `index_matches_workspace: true`.
 - Prefer the lightest truthful refresh mode: use `--files` only for known in-place edits or new files, use `--commits HEAD` after a normal commit because it tracks renames/deletes from git history, and reserve a full `cdidx . --json` scan for cases where the checkout itself changed broadly or stale files must be purged repo-wide.
 - Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results. This is enforced at the Claude Code harness level via the repo-tracked `.claude/settings.json`, which denies the full set of shell code-search and file-discovery commands: `rg`, `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep`, `ripgrep`, `ag`, `ack`, `ack-grep`, `git grep`, `find`, `locate`, `mlocate`, `mdfind`, and `cdidx`. Use the built-in Grep / Glob tools or the locally built binary instead.
 - Treat repo-tracked `.claude/settings.json` and `.claude/hooks/bash-guard.py` as policy files. Do not edit them during ordinary self-improvement work unless the task is explicitly about Claude Code guard behavior. The current guard is deny-oriented: it is intentionally permissive for routine `dotnet`, `git`, `gh`, `codex exec`, `/tmp` work, and read-only shell inspection, while still blocking dangerous shell patterns and sensitive local read paths.
@@ -93,9 +93,17 @@ Always compile the current repository version before relying on searches for sel
 dotnet build
 ```
 
-### 3. Refresh the index with the freshly built binary
+### 3. Check or refresh the index with the freshly built binary
 
 Use the binary produced from the current commit, not an older global tool, so the database shape and query features match the code you are editing.
+
+Start with the exact workspace match check:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
+```
+
+If it exits `0` and reports `index_matches_workspace: true`, keep the existing `.cdidx/codeindex.db`. Otherwise, refresh the index.
 
 Prefer delta refreshes during normal iteration, and use a full scan only when you need a whole-checkout resync.
 
@@ -379,7 +387,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - **1案件1コミット** を守る。
 - 毎コミット前に、`.codex/workflows/precommit.md` を明示的に確認する。
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
-- 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
+- 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json` を実行する。`index_matches_workspace: true` でなければ、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
 - 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、rename/delete/拡張子変更を含む場合は旧 path も明示的に渡すか、通常どおり `--commits HEAD` を使う。checkout 全体が大きく動いた場合や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` のフルスキャンへ上げる。
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。このルールはリポジトリ追跡の `.claude/settings.json` で harness レベルでも強制されており、shell のコード検索・ファイル探索系コマンドを網羅的に deny している（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。代わりに組み込みの Grep / Glob ツールかローカルビルド版を使うこと。
 - リポジトリ追跡の `.claude/settings.json` と `.claude/hooks/bash-guard.py` はポリシーファイルとして扱う。通常の自己改善作業では編集せず、Claude Code のガード挙動自体を変えるタスクのときだけ触る。現在のガードは deny ベースで、日常的な `dotnet`、`git`、`gh`、`codex exec`、`/tmp` 作業、読み取り中心の shell 確認は止めにくくしつつ、危険な shell パターンと機微なローカル read path は止める設計になっている。
@@ -432,9 +440,17 @@ git switch -c codex/ai-snippets
 dotnet build
 ```
 
-### 3. そのビルド済みバイナリでインデックスを更新する
+### 3. そのビルド済みバイナリでインデックスを確認または更新する
 
 編集中のコードと DB 形状と検索機能を一致させるため、古いグローバルツールではなく、**現在のコミットからビルドしたバイナリ** を使います。
+
+まず現在の workspace と DB が一致しているか確認します:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
+```
+
+終了コード `0` かつ `index_matches_workspace: true` なら、既存の `.cdidx/codeindex.db` をそのまま使って構いません。それ以外ならインデックスを更新してください。
 
 状況に合う更新モードを1つ選んでください:
 

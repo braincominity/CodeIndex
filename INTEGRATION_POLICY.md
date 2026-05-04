@@ -55,6 +55,7 @@ or offers substantially similar indexing/search/retrieval functionality.
 Allowed:
 
 - "My agent calls `cdidx search` before editing files."
+- "My agent calls `cdidx status --check --json` before searching so it can skip unnecessary reindexing when the DB already matches the workspace."
 - "My VS Code extension lets users configure the path to their local `cdidx`."
 - "My CI job runs `cdidx .` and `cdidx search` against our private repo."
 - "My devcontainer installs the official `cdidx` release."

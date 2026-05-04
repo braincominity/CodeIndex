@@ -21,6 +21,8 @@ public readonly record struct SqlGraphContractSignal(
     bool Relevant,
     string? DegradedReason);
 
+internal readonly record struct IndexedFileSnapshot(string Path, string? Checksum);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -954,6 +956,22 @@ public partial class DbReader
                 IndexedAt = GetNullableDateTime(reader, 8),
             });
         }
+        return results;
+    }
+
+    internal List<IndexedFileSnapshot> GetIndexedFileSnapshots()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT f.path, {GetFileColumnSql("checksum")} AS checksum
+            FROM files f
+            ORDER BY f.path
+            """;
+
+        var results = new List<IndexedFileSnapshot>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            results.Add(new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1)));
         return results;
     }
 

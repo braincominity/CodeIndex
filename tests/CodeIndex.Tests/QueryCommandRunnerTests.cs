@@ -27366,6 +27366,150 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_CheckJson_ReturnsSuccessWhenIndexMatchesWorkspace()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_match");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var check = json.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(check.GetProperty("checked").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(1, check.GetProperty("matched_file_count").GetInt32());
+            Assert.Contains("index fresh", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_ReturnsStaleIndexWhenContentChecksumDiffers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_changed");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var check = json.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(check.GetProperty("checked").GetBoolean());
+            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("changed_files", check.GetProperty("reason").GetString());
+            Assert.Equal(1, check.GetProperty("changed_file_count").GetInt32());
+            Assert.Equal("src/app.cs", check.GetProperty("changed_files")[0].GetString());
+            Assert.Contains("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_DetectsMissingAndUnindexedFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_paths");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "new.cs"), "class NewFile {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/old.cs", "csharp", "class OldFile {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal(1, check.GetProperty("missing_file_count").GetInt32());
+            Assert.Equal(1, check.GetProperty("unindexed_file_count").GetInt32());
+            Assert.Equal("src/old.cs", check.GetProperty("missing_files")[0].GetString());
+            Assert.Equal("src/new.cs", check.GetProperty("unindexed_files")[0].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_UsesRepositoryRootIgnoreRulesForSubdirectoryIndex()
+    {
+        var repoRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_parent_ignore");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(repoRoot);
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "sub/generated/\n");
+
+            var projectRoot = Path.Combine(repoRoot, "sub");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "generated"));
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "generated", "ignored.cs"), "class Ignored {}\n");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal(1, check.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(1, check.GetProperty("workspace_file_count").GetInt32());
+            Assert.Equal(0, check.GetProperty("unindexed_file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_uri");
