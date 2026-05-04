@@ -4654,7 +4654,7 @@ private sealed class RubyMaskState
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
-        NormalizeKotlinSecondaryConstructorNames(symbols);
+        KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
@@ -14792,7 +14792,7 @@ private sealed class RubyMaskState
             var programIdMatch = CobolProgramIdLineRegex.Match(line);
             if (programIdMatch.Success)
             {
-                programName = NormalizeCobolSymbolName(programIdMatch.Groups["name"].Value);
+                programName = CobolSymbolNameNormalizer.Normalize(programIdMatch.Groups["name"].Value);
                 inProcedureDivision = false;
                 continue;
             }
@@ -14816,7 +14816,7 @@ private sealed class RubyMaskState
             var sectionMatch = CobolSectionHeaderRegex.Match(line);
             if (sectionMatch.Success)
             {
-                var sectionName = NormalizeCobolSymbolName(sectionMatch.Groups["name"].Value);
+                var sectionName = CobolSymbolNameNormalizer.Normalize(sectionMatch.Groups["name"].Value);
                 if (string.IsNullOrWhiteSpace(sectionName))
                     continue;
 
@@ -14849,7 +14849,7 @@ private sealed class RubyMaskState
             if (!paragraphMatch.Success)
                 continue;
 
-            var name = NormalizeCobolSymbolName(paragraphMatch.Groups["name"].Value);
+            var name = CobolSymbolNameNormalizer.Normalize(paragraphMatch.Groups["name"].Value);
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
@@ -26062,55 +26062,14 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         return lang switch
         {
             "csharp" => CSharpSymbolNameNormalizer.Normalize(name, match, matchLine),
-            "cobol" => NormalizeCobolSymbolName(name),
-            "fsharp" => NormalizeFSharpSymbolName(name),
-            "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
-            "rust" => NormalizeRustSymbolName(name),
-            "swift" => NormalizeSwiftSymbolName(name),
-            "sql" => NormalizeSqlSymbolName(name),
+            "cobol" => CobolSymbolNameNormalizer.Normalize(name),
+            "fsharp" => FSharpSymbolNameNormalizer.Normalize(name),
+            "kotlin" => KotlinSymbolNameNormalizer.Normalize(name, matchLine),
+            "rust" => RustSymbolNameNormalizer.Normalize(name),
+            "swift" => SwiftSymbolNameNormalizer.Normalize(name),
+            "sql" => SqlSymbolNameNormalizer.Normalize(name),
             _ => name,
         };
-    }
-
-    private static string NormalizeFSharpSymbolName(string name)
-    {
-        if (name.Length >= 4 && name.StartsWith("``", StringComparison.Ordinal) && name.EndsWith("``", StringComparison.Ordinal))
-            return name[2..^2];
-
-        if (name.Length >= 2 && name[0] == '(' && name[^1] == ')')
-        {
-            var operatorName = name[1..^1].Trim();
-            if (operatorName.Length > 0)
-                return $"operator {operatorName}";
-        }
-
-        return name;
-    }
-
-    private static string NormalizeRustSymbolName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return name;
-
-        var trimmed = name.Trim();
-        if (trimmed.Length == 0)
-            return trimmed;
-
-        if (!trimmed.Contains("::", StringComparison.Ordinal))
-            return trimmed.StartsWith("r#", StringComparison.Ordinal)
-                ? trimmed[2..]
-                : trimmed;
-
-        var segments = trimmed.Split("::");
-        for (var i = 0; i < segments.Length; i++)
-        {
-            var segment = segments[i].Trim();
-            if (segment.StartsWith("r#", StringComparison.Ordinal))
-                segment = segment[2..];
-            segments[i] = segment;
-        }
-
-        return string.Join("::", segments);
     }
 
     private enum FSharpTypeBodyKind
@@ -26261,7 +26220,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
                 {
                     FileId = fileId,
                     Kind = "property",
-                    Name = NormalizeFSharpSymbolName(match.Groups["name"].Value),
+                    Name = FSharpSymbolNameNormalizer.Normalize(match.Groups["name"].Value),
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
@@ -26331,7 +26290,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
                 {
                     FileId = fileId,
                     Kind = "property",
-                    Name = NormalizeFSharpSymbolName(match.Groups["name"].Value),
+                    Name = FSharpSymbolNameNormalizer.Normalize(match.Groups["name"].Value),
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
@@ -26382,7 +26341,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
                 {
                     FileId = fileId,
                     Kind = "function",
-                    Name = NormalizeFSharpSymbolName(rawName),
+                    Name = FSharpSymbolNameNormalizer.Normalize(rawName),
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
@@ -26409,7 +26368,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             {
                 FileId = fileId,
                 Kind = "function",
-                Name = NormalizeFSharpSymbolName(match.Groups["name"].Value),
+                Name = FSharpSymbolNameNormalizer.Normalize(match.Groups["name"].Value),
                 Line = lineNumber,
                 StartLine = lineNumber,
                 EndLine = lineNumber,
@@ -26417,245 +26376,6 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
             },
             rawLine: line);
         return true;
-    }
-
-    private static string NormalizeKotlinSymbolName(string name, string matchLine)
-    {
-        var trimmedLine = matchLine.TrimStart();
-        if (!trimmedLine.StartsWith("companion object", StringComparison.Ordinal))
-            return name;
-
-        var trimmedName = name.Trim();
-        return string.IsNullOrWhiteSpace(trimmedName)
-            || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
-            ? "Companion"
-            : name;
-    }
-
-    private static string NormalizeSwiftSymbolName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return name;
-
-        var trimmed = name.Trim();
-        if (trimmed.IndexOf('<') < 0
-            && trimmed.IndexOf(':') < 0
-            && trimmed.IndexOf("where", StringComparison.Ordinal) < 0
-            && trimmed.IndexOf('/') < 0)
-        {
-            return trimmed;
-        }
-
-        var builder = new StringBuilder(trimmed.Length);
-        var angleDepth = 0;
-        var parenDepth = 0;
-        var bracketDepth = 0;
-        var inBackticks = false;
-
-        for (var index = 0; index < trimmed.Length; index++)
-        {
-            var ch = trimmed[index];
-
-            if (inBackticks)
-            {
-                builder.Append(ch);
-                if (ch == '`')
-                    inBackticks = false;
-                continue;
-            }
-
-            if (ch == '`')
-            {
-                builder.Append(ch);
-                inBackticks = true;
-                continue;
-            }
-
-            if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0)
-            {
-                if (ch == ':' || ch == '{')
-                    break;
-
-                if (ch == '/' && index + 1 < trimmed.Length)
-                {
-                    var next = trimmed[index + 1];
-                    if (next == '/' || next == '*')
-                        break;
-                }
-
-                if (char.IsWhiteSpace(ch))
-                {
-                    var nextIndex = index + 1;
-                    while (nextIndex < trimmed.Length && char.IsWhiteSpace(trimmed[nextIndex]))
-                        nextIndex++;
-
-                    if (nextIndex >= trimmed.Length)
-                        break;
-
-                    if (trimmed[nextIndex] == ':'
-                        || trimmed[nextIndex] == '{'
-                        || (trimmed[nextIndex] == '/' && nextIndex + 1 < trimmed.Length && trimmed[nextIndex + 1] is '/' or '*')
-                        || StartsWithWord(trimmed, nextIndex, "where"))
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                if (StartsWithWord(trimmed, index, "where"))
-                    break;
-            }
-
-            switch (ch)
-            {
-                case '<':
-                    angleDepth++;
-                    builder.Append(ch);
-                    break;
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    builder.Append(ch);
-                    break;
-                case '(':
-                    parenDepth++;
-                    builder.Append(ch);
-                    break;
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    builder.Append(ch);
-                    break;
-                case '[':
-                    bracketDepth++;
-                    builder.Append(ch);
-                    break;
-                case ']':
-                    if (bracketDepth > 0)
-                        bracketDepth--;
-                    builder.Append(ch);
-                    break;
-                default:
-                    builder.Append(ch);
-                    break;
-            }
-        }
-
-        return builder.ToString().Trim();
-    }
-
-    private static string NormalizeCobolSymbolName(string name)
-    {
-        return string.IsNullOrWhiteSpace(name)
-            ? name
-            : name.Trim().ToUpperInvariant();
-    }
-
-    private static void NormalizeKotlinSecondaryConstructorNames(List<SymbolRecord> symbols)
-    {
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function"
-                || symbol.ContainerKind != "class"
-                || string.IsNullOrWhiteSpace(symbol.ContainerName))
-            {
-                continue;
-            }
-
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
-                continue;
-
-            var isSecondaryConstructor = signature.StartsWith("constructor", StringComparison.Ordinal)
-                || signature.StartsWith("public constructor", StringComparison.Ordinal)
-                || signature.StartsWith("private constructor", StringComparison.Ordinal)
-                || signature.StartsWith("protected constructor", StringComparison.Ordinal)
-                || signature.StartsWith("internal constructor", StringComparison.Ordinal);
-            if (!isSecondaryConstructor)
-                continue;
-
-            symbol.Name = symbol.ContainerName;
-        }
-    }
-
-    private static string NormalizeSqlSymbolName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return name;
-
-        var trimmed = name.Trim();
-        var normalized = new StringBuilder(trimmed.Length);
-        char quote = '\0';
-        var pendingWhitespace = false;
-
-        for (var i = 0; i < trimmed.Length; i++)
-        {
-            var ch = trimmed[i];
-            if (quote != '\0')
-            {
-                normalized.Append(ch);
-                if (quote == '[')
-                {
-                    if (ch == ']')
-                    {
-                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
-                        {
-                            normalized.Append(']');
-                            i++;
-                        }
-                        else
-                        {
-                            quote = '\0';
-                        }
-                    }
-                }
-                else if (ch == quote)
-                {
-                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
-                    {
-                        normalized.Append(quote);
-                        i++;
-                    }
-                    else
-                    {
-                        quote = '\0';
-                    }
-                }
-
-                continue;
-            }
-
-            if (char.IsWhiteSpace(ch))
-            {
-                pendingWhitespace = normalized.Length > 0;
-                continue;
-            }
-
-            if (ch == '.')
-            {
-                if (normalized.Length == 0 || normalized[^1] == '.')
-                    continue;
-
-                normalized.Append('.');
-                pendingWhitespace = false;
-                while (i + 1 < trimmed.Length && char.IsWhiteSpace(trimmed[i + 1]))
-                    i++;
-                continue;
-            }
-
-            if (pendingWhitespace)
-            {
-                normalized.Append(' ');
-                pendingWhitespace = false;
-            }
-
-            normalized.Append(ch);
-            if (ch is '[' or '"' or '`')
-                quote = ch;
-        }
-
-        return normalized.ToString();
     }
 
     private static readonly Regex ComplexityRegex = new(
