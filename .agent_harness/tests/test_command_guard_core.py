@@ -152,6 +152,19 @@ class CommandGuardCoreTests(TestCase):
         self.assertEqual(core.ALLOW_REASON_EXPANDED_INSTALLED_CDIDX, expanded_decision.reason)
         self.assertFalse(home_shortcut_decision.allowed)
 
+    def test_expanded_installed_cdidx_is_not_scanned_as_script(self) -> None:
+        root = Path("/tmp")
+        expanded = Path.home() / ".local" / "bin" / "cdidx"
+
+        self.assertEqual([], core.candidate_script_paths(f"{expanded} search SymbolExtractor", cwd=root))
+        self.assertEqual(
+            [],
+            core.candidate_script_paths(
+                f"""echo '{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}' | {expanded} mcp""",
+                cwd=root,
+            ),
+        )
+
     def test_blocks_braced_home_installed_cdidx_shortcut(self) -> None:
         root = Path("/tmp")
         decision = core.evaluate_bash_command(
@@ -242,10 +255,12 @@ class CommandGuardCoreTests(TestCase):
         for command in (
             "docker --context ctx push example/image",
             "docker --log-level debug push example/image",
+            "docker buildx --builder default build --push .",
             "kubectl -n ns delete pod example",
             "kubectl --as admin delete pod example",
             "helm -n ns uninstall release",
             "gh -R owner/repo pr merge 1",
+            "gh pr --repo owner/repo merge 1",
             "npm --registry https://registry.example.invalid publish",
             "npm --loglevel silent publish",
         ):
@@ -390,6 +405,31 @@ class CommandGuardCoreTests(TestCase):
             self.assertTrue(decision.allowed)
             self.assertEqual([script.resolve()], scripts)
             self.assertFalse(script_decision.allowed)
+
+    def test_wrapper_script_execution_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("r''m -rf tmp\n", encoding="utf-8")
+
+            for command in (
+                "time bash tools/guard.sh",
+                "timeout 30 bash tools/guard.sh",
+                "gtimeout 30 bash tools/guard.sh",
+                "command bash tools/guard.sh",
+                "exec bash tools/guard.sh",
+                "nice -n 5 bash tools/guard.sh",
+                "nohup bash tools/guard.sh",
+            ):
+                with self.subTest(command=command):
+                    decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+                    scripts = core.candidate_script_paths(command, cwd=root)
+                    script_decision = core.check_script_file(scripts[0], project_root=root)
+
+                    self.assertTrue(decision.allowed)
+                    self.assertEqual([script.resolve()], scripts)
+                    self.assertFalse(script_decision.allowed)
 
     def test_env_chdir_wrapped_script_execution_is_denied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,6 +35,7 @@ _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
 _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND = "__unknown_global_option__"
 _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON = "unrecognized global option before high-risk CLI subcommand is blocked"
+_TRANSPARENT_SCRIPT_WRAPPERS = {"time", "timeout", "gtimeout", "command", "exec", "nice", "nohup"}
 _SEARCH_OR_DISCOVERY_COMMANDS = {
     "grep",
     "egrep",
@@ -276,6 +277,13 @@ def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
     return path == expected
 
 
+def _path_is_expanded_installed_cdidx(path: Path) -> bool:
+    try:
+        return path.resolve() == (Path.home() / ".local" / "bin" / "cdidx").resolve()
+    except Exception:
+        return False
+
+
 def _command_mentions_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
     tokens = _split_command(command)
     return any(_token_is_expanded_installed_cdidx(token, cwd) for token in tokens)
@@ -459,8 +467,17 @@ def _tokenized_docker_reason(args: list[str]) -> str | None:
         return "dangerous docker operation is blocked"
     if subcommand == "volume" and rest and rest[0] == "rm":
         return "dangerous docker operation is blocked"
-    if subcommand == "buildx" and rest and rest[0] == "build" and "--push" in rest:
-        return "dangerous docker operation is blocked"
+    if subcommand == "buildx":
+        buildx_subcommand, buildx_rest = _subcommand_args(
+            rest,
+            {"--builder", "--config"},
+            valueless_options={"--help", "-h", "--version", "-v"},
+            fail_on_unknown_option=True,
+        )
+        if buildx_subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+            return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
+        if buildx_subcommand == "build" and "--push" in buildx_rest:
+            return "dangerous docker operation is blocked"
     return None
 
 
@@ -477,8 +494,17 @@ def _tokenized_gh_reason(args: list[str]) -> str | None:
         return "GitHub CLI high-risk operation is blocked"
     if subcommand == "repo" and rest and rest[0] in {"create", "fork"}:
         return "GitHub CLI high-risk operation is blocked"
-    if subcommand == "pr" and rest and rest[0] == "merge":
-        return "GitHub CLI high-risk operation is blocked"
+    if subcommand == "pr":
+        pr_subcommand, pr_rest = _subcommand_args(
+            rest,
+            {"-R", "--repo", "--hostname", "--config"},
+            valueless_options={"--help", "-h", "--web"},
+            fail_on_unknown_option=True,
+        )
+        if pr_subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+            return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
+        if pr_subcommand == "merge":
+            return "GitHub CLI high-risk operation is blocked"
     return None
 
 
@@ -702,6 +728,76 @@ def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
     return []
 
 
+def _strip_wrapper_options(
+    args: list[str],
+    options_with_values: set[str],
+    *,
+    valueless_options: set[str] | None = None,
+) -> list[str]:
+    valueless_options = valueless_options or set()
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            return args[index + 1 :]
+        if arg in options_with_values:
+            index += 2
+            continue
+        if any(arg.startswith(option + "=") for option in options_with_values):
+            index += 1
+            continue
+        if arg in valueless_options:
+            index += 1
+            continue
+        return args[index:]
+    return []
+
+
+def _strip_one_transparent_script_wrapper(tokens: list[str]) -> list[str] | None:
+    if not tokens:
+        return None
+    first = _token_command_name(tokens[0])
+    if first not in _TRANSPARENT_SCRIPT_WRAPPERS:
+        return None
+
+    args = tokens[1:]
+    if first in {"time"}:
+        return _strip_wrapper_options(
+            args,
+            {"-f", "--format", "-o", "--output"},
+            valueless_options={"-p", "-a", "-v", "--verbose", "-q", "--quiet"},
+        )
+    if first in {"timeout", "gtimeout"}:
+        rest = _strip_wrapper_options(
+            args,
+            {"-s", "--signal", "-k", "--kill-after"},
+            valueless_options={"--foreground", "--preserve-status", "-v", "--verbose"},
+        )
+        return rest[1:] if rest else []
+    if first == "command":
+        if args and args[0] in {"-v", "-V"}:
+            return []
+        return _strip_wrapper_options(args, set(), valueless_options={"-p"})
+    if first == "exec":
+        return _strip_wrapper_options(args, {"-a"}, valueless_options={"-c", "-l"})
+    if first == "nice":
+        if args and args[0].startswith("-n") and len(args[0]) > 2:
+            args = args[1:]
+        return _strip_wrapper_options(args, {"-n", "--adjustment"})
+    if first == "nohup":
+        return args
+    return None
+
+
+def _strip_transparent_script_wrappers(tokens: list[str]) -> list[str]:
+    while True:
+        tokens = _strip_env_command_wrapper(tokens)
+        stripped = _strip_one_transparent_script_wrapper(tokens)
+        if stripped is None:
+            return tokens
+        tokens = stripped
+
+
 def _leading_installer_env_assignments_are_safe(tokens: list[str]) -> bool:
     for token in tokens:
         if not _is_env_assignment(token):
@@ -867,7 +963,7 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
 
 def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Path]:
-    tokens = _strip_env_command_wrapper(tokens)
+    tokens = _strip_transparent_script_wrappers(tokens)
     if not tokens:
         return []
 
@@ -900,6 +996,8 @@ def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Pa
 
     path = _token_path(tokens[0], cwd)
     if path is None:
+        return result
+    if _path_is_expanded_installed_cdidx(path):
         return result
 
     if tokens[0].startswith(("./", "../", "/", "~")) or path.suffix.lower() in {
