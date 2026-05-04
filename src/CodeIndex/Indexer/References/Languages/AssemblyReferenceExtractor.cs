@@ -24,6 +24,13 @@ internal static class AssemblyReferenceExtractor
         "ax", "bx", "cx", "dx", "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
     };
 
+    private static readonly HashSet<string> BranchMnemonics = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "beq", "bne", "bcs", "bhs", "bcc", "blo", "bmi", "bpl", "bvs", "bvc",
+        "bhi", "bls", "bge", "blt", "bgt", "ble", "bal", "bnv",
+        "beqz", "bnez", "blez", "bgez", "bltz", "bgtz", "bltu", "bgeu",
+    };
+
     public static void EmitInstructionTargetReferences(
         string originalLine,
         List<ReferenceRecord> references,
@@ -33,7 +40,7 @@ internal static class AssemblyReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        var codeLine = SymbolExtractor.StripAssemblyComment(originalLine);
+        var codeLine = SymbolExtractor.StripAssemblyComment(originalLine, preserveHashImmediates: true);
         if (string.IsNullOrWhiteSpace(codeLine))
             return;
 
@@ -72,7 +79,7 @@ internal static class AssemblyReferenceExtractor
             || lower is "jmp" or "jmpq" or "ljmp" or "bra" or "br" or "b"
             || lower.StartsWith("j", StringComparison.Ordinal)
             || lower.StartsWith("b.", StringComparison.Ordinal)
-            || (lower.Length > 1 && lower[0] == 'b' && lower is not "bl" and not "blx" and not "bsr")
+            || BranchMnemonics.Contains(lower)
             || lower is "cbz" or "cbnz" or "tbz" or "tbnz"
             || lower is "jal" or "jalr"
             || lower is "loop" or "loope" or "loopne" or "loopnz" or "loopz";

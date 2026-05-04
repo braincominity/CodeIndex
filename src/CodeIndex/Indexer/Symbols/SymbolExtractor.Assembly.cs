@@ -76,7 +76,7 @@ public static partial class SymbolExtractor
         return symbols;
     }
 
-    internal static string StripAssemblyComment(string line)
+    internal static string StripAssemblyComment(string line, bool preserveHashImmediates = false)
     {
         var firstNonWhitespace = 0;
         while (firstNonWhitespace < line.Length && char.IsWhiteSpace(line[firstNonWhitespace]))
@@ -114,6 +114,8 @@ public static partial class SymbolExtractor
             {
                 if (i == firstNonWhitespace && preserveLeadingHashDirective)
                     continue;
+                if (preserveHashImmediates && IsAssemblyHashImmediate(line, i))
+                    continue;
                 return line[..i];
             }
 
@@ -125,6 +127,18 @@ public static partial class SymbolExtractor
         }
 
         return line;
+    }
+
+    private static bool IsAssemblyHashImmediate(string line, int hashIndex)
+    {
+        var previous = hashIndex - 1;
+        while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+            previous--;
+        if (previous < 0 || line[previous] != ',')
+            return false;
+
+        var next = hashIndex + 1;
+        return next < line.Length && !char.IsWhiteSpace(line[next]);
     }
 
     private static bool TryAddAssemblySectionSymbol(
@@ -248,17 +262,19 @@ public static partial class SymbolExtractor
         List<SymbolRecord> sectionSymbols,
         int lineCount)
     {
+        var sections = sectionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
         var functions = functionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
         for (var i = 0; i < functions.Count; i++)
         {
             var current = functions[i];
-            var nextStartLine = i + 1 < functions.Count ? functions[i + 1].StartLine : lineCount + 1;
+            var nextFunctionStartLine = i + 1 < functions.Count ? functions[i + 1].StartLine : lineCount + 1;
+            var nextSectionStartLine = sections.FirstOrDefault(symbol => symbol.StartLine > current.StartLine)?.StartLine ?? lineCount + 1;
+            var nextStartLine = Math.Min(nextFunctionStartLine, nextSectionStartLine);
             current.BodyStartLine = current.StartLine;
             current.BodyEndLine = Math.Max(current.StartLine, nextStartLine - 1);
             current.EndLine = current.BodyEndLine.Value;
         }
 
-        var sections = sectionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
         for (var i = 0; i < sections.Count; i++)
         {
             var current = sections[i];

@@ -260,6 +260,8 @@ public class ReferenceExtractorTests
             .loop:
                 bl helper
                 bne .loop
+                tbz x0, #3, .done
+                bsf ecx, mask
                 lea foo(%rip), %rax
                 jmp rax
                 jr $ra
@@ -274,7 +276,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
 
         Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "assembly");
-        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(5, references.Count(reference => reference.ReferenceKind == "call"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "printf"
             && reference.ReferenceKind == "call"
@@ -291,7 +293,12 @@ public class ReferenceExtractorTests
             reference.SymbolName == ".loop"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == ".loop");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == ".done"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == ".loop");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "foo");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "mask");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "$ra");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored");

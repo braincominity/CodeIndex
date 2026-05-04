@@ -302,6 +302,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "PAGE_SIZE");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "TABLE_SIZE");
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake_label");
+
+        var helper = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "helper"));
+        var dataSection = Assert.Single(symbols.Where(symbol => symbol.Kind == "namespace" && symbol.Name == ".data"));
+        Assert.Equal(dataSection.StartLine - 1, helper.BodyEndLine);
     }
 
     [Fact]
