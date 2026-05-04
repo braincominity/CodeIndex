@@ -86,6 +86,27 @@ public class FileFindResult
     public bool SnippetTruncated { get; set; }
 }
 
+public class IndexFreshnessCheckResult
+{
+    public bool Checked { get; set; }
+    [JsonPropertyName("matches_workspace")]
+    public bool MatchesWorkspace { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public int IndexedFileCount { get; set; }
+    public int WorkspaceFileCount { get; set; }
+    public int MatchedFileCount { get; set; }
+    public int ChangedFileCount { get; set; }
+    public int MissingFileCount { get; set; }
+    public int UnindexedFileCount { get; set; }
+    public int UnverifiableFileCount { get; set; }
+    public int ScanErrorCount { get; set; }
+    public List<string> ChangedFiles { get; set; } = [];
+    public List<string> MissingFiles { get; set; } = [];
+    public List<string> UnindexedFiles { get; set; } = [];
+    public List<string> UnverifiableFiles { get; set; } = [];
+    public List<string> ScanErrors { get; set; } = [];
+}
+
 public class DefinitionResult : SymbolResult
 {
     public string Content { get; set; } = string.Empty;
@@ -237,6 +258,12 @@ public class StatusResult
     /// クイックオリエンテーション用の1行サマリー。
     /// </summary>
     public string? Summary { get; set; }
+    [JsonPropertyName("index_matches_workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IndexMatchesWorkspace { get; set; }
+    [JsonPropertyName("workspace_check")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IndexFreshnessCheckResult? WorkspaceCheck { get; set; }
     /// <summary>
     /// True when the index exposes the full reference / validation tables. False signals a
     /// degraded read (legacy or read-only DB where TryMigrateForRead could not create

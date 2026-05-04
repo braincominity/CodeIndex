@@ -25,8 +25,13 @@ Use the locally built CodeIndex binary from this repository:
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll
 ```
 
-Before implementation, refresh the local index as documented by the project guidance.
-If the exact index-refresh command is documented elsewhere, use that documented command instead of inventing a new one.
+Before implementation, first check whether the local index already matches the current workspace:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
+```
+
+If the command exits `0` and reports `index_matches_workspace: true`, you may trust the existing `.cdidx/codeindex.db` without rebuilding it. If it exits with stale-index status or reports mismatched `workspace_check` counts, refresh the local index as documented by the project guidance. If the exact index-refresh command is documented elsewhere, use that documented command instead of inventing a new one.
 
 This rule applies to code search and repository understanding. It does not forbid Git commands, build tools, test runners, package managers, or small shell checks that are not being used to search implementation code.
 

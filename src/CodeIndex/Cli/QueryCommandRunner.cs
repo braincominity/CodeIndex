@@ -1608,8 +1608,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json"]))
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowStatusCheck: true);
+        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json", "--check"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "status"))
             return CommandExitCodes.UsageError;
@@ -1620,6 +1620,13 @@ public static class QueryCommandRunner
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+            if (options.CheckWorkspace)
+            {
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
+                    ? status.WorkspaceCheck.MatchesWorkspace
+                    : null;
+            }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
@@ -1665,6 +1672,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD: {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
+                if (status.WorkspaceCheck != null)
+                    WriteWorkspaceCheck(status.WorkspaceCheck);
                 if (status.Languages.Count > 0)
                 {
                     Console.WriteLine("Languages:");
@@ -1718,7 +1727,14 @@ public static class QueryCommandRunner
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
             }
-            return CommandExitCodes.Success;
+
+            if (!options.CheckWorkspace)
+                return CommandExitCodes.Success;
+            if (status.WorkspaceCheck?.Checked != true)
+                return CommandExitCodes.FeatureUnavailable;
+            return status.WorkspaceCheck.MatchesWorkspace
+                ? CommandExitCodes.Success
+                : CommandExitCodes.StaleIndex;
         });
     }
 
@@ -2631,7 +2647,7 @@ public static class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false)
+    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false, bool allowStatusCheck = false)
     {
         string dbPath = Path.Combine(".cdidx", "codeindex.db");
         bool? json = null;
@@ -2662,6 +2678,7 @@ public static class QueryCommandRunner
         bool exactName = false;
         bool exactSubstring = false;
         bool dbPathExplicit = false;
+        bool checkWorkspace = false;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -2814,6 +2831,20 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--group-by-name":
+                    break;
+                case "--check":
+                    if (allowStatusCheck)
+                    {
+                        checkWorkspace = true;
+                    }
+                    else if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --check is not supported by this command.");
+                    }
                     break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
@@ -3001,6 +3032,7 @@ public static class QueryCommandRunner
             Exact = exact,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
+            CheckWorkspace = checkWorkspace,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
@@ -3479,6 +3511,11 @@ public static class QueryCommandRunner
 
     private static string BuildStatusFreshnessLabel(StatusResult status)
     {
+        if (status.WorkspaceCheck != null)
+            return status.WorkspaceCheck.Checked
+                ? (status.WorkspaceCheck.MatchesWorkspace ? "fresh" : "stale")
+                : "unknown";
+
         if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
             return "unknown";
 
@@ -3487,6 +3524,36 @@ public static class QueryCommandRunner
 
         return status.IndexedAt.Value >= status.LatestModified.Value ? "fresh" : "stale";
     }
+
+    private static void WriteWorkspaceCheck(IndexFreshnessCheckResult check)
+    {
+        if (!check.Checked)
+        {
+            Console.WriteLine($"Check   : unavailable ({check.Reason})");
+        }
+        else if (check.MatchesWorkspace)
+        {
+            Console.WriteLine($"Check   : matches workspace ({check.MatchedFileCount:N0} files)");
+        }
+        else
+        {
+            Console.WriteLine($"Check   : stale ({check.Reason})");
+        }
+
+        if (check.ChangedFileCount > 0)
+            Console.WriteLine($"  Changed indexed files : {check.ChangedFileCount:N0}{FormatSamples(check.ChangedFiles)}");
+        if (check.MissingFileCount > 0)
+            Console.WriteLine($"  Missing indexed files : {check.MissingFileCount:N0}{FormatSamples(check.MissingFiles)}");
+        if (check.UnindexedFileCount > 0)
+            Console.WriteLine($"  Unindexed workspace files : {check.UnindexedFileCount:N0}{FormatSamples(check.UnindexedFiles)}");
+        if (check.UnverifiableFileCount > 0)
+            Console.WriteLine($"  Unverifiable DB rows : {check.UnverifiableFileCount:N0}{FormatSamples(check.UnverifiableFiles)}");
+        if (check.ScanErrorCount > 0)
+            Console.WriteLine($"  Scan errors : {check.ScanErrorCount:N0}{FormatSamples(check.ScanErrors)}");
+    }
+
+    private static string FormatSamples(IReadOnlyList<string> samples)
+        => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
     {
@@ -4221,6 +4288,7 @@ public sealed class QueryCommandOptions
     public bool Exact { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
+    public bool CheckWorkspace { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }
