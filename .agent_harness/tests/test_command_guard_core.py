@@ -220,14 +220,31 @@ class CommandGuardCoreTests(TestCase):
         root = Path("/tmp")
         for command in (
             "r''m -rf tmp",
+            "r$'m' -rf tmp",
             "g''it reset --hard",
+            "g$'it' gr$'ep' SymbolExtractor",
             "su''do true",
+            "su$'do' true",
+            "c$'url' https://example.invalid",
             "np''x cowsay hello",
             "a''ws sts get-caller-identity",
             "te''rraform apply",
             "do''cker push example/image",
             "gh pr me''rge 1",
             "cat .e''nv",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+                self.assertFalse(decision.allowed)
+
+    def test_denies_high_risk_commands_with_global_options(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "docker --context ctx push example/image",
+            "kubectl -n ns delete pod example",
+            "helm -n ns uninstall release",
+            "gh -R owner/repo pr merge 1",
+            "npm --registry https://registry.example.invalid publish",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
@@ -289,10 +306,14 @@ class CommandGuardCoreTests(TestCase):
             direct = core.candidate_script_paths("./tools/guard.py", cwd=root)
             interpreter = core.candidate_script_paths("python3 tools/guard.py", cwd=root)
             sourced = core.candidate_script_paths("source tools/guard.py", cwd=root)
+            env_interpreter = core.candidate_script_paths("env bash tools/guard.py", cwd=root)
+            env_split = core.candidate_script_paths("env -S 'bash tools/guard.py'", cwd=root)
 
             self.assertEqual([script.resolve()], direct)
             self.assertEqual([script.resolve()], interpreter)
             self.assertEqual([script.resolve()], sourced)
+            self.assertEqual([script.resolve()], env_interpreter)
+            self.assertEqual([script.resolve()], env_split)
 
     def test_check_script_file_denies_outside_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,6 +346,32 @@ class CommandGuardCoreTests(TestCase):
             decision = core.check_script_file(script, project_root=root)
 
             self.assertFalse(decision.allowed)
+
+    def test_check_script_file_denies_forbidden_content_after_scan_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text((" " * (core.MAX_SCRIPT_SCAN_BYTES + 1)) + "r''m -rf tmp\n", encoding="utf-8")
+
+            decision = core.check_script_file(script, project_root=root)
+
+            self.assertFalse(decision.allowed)
+
+    def test_env_wrapped_script_execution_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("r''m -rf tmp\n", encoding="utf-8")
+
+            decision = core.evaluate_bash_command("env bash tools/guard.sh", cwd=root, project_root=root)
+            scripts = core.candidate_script_paths("env bash tools/guard.sh", cwd=root)
+            script_decision = core.check_script_file(scripts[0], project_root=root)
+
+            self.assertTrue(decision.allowed)
+            self.assertEqual([script.resolve()], scripts)
+            self.assertFalse(script_decision.allowed)
 
     def test_staged_secret_check_uses_git_diff_fallback(self) -> None:
         fake_proc = Mock(returncode=0, stdout="+ api_key = 'sk-abcdefghijklmnopqrstuvwx123456'\n", stderr="")

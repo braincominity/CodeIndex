@@ -62,6 +62,7 @@ _MACOS_SYSTEM_COMMANDS = {"launchctl", "security", "tccutil", "spctl", "csrutil"
 _CLOUD_COMMANDS = {"aws", "gcloud", "az"}
 _SECRET_FILE_READ_COMMANDS = {"cat", "less", "more", "head", "tail", "sed", "awk", "python", "python3", "node", "ruby", "perl", "sqlite3"}
 _SECRET_PATH_RE = re.compile(r"(?i)(?:\.env\b|\.env\.|\.pem\b|\.key\b|id_rsa|id_ed25519|credentials?|secrets?)")
+ANSI_C_QUOTE_RE = re.compile(r"\$'")
 
 SEARCH_OR_DISCOVERY_RE = re.compile(
     r"""(?ix)
@@ -324,6 +325,31 @@ def _first_arg(args: list[str]) -> str:
     return ""
 
 
+def _subcommand_args(args: list[str], options_with_values: set[str]) -> tuple[str, list[str]]:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if _is_env_assignment(arg):
+            index += 1
+            continue
+        if arg == "--":
+            index += 1
+            break
+        if arg in options_with_values:
+            index += 2
+            continue
+        if any(arg.startswith(option + "=") for option in options_with_values):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        return arg, args[index + 1 :]
+    if index < len(args):
+        return args[index], args[index + 1 :]
+    return "", []
+
+
 def _tokenized_git_reason(args: list[str]) -> str | None:
     subcommand = _git_subcommand(args)
     if subcommand == "grep":
@@ -346,7 +372,10 @@ def _tokenized_git_reason(args: list[str]) -> str | None:
 
 
 def _tokenized_package_reason(name: str, args: list[str]) -> str | None:
-    subcommand = _first_arg(args)
+    subcommand, rest = _subcommand_args(
+        args,
+        {"--registry", "--cache", "--prefix", "--userconfig", "--cwd", "--dir", "-C"},
+    )
     if name in {"npm", "yarn", "pnpm"} and subcommand == "publish":
         return "package publishing is blocked"
     if name == "dotnet" and len(args) >= 2 and args[0] == "nuget" and args[1] == "push":
@@ -357,11 +386,16 @@ def _tokenized_package_reason(name: str, args: list[str]) -> str | None:
         return "package registry login is blocked"
     if name == "npx" or (name == "npm" and subcommand == "exec") or (name in {"yarn", "pnpm"} and subcommand == "dlx"):
         return "ephemeral package execution is blocked"
+    if name == "dotnet" and subcommand == "nuget" and rest and rest[0] == "push":
+        return "package publishing is blocked"
     return None
 
 
 def _tokenized_infra_reason(name: str, args: list[str]) -> str | None:
-    subcommand = _first_arg(args)
+    subcommand, _ = _subcommand_args(
+        args,
+        {"-chdir", "-n", "--namespace", "--context", "--kubeconfig", "--server", "--user", "--cluster", "--kube-context"},
+    )
     if name == "terraform" and subcommand in {"apply", "destroy"}:
         return "infra mutation is blocked"
     if name == "kubectl" and subcommand in {"apply", "delete"}:
@@ -372,25 +406,25 @@ def _tokenized_infra_reason(name: str, args: list[str]) -> str | None:
 
 
 def _tokenized_docker_reason(args: list[str]) -> str | None:
-    subcommand = _first_arg(args)
+    subcommand, rest = _subcommand_args(args, {"--context", "--host", "-H", "--config"})
     if subcommand in {"push", "login", "rm", "rmi"}:
         return "dangerous docker operation is blocked"
-    if len(args) >= 2 and args[0] == "system" and args[1] == "prune":
+    if subcommand == "system" and rest and rest[0] == "prune":
         return "dangerous docker operation is blocked"
-    if len(args) >= 2 and args[0] == "volume" and args[1] == "rm":
+    if subcommand == "volume" and rest and rest[0] == "rm":
         return "dangerous docker operation is blocked"
-    if len(args) >= 2 and args[0] == "buildx" and args[1] == "build" and "--push" in args:
+    if subcommand == "buildx" and rest and rest[0] == "build" and "--push" in rest:
         return "dangerous docker operation is blocked"
     return None
 
 
 def _tokenized_gh_reason(args: list[str]) -> str | None:
-    subcommand = _first_arg(args)
+    subcommand, rest = _subcommand_args(args, {"-R", "--repo", "--hostname", "--config"})
     if subcommand in {"auth", "api", "secret", "release"}:
         return "GitHub CLI high-risk operation is blocked"
-    if len(args) >= 2 and args[0] == "repo" and args[1] in {"create", "fork"}:
+    if subcommand == "repo" and rest and rest[0] in {"create", "fork"}:
         return "GitHub CLI high-risk operation is blocked"
-    if len(args) >= 2 and args[0] == "pr" and args[1] == "merge":
+    if subcommand == "pr" and rest and rest[0] == "merge":
         return "GitHub CLI high-risk operation is blocked"
     return None
 
@@ -541,6 +575,39 @@ def _strip_leading_env_assignments(tokens: list[str]) -> list[str]:
     return tokens[index:]
 
 
+def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
+    tokens = _strip_leading_env_assignments(tokens)
+    if not tokens or _token_command_name(tokens[0]) != "env":
+        return tokens
+
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_env_assignment(token):
+            index += 1
+            continue
+        if token in {"-i", "--ignore-environment", "-0", "--null"}:
+            index += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            index += 2
+            continue
+        if token in {"-S", "--split-string"}:
+            if index + 1 >= len(tokens):
+                return []
+            return _strip_env_command_wrapper(_split_command(tokens[index + 1]) + tokens[index + 2 :])
+        if token.startswith("-S") and len(token) > 2:
+            return _strip_env_command_wrapper(_split_command(token[2:]) + tokens[index + 1 :])
+        if any(token.startswith(option + "=") for option in {"--unset", "--chdir"}):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return tokens[index:]
+    return []
+
+
 def _leading_installer_env_assignments_are_safe(tokens: list[str]) -> bool:
     for token in tokens:
         if not _is_env_assignment(token):
@@ -650,6 +717,9 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
     if not isinstance(command, str) or not command.strip():
         return _deny("Bash command missing from hook input; failing closed")
 
+    if ANSI_C_QUOTE_RE.search(command):
+        return _deny("ANSI-C shell quoting is blocked; use plain reviewed command tokens instead")
+
     if _command_is_safe_local_cdidx(command, cwd, project_root):
         return _allow("local cdidx command")
 
@@ -703,7 +773,7 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
 
 def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
-    tokens = _split_command(command)
+    tokens = _strip_env_command_wrapper(_split_command(command))
     if not tokens:
         return []
 
@@ -764,11 +834,13 @@ def check_script_file(path: Path, project_root: Path) -> GuardDecision:
         return _deny(f"script outside project is blocked: {path}")
 
     try:
-        data = resolved.read_bytes()[:MAX_SCRIPT_SCAN_BYTES]
+        data = resolved.read_bytes()
     except Exception as exc:
         return _deny(f"could not inspect script before execution; failing closed: {path}: {exc}")
 
     text = data.decode("utf-8", errors="ignore")
+    if ANSI_C_QUOTE_RE.search(text):
+        return _deny(f"script contains ANSI-C shell quoting: {path}")
     tokenized_reason = _tokenized_forbidden_script_reason(text)
     if tokenized_reason is not None:
         return _deny(f"script contains blocked command: {tokenized_reason}: {path}")

@@ -3,6 +3,7 @@ category: fixed
 affected:
   - .agent_harness/command_guard_core.py
   - .agent_harness/tests/test_command_guard_core.py
+  - .claude/hooks/bash-guard.py
   - .codex/hooks/bash_guard.py
   - .codex/README.md
   - CLOUD_BOOTSTRAP_PROMPT.md

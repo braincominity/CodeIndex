@@ -649,15 +649,16 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | /root/.local
 
 ### `--json` 出力
 
-公開 `install.sh` バイナリは trim せずにビルドされるため、CLI で `--json` を
-付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は機械可読
-JSON を出力する想定です。
+公開 `install.sh` バイナリは trim 済み自己完結 release ですが、CLI で
+`--json` を付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）
+は source-generated serializer でカバーされているため、機械可読 JSON を
+出力する想定です。
 
 `Error: --json is not available on this trimmed build.` が出る場合は、
-現在の公開 release ではなく、古いバイナリまたは custom trimmed binary を
-実行しています。`install.sh` で入れ直すか NuGet グローバルツール版を使って
-ください。MCP クライアント経由の構造化レスポンスが必要な場合は、引き続き
-MCP も利用できます。
+現在の公開 release ではなく、CLI JSON serializer の source-generation 経路を
+欠いた古いバイナリまたは custom binary を実行しています。`install.sh` で
+入れ直すか NuGet グローバルツール版を使ってください。MCP クライアント経由の
+構造化レスポンスが必要な場合は、引き続き MCP も利用できます。
 
 ### Step 3 — SDK なしの制約下で動く
 

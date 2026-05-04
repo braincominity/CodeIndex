@@ -775,12 +775,14 @@ and verifies the reported version matches the requested tag, then builds a
 tiny scratch Python project in `/tmp/cdidx-reinstall-scratch.XXXXXX` and runs
 `cdidx . --db <scratch>/.cdidx/codeindex.db` followed by
 `cdidx search greet --db <...>` against it and confirms the match payload
-surfaces the scratch symbol. Human-readable output is used on purpose:
-trimmed release builds fail fast with exit code 4 on `--json`, so a validation
-mode that asked for `--json` would never succeed against a real release. This
-exercises the real indexing path (symbol extraction, native SQLite load, FTS5)
-on the freshly-downloaded binary — `--self-test-local-mirror` only stubs
-`--version` and would miss those regressions. `CDIDX_INSTALL_DIR` is
+surfaces the scratch symbol. Human-readable output is used on purpose so this
+validation covers the default user path. Current release binaries are trimmed
+with source-generated CLI JSON DTOs, so `--json` is expected to work; the
+`JsonOutputFailure` path is only a fallback for old or custom binaries that
+miss a serializer registration. This exercises the real indexing path (symbol
+extraction, native SQLite load, FTS5) on the freshly-downloaded binary —
+`--self-test-local-mirror` only stubs `--version` and would miss those
+regressions. `CDIDX_INSTALL_DIR` is
 intentionally ignored by `--reinstall-real` so a broken build can never
 clobber a working real install, and both temp dirs are cleaned up on normal
 exit and on failure via `trap`.
@@ -1927,7 +1929,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 
 bootstrap prompt では、maintainer が押さえるべき cloud 向け installer knob も明示している。`CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` は、egress 制限付きセッションで release download host と latest-release API host を別々に差し替えるためのもの。組み込みの `--self-test-local-mirror` 経路は、非空の `CDIDX_INSTALL_DIR` を与えない限り実 `~/.local/bin` install を汚さないよう隔離されている。非空の `CDIDX_INSTALL_DIR` が *指定されている* ときも、self-test はリスクのある対象 — よく使われるシステムパス（`/usr/local/bin`、`/usr/bin`、`/opt/homebrew/bin`、`/opt/local/bin`）、`$HOME/.local/bin`、そして既に `cdidx` 実体が存在する任意のディレクトリ — への書き込みを拒否して abort する。mock payload は `--version` にしか応答しないため、実インストールが無言で機能不全になるのを防ぐためである。隔離された tempdir に戻すなら `CDIDX_INSTALL_DIR` を unset すればよく、どうしても現地で mock layout を確認したい場合は CLI フラグ `--self-test-allow-overwrite` を渡してガードを解除する。エスケープハッチは意図的に CLI 専用とし、呼び出し側の env に残った `SELF_TEST_ALLOW_OVERWRITE=1` は継承しない（古い env var による silent bypass を防ぐため）。self-test には引き続き `python3` と `127.0.0.1` への loopback listen 権限が必要で、sandbox によっては完全に禁止される。その場合、この self-test はより制約の弱い shell か、事前に用意した mirror に対して実行する必要がある。
 
-mock に頼らないリリース前検証として、`install.sh --reinstall-real <version>` は指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` にダウンロード・インストールしたうえで、`cdidx --version` を走らせて報告されたバージョンが要求タグと一致することを検証し、さらに `/tmp/cdidx-reinstall-scratch.XXXXXX` に極小の Python プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが現れることを確認する。出力は人間向けフォーマットを意図的に使う: trimmed release build は `--json` に対して exit code 4 で早期失敗するため、`--json` を要求する検証モードは実リリースでは原理的に成功し得ない。これにより、新しいバイナリの上で実インデックス経路（シンボル抽出、ネイティブ SQLite ロード、FTS5 検索）まで実際に動くかを確認できる。`--self-test-local-mirror` のモックは `--version` しかスタブしないため、インデックスや検索経路の回帰はそちらでは素通りしてしまう。`--reinstall-real` は `CDIDX_INSTALL_DIR` を意図的に無視するので、検証モードで壊れたビルドが実インストールを上書きすることはない。temp インストールディレクトリとスクラッチディレクトリは、正常終了でも失敗でも `trap` によって確実に片付けられる。
+mock に頼らないリリース前検証として、`install.sh --reinstall-real <version>` は指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` にダウンロード・インストールしたうえで、`cdidx --version` を走らせて報告されたバージョンが要求タグと一致することを検証し、さらに `/tmp/cdidx-reinstall-scratch.XXXXXX` に極小の Python プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが現れることを確認する。出力は既定のユーザー経路を検証するために人間向けフォーマットを意図的に使う。現在の release バイナリは trim 済みだが、CLI JSON DTO は source-generated serializer でカバーされるため `--json` も動作する想定である。`JsonOutputFailure` 経路は serializer 登録を欠いた古いバイナリや custom binary 向けの fallback に限られる。これにより、新しいバイナリの上で実インデックス経路（シンボル抽出、ネイティブ SQLite ロード、FTS5 検索）まで実際に動くかを確認できる。`--self-test-local-mirror` のモックは `--version` しかスタブしないため、インデックスや検索経路の回帰はそちらでは素通りしてしまう。`--reinstall-real` は `CDIDX_INSTALL_DIR` を意図的に無視するので、検証モードで壊れたビルドが実インストールを上書きすることはない。temp インストールディレクトリとスクラッチディレクトリは、正常終了でも失敗でも `trap` によって確実に片付けられる。
 
 インストール前のネットワーク診断として、`install.sh --doctor [vX.Y.Z]` は有効な proxy 環境変数を表示したうえで（各値は `redact_proxy_userinfo` ヘルパーを通して `http://alice:hunter2@proxy:8080` のような URL userinfo を `http://<redacted>@proxy:8080` として出力するため、reachability 診断に必要な host/port は保ちつつ、共有 log / issue / サポート窓口に資格情報が流出しない）、指定バージョン（省略時は同梱 `version.json`）で installer が叩く 3 つの upstream URL — latest-release API endpoint、リリース tarball asset、`sha256sums.txt` — を probe する。各 probe は `curl -sSI` を使うので数 MB のリリース tarball を実ダウンロードしない。`CONNECT tunnel failed, response 403`（curl exit 56）を検出したら、既存の `is_proxy_tunnel_403` 経路と同じ定型ガイダンス（「拒否は TLS 前の upstream proxy / egress policy 側で起きている。経路差し替えだけでは解消しない。network 管理者に artifact 配信経路のいずれかを allow-list してもらうか、`CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL` を到達可能な内部 mirror へ向ける」）を再利用し、ユーザーに次の一手を 1 つに絞って提示する。doctor はインストールを一切行わず、`/tmp` の外に書き込まず、最初の失敗で短絡せずに全 probe を走らせる（1 つの network-policy deny が他を隠さない）ため、全 probe が 2xx/3xx を返したときだけ exit 0、それ以外は exit 1 を返す。
 
