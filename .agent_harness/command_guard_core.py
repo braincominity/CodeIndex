@@ -479,9 +479,29 @@ def _tokenized_docker_reason(args: list[str]) -> str | None:
         )
         if buildx_subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
             return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
-        if buildx_subcommand == "build" and any(arg == "--push" or arg.startswith("--push=") for arg in buildx_rest):
+        if buildx_subcommand == "build" and _docker_buildx_build_pushes(buildx_rest):
             return "dangerous docker operation is blocked"
     return None
+
+
+def _docker_buildx_build_pushes(args: list[str]) -> bool:
+    for index, arg in enumerate(args):
+        if arg == "--push" or arg.startswith("--push="):
+            return True
+        if arg in {"--output", "-o"}:
+            if index + 1 < len(args) and _docker_output_spec_pushes(args[index + 1]):
+                return True
+            continue
+        if arg.startswith("--output=") and _docker_output_spec_pushes(arg.split("=", 1)[1]):
+            return True
+        if arg.startswith("-o") and len(arg) > 2 and _docker_output_spec_pushes(arg[2:]):
+            return True
+    return False
+
+
+def _docker_output_spec_pushes(value: str) -> bool:
+    parts = {part.strip().lower() for part in value.split(",")}
+    return "type=registry" in parts or "push=true" in parts
 
 
 def _tokenized_gh_reason(args: list[str]) -> str | None:
