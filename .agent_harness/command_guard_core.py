@@ -54,7 +54,7 @@ GLOBAL_CDIDX_RE = re.compile(
       |\$\{HOME\}/\.local/bin/cdidx
       |\$CDIDX
       |\$\{CDIDX\}
-      |/[^\s'"]*/\.local/bin/cdidx
+      |(?:\.{1,2}/|/|[A-Za-z0-9_.-]+/)[^\s'"]*cdidx
     )
     (?=$|[^\w./-])
     """
