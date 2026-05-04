@@ -230,6 +230,7 @@ class CommandGuardCoreTests(TestCase):
             "bash -c '/usr/local/bin/cdidx search Foo'",
             "sh -lc '/opt/homebrew/bin/cdidx symbols'",
             "zsh -c 'cdidx search Foo'",
+            "env bash -c '/usr/local/bin/cdidx search Foo'",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)

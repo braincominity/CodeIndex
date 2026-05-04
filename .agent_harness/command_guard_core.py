@@ -269,11 +269,10 @@ def _is_inline_shell_flag(token: str) -> bool:
 
 def _contains_inline_shell_execution(command: str) -> bool:
     tokens = _split_command(command)
-    if not tokens:
-        return False
-    if Path(tokens[0]).name not in _INLINE_SHELLS:
-        return False
-    return any(_is_inline_shell_flag(token) for token in tokens[1:])
+    for index, token in enumerate(tokens):
+        if Path(token).name in _INLINE_SHELLS and any(_is_inline_shell_flag(arg) for arg in tokens[index + 1 :]):
+            return True
+    return False
 
 
 def _contains_secret_like_assignment(text: str) -> bool:
