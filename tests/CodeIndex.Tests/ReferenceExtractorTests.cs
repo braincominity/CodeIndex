@@ -250,6 +250,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Assembly_EmitsCallAndBranchTargetsWithContainers()
+    {
+        const string content = """
+            section .text
+            _start:
+                call printf@PLT
+                jmp .done
+            .loop:
+                bl helper
+                bne .loop
+                lea foo(%rip), %rax
+                jmp rax
+                jr $ra
+            .done:
+                ret
+            helper:
+                ret
+            ; call ignored
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "assembly", content);
+        var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
+
+        Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "assembly");
+        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "printf"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "_start");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == ".done"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "_start");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == ".loop");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == ".loop"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == ".loop");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "foo");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "$ra");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsAliasCalls()
     {
         const string content = """

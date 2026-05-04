@@ -817,6 +817,10 @@ public partial class DbReader
         AddQueryLanguageAlias(aliases, "sqlserver", "sql");
         AddQueryLanguageAlias(aliases, "mssql", "sql");
         AddQueryLanguageAlias(aliases, "transactsql", "sql");
+        AddQueryLanguageAlias(aliases, "assembler", "assembly");
+        AddQueryLanguageAlias(aliases, "gas", "assembly");
+        AddQueryLanguageAlias(aliases, "gnuasm", "assembly");
+        AddQueryLanguageAlias(aliases, "gnu assembler", "assembly");
 
         return aliases;
     }

@@ -37,6 +37,7 @@ public static class QueryCommandRunner
         ["rust"] = ["rs"],
         ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
         ["xml"] = ["xaml", "axaml"],
+        ["assembly"] = ["asm", "assembler", "nasm", "gas", "gnuasm", "gnu assembler"],
     };
     private static readonly HashSet<string> ValueTakingOptions =
     [

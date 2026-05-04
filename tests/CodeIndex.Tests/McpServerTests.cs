@@ -3630,6 +3630,12 @@ public class McpServerTests : IDisposable
         Assert.Contains(".cts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains(".mts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
 
+        var assembly = languages.First(l => l!["lang"]!.GetValue<string>() == "assembly")!;
+        Assert.True(assembly["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(assembly["graph_queries"]!.GetValue<bool>());
+        Assert.Contains(".asm", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("assembler", assembly["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
+
         // Verify a detection-only language / 検出のみの言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
         Assert.True(markdown["symbol_extraction"]!.GetValue<bool>());
