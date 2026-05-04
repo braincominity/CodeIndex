@@ -154,7 +154,7 @@ internal static class AssemblyReferenceExtractor
             return false;
 
         var match = TargetNameRegex.Match(candidate);
-        if (!match.Success)
+        if (!match.Success || match.Index != 0)
             return false;
 
         targetName = NormalizeAssemblyReferenceName(match.Groups["name"].Value);

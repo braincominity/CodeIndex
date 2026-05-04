@@ -265,6 +265,9 @@ public class ReferenceExtractorTests
                 lea foo(%rip), %rax
                 jmp rax
                 jr $ra
+                b 1f
+                jmp 0x401000
+                call 1234h
             .done:
                 ret
             helper:
@@ -301,6 +304,9 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "mask");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "$ra");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "f");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "x401000");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "h");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored");
     }
 
