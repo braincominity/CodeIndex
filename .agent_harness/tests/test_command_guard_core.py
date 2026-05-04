@@ -227,6 +227,7 @@ class CommandGuardCoreTests(TestCase):
             "env -S 'rg SymbolExtractor src'",
             "env --split-string='f''ind . -name *.cs'",
             "timeout 30 env -S 'rg SymbolExtractor src'",
+            "env -S '-S \"rg SymbolExtractor src\"'",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)

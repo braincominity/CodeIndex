@@ -705,13 +705,13 @@ def _expand_env_split_strings_from_env(tokens: list[str], depth: int) -> list[st
             if index + 1 >= len(tokens):
                 return tokens
             split_tokens = _split_command(tokens[index + 1])
-            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 2 :], depth + 1)
+            return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 2 :], depth + 1)
         if token.startswith("-S") and len(token) > 2:
             split_tokens = _split_command(token[2:])
-            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 1 :], depth + 1)
+            return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 1 :], depth + 1)
         if token.startswith("--split-string="):
             split_tokens = _split_command(token.split("=", 1)[1])
-            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 1 :], depth + 1)
+            return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 1 :], depth + 1)
         if token.startswith("-"):
             index += 1
             continue
