@@ -1602,13 +1602,17 @@ public static class IndexCommandRunner
                     ResumeIndexSpinnerAfterConsoleWrite();
                 }
 
-                var existingId = writer.GetUnchangedFileId(
-                    record.Path,
-                    record.Modified,
-                    record.Checksum,
-                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                        && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
-                        && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                long? existingId = null;
+                if (!options.Rebuild)
+                {
+                    existingId = writer.GetUnchangedFileId(
+                        record.Path,
+                        record.Modified,
+                        record.Checksum,
+                        allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                            && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                            && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                }
                 if (existingId != null)
                 {
                     skipped++;
