@@ -18863,6 +18863,18 @@ public class ReferenceExtractorTests
             import*as CompactImport from "mod";
             export*as CompactNamespace from "mod";
             export type*as CompactPublicNamespace from "mod";
+            import {
+                MultiFoo as MultiBar
+            } from "mod";
+            import DefaultThing, {
+                Secondary as SecondaryAlias
+            } from "mod";
+            export {
+                MultiExport as MultiBaz
+            } from "mod";
+            export type {
+                Internal as PublicInternal
+            } from "mod";
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -18877,6 +18889,10 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "CompactImport" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "CompactNamespace" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "CompactPublicNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MultiBar" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "SecondaryAlias" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MultiBaz" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PublicInternal" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "from" && r.ReferenceKind == "type_reference");
     }
 

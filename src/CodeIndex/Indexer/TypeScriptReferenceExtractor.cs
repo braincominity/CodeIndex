@@ -44,7 +44,7 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
-        if (!IsImportExportAliasLine(preparedLine))
+        if (!IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
         {
             TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
                 preparedLine,
@@ -231,12 +231,13 @@ internal static class TypeScriptReferenceExtractor
             container);
     }
 
-    private static bool IsImportExportAliasLine(string preparedLine)
+    private static bool IsImportExportAliasLine(IReadOnlyList<string> preparedLines, int lineIndex, string preparedLine)
     {
         var trimmed = preparedLine.TrimStart();
         return IsImportDeclarationLine(trimmed)
                || IsNamedExportLine(trimmed)
-               || IsExportStarAliasLine(trimmed);
+               || IsExportStarAliasLine(trimmed)
+               || IsInsideMultilineImportExportAlias(preparedLines, lineIndex, preparedLine);
     }
 
     private static bool IsImportDeclarationLine(string text)
@@ -285,6 +286,101 @@ internal static class TypeScriptReferenceExtractor
         index++;
         SkipWhitespace(text, ref index);
         return TryConsumeKeyword(text, "as", ref index);
+    }
+
+    private static bool IsInsideMultilineImportExportAlias(
+        IReadOnlyList<string> preparedLines,
+        int lineIndex,
+        string preparedLine)
+    {
+        var asIndex = -1;
+        foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
+        {
+            asIndex = keywordIndex;
+            break;
+        }
+
+        return asIndex >= 0 && IsInsideImportExportBraceAt(preparedLines, lineIndex, asIndex);
+    }
+
+    private static bool IsInsideImportExportBraceAt(IReadOnlyList<string> preparedLines, int lineIndex, int column)
+    {
+        var unmatchedClosingBraces = 0;
+        for (var currentLine = lineIndex; currentLine >= 0; currentLine--)
+        {
+            var line = preparedLines[currentLine];
+            var startColumn = currentLine == lineIndex ? Math.Min(column, line.Length) - 1 : line.Length - 1;
+            for (var index = startColumn; index >= 0; index--)
+            {
+                if (line[index] == '}')
+                {
+                    unmatchedClosingBraces++;
+                    continue;
+                }
+
+                if (line[index] != '{')
+                    continue;
+
+                if (unmatchedClosingBraces > 0)
+                {
+                    unmatchedClosingBraces--;
+                    continue;
+                }
+
+                return IsImportExportOpeningBrace(preparedLines, currentLine, index);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsImportExportOpeningBrace(IReadOnlyList<string> preparedLines, int openLineIndex, int openColumn)
+    {
+        var sameLinePrefix = preparedLines[openLineIndex].Substring(0, openColumn).Trim();
+        if (sameLinePrefix.Length > 0)
+            return IsImportBracePrefix(sameLinePrefix) || IsNamedExportBracePrefix(sameLinePrefix);
+
+        for (var lineIndex = openLineIndex - 1; lineIndex >= 0; lineIndex--)
+        {
+            var previousLine = preparedLines[lineIndex].Trim();
+            if (previousLine.Length == 0)
+                continue;
+
+            return IsImportBracePrefix(previousLine) || IsNamedExportBracePrefix(previousLine);
+        }
+
+        return false;
+    }
+
+    private static bool IsImportBracePrefix(string text)
+    {
+        const string importKeyword = "import";
+        if (!text.StartsWith(importKeyword, StringComparison.Ordinal))
+            return false;
+
+        var index = importKeyword.Length;
+        if (index >= text.Length)
+            return true;
+
+        return !IsTypeScriptIdentifierPart(text[index])
+               && (char.IsWhiteSpace(text[index]) || text[index] is '{' or '*');
+    }
+
+    private static bool IsNamedExportBracePrefix(string text)
+    {
+        var index = 0;
+        if (!TryConsumeKeyword(text, "export", ref index))
+            return false;
+
+        SkipWhitespace(text, ref index);
+        if (index >= text.Length)
+            return true;
+
+        if (!TryConsumeKeyword(text, "type", ref index))
+            return false;
+
+        SkipWhitespace(text, ref index);
+        return index >= text.Length;
     }
 
     private static bool TryConsumeKeyword(string text, string keyword, ref int index)
