@@ -256,6 +256,7 @@ class CommandGuardCoreTests(TestCase):
             "docker --context ctx push example/image",
             "docker --log-level debug push example/image",
             "docker buildx --builder default build --push .",
+            "docker buildx --builder default build --push=true .",
             "kubectl -n ns delete pod example",
             "kubectl --as admin delete pod example",
             "helm -n ns uninstall release",
@@ -443,6 +444,8 @@ class CommandGuardCoreTests(TestCase):
                 "env --chdir tools bash guard.sh",
                 "env --chdir=tools bash guard.sh",
                 "env -S '-C tools bash guard.sh'",
+                "timeout 30 env -C tools bash guard.sh",
+                "time env --chdir=tools bash guard.sh",
             ):
                 with self.subTest(command=command):
                     decision = core.evaluate_bash_command(command, cwd=root, project_root=root)

@@ -476,7 +476,7 @@ def _tokenized_docker_reason(args: list[str]) -> str | None:
         )
         if buildx_subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
             return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
-        if buildx_subcommand == "build" and "--push" in buildx_rest:
+        if buildx_subcommand == "build" and any(arg == "--push" or arg.startswith("--push=") for arg in buildx_rest):
             return "dangerous docker operation is blocked"
     return None
 
@@ -690,8 +690,13 @@ def _env_segment_uses_chdir(tokens: list[str]) -> bool:
 def _env_chdir_wrapper_present(tokens: list[str]) -> bool:
     for segment in _token_segments(tokens):
         segment = _strip_leading_env_assignments(segment)
-        if segment and _token_command_name(segment[0]) == "env" and _env_segment_uses_chdir(segment):
-            return True
+        while segment:
+            if _token_command_name(segment[0]) == "env" and _env_segment_uses_chdir(segment):
+                return True
+            stripped = _strip_one_transparent_script_wrapper(segment)
+            if stripped is None:
+                break
+            segment = _strip_leading_env_assignments(stripped)
     return False
 
 
