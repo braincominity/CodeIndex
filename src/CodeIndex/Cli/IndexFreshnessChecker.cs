@@ -27,7 +27,9 @@ internal static class IndexFreshnessChecker
             IndexedFileCount = indexed.Count,
         };
 
-        var indexer = new FileIndexer(projectRoot);
+        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
+        var indexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
         var scan = indexer.ScanFilesDetailed();
         foreach (var error in scan.Errors)
         {
