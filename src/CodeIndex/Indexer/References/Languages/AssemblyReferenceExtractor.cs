@@ -177,15 +177,30 @@ internal static class AssemblyReferenceExtractor
             changed = false;
             foreach (var prefix in prefixes)
             {
-                if (candidate.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase))
+                var stripped = StripAssemblyTargetPrefix(candidate, prefix);
+                if (stripped is not null)
                 {
-                    candidate = candidate[(prefix.Length + 1)..].TrimStart();
+                    candidate = stripped;
                     changed = true;
                 }
             }
         }
 
         return candidate;
+    }
+
+    private static string? StripAssemblyTargetPrefix(string candidate, string prefix)
+    {
+        if (candidate.Length <= prefix.Length
+            || !candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(candidate[prefix.Length]))
+            return null;
+
+        var index = prefix.Length + 1;
+        while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+            index++;
+
+        return candidate[index..];
     }
 
     private static bool IsIndirectAssemblyTarget(string candidate)

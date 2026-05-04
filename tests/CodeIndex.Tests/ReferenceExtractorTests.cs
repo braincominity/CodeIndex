@@ -321,6 +321,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Assembly_IgnoresTabSeparatedIndirectTargetsAfterSizeDecorators()
+    {
+        const string content = "entry:\n    call qword\t[rax]\n    jmp dword\t[target]\n    call helper\nhelper:\n    ret\n";
+
+        var symbols = SymbolExtractor.Extract(1, "assembly", content);
+        var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
+
+        var reference = Assert.Single(references, reference => reference.ReferenceKind == "call");
+        Assert.Equal("helper", reference.SymbolName);
+        Assert.Equal("entry", reference.ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "qword");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "dword");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "target");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsAliasCalls()
     {
         const string content = """
