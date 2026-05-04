@@ -18801,15 +18801,19 @@ public class ReferenceExtractorTests
     public void Extract_TypeScriptTypedDeclarations_CaptureStructuralTypeReferences()
     {
         const string content = """
-            interface Handler extends BaseHandler<Request>, Disposable {}
+            interface Handler extends BaseHandler<Request>, Disposable {
+                handle?: (callbackInput: Request) => Response;
+            }
 
             class Service extends BaseService implements Runnable, Closeable {
                 load(input: User, options?: LoadOptions): Promise<Result> {
                     const current: User = input as User;
+                    const handler: (variableInput: Request) => Response = makeHandler();
                     return build(current);
                 }
             }
 
+            type HandlerFactory = (factoryInput: Request) => Response;
             type UserPick = Pick<User, "id">;
 
             function runtime(input: unknown) {
@@ -18831,6 +18835,10 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Promise" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Pick" && r.ReferenceKind == "type_reference");
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "callbackInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "variableInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "factoryInput" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "input" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
     }

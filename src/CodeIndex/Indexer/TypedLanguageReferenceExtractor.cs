@@ -22,17 +22,146 @@ internal static class TypedLanguageReferenceExtractor
         if (length <= 0)
             return;
 
+        var normalizedExpression = expression.Substring(leading, length);
+        var normalizedStart = expressionStartInLine + leading;
+        if (language == "typescript"
+            && TryEmitTypeScriptFunctionTypeExpressionReferences(
+                normalizedExpression,
+                normalizedStart,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container))
+        {
+            return;
+        }
+
         ReferenceExtractor.AddTypeExpressionSegments(
             references,
             seen,
             fileId,
-            expression.Substring(leading, length),
-            expressionStartInLine + leading,
+            normalizedExpression,
+            normalizedStart,
             context,
             lineNumber,
             container,
             language,
             ignoredSegments);
+    }
+
+    public static bool TryEmitTypeScriptFunctionTypeExpressionReferences(
+        string expression,
+        int expressionStartInLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var leading = CountLeadingWhitespace(expression, 0, expression.Length);
+        var trailing = CountTrailingWhitespace(expression, leading, expression.Length - leading);
+        var length = expression.Length - leading - trailing;
+        if (length <= 0)
+            return false;
+
+        var normalizedExpression = expression.Substring(leading, length);
+        var normalizedStart = expressionStartInLine + leading;
+        var openParen = FindTopLevelChar(normalizedExpression, '(');
+        if (openParen < 0)
+            return false;
+
+        var prefix = normalizedExpression.Substring(0, openParen).Trim();
+        if (prefix.Length > 0 && !string.Equals(prefix, "new", StringComparison.Ordinal))
+            return false;
+
+        var closeParen = ReferenceExtractor.FindMatchingChar(normalizedExpression, openParen, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        var arrowIndex = FindTopLevelSequence(normalizedExpression, "=>", closeParen + 1);
+        if (arrowIndex < 0)
+            return false;
+
+        EmitTypeScriptFunctionParameterTypeReferences(
+            normalizedExpression,
+            normalizedStart,
+            openParen + 1,
+            closeParen,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+        var returnStart = SkipTypePrefixTrivia(normalizedExpression, arrowIndex + 2);
+        if (returnStart >= normalizedExpression.Length)
+            return true;
+
+        var returnEnd = FindTypeExpressionEnd(normalizedExpression, returnStart, stopAtComma: false, stopAtArrow: false);
+        if (returnEnd <= returnStart)
+            return true;
+
+        EmitTypeExpressionReferences(
+            normalizedExpression.Substring(returnStart, returnEnd - returnStart),
+            normalizedStart + returnStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+        return true;
+    }
+
+    private static void EmitTypeScriptFunctionParameterTypeReferences(
+        string expression,
+        int expressionStartInLine,
+        int paramStart,
+        int paramEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (paramStart < 0 || paramEnd <= paramStart || paramStart >= expression.Length)
+            return;
+
+        paramEnd = Math.Min(paramEnd, expression.Length);
+        var parameterList = expression.Substring(paramStart, paramEnd - paramStart);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
+        {
+            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var colonIndex = FindTopLevelChar(fragment, ':');
+            if (colonIndex < 0)
+                continue;
+
+            var typeStart = SkipTypePrefixTrivia(fragment, colonIndex + 1);
+            if (typeStart >= fragment.Length)
+                continue;
+
+            var typeEnd = FindTypeExpressionEnd(fragment, typeStart, stopAtArrow: false);
+            if (typeEnd <= typeStart)
+                continue;
+
+            EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                expressionStartInLine + paramStart + segmentStart + typeStart,
+                "typescript",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     public static void EmitCommaSeparatedTypeListReferences(
@@ -110,7 +239,7 @@ internal static class TypedLanguageReferenceExtractor
             if (typeStart >= fragment.Length)
                 continue;
 
-            var typeEnd = FindTypeExpressionEnd(fragment, typeStart);
+            var typeEnd = FindTypeExpressionEndForLanguage(fragment, typeStart, language);
             if (typeEnd <= typeStart)
                 continue;
 
@@ -156,7 +285,7 @@ internal static class TypedLanguageReferenceExtractor
                 if (typeStart >= line.Length)
                     continue;
 
-                var typeEnd = FindTypeExpressionEnd(line, typeStart);
+                var typeEnd = FindTypeExpressionEndForLanguage(line, typeStart, language);
                 if (typeEnd <= typeStart)
                     continue;
 
@@ -193,7 +322,7 @@ internal static class TypedLanguageReferenceExtractor
                 if (typeStart >= line.Length)
                     continue;
 
-                var typeEnd = FindTypeExpressionEnd(line, typeStart);
+                var typeEnd = FindTypeExpressionEndForLanguage(line, typeStart, language);
                 if (typeEnd <= typeStart)
                     continue;
 
@@ -353,7 +482,7 @@ internal static class TypedLanguageReferenceExtractor
         }
     }
 
-    public static int FindTypeExpressionEnd(string text, int startIndex, bool stopAtComma = true)
+    public static int FindTypeExpressionEnd(string text, int startIndex, bool stopAtComma = true, bool stopAtArrow = true)
     {
         foreach (var (index, ch) in EnumerateTopLevelCharacters(text, startIndex))
         {
@@ -361,9 +490,13 @@ internal static class TypedLanguageReferenceExtractor
                 return index;
             if (ch is ';' or '{' or '}')
                 return index;
-            if (ch == '=')
-                return index;
             if (index + 2 <= text.Length && string.CompareOrdinal(text, index, "=>", 0, 2) == 0)
+            {
+                if (stopAtArrow)
+                    return index;
+                continue;
+            }
+            if (ch == '=')
                 return index;
             if (IsTopLevelStopKeyword(text, index, "where")
                 || IsTopLevelStopKeyword(text, index, "implements")
@@ -375,6 +508,9 @@ internal static class TypedLanguageReferenceExtractor
 
         return text.Length;
     }
+
+    private static int FindTypeExpressionEndForLanguage(string text, int startIndex, string language, bool stopAtComma = true)
+        => FindTypeExpressionEnd(text, startIndex, stopAtComma, stopAtArrow: language != "typescript");
 
     public static int SkipTypePrefixTrivia(string text, int index)
     {

@@ -3455,6 +3455,19 @@ public static class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (TypedLanguageReferenceExtractor.TryEmitTypeScriptFunctionTypeExpressionReferences(
+                expression,
+                expressionStartInLine,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container))
+        {
+            return;
+        }
+
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
