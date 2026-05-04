@@ -260,6 +260,7 @@ class CommandGuardCoreTests(TestCase):
         for command in (
             "docker --context ctx push example/image",
             "docker --log-level debug push example/image",
+            "docker image push example/image",
             "docker buildx --builder default build --push .",
             "docker buildx --builder default build --push=true .",
             "docker buildx build --output=type=registry .",

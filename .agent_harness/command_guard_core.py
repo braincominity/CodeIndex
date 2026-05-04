@@ -467,6 +467,8 @@ def _tokenized_docker_reason(args: list[str]) -> str | None:
         return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if subcommand in {"push", "login", "rm", "rmi"}:
         return "dangerous docker operation is blocked"
+    if subcommand == "image" and rest and rest[0] == "push":
+        return "dangerous docker operation is blocked"
     if subcommand == "system" and rest and rest[0] == "prune":
         return "dangerous docker operation is blocked"
     if subcommand == "volume" and rest and rest[0] == "rm":
