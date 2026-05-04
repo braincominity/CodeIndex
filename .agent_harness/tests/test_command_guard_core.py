@@ -417,6 +417,8 @@ class CommandGuardCoreTests(TestCase):
             for command in (
                 "time bash tools/guard.sh",
                 "timeout 30 bash tools/guard.sh",
+                "timeout -k5 30 bash tools/guard.sh",
+                "timeout -sTERM 30 bash tools/guard.sh",
                 "gtimeout 30 bash tools/guard.sh",
                 "command bash tools/guard.sh",
                 "exec bash tools/guard.sh",
@@ -444,6 +446,8 @@ class CommandGuardCoreTests(TestCase):
                 "env --chdir tools bash guard.sh",
                 "env --chdir=tools bash guard.sh",
                 "env -S '-C tools bash guard.sh'",
+                "env --split-string='-C tools bash guard.sh'",
+                "env timeout 30 env -C tools bash guard.sh",
                 "timeout 30 env -C tools bash guard.sh",
                 "time env --chdir=tools bash guard.sh",
             ):

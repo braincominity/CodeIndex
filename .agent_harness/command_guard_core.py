@@ -677,6 +677,8 @@ def _env_segment_uses_chdir(tokens: list[str]) -> bool:
             return _env_segment_uses_chdir(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
         if token.startswith("-S") and len(token) > 2:
             return _env_segment_uses_chdir(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
+        if token.startswith("--split-string="):
+            return _env_segment_uses_chdir(["env"] + _split_command(token.split("=", 1)[1]) + tokens[index + 1 :])
         if token.startswith("--unset="):
             index += 1
             continue
@@ -693,6 +695,10 @@ def _env_chdir_wrapper_present(tokens: list[str]) -> bool:
         while segment:
             if _token_command_name(segment[0]) == "env" and _env_segment_uses_chdir(segment):
                 return True
+            stripped_env = _strip_env_command_wrapper(segment)
+            if stripped_env != segment:
+                segment = _strip_leading_env_assignments(stripped_env)
+                continue
             stripped = _strip_one_transparent_script_wrapper(segment)
             if stripped is None:
                 break
@@ -723,6 +729,8 @@ def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
             return _strip_env_command_wrapper(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
         if token.startswith("-S") and len(token) > 2:
             return _strip_env_command_wrapper(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
+        if token.startswith("--split-string="):
+            return _strip_env_command_wrapper(["env"] + _split_command(token.split("=", 1)[1]) + tokens[index + 1 :])
         if any(token.startswith(option + "=") for option in {"--unset", "--chdir"}):
             index += 1
             continue
@@ -738,8 +746,10 @@ def _strip_wrapper_options(
     options_with_values: set[str],
     *,
     valueless_options: set[str] | None = None,
+    attached_short_options_with_values: set[str] | None = None,
 ) -> list[str]:
     valueless_options = valueless_options or set()
+    attached_short_options_with_values = attached_short_options_with_values or set()
     index = 0
     while index < len(args):
         arg = args[index]
@@ -749,6 +759,9 @@ def _strip_wrapper_options(
             index += 2
             continue
         if any(arg.startswith(option + "=") for option in options_with_values):
+            index += 1
+            continue
+        if any(arg.startswith(option) and len(arg) > len(option) for option in attached_short_options_with_values):
             index += 1
             continue
         if arg in valueless_options:
@@ -777,6 +790,7 @@ def _strip_one_transparent_script_wrapper(tokens: list[str]) -> list[str] | None
             args,
             {"-s", "--signal", "-k", "--kill-after"},
             valueless_options={"--foreground", "--preserve-status", "-v", "--verbose"},
+            attached_short_options_with_values={"-s", "-k"},
         )
         return rest[1:] if rest else []
     if first == "command":
