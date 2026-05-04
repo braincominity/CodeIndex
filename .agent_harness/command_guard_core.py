@@ -17,6 +17,16 @@ from pathlib import Path
 
 MAX_SCRIPT_SCAN_BYTES = 512 * 1024
 LOCAL_CDIDX_REL = Path("src/CodeIndex/bin/Debug/net8.0/cdidx.dll")
+REPO_INSTALLER_REL = Path("install.sh")
+ALLOW_REASON_OFFICIAL_INSTALLER = "official cdidx installer bootstrap"
+ALLOW_REASON_REPO_LOCAL_INSTALLER = "repo-local cdidx installer bootstrap"
+ALLOW_REASON_EXPANDED_INSTALLED_CDIDX = "expanded installed cdidx bootstrap"
+ALLOWED_INSTALLER_ENV_NAMES = {
+    "CDIDX_GITHUB_BASE_URL",
+    "CDIDX_GITHUB_API_BASE_URL",
+    "CDIDX_LOCAL_MIRROR_PORT",
+    "CDIDX_INSTALL_DIR",
+}
 
 _SHELL_CONTROL_TOKENS = {"|", "||", "&", "&&", ";", "|&", "(", ")", "<", ">", "<<", ">>"}
 _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
@@ -45,6 +55,19 @@ GLOBAL_CDIDX_RE = re.compile(
     """
 )
 
+OFFICIAL_INSTALLER_ONE_LINER_RE = re.compile(
+    r"""(?ix)
+    ^\s*
+    curl\s+-fsSL\s+
+    https://raw\.githubusercontent\.com/Widthdom/CodeIndex/
+        (?:main|v[0-9][A-Za-z0-9._+-]*)/install\.sh
+    \s*\|\s*
+    bash
+    (?:\s+-s\s+--\s+v?[0-9][A-Za-z0-9._+-]*)?
+    \s*$
+    """
+)
+
 GIT_GREP_RE = re.compile(r"(?i)(^|[^\w./-])git\s+grep\b")
 LOCAL_CDIDX_DLL_RE = re.compile(r"(?i)cdidx\.dll")
 INLINE_SECRET_RE = re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{20,}")
@@ -54,7 +77,7 @@ INLINE_INTERPRETER_RE = re.compile(r"(?i)^\s*(?:python|python3|ruby|perl|node)\b
 
 _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (SEARCH_OR_DISCOVERY_RE, "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
-    (GLOBAL_CDIDX_RE, "global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
+    (GLOBAL_CDIDX_RE, "global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead, or the fully expanded installed path documented in CLOUD_BOOTSTRAP_PROMPT.md for no-SDK cloud bootstrap."),
     (GIT_GREP_RE, "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
     (re.compile(r"(?i)\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b"), "recursive forced rm is blocked"),
     (re.compile(r"(?i)\brm\s+-r\b"), "recursive rm is blocked"),
@@ -169,12 +192,146 @@ def _command_is_safe_local_cdidx(command: str, cwd: Path, project_root: Path) ->
     return dll == expected
 
 
+def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
+    if token.startswith("~") or token.startswith("$HOME"):
+        return False
+    path = _token_path(token, cwd)
+    if path is None:
+        return False
+    try:
+        expected = (Path.home() / ".local" / "bin" / "cdidx").resolve()
+    except Exception:
+        return False
+    return path == expected
+
+
+def _command_mentions_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
+    tokens = _split_command(command)
+    return any(_token_is_expanded_installed_cdidx(token, cwd) for token in tokens)
+
+
+def _command_is_safe_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
+    if CONTROL_OP_RE.search(command):
+        return False
+    if COMMAND_SUBSTITUTION_RE.search(command):
+        return False
+    tokens = _split_command(command)
+    if not tokens:
+        return False
+    return _token_is_expanded_installed_cdidx(tokens[0], cwd)
+
+
 def _contains_inline_interpreter(command: str) -> bool:
     return bool(INLINE_INTERPRETER_RE.search(command))
 
 
 def _contains_secret_like_assignment(text: str) -> bool:
     return bool(INLINE_SECRET_RE.search(text))
+
+
+def _is_env_assignment(token: str) -> bool:
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", token))
+
+
+def _strip_leading_env_assignments(tokens: list[str]) -> list[str]:
+    index = 0
+    while index < len(tokens) and _is_env_assignment(tokens[index]):
+        index += 1
+    return tokens[index:]
+
+
+def _leading_installer_env_assignments_are_safe(tokens: list[str]) -> bool:
+    for token in tokens:
+        if not _is_env_assignment(token):
+            return True
+        name = token.split("=", 1)[0]
+        if name not in ALLOWED_INSTALLER_ENV_NAMES:
+            return False
+        if _contains_secret_like_assignment(token):
+            return False
+    return True
+
+
+def is_repo_local_install_script(path: Path, project_root: Path) -> bool:
+    try:
+        return path.resolve() == (project_root.resolve() / REPO_INSTALLER_REL).resolve()
+    except Exception:
+        return False
+
+
+def _token_is_repo_local_installer(token: str, cwd: Path, project_root: Path) -> bool:
+    path = _token_path(token, cwd)
+    return path is not None and is_repo_local_install_script(path, project_root)
+
+
+def _installer_args_are_safe(args: list[str]) -> bool:
+    if not args:
+        return True
+
+    first = args[0]
+    if first == "--doctor":
+        return len(args) <= 2
+    if first == "--reinstall-real":
+        return len(args) == 2
+    if first == "--self-test-local-mirror":
+        remaining = args[1:]
+        if remaining and remaining[0] == "--self-test-allow-overwrite":
+            remaining = remaining[1:]
+        return len(remaining) <= 1
+    if first.startswith("--"):
+        return False
+    return len(args) == 1
+
+
+def _command_mentions_repo_local_installer(command: str, cwd: Path, project_root: Path) -> bool:
+    tokens = _strip_leading_env_assignments(_split_command(command))
+    return any(_token_is_repo_local_installer(token, cwd, project_root) for token in tokens)
+
+
+def _command_is_safe_repo_local_installer(command: str, cwd: Path, project_root: Path) -> bool:
+    if CONTROL_OP_RE.search(command):
+        return False
+    if COMMAND_SUBSTITUTION_RE.search(command):
+        return False
+
+    raw_tokens = _split_command(command)
+    if not _leading_installer_env_assignments_are_safe(raw_tokens):
+        return False
+
+    tokens = _strip_leading_env_assignments(raw_tokens)
+    if not tokens:
+        return False
+
+    first = Path(tokens[0]).name
+    if first == "bash":
+        script_index: int | None = None
+        for index, token in enumerate(tokens[1:], start=1):
+            if token.startswith("-"):
+                continue
+            if _token_is_repo_local_installer(token, cwd, project_root):
+                script_index = index
+                break
+            return False
+        if script_index is None:
+            return False
+        return _installer_args_are_safe(tokens[script_index + 1 :])
+
+    if _token_is_repo_local_installer(tokens[0], cwd, project_root):
+        return _installer_args_are_safe(tokens[1:])
+
+    return False
+
+
+def _command_is_safe_official_installer_one_liner(command: str) -> bool:
+    return bool(OFFICIAL_INSTALLER_ONE_LINER_RE.match(command))
+
+
+def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
+    return (
+        decision.allowed
+        and decision.reason == ALLOW_REASON_REPO_LOCAL_INSTALLER
+        and is_repo_local_install_script(path, project_root)
+    )
 
 
 def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardDecision:
@@ -189,6 +346,20 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
     if LOCAL_CDIDX_DLL_RE.search(command):
         return _deny("use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead")
+
+    if _command_is_safe_expanded_installed_cdidx(command, cwd):
+        return _allow(ALLOW_REASON_EXPANDED_INSTALLED_CDIDX)
+
+    if _command_mentions_expanded_installed_cdidx(command, cwd):
+        return _deny("expanded installed cdidx commands must not use shell control operators or command substitutions")
+
+    if _command_is_safe_official_installer_one_liner(command):
+        return _allow(ALLOW_REASON_OFFICIAL_INSTALLER)
+
+    if _command_mentions_repo_local_installer(command, cwd, project_root):
+        if _command_is_safe_repo_local_installer(command, cwd, project_root):
+            return _allow(ALLOW_REASON_REPO_LOCAL_INSTALLER)
+        return _deny("repo-local install.sh bootstrap must use a direct install.sh invocation with supported installer flags only")
 
     for pattern, reason in _FORBIDDEN_COMMAND_PATTERNS:
         if pattern.search(command):

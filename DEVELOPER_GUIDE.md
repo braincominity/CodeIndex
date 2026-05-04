@@ -726,6 +726,40 @@ permission to bind a loopback listener on
 `127.0.0.1`; some sandboxes forbid that outright, in which case the self-test
 must run in a less-restricted shell or against a pre-hosted mirror.
 
+Codex cloud sessions have one extra repository-local constraint: the tracked
+`.codex/hooks.json` Bash guard blocks generic network downloads and generic
+global `cdidx` use. The guard therefore has a deliberately narrow bootstrap
+exception for the official CodeIndex installer only. It allows the exact
+`curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
+| bash` shape and direct repo-local `bash ./install.sh ...` invocations with
+the installer-supported flags (`--doctor`, `--self-test-local-mirror`,
+`--self-test-allow-overwrite`, and `--reinstall-real`). It still rejects
+arbitrary download-and-execute commands, unknown installer flags, shell-control
+wrappers around `install.sh`, bare `cdidx`, `~/.local/bin/cdidx`, and
+`$HOME/.local/bin/cdidx`. After installation, Codex operators should resolve
+`$HOME/.local/bin/cdidx` to its fully expanded absolute path and use that path
+for no-SDK code search, matching the tripwire guidance in
+`CLOUD_BOOTSTRAP_PROMPT.md`. This exception only unblocks the repository guard;
+it cannot bypass upstream proxy or egress policy denies such as `CONNECT tunnel
+failed, response 403`.
+
+Codex cloud session には、リポジトリローカルの追加制約が 1 つあります。追跡対象の
+`.codex/hooks.json` Bash guard は、汎用ネットワークダウンロードと汎用グローバル
+`cdidx` 利用をブロックします。そのため guard には、公式 CodeIndex installer だけを
+通す意図的に狭い bootstrap 例外を入れています。許可するのは
+`curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
+| bash` という正確な形と、installer が対応する flag（`--doctor`,
+`--self-test-local-mirror`, `--self-test-allow-overwrite`, `--reinstall-real`）を
+使う repo-local `bash ./install.sh ...` の直接実行だけです。任意の
+download-and-execute、未知の installer flag、`install.sh` を shell control で
+包む呼び出し、裸の `cdidx`、`~/.local/bin/cdidx`、`$HOME/.local/bin/cdidx` は
+引き続き拒否します。インストール後、Codex operator は
+`$HOME/.local/bin/cdidx` を完全展開済み絶対パスへ解決し、SDK なしのコード検索では
+そのパスを使ってください。これは `CLOUD_BOOTSTRAP_PROMPT.md` の tripwire
+guidance と同じです。この例外が解除するのはリポジトリ guard だけで、
+`CONNECT tunnel failed, response 403` のような upstream proxy / egress policy
+の拒否は迂回できません。
+
 For pre-release validation beyond the mock self-test, `install.sh
 --reinstall-real <version>` downloads and installs the requested release tag
 into an isolated `/tmp/cdidx-reinstall-real.XXXXXX` dir, runs `cdidx --version`

@@ -17,11 +17,11 @@ this page — `README.md` is enough.
   or cdidx/CodeIndex branding for derivative distributions without written
   permission.
   → [DEVELOPER_GUIDE.md → "Release Workflow"](DEVELOPER_GUIDE.md#release-workflow)
-- **Bootstrapping a Claude Code cloud session with no local .NET SDK.** Only
-  useful to someone who wants to run Claude Code *against this repo* from a
-  SDK-less container as an authorized maintainer.
+- **Bootstrapping a cloud AI coding session with no local .NET SDK.** Only
+  useful to someone who wants to run Claude Code or Codex *against this repo*
+  from a SDK-less container as an authorized maintainer.
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — drop-in first-turn prompt.
-  → [DEVELOPER_GUIDE.md → "Cloud Claude Code bootstrap (no .NET SDK)"](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrap-no-net-sdk) — deep dive on the install/runtime mechanics behind the prompt.
+  → [DEVELOPER_GUIDE.md → "Cloud Claude Code bootstrap (no .NET SDK)"](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrap-no-net-sdk) — deep dive on the install/runtime mechanics behind the prompt, including the Codex guard exception for official installer bootstrap commands.
 - **AI-driven self-improvement loop.** The operating contract used by
   maintainer-run Claude Code sessions to iterate on cdidx itself. End users
   shouldn't need this.
@@ -53,9 +53,9 @@ end-user documentation surface* so that:
 
 - **cdidx の新バージョンリリース。** 公式リリースの push 権限を持つのは Maintainer だけです。派生配布で公式 release workflow、package identity、cdidx / CodeIndex branding を再利用するには書面による許可が必要です。
   → [DEVELOPER_GUIDE.md → 「リリース手順」](DEVELOPER_GUIDE.md#リリース手順)
-- **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい認可 Maintainer 向けのワークフローです。
+- **.NET SDK のないコンテナから cloud AI coding セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code または Codex を走らせたい認可 Maintainer 向けのワークフローです。
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — 初回投入用のプロンプト。
-  → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
+  → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。Codex guard が公式 installer bootstrap だけを通す例外も含みます。
 - **AI 駆動の自己改善ループ。** Maintainer が走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要です。
   → [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 
