@@ -1799,7 +1799,7 @@ public static class IndexCommandRunner
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 status = errors > 0 ? "partial" : "success",
-                mode = "incremental",
+                mode = options.Rebuild ? "rebuild" : "incremental",
                 summary = new
                 {
                     files_total = totalFiles,

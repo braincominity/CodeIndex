@@ -3829,6 +3829,7 @@ public class IndexCommandRunnerTests
             // Rebuild: should drop and re-scan all files / rebuild: 全削除して全ファイル再スキャン
             var (exitCode2, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("rebuild", json.GetProperty("mode").GetString());
             // After rebuild, all files should be scanned (not skipped)
             // rebuild 後、全ファイルがスキャンされるべき（スキップなし）
             Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 2);
@@ -3852,6 +3853,7 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("rebuild", json.GetProperty("mode").GetString());
             Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 1);
         }
         finally
