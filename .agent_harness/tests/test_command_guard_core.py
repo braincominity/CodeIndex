@@ -197,6 +197,8 @@ class CommandGuardCoreTests(TestCase):
             "/opt/homebrew/bin/cdidx search SymbolExtractor",
             "./cdidx search SymbolExtractor",
             "eval '/opt/homebrew/bin/cdidx symbols'",
+            "eval cdi''dx search SymbolExtractor",
+            """eval "$SHELL -c 'cdi''dx search SymbolExtractor'" """,
             "$SHELL -c '/usr/local/bin/cdidx search Foo'",
             "grep -R SymbolExtractor src",
             "git grep SymbolExtractor",

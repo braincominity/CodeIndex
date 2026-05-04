@@ -90,6 +90,7 @@ CDIDX_MCP_INIT_SMOKE_RE = re.compile(
 )
 
 GIT_GREP_RE = re.compile(r"(?i)(^|[^\w./-])git\s+grep\b")
+EVAL_RE = re.compile(r"(?i)(^|[^\w./-])eval(?=$|[^\w./-])")
 LOCAL_CDIDX_DLL_RE = re.compile(r"(?i)cdidx\.dll")
 INLINE_SECRET_RE = re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{20,}")
 COMMAND_SUBSTITUTION_RE = re.compile(r"`|\$\(")
@@ -100,6 +101,7 @@ _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (SEARCH_OR_DISCOVERY_RE, "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
     (GLOBAL_CDIDX_RE, "global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead, or the fully expanded installed path documented in CLOUD_BOOTSTRAP_PROMPT.md for no-SDK cloud bootstrap."),
     (GIT_GREP_RE, "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
+    (EVAL_RE, "eval is blocked; use a direct reviewed command or script file instead."),
     (re.compile(r"(?i)\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b"), "recursive forced rm is blocked"),
     (re.compile(r"(?i)\brm\s+-r\b"), "recursive rm is blocked"),
     (re.compile(r"(?i)\b(?:rmdir|unlink|shred|srm|truncate)\b"), "destructive filesystem command is blocked"),
