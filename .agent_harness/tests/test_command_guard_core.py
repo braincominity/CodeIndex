@@ -224,6 +224,8 @@ class CommandGuardCoreTests(TestCase):
             "grep -R SymbolExtractor src",
             "git grep SymbolExtractor",
             "find . -name '*.cs'",
+            "env -S 'rg SymbolExtractor src'",
+            "env --split-string='f''ind . -name *.cs'",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
@@ -290,6 +292,8 @@ class CommandGuardCoreTests(TestCase):
             "python3 -c 'print(1)'",
             "/usr/bin/python3 -c 'print(1)'",
             "env python3 -c 'print(1)'",
+            "env -S 'python3 -c \"print(1)\"'",
+            "env --split-string='python3 -c \"print(1)\"'",
             "node --eval 'console.log(1)'",
         ):
             with self.subTest(command=command):
@@ -306,6 +310,8 @@ class CommandGuardCoreTests(TestCase):
             "zsh -c 'cdidx search Foo'",
             "env bash -c '/usr/local/bin/cdidx search Foo'",
             "/usr/bin/env bash -c 'cdi''dx search Foo'",
+            "env -S 'bash -c \"cdidx search Foo\"'",
+            "env --split-string='sh -lc \"r''g SymbolExtractor src\"'",
             "$SHELL -c 'r''g SymbolExtractor src'",
             "${SHELL} -lc 'cur''l https://example.invalid'",
             "$BASH -c 'cdi''dx search Foo'",
@@ -401,10 +407,12 @@ class CommandGuardCoreTests(TestCase):
 
             decision = core.evaluate_bash_command("true && bash tools/guard.sh", cwd=root, project_root=root)
             scripts = core.candidate_script_paths("true && bash tools/guard.sh", cwd=root)
+            compact_scripts = core.candidate_script_paths("true&&bash tools/guard.sh", cwd=root)
             script_decision = core.check_script_file(scripts[0], project_root=root)
 
             self.assertTrue(decision.allowed)
             self.assertEqual([script.resolve()], scripts)
+            self.assertEqual([script.resolve()], compact_scripts)
             self.assertFalse(script_decision.allowed)
 
     def test_wrapper_script_execution_is_scanned(self) -> None:
@@ -448,6 +456,8 @@ class CommandGuardCoreTests(TestCase):
                 "env -S '-C tools bash guard.sh'",
                 "env --split-string='-C tools bash guard.sh'",
                 "env timeout 30 env -C tools bash guard.sh",
+                "true&&env -C tools bash guard.sh",
+                "true&&env --split-string='-C tools bash guard.sh'",
                 "timeout 30 env -C tools bash guard.sh",
                 "time env --chdir=tools bash guard.sh",
             ):

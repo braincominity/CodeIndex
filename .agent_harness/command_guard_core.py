@@ -206,7 +206,10 @@ def _deny(reason: str) -> GuardDecision:
 
 def _split_command(command: str) -> list[str]:
     try:
-        return shlex.split(command, posix=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
     except ValueError:
         return []
 
@@ -509,6 +512,7 @@ def _tokenized_gh_reason(args: list[str]) -> str | None:
 
 
 def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
+    tokens = _expand_env_split_strings(tokens)
     normalized = " ".join(tokens)
     if _contains_secret_like_assignment(normalized):
         return "inline secret-looking value in command is blocked"
@@ -614,7 +618,7 @@ def _git_subcommand(args: list[str]) -> str:
 
 
 def _contains_inline_interpreter(command: str) -> bool:
-    tokens = _split_command(command)
+    tokens = _expand_env_split_strings(_split_command(command))
     for index, token in enumerate(tokens):
         if _token_command_name(token) in _INLINE_INTERPRETERS and any(
             _is_inline_interpreter_flag(arg) for arg in tokens[index + 1 :]
@@ -630,7 +634,7 @@ def _is_inline_shell_flag(token: str) -> bool:
 
 
 def _contains_inline_shell_execution(command: str) -> bool:
-    tokens = _split_command(command)
+    tokens = _expand_env_split_strings(_split_command(command))
     for index, token in enumerate(tokens):
         if (
             _token_command_name(token) in _INLINE_SHELLS
@@ -647,6 +651,62 @@ def _contains_secret_like_assignment(text: str) -> bool:
 
 def _is_env_assignment(token: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", token))
+
+
+def _expand_env_split_strings(tokens: list[str], depth: int = 0) -> list[str]:
+    if depth >= 8:
+        return tokens
+    result: list[str] = []
+    segment: list[str] = []
+    for token in tokens:
+        if token in _SHELL_CONTROL_TOKENS:
+            if segment:
+                result.extend(_expand_env_split_strings_in_segment(segment, depth))
+                segment = []
+            result.append(token)
+            continue
+        segment.append(token)
+    if segment:
+        result.extend(_expand_env_split_strings_in_segment(segment, depth))
+    return result
+
+
+def _expand_env_split_strings_in_segment(segment: list[str], depth: int) -> list[str]:
+    tokens = _strip_leading_env_assignments(segment)
+    if not tokens or _token_command_name(tokens[0]) != "env":
+        return segment
+
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_env_assignment(token):
+            index += 1
+            continue
+        if token in {"-i", "--ignore-environment", "-0", "--null"}:
+            index += 1
+            continue
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            index += 2
+            continue
+        if token.startswith(("--unset=", "-C", "--chdir=")):
+            index += 1
+            continue
+        if token in {"-S", "--split-string"}:
+            if index + 1 >= len(tokens):
+                return tokens
+            split_tokens = _split_command(tokens[index + 1])
+            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 2 :], depth + 1)
+        if token.startswith("-S") and len(token) > 2:
+            split_tokens = _split_command(token[2:])
+            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 1 :], depth + 1)
+        if token.startswith("--split-string="):
+            split_tokens = _split_command(token.split("=", 1)[1])
+            return ["env"] + tokens[1:index] + _expand_env_split_strings(split_tokens + tokens[index + 1 :], depth + 1)
+        if token.startswith("-"):
+            index += 1
+            continue
+        return segment
+    return segment
 
 
 def _strip_leading_env_assignments(tokens: list[str]) -> list[str]:
