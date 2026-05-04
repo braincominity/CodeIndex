@@ -30,7 +30,9 @@ ALLOWED_INSTALLER_ENV_NAMES = {
 
 _SHELL_CONTROL_TOKENS = {"|", "||", "&", "&&", ";", "|&", "(", ")", "<", ">", "<<", ">>"}
 _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
+_INLINE_INTERPRETERS = {"python", "python3", "ruby", "perl", "node", "deno", "php"}
 _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
+_INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
 
 SEARCH_OR_DISCOVERY_RE = re.compile(
     r"""(?ix)
@@ -96,6 +98,7 @@ INLINE_SECRET_RE = re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s
 COMMAND_SUBSTITUTION_RE = re.compile(r"`|\$\(")
 CONTROL_OP_RE = re.compile(r"(?s)(?:&&|\|\||;|\|&|\||&|`|\$\(|<|>|\n)")
 INLINE_INTERPRETER_RE = re.compile(r"(?i)^\s*(?:python|python3|ruby|perl|node)\b.*(?:\s(?:-c|-e|--eval)\b)")
+VARIABLE_COMMAND_RE = re.compile(r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$")
 
 _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (SEARCH_OR_DISCOVERY_RE, "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
@@ -259,7 +262,27 @@ def _command_is_safe_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
     return _token_is_expanded_installed_cdidx(tokens[0], cwd)
 
 
+def _is_inline_interpreter_flag(token: str) -> bool:
+    if token in _INLINE_INTERPRETER_FLAGS or token.startswith("--eval="):
+        return True
+    return token.startswith("-") and not token.startswith("--") and any(flag in token[1:] for flag in {"c", "e"})
+
+
+def _token_command_name(token: str) -> str:
+    return Path(token).name
+
+
+def _is_variable_command(token: str) -> bool:
+    return bool(VARIABLE_COMMAND_RE.match(token))
+
+
 def _contains_inline_interpreter(command: str) -> bool:
+    tokens = _split_command(command)
+    for index, token in enumerate(tokens):
+        if _token_command_name(token) in _INLINE_INTERPRETERS and any(
+            _is_inline_interpreter_flag(arg) for arg in tokens[index + 1 :]
+        ):
+            return True
     return bool(INLINE_INTERPRETER_RE.search(command))
 
 
@@ -272,7 +295,11 @@ def _is_inline_shell_flag(token: str) -> bool:
 def _contains_inline_shell_execution(command: str) -> bool:
     tokens = _split_command(command)
     for index, token in enumerate(tokens):
-        if Path(token).name in _INLINE_SHELLS and any(_is_inline_shell_flag(arg) for arg in tokens[index + 1 :]):
+        if (
+            _token_command_name(token) in _INLINE_SHELLS
+            or token in _INLINE_SHELL_VARIABLES
+            or _is_variable_command(token)
+        ) and any(_is_inline_shell_flag(arg) for arg in tokens[index + 1 :]):
             return True
     return False
 

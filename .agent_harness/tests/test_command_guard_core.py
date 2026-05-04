@@ -225,16 +225,29 @@ class CommandGuardCoreTests(TestCase):
 
     def test_denies_inline_interpreter_execution(self) -> None:
         root = Path("/tmp")
-        decision = core.evaluate_bash_command("python3 -c 'print(1)'", cwd=root, project_root=root)
-        self.assertFalse(decision.allowed)
+        for command in (
+            "python3 -c 'print(1)'",
+            "/usr/bin/python3 -c 'print(1)'",
+            "env python3 -c 'print(1)'",
+            "node --eval 'console.log(1)'",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
 
     def test_denies_inline_shell_execution(self) -> None:
         root = Path("/tmp")
         for command in (
             "bash -c '/usr/local/bin/cdidx search Foo'",
+            "/bin/bash -c 'r''g SymbolExtractor src'",
             "sh -lc '/opt/homebrew/bin/cdidx symbols'",
             "zsh -c 'cdidx search Foo'",
             "env bash -c '/usr/local/bin/cdidx search Foo'",
+            "/usr/bin/env bash -c 'cdi''dx search Foo'",
+            "$SHELL -c 'r''g SymbolExtractor src'",
+            "${SHELL} -lc 'cur''l https://example.invalid'",
+            "$BASH -c 'cdi''dx search Foo'",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
