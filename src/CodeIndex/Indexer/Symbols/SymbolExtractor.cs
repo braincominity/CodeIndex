@@ -20022,7 +20022,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
 
         if (tokenStart > 0
             && trimmed[tokenStart - 1] == '@'
-            && IsCSharpVerbatimIdentifierPrefix(trimmed, tokenStart - 1))
+            && CSharpSymbolNameNormalizer.IsVerbatimIdentifierPrefix(trimmed, tokenStart - 1))
         {
             return false;
         }
@@ -22260,7 +22260,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         while (next < line.Length && char.IsWhiteSpace(line[next]))
             next++;
 
-        if (next >= line.Length || !IsCSharpIdentifierStart(line[next]))
+        if (next >= line.Length || !CSharpSymbolNameNormalizer.IsIdentifierStart(line[next]))
             return false;
 
         return IsCSharpTupleElementTypeTokenEnd(line[previous]);
@@ -26029,6 +26029,18 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         return indent;
     }
 
+    private static bool StartsWithKeyword(string line, int startIndex, string keyword)
+    {
+        if (startIndex < 0 || startIndex + keyword.Length > line.Length)
+            return false;
+
+        if (!string.Equals(line.Substring(startIndex, keyword.Length), keyword, StringComparison.Ordinal))
+            return false;
+
+        var nextIndex = startIndex + keyword.Length;
+        return nextIndex >= line.Length || char.IsWhiteSpace(line[nextIndex]);
+    }
+
     private static string? TryGetGroup(Match match, string? groupName)
     {
         if (groupName == null || !match.Groups[groupName].Success)
@@ -26049,7 +26061,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
     {
         return lang switch
         {
-            "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
+            "csharp" => CSharpSymbolNameNormalizer.Normalize(name, match, matchLine),
             "cobol" => NormalizeCobolSymbolName(name),
             "fsharp" => NormalizeFSharpSymbolName(name),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
@@ -26407,37 +26419,6 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         return true;
     }
 
-    private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return name;
-
-        if (match.Groups["conversionKind"].Success
-            && TryReadCSharpConversionOperatorName(match, matchLine, out var conversionOperatorName))
-        {
-            return conversionOperatorName;
-        }
-
-        if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
-            return "Item";
-
-        // Canonicalize verbatim identifier prefixes (`@` escape) so the persisted
-        // symbol name matches the writer-side import / base-resolution canonical
-        // form in `DbWriter.StripCSharpVerbatimPrefixes`. `@BaseAttr` -> `BaseAttr`,
-        // `@Foo.@Bar` -> `Foo.Bar` (namespaces). Without this, iter 5's import-aware
-        // resolver and iter 6's base normalizer cannot match a class declared as
-        // `public class @BaseAttr : Attribute` since its persisted name would stay
-        // `@BaseAttr` while imports / qualified lookups use `BaseAttr`. Mirrors the
-        // one-way canonicalization policy: the `@` escape is purely syntactic.
-        // verbatim 識別子（`@` エスケープ）を canonical 化し、永続化されたシンボル名と
-        // `DbWriter.StripCSharpVerbatimPrefixes` の正規化側のキーが一致するようにする。
-        // `@BaseAttr` -> `BaseAttr`、`@Foo.@Bar` -> `Foo.Bar`（名前空間）。これをしないと
-        // `public class @BaseAttr : Attribute` の class 行が `@BaseAttr` のまま永続化され、
-        // iter 5 の import-aware resolver と iter 6 の base 正規化では一致しない。
-        // `@` エスケープは純粋に構文上のものであるという一方向 canonical 化の方針に従う。
-        return NormalizeCSharpVerbatimIdentifiers(name);
-    }
-
     private static string NormalizeKotlinSymbolName(string name, string matchLine)
     {
         var trimmedLine = matchLine.TrimStart();
@@ -26677,311 +26658,9 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
         return normalized.ToString();
     }
 
-    // Mirror of DbWriter.StripCSharpVerbatimPrefixes — strip `@` verbatim escapes from
-    // identifier starts with segment boundaries at string start, `.`, and `::`. Kept
-    // local to SymbolExtractor so the extractor has no dependency on the Database layer.
-    // DbWriter.StripCSharpVerbatimPrefixes のミラー。文字列先頭、`.`、`::` を境界として
-    // 各識別子先頭の verbatim `@` を剥がす。Extractor が Database 層に依存しないようローカルに置く。
-    private static string StripCSharpVerbatimPrefixes(string qualified)
-    {
-        if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
-            return qualified;
-        var sb = new System.Text.StringBuilder(qualified.Length);
-        bool atBoundary = true;
-        for (int i = 0; i < qualified.Length; i++)
-        {
-            char c = qualified[i];
-            if (atBoundary && c == '@'
-                && i + 1 < qualified.Length
-                && (qualified[i + 1] == '_' || char.IsLetter(qualified[i + 1])))
-            {
-                atBoundary = false;
-                continue;
-            }
-            sb.Append(c);
-            if (c == '.')
-            {
-                atBoundary = true;
-            }
-            else if (c == ':' && i + 1 < qualified.Length && qualified[i + 1] == ':')
-            {
-                sb.Append(':');
-                i++;
-                atBoundary = true;
-            }
-            else
-            {
-                atBoundary = false;
-            }
-        }
-        return sb.Length == qualified.Length ? qualified : sb.ToString();
-    }
-
-    private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)
-    {
-        name = string.Empty;
-
-        var conversionKind = match.Groups["conversionKind"].Value.Trim();
-        if (conversionKind.Length == 0)
-            return false;
-
-        var cursor = match.Index + match.Length;
-        while (cursor < matchLine.Length && char.IsWhiteSpace(matchLine[cursor]))
-            cursor++;
-
-        var hasChecked = false;
-        if (StartsWithKeyword(matchLine, cursor, "checked"))
-        {
-            hasChecked = true;
-            cursor += "checked".Length;
-            while (cursor < matchLine.Length && char.IsWhiteSpace(matchLine[cursor]))
-                cursor++;
-        }
-
-        if (!TryReadCSharpTypeUntilParameterList(matchLine, cursor, out var targetType))
-            return false;
-
-        var normalizedTargetType = NormalizeCSharpTypeDisplayName(targetType);
-        name = hasChecked
-            ? $"{conversionKind} operator checked {normalizedTargetType}"
-            : $"{conversionKind} operator {normalizedTargetType}";
-        return true;
-    }
-
-    private static bool TryReadCSharpTypeUntilParameterList(string line, int startIndex, out string typeName)
-    {
-        typeName = string.Empty;
-        var builder = new StringBuilder();
-        var angleDepth = 0;
-        var bracketDepth = 0;
-        var parenDepth = 0;
-        var sawAnyTypeToken = false;
-
-        for (var index = startIndex; index < line.Length; index++)
-        {
-            var ch = line[index];
-            switch (ch)
-            {
-                case '(':
-                    if (angleDepth == 0 && bracketDepth == 0 && parenDepth == 0 && sawAnyTypeToken)
-                    {
-                        typeName = builder.ToString().Trim();
-                        return typeName.Length > 0;
-                    }
-
-                    parenDepth++;
-                    builder.Append(ch);
-                    if (!char.IsWhiteSpace(ch))
-                        sawAnyTypeToken = true;
-                    break;
-
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    builder.Append(ch);
-                    if (!char.IsWhiteSpace(ch))
-                        sawAnyTypeToken = true;
-                    break;
-
-                case '<':
-                    angleDepth++;
-                    builder.Append(ch);
-                    sawAnyTypeToken = true;
-                    break;
-
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    builder.Append(ch);
-                    sawAnyTypeToken = true;
-                    break;
-
-                case '[':
-                    bracketDepth++;
-                    builder.Append(ch);
-                    sawAnyTypeToken = true;
-                    break;
-
-                case ']':
-                    if (bracketDepth > 0)
-                        bracketDepth--;
-                    builder.Append(ch);
-                    sawAnyTypeToken = true;
-                    break;
-
-                default:
-                    builder.Append(ch);
-                    if (!char.IsWhiteSpace(ch))
-                        sawAnyTypeToken = true;
-                    break;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool StartsWithKeyword(string line, int startIndex, string keyword)
-    {
-        if (startIndex < 0 || startIndex + keyword.Length > line.Length)
-            return false;
-
-        if (!string.Equals(line.Substring(startIndex, keyword.Length), keyword, StringComparison.Ordinal))
-            return false;
-
-        var nextIndex = startIndex + keyword.Length;
-        return nextIndex >= line.Length || char.IsWhiteSpace(line[nextIndex]);
-    }
-
-    private static string NormalizeCSharpTypeDisplayName(string typeName)
-    {
-        var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
-        normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
-        normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
-        normalized = NormalizeCSharpTypeTokenSpacing(normalized);
-        return NormalizeCSharpVerbatimIdentifiers(normalized);
-    }
-
-    private static string NormalizeCSharpVerbatimIdentifiers(string value)
-    {
-        if (string.IsNullOrEmpty(value) || value.IndexOf('@', StringComparison.Ordinal) < 0)
-            return value;
-
-        StringBuilder? builder = null;
-        var segmentStart = 0;
-
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (!IsCSharpVerbatimIdentifierPrefix(value, index))
-                continue;
-
-            builder ??= new StringBuilder(value.Length);
-            if (index > segmentStart)
-                builder.Append(value, segmentStart, index - segmentStart);
-            segmentStart = index + 1;
-        }
-
-        if (builder is null)
-            return value;
-
-        if (segmentStart < value.Length)
-            builder.Append(value, segmentStart, value.Length - segmentStart);
-        return builder.ToString();
-    }
-
-    private static bool IsCSharpVerbatimIdentifierPrefix(string value, int index)
-    {
-        if (value[index] != '@' || index + 1 >= value.Length || !IsCSharpIdentifierStart(value[index + 1]))
-            return false;
-
-        return index == 0 || !IsCSharpIdentifierChar(value[index - 1]);
-    }
-
-    private static bool IsCSharpIdentifierStart(char ch) =>
-        ch == '_' || char.IsLetter(ch);
-
-    private static bool IsCSharpIdentifierChar(char ch) =>
-        ch == '_' || char.IsLetterOrDigit(ch);
-
-    private static string NormalizeCSharpTypeTokenSpacing(string typeName)
-    {
-        var builder = new StringBuilder(typeName.Length);
-
-        for (var index = 0; index < typeName.Length; index++)
-        {
-            var ch = typeName[index];
-            switch (ch)
-            {
-                case ' ':
-                    var previous = GetLastNonWhitespace(builder);
-                    var next = FindNextNonWhitespace(typeName, index + 1);
-                    if (!previous.HasValue || !next.HasValue)
-                        continue;
-
-                    if (ShouldInsertCSharpTypeSpace(previous.Value, next.Value) && (builder.Length == 0 || builder[^1] != ' '))
-                        builder.Append(' ');
-                    break;
-
-                case ',':
-                    TrimTrailingWhitespace(builder);
-                    builder.Append(',');
-                    var nextAfterComma = FindNextNonWhitespace(typeName, index + 1);
-                    if (nextAfterComma.HasValue && nextAfterComma.Value is not ')' and not '>' and not ']')
-                        builder.Append(' ');
-                    break;
-
-                case '<':
-                case '>':
-                case '[':
-                case ']':
-                case '(':
-                case ')':
-                case '?':
-                    TrimTrailingWhitespace(builder);
-                    builder.Append(ch);
-                    break;
-
-                default:
-                    builder.Append(ch);
-                    break;
-            }
-        }
-
-        return builder.ToString().Trim();
-    }
-
-    private static char? GetLastNonWhitespace(StringBuilder builder)
-    {
-        for (var index = builder.Length - 1; index >= 0; index--)
-        {
-            if (!char.IsWhiteSpace(builder[index]))
-                return builder[index];
-        }
-
-        return null;
-    }
-
-    private static char? FindNextNonWhitespace(string text, int startIndex)
-    {
-        for (var index = startIndex; index < text.Length; index++)
-        {
-            if (!char.IsWhiteSpace(text[index]))
-                return text[index];
-        }
-
-        return null;
-    }
-
-    private static void TrimTrailingWhitespace(StringBuilder builder)
-    {
-        while (builder.Length > 0 && char.IsWhiteSpace(builder[^1]))
-            builder.Length--;
-    }
-
-    private static bool ShouldInsertCSharpTypeSpace(char previous, char next)
-    {
-        if (IsCSharpTypeIdentifierChar(previous) && IsCSharpTypeIdentifierStart(next))
-            return true;
-
-        return previous is '>' or ']' or ')' or '?' or '*'
-            && IsCSharpTypeIdentifierStart(next);
-    }
-
-    private static bool IsCSharpTypeIdentifierStart(char ch)
-    {
-        return ch == '@' || ch == '_' || char.IsLetter(ch);
-    }
-
-    private static bool IsCSharpTypeIdentifierChar(char ch)
-    {
-        return IsCSharpTypeIdentifierStart(ch) || char.IsDigit(ch);
-    }
-
     private static readonly Regex ComplexityRegex = new(
         @"\b(?:if|else\s+if|elif|elsif|elseif|case|catch|except|when|while|for|foreach|guard)\b|(?:\?\?|&&|\|\||[?:](?!=))",
         RegexOptions.Compiled);
-    private static readonly Regex CSharpTypeWhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
-    private static readonly Regex CSharpTypeDoubleColonWhitespaceRegex = new(@"\s*::\s*", RegexOptions.Compiled);
-    private static readonly Regex CSharpTypeDotWhitespaceRegex = new(@"\s*\.\s*", RegexOptions.Compiled);
     private static readonly Regex JavaModuleRequiresDirectiveRegex = new(
         @"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

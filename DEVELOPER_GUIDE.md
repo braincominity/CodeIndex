@@ -40,6 +40,7 @@ src/CodeIndex/
       ChunkSplitter.cs        — 80-line chunks with 10-line overlap
     Symbols/
       SymbolExtractor.cs      — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
+      CSharpSymbolNameNormalizer.cs — C# persisted symbol-name canonicalization for verbatim identifiers, indexers, and conversion operators
     References/
       ReferenceExtractor.cs   — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
       Support/
