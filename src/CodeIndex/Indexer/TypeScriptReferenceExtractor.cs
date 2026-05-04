@@ -238,7 +238,9 @@ internal static class TypeScriptReferenceExtractor
                || trimmed.StartsWith("import{", StringComparison.Ordinal)
                || trimmed.StartsWith("export {", StringComparison.Ordinal)
                || trimmed.StartsWith("export{", StringComparison.Ordinal)
+               || trimmed.StartsWith("export * as ", StringComparison.Ordinal)
                || trimmed.StartsWith("export type {", StringComparison.Ordinal)
-               || trimmed.StartsWith("export type{", StringComparison.Ordinal);
+               || trimmed.StartsWith("export type{", StringComparison.Ordinal)
+               || trimmed.StartsWith("export type * as ", StringComparison.Ordinal);
     }
 }
