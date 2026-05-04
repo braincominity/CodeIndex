@@ -52,16 +52,19 @@ internal static class KotlinReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
-        TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
-            preparedLine,
-            TypeOperatorKeywords,
-            "kotlin",
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
+        if (!preparedLine.TrimStart().StartsWith("import ", StringComparison.Ordinal))
+        {
+            TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
+                preparedLine,
+                TypeOperatorKeywords,
+                "kotlin",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
     }
 
     private static void EmitCallableSignatureTypeReferences(

@@ -44,16 +44,19 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
-        TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
-            preparedLine,
-            TypeOperatorKeywords,
-            "typescript",
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
+        if (!IsImportExportAliasLine(preparedLine))
+        {
+            TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
+                preparedLine,
+                TypeOperatorKeywords,
+                "typescript",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
     }
 
     public static void EmitDeclarationTypeReferences(
@@ -226,5 +229,16 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             container);
+    }
+
+    private static bool IsImportExportAliasLine(string preparedLine)
+    {
+        var trimmed = preparedLine.TrimStart();
+        return trimmed.StartsWith("import ", StringComparison.Ordinal)
+               || trimmed.StartsWith("import{", StringComparison.Ordinal)
+               || trimmed.StartsWith("export {", StringComparison.Ordinal)
+               || trimmed.StartsWith("export{", StringComparison.Ordinal)
+               || trimmed.StartsWith("export type {", StringComparison.Ordinal)
+               || trimmed.StartsWith("export type{", StringComparison.Ordinal);
     }
 }

@@ -51,6 +51,7 @@ internal static class RustReferenceExtractor
     {
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitTupleStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -147,6 +148,54 @@ internal static class RustReferenceExtractor
         }
     }
 
+    private static void EmitTupleStructFieldTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container)
+    {
+        var structIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "struct");
+        if (structIndex < 0)
+            return;
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(', structIndex + "struct".Length);
+        if (openParen < 0)
+            return;
+
+        var closeParen = ReferenceExtractor.FindMatchingChar(preparedLine, openParen, '(', ')');
+        if (closeParen <= openParen)
+            return;
+
+        var fieldList = preparedLine.Substring(openParen + 1, closeParen - openParen - 1);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(fieldList))
+        {
+            var fragment = fieldList.Substring(segmentStart, segmentLength);
+            var typeStart = SkipRustTupleFieldPrefix(fragment);
+            if (typeStart >= fragment.Length)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = openParen + 1 + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container ?? resolveContainerForColumn(absoluteStart));
+        }
+    }
+
     private static void EmitStructFieldTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -188,6 +237,43 @@ internal static class RustReferenceExtractor
             lineNumber,
             container);
     }
+
+    private static int SkipRustTupleFieldPrefix(string fragment)
+    {
+        var index = 0;
+        while (index < fragment.Length && char.IsWhiteSpace(fragment[index]))
+            index++;
+
+        if (index + 3 > fragment.Length
+            || string.CompareOrdinal(fragment, index, "pub", 0, "pub".Length) != 0)
+        {
+            return index;
+        }
+
+        var afterPub = index + "pub".Length;
+        if (afterPub < fragment.Length && IsRustIdentifierPart(fragment[afterPub]))
+            return index;
+
+        index = afterPub;
+        while (index < fragment.Length && char.IsWhiteSpace(fragment[index]))
+            index++;
+
+        if (index < fragment.Length && fragment[index] == '(')
+        {
+            var closeParen = ReferenceExtractor.FindMatchingChar(fragment, index, '(', ')');
+            if (closeParen < 0)
+                return fragment.Length;
+
+            index = closeParen + 1;
+            while (index < fragment.Length && char.IsWhiteSpace(fragment[index]))
+                index++;
+        }
+
+        return index;
+    }
+
+    private static bool IsRustIdentifierPart(char ch) =>
+        ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
 
     private static void EmitImplAndTraitTypeReferences(
         string preparedLine,

@@ -18851,6 +18851,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptImportExportAliases_DoNotEmitTypeReferences()
+    {
+        const string content = """
+            import * as Mod from "mod";
+            import { Foo as Bar } from "mod";
+            export { Foo as Baz } from "mod";
+            export type { Model as PublicModel } from "mod";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Mod" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Baz" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PublicModel" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "from" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinTypedDeclarations_CaptureStructuralTypeReferences()
     {
         const string content = """
@@ -18885,6 +18905,19 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fallbackUser" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinImportAlias_DoesNotEmitTypeReference()
+    {
+        const string content = """
+            import com.example.Bar as Baz
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Baz" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -18970,6 +19003,9 @@ public class ReferenceExtractorTests
             struct FieldOnly {
                 repo: Repository,
             }
+
+            struct UserId(Uuid);
+            pub struct Pair(pub User, Repository);
             """;
 
         var symbols = SymbolExtractor.Extract(1, "rust", content);
@@ -18980,6 +19016,9 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "type_reference"
             && r.ContainerKind == "struct"
             && r.ContainerName == "FieldOnly");
+        Assert.Contains(references, r => r.SymbolName == "Uuid" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
