@@ -673,6 +673,15 @@ def _is_env_assignment(token: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", token))
 
 
+def _env_short_option_suffix(token: str, option: str) -> str | None:
+    if token.startswith("--") or not token.startswith("-"):
+        return None
+    offset = token.find(option, 1)
+    if offset < 0:
+        return None
+    return token[offset + 1 :]
+
+
 def _expand_env_split_strings(tokens: list[str], depth: int = 0) -> list[str]:
     if depth >= 8:
         return tokens
@@ -718,17 +727,33 @@ def _expand_env_split_strings_from_env(tokens: list[str], depth: int) -> list[st
         if token in {"-u", "--unset", "-C", "--chdir"}:
             index += 2
             continue
+        if token in {"-a", "--argv0"}:
+            index += 2
+            continue
         if token.startswith(("--unset=", "-C", "--chdir=")):
             index += 1
+            continue
+        if token.startswith("--argv0="):
+            index += 1
+            continue
+        c_suffix = _env_short_option_suffix(token, "C")
+        if c_suffix is not None:
+            index += 1 if c_suffix else 2
             continue
         if token in {"-S", "--split-string"}:
             if index + 1 >= len(tokens):
                 return tokens
             split_tokens = _split_command(tokens[index + 1])
             return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 2 :], depth + 1)
-        if token.startswith("-S") and len(token) > 2:
-            split_tokens = _split_command(token[2:])
-            return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 1 :], depth + 1)
+        s_suffix = _env_short_option_suffix(token, "S")
+        if s_suffix is not None:
+            if s_suffix:
+                split_tokens = _split_command(s_suffix)
+                return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 1 :], depth + 1)
+            if index + 1 >= len(tokens):
+                return tokens
+            split_tokens = _split_command(tokens[index + 1])
+            return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 2 :], depth + 1)
         if token.startswith("--split-string="):
             split_tokens = _split_command(token.split("=", 1)[1])
             return _expand_env_split_strings(["env"] + tokens[1:index] + split_tokens + tokens[index + 1 :], depth + 1)
@@ -759,14 +784,27 @@ def _env_segment_uses_chdir(tokens: list[str]) -> bool:
         if token in {"-u", "--unset"}:
             index += 2
             continue
+        if token in {"-a", "--argv0"}:
+            index += 2
+            continue
         if token in {"-C", "--chdir"} or token.startswith(("-C", "--chdir=")):
+            return True
+        if token.startswith("--argv0="):
+            index += 1
+            continue
+        if _env_short_option_suffix(token, "C") is not None:
             return True
         if token in {"-S", "--split-string"}:
             if index + 1 >= len(tokens):
                 return False
             return _env_segment_uses_chdir(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
-        if token.startswith("-S") and len(token) > 2:
-            return _env_segment_uses_chdir(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
+        s_suffix = _env_short_option_suffix(token, "S")
+        if s_suffix is not None:
+            if s_suffix:
+                return _env_segment_uses_chdir(["env"] + _split_command(s_suffix) + tokens[index + 1 :])
+            if index + 1 >= len(tokens):
+                return False
+            return _env_segment_uses_chdir(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
         if token.startswith("--split-string="):
             return _env_segment_uses_chdir(["env"] + _split_command(token.split("=", 1)[1]) + tokens[index + 1 :])
         if token.startswith("--unset="):
@@ -810,19 +848,28 @@ def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
         if token in {"-i", "--ignore-environment", "-0", "--null"}:
             index += 1
             continue
-        if token in {"-u", "--unset", "-C", "--chdir"}:
+        if token in {"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}:
             index += 2
             continue
         if token in {"-S", "--split-string"}:
             if index + 1 >= len(tokens):
                 return []
             return _strip_env_command_wrapper(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
-        if token.startswith("-S") and len(token) > 2:
-            return _strip_env_command_wrapper(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
+        s_suffix = _env_short_option_suffix(token, "S")
+        if s_suffix is not None:
+            if s_suffix:
+                return _strip_env_command_wrapper(["env"] + _split_command(s_suffix) + tokens[index + 1 :])
+            if index + 1 >= len(tokens):
+                return []
+            return _strip_env_command_wrapper(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
         if token.startswith("--split-string="):
             return _strip_env_command_wrapper(["env"] + _split_command(token.split("=", 1)[1]) + tokens[index + 1 :])
-        if any(token.startswith(option + "=") for option in {"--unset", "--chdir"}):
+        if any(token.startswith(option + "=") for option in {"--unset", "--chdir", "--argv0"}):
             index += 1
+            continue
+        c_suffix = _env_short_option_suffix(token, "C")
+        if c_suffix is not None:
+            index += 1 if c_suffix else 2
             continue
         if token.startswith("-"):
             index += 1

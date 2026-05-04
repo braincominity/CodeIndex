@@ -228,6 +228,7 @@ class CommandGuardCoreTests(TestCase):
             "env --split-string='f''ind . -name *.cs'",
             "timeout 30 env -S 'rg SymbolExtractor src'",
             "env -S '-S \"rg SymbolExtractor src\"'",
+            "env -iS 'rg SymbolExtractor src'",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
@@ -339,12 +340,14 @@ class CommandGuardCoreTests(TestCase):
             sourced = core.candidate_script_paths("source tools/guard.py", cwd=root)
             env_interpreter = core.candidate_script_paths("env bash tools/guard.py", cwd=root)
             env_split = core.candidate_script_paths("env -S 'bash tools/guard.py'", cwd=root)
+            env_argv0 = core.candidate_script_paths("env --argv0 guard bash tools/guard.py", cwd=root)
 
             self.assertEqual([script.resolve()], direct)
             self.assertEqual([script.resolve()], interpreter)
             self.assertEqual([script.resolve()], sourced)
             self.assertEqual([script.resolve()], env_interpreter)
             self.assertEqual([script.resolve()], env_split)
+            self.assertEqual([script.resolve()], env_argv0)
 
     def test_check_script_file_denies_outside_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -459,6 +462,7 @@ class CommandGuardCoreTests(TestCase):
                 "env -C tools bash guard.sh",
                 "env --chdir tools bash guard.sh",
                 "env --chdir=tools bash guard.sh",
+                "env -iC tools bash guard.sh",
                 "env -S '-C tools bash guard.sh'",
                 "env --split-string='-C tools bash guard.sh'",
                 "env timeout 30 env -C tools bash guard.sh",
