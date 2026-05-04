@@ -171,14 +171,16 @@ dir, runs `cdidx --version` and verifies the reported version matches the
 requested tag, then builds a tiny scratch Python project and runs
 `cdidx . --db <scratch>/.cdidx/codeindex.db` followed by
 `cdidx search greet --db <...>` against it and confirms the match payload
-surfaces the scratch symbol. Human-readable output is used on purpose:
-trimmed release builds fail fast with exit code 4 on `--json`, so a validation
-mode that asked for `--json` would never succeed against a real release.
-`--self-test-local-mirror` only stubs `--version`, so regressions in indexing,
-native SQLite load, or FTS5 search paths would slip past it; `--reinstall-real`
-closes that gap. `CDIDX_INSTALL_DIR` is intentionally ignored by this mode so
-a broken build can never clobber a working real install, and both temp dirs
-are cleaned up on exit via `trap`.
+surfaces the scratch symbol. Human-readable output is used on purpose so this
+validation covers the default user path. Current release binaries are trimmed
+with source-generated CLI JSON DTOs, so `--json` is expected to work; the
+`JsonOutputFailure` path is only a fallback for old or custom binaries that
+miss a serializer registration. `--self-test-local-mirror` only stubs
+`--version`, so regressions in indexing, native SQLite load, or FTS5 search
+paths would slip past it; `--reinstall-real` closes that gap.
+`CDIDX_INSTALL_DIR` is intentionally ignored by this mode so a broken build can
+never clobber a working real install, and both temp dirs are cleaned up on exit
+via `trap`.
 
 The installer downloads the latest release tarball, verifies SHA256, and
 copies the binary **plus the adjacent runtime assets** (`version.json` and
@@ -522,14 +524,15 @@ bash ./install.sh --reinstall-real v1.11.0
 要求タグと一致することを検証したうえで、極小の Python プロジェクトを
 生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と
 `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが
-現れることを確認します。出力は人間向けフォーマットを意図的に使います:
-trimmed release build は `--json` に対して exit code 4 で早期失敗するため、
-`--json` を要求する検証モードは実リリースでは原理的に成功し得ません。
-`--self-test-local-mirror` のモックは `--version` しかスタブしないため、
-インデックス・ネイティブ SQLite ロード・FTS5 検索の回帰は素通りしますが、
-`--reinstall-real` でその穴を埋められます。このモードは
-`CDIDX_INSTALL_DIR` を意図的に無視するので、壊れたビルドが実インストール
-を上書きすることはありません。temp ディレクトリは `trap` で必ず片付けます。
+現れることを確認します。出力は人間向けフォーマットを意図的に使い、
+既定のユーザー経路を検証します。現在の公式 release binary は trimmed
+ですが、source-generated CLI JSON DTO により `--json` は動作する前提です。
+`JsonOutputFailure` は serializer 登録が欠けた古い/カスタムバイナリ向けの
+fallback です。`--self-test-local-mirror` のモックは `--version` しか
+スタブしないため、インデックス・ネイティブ SQLite ロード・FTS5 検索の
+回帰は素通りしますが、`--reinstall-real` でその穴を埋められます。
+このモードは `CDIDX_INSTALL_DIR` を意図的に無視するので、壊れたビルドが
+実インストールを上書きすることはありません。temp ディレクトリは `trap` で必ず片付けます。
 
 インストーラは最新リリースの tarball をダウンロードし、SHA256 を検証して、
 バイナリに加え**隣接ランタイム資産**（`version.json`、Linux は

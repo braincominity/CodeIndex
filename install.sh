@@ -1202,10 +1202,13 @@ PY
         error "Real reinstall validation: ${BINARY_NAME} did not produce a populated index DB at ${scratch_db}."
     fi
 
-    # Human-readable output only. Trimmed release builds fail fast on --json
-    # (exit code 4), so a validation mode that asked for --json would never
-    # succeed on real releases.
-    # trimmed release では --json が exit 4 になるため人間向け出力で検証する。
+    # Human-readable output covers the default user path. Current trimmed
+    # releases are expected to support --json via source-generated CLI DTOs;
+    # JsonOutputFailure is only a fallback for old/custom binaries that miss
+    # serializer coverage.
+    # 人間向け出力で既定のユーザー経路を検証する。現在の公式 trimmed release は
+    # source-generated CLI JSON DTO により --json が動作する前提で、exit 4 は
+    # serializer 登録が欠けた古い/カスタムバイナリ向けの fallback。
     info "Running ${BINARY_NAME} search greet --db ${scratch_db} to verify FTS"
     local reinstall_search_output
     if ! reinstall_search_output="$("$reinstall_cdidx" search greet --db "$scratch_db" 2>&1)"; then

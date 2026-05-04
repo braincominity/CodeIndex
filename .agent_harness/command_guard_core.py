@@ -33,6 +33,8 @@ _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
 _INLINE_INTERPRETERS = {"python", "python3", "ruby", "perl", "node", "deno", "php"}
 _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
+_UNKNOWN_GLOBAL_OPTION_SUBCOMMAND = "__unknown_global_option__"
+_HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON = "unrecognized global option before high-risk CLI subcommand is blocked"
 _SEARCH_OR_DISCOVERY_COMMANDS = {
     "grep",
     "egrep",
@@ -208,6 +210,21 @@ def _split_command(command: str) -> list[str]:
         return []
 
 
+def _token_segments(tokens: list[str]) -> list[list[str]]:
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in _SHELL_CONTROL_TOKENS:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _token_path(token: str, cwd: Path) -> Path | None:
     if not token or token.startswith("-"):
         return None
@@ -325,7 +342,14 @@ def _first_arg(args: list[str]) -> str:
     return ""
 
 
-def _subcommand_args(args: list[str], options_with_values: set[str]) -> tuple[str, list[str]]:
+def _subcommand_args(
+    args: list[str],
+    options_with_values: set[str],
+    *,
+    valueless_options: set[str] | None = None,
+    fail_on_unknown_option: bool = False,
+) -> tuple[str, list[str]]:
+    valueless_options = valueless_options or set()
     index = 0
     while index < len(args):
         arg = args[index]
@@ -341,7 +365,12 @@ def _subcommand_args(args: list[str], options_with_values: set[str]) -> tuple[st
         if any(arg.startswith(option + "=") for option in options_with_values):
             index += 1
             continue
+        if arg in valueless_options:
+            index += 1
+            continue
         if arg.startswith("-"):
+            if fail_on_unknown_option:
+                return _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND, args[index + 1 :]
             index += 1
             continue
         return arg, args[index + 1 :]
@@ -372,10 +401,16 @@ def _tokenized_git_reason(args: list[str]) -> str | None:
 
 
 def _tokenized_package_reason(name: str, args: list[str]) -> str | None:
+    if name == "npx":
+        return "ephemeral package execution is blocked"
     subcommand, rest = _subcommand_args(
         args,
         {"--registry", "--cache", "--prefix", "--userconfig", "--cwd", "--dir", "-C"},
+        valueless_options={"--help", "-h", "--version", "-v", "--yes", "-y", "--silent", "--verbose"},
+        fail_on_unknown_option=name in {"npm", "yarn", "pnpm", "nuget"},
     )
+    if subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+        return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if name in {"npm", "yarn", "pnpm"} and subcommand == "publish":
         return "package publishing is blocked"
     if name == "dotnet" and len(args) >= 2 and args[0] == "nuget" and args[1] == "push":
@@ -384,7 +419,7 @@ def _tokenized_package_reason(name: str, args: list[str]) -> str | None:
         return "package publishing is blocked"
     if name == "npm" and subcommand in {"login", "adduser"}:
         return "package registry login is blocked"
-    if name == "npx" or (name == "npm" and subcommand == "exec") or (name in {"yarn", "pnpm"} and subcommand == "dlx"):
+    if (name == "npm" and subcommand == "exec") or (name in {"yarn", "pnpm"} and subcommand == "dlx"):
         return "ephemeral package execution is blocked"
     if name == "dotnet" and subcommand == "nuget" and rest and rest[0] == "push":
         return "package publishing is blocked"
@@ -395,7 +430,11 @@ def _tokenized_infra_reason(name: str, args: list[str]) -> str | None:
     subcommand, _ = _subcommand_args(
         args,
         {"-chdir", "-n", "--namespace", "--context", "--kubeconfig", "--server", "--user", "--cluster", "--kube-context"},
+        valueless_options={"--help", "-h", "--version", "-v"},
+        fail_on_unknown_option=name in {"terraform", "kubectl", "helm"},
     )
+    if subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+        return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if name == "terraform" and subcommand in {"apply", "destroy"}:
         return "infra mutation is blocked"
     if name == "kubectl" and subcommand in {"apply", "delete"}:
@@ -406,7 +445,14 @@ def _tokenized_infra_reason(name: str, args: list[str]) -> str | None:
 
 
 def _tokenized_docker_reason(args: list[str]) -> str | None:
-    subcommand, rest = _subcommand_args(args, {"--context", "--host", "-H", "--config"})
+    subcommand, rest = _subcommand_args(
+        args,
+        {"--context", "--host", "-H", "--config"},
+        valueless_options={"--help", "-h", "--version", "-v"},
+        fail_on_unknown_option=True,
+    )
+    if subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+        return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if subcommand in {"push", "login", "rm", "rmi"}:
         return "dangerous docker operation is blocked"
     if subcommand == "system" and rest and rest[0] == "prune":
@@ -419,7 +465,14 @@ def _tokenized_docker_reason(args: list[str]) -> str | None:
 
 
 def _tokenized_gh_reason(args: list[str]) -> str | None:
-    subcommand, rest = _subcommand_args(args, {"-R", "--repo", "--hostname", "--config"})
+    subcommand, rest = _subcommand_args(
+        args,
+        {"-R", "--repo", "--hostname", "--config"},
+        valueless_options={"--help", "-h", "--version", "-v"},
+        fail_on_unknown_option=True,
+    )
+    if subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+        return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if subcommand in {"auth", "api", "secret", "release"}:
         return "GitHub CLI high-risk operation is blocked"
     if subcommand == "repo" and rest and rest[0] in {"create", "fork"}:
@@ -433,6 +486,8 @@ def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
     normalized = " ".join(tokens)
     if _contains_secret_like_assignment(normalized):
         return "inline secret-looking value in command is blocked"
+    if _env_chdir_wrapper_present(tokens):
+        return "env chdir wrappers are blocked; run from the target cwd directly"
 
     for index, token in enumerate(tokens):
         if not token or token.startswith("-") or _is_env_assignment(token):
@@ -575,6 +630,45 @@ def _strip_leading_env_assignments(tokens: list[str]) -> list[str]:
     return tokens[index:]
 
 
+def _env_segment_uses_chdir(tokens: list[str]) -> bool:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_env_assignment(token):
+            index += 1
+            continue
+        if token in {"-i", "--ignore-environment", "-0", "--null"}:
+            index += 1
+            continue
+        if token in {"-u", "--unset"}:
+            index += 2
+            continue
+        if token in {"-C", "--chdir"} or token.startswith(("-C", "--chdir=")):
+            return True
+        if token in {"-S", "--split-string"}:
+            if index + 1 >= len(tokens):
+                return False
+            return _env_segment_uses_chdir(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
+        if token.startswith("-S") and len(token) > 2:
+            return _env_segment_uses_chdir(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
+        if token.startswith("--unset="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return False
+    return False
+
+
+def _env_chdir_wrapper_present(tokens: list[str]) -> bool:
+    for segment in _token_segments(tokens):
+        segment = _strip_leading_env_assignments(segment)
+        if segment and _token_command_name(segment[0]) == "env" and _env_segment_uses_chdir(segment):
+            return True
+    return False
+
+
 def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
     tokens = _strip_leading_env_assignments(tokens)
     if not tokens or _token_command_name(tokens[0]) != "env":
@@ -595,9 +689,9 @@ def _strip_env_command_wrapper(tokens: list[str]) -> list[str]:
         if token in {"-S", "--split-string"}:
             if index + 1 >= len(tokens):
                 return []
-            return _strip_env_command_wrapper(_split_command(tokens[index + 1]) + tokens[index + 2 :])
+            return _strip_env_command_wrapper(["env"] + _split_command(tokens[index + 1]) + tokens[index + 2 :])
         if token.startswith("-S") and len(token) > 2:
-            return _strip_env_command_wrapper(_split_command(token[2:]) + tokens[index + 1 :])
+            return _strip_env_command_wrapper(["env"] + _split_command(token[2:]) + tokens[index + 1 :])
         if any(token.startswith(option + "=") for option in {"--unset", "--chdir"}):
             index += 1
             continue
@@ -772,10 +866,16 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
     return _allow("bash-guard allow")
 
 
-def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
-    tokens = _strip_env_command_wrapper(_split_command(command))
+def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Path]:
+    tokens = _strip_env_command_wrapper(tokens)
     if not tokens:
         return []
+
+    if any(token in _SHELL_CONTROL_TOKENS for token in tokens):
+        result: list[Path] = []
+        for segment in _token_segments(tokens):
+            result.extend(_candidate_script_paths_from_tokens(segment, cwd))
+        return result
 
     result: list[Path] = []
     first = Path(tokens[0]).name
@@ -808,6 +908,10 @@ def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
         result.append(path)
 
     return result
+
+
+def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
+    return _candidate_script_paths_from_tokens(_split_command(command), cwd)
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

@@ -241,10 +241,13 @@ class CommandGuardCoreTests(TestCase):
         root = Path("/tmp")
         for command in (
             "docker --context ctx push example/image",
+            "docker --log-level debug push example/image",
             "kubectl -n ns delete pod example",
+            "kubectl --as admin delete pod example",
             "helm -n ns uninstall release",
             "gh -R owner/repo pr merge 1",
             "npm --registry https://registry.example.invalid publish",
+            "npm --loglevel silent publish",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
@@ -372,6 +375,39 @@ class CommandGuardCoreTests(TestCase):
             self.assertTrue(decision.allowed)
             self.assertEqual([script.resolve()], scripts)
             self.assertFalse(script_decision.allowed)
+
+    def test_chained_script_execution_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("r''m -rf tmp\n", encoding="utf-8")
+
+            decision = core.evaluate_bash_command("true && bash tools/guard.sh", cwd=root, project_root=root)
+            scripts = core.candidate_script_paths("true && bash tools/guard.sh", cwd=root)
+            script_decision = core.check_script_file(scripts[0], project_root=root)
+
+            self.assertTrue(decision.allowed)
+            self.assertEqual([script.resolve()], scripts)
+            self.assertFalse(script_decision.allowed)
+
+    def test_env_chdir_wrapped_script_execution_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = root / "tools"
+            tools.mkdir(parents=True, exist_ok=True)
+            (tools / "guard.sh").write_text("echo ok\n", encoding="utf-8")
+
+            for command in (
+                "env -C tools bash guard.sh",
+                "env --chdir tools bash guard.sh",
+                "env --chdir=tools bash guard.sh",
+                "env -S '-C tools bash guard.sh'",
+            ):
+                with self.subTest(command=command):
+                    decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                    self.assertFalse(decision.allowed)
 
     def test_staged_secret_check_uses_git_diff_fallback(self) -> None:
         fake_proc = Mock(returncode=0, stdout="+ api_key = 'sk-abcdefghijklmnopqrstuvwx123456'\n", stderr="")
