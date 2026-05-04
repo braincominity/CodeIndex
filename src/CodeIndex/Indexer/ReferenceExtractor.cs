@@ -479,6 +479,29 @@ public static class ReferenceExtractor
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
     };
+    private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
+    {
+        ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "any", "bigint", "boolean", "false", "never", "null", "number", "object", "string",
+            "symbol", "true", "undefined", "unknown", "void",
+        },
+        ["kotlin"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Any", "Boolean", "Byte", "Char", "Double", "Float", "Int", "Long", "Nothing",
+            "Short", "String", "Unit",
+        },
+        ["swift"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Any", "Bool", "Character", "Double", "Float", "Int", "Int8", "Int16", "Int32", "Int64",
+            "Never", "Self", "String", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Void",
+        },
+        ["rust"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Self", "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
+            "str", "u8", "u16", "u32", "u64", "u128", "usize",
+        },
+    };
     // C# pattern-only keywords / literals that can appear after `is` / `case not` but are never
     // real user-defined types. Filter them before AddTypeExpressionSegments so `is not null`,
     // `is default`, and similar constant patterns do not surface phantom `type_reference` rows.
@@ -1198,6 +1221,40 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall);
+            }
+            else if (language == "kotlin")
+            {
+                KotlinReferenceExtractor.EmitTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language == "swift")
+            {
+                SwiftReferenceExtractor.EmitTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+            else if (language == "rust")
+            {
+                RustReferenceExtractor.EmitTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    container);
             }
             else if (language == "css")
             {
@@ -1956,6 +2013,12 @@ public static class ReferenceExtractor
             return true;
         if (language == "csharp" && CSharpBuiltInTypeNames.Contains(segment))
             return true;
+        if (LanguageBuiltInTypeNames.TryGetValue(language, out var builtInTypes)
+            && builtInTypes.Contains(segment))
+        {
+            return true;
+        }
+
         return false;
     }
 
