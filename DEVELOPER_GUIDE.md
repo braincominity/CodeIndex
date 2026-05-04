@@ -34,33 +34,42 @@ src/CodeIndex/
     LineWidthFormatter.cs     — Shared single-line payload clamp helper used by find/references/excerpt/inspect and MCP counterparts to keep focused tokens visible while shrinking long lines
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
-    FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
-    ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    BatchReferenceExtractor.cs — Batch-specific reference extraction for `goto` / `call` label targets
-    CSharpReferenceExtractor.cs — C#-specific reference extraction for constructor-chain rewrites, type-position references, XML-doc cref references, and qualified enum-member references
-    CssReferenceExtractor.cs  — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
-    CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
-    DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
-    FSharpReferenceExtractor.cs — F#-specific reference extraction for pipeline, space-application, and symbolic operator calls
-    GradleReferenceExtractor.cs — Gradle/Groovy-specific reference extraction for block and command-style DSL calls
-    JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
-    JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites, same-line constructor container recovery, type-position references, method references, `.class` literals, and module directives
-    KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls, method references, and structural type-position references
-    PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
-    PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
-    PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
-    RReferenceExtractor.cs    — R-specific reference extraction for namespace references
-    RubyReferenceExtractor.cs — Ruby-specific reference extraction for command-style calls, block calls, and DSL target references
-    RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls, raw identifier normalization, and structural type-position references
-    ScalaReferenceExtractor.cs — Scala-specific reference extraction for trailing block calls and method references
-    ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
-    SwiftReferenceExtractor.cs — Swift-specific reference extraction for trailing closure calls and structural type-position references
-    TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
-    TypeScriptReferenceExtractor.cs — TypeScript-specific reference extraction entry point for type-position and declaration type references
-    TypedLanguageReferenceExtractor.cs — Shared scanner helpers for colon/arrow/heritage/generic type-position references in typed languages
-    SqlReferenceExtractor.cs  — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
-    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
-    ReferenceExtractor.cs     — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+    Scanning/
+      FileIndexer.cs          — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
+      ChunkSplitter.cs        — 80-line chunks with 10-line overlap
+    Symbols/
+      SymbolExtractor.cs      — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
+    References/
+      ReferenceExtractor.cs   — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+      Support/
+        StructuralLineMasker.cs — Shared string/comment/structure masking helpers used by reference extraction
+        TypedLanguageReferenceExtractor.cs — Shared scanner helpers for colon/arrow/heritage/generic type-position references in typed languages
+        TrailingLambdaReferenceExtractor.cs — Shared trailing lambda/block call helpers for Kotlin, Scala, and Swift
+        JvmMethodReferenceExtractor.cs — Shared JVM method-reference helpers for Java and Kotlin
+        SqlNameResolver.cs    — SQL identifier normalization and scoped name resolution helpers
+      Languages/
+        BatchReferenceExtractor.cs — Batch-specific reference extraction for `goto` / `call` label targets
+        CSharpReferenceExtractor.cs — C#-specific reference extraction for constructor-chain rewrites, type-position references, XML-doc cref references, and qualified enum-member references
+        CssReferenceExtractor.cs — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends
+        CobolReferenceExtractor.cs — COBOL-specific reference extraction for statement targets and PERFORM ranges
+        DockerfileReferenceExtractor.cs — Dockerfile-specific reference extraction for named stage dependencies
+        FSharpReferenceExtractor.cs — F#-specific reference extraction for pipeline, space-application, and symbolic operator calls
+        GradleReferenceExtractor.cs — Gradle/Groovy-specific reference extraction for block and command-style DSL calls
+        JavaScriptReferenceExtractor.cs — JavaScript/TypeScript-specific reference extraction for parenless zero-argument constructor calls
+        JavaReferenceExtractor.cs — Java-specific reference extraction for constructor-chain rewrites, same-line constructor container recovery, type-position references, method references, `.class` literals, and module directives
+        KotlinReferenceExtractor.cs — Kotlin-specific reference extraction for trailing lambda calls, method references, and structural type-position references
+        PhpReferenceExtractor.cs — PHP-specific reference extraction for static and object member access
+        PowerShellReferenceExtractor.cs — PowerShell-specific reference extraction for cmdlet-style calls
+        PythonReferenceExtractor.cs — Python-specific reference extraction for bare decorators
+        RReferenceExtractor.cs  — R-specific reference extraction for namespace references
+        RubyReferenceExtractor.cs — Ruby-specific reference extraction for command-style calls, block calls, and DSL target references
+        RustReferenceExtractor.cs — Rust-specific reference extraction for macro calls, raw identifier normalization, and structural type-position references
+        ScalaReferenceExtractor.cs — Scala-specific reference extraction for trailing block calls and method references
+        ShellReferenceExtractor.cs — Shell-specific reference extraction for command-style function calls, sources, and global aliases
+        SwiftReferenceExtractor.cs — Swift-specific reference extraction for trailing closure calls and structural type-position references
+        TerraformReferenceExtractor.cs — Terraform-specific reference extraction for dotted dependency forms
+        TypeScriptReferenceExtractor.cs — TypeScript-specific reference extraction entry point for type-position and declaration type references
+        SqlReferenceExtractor.cs — SQL-specific reference extraction for source/target dependencies, temp-object tracking, and procedure calls
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
@@ -1198,33 +1207,42 @@ src/CodeIndex/
     LineWidthFormatter.cs     — find/references/excerpt/inspect と MCP 側の長い単一行クランプを共有し、注目トークンを残したまま行幅を縮めるヘルパー
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
-    FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
-    ChunkSplitter.cs          — 80行チャンク（10行重複）
-    BatchReferenceExtractor.cs — Batch 固有の `goto` / `call` label target 参照抽出
-    CSharpReferenceExtractor.cs — C# 固有の constructor-chain 書き換え、type-position reference、XML-doc cref reference、qualified enum-member reference 参照抽出
-    CssReferenceExtractor.cs  — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
-    CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
-    DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
-    FSharpReferenceExtractor.cs — F# 固有の pipeline、space application、symbolic operator call 参照抽出
-    GradleReferenceExtractor.cs — Gradle/Groovy 固有の block / command-style DSL call 参照抽出
-    JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
-    JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換え、same-line constructor container 復元、type-position reference、method reference、`.class` literal、module directive 参照抽出
-    KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call、method reference、構造的 type-position reference 参照抽出
-    PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
-    PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
-    PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
-    RReferenceExtractor.cs    — R 固有の namespace 参照抽出
-    RubyReferenceExtractor.cs — Ruby 固有の command-style call、block call、DSL target 参照抽出
-    RustReferenceExtractor.cs — Rust 固有の macro call、raw identifier 正規化、構造的 type-position reference 参照抽出
-    ScalaReferenceExtractor.cs — Scala 固有の trailing block call と method reference 参照抽出
-    ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
-    SwiftReferenceExtractor.cs — Swift 固有の trailing closure call と構造的 type-position reference 参照抽出
-    TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
-    TypeScriptReferenceExtractor.cs — TypeScript 固有の型位置・宣言型参照抽出エントリポイント
-    TypedLanguageReferenceExtractor.cs — 型付き言語の colon / arrow / heritage / generic type-position reference 用の共有スキャナヘルパー
-    SqlReferenceExtractor.cs  — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出
-    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property、Java は generic type-parameter prefix と statement keyword のガード、C/C++ のクラス外 member 定義・operator・concept・inline namespace・module、CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
-    ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出（型位置の `type_reference` エッジと nested generic 呼び出し向け depth-aware fallback を含む）
+    Scanning/
+      FileIndexer.cs          — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
+      ChunkSplitter.cs        — 80行チャンク（10行重複）
+    Symbols/
+      SymbolExtractor.cs      — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method と `;` 終端の interface/abstract property、Java は generic type-parameter prefix と statement keyword のガード、C/C++ のクラス外 member 定義・operator・concept・inline namespace・module、CSS の grouping/nesting セレクタ・same-line restart の重複抑止用のファイル単位ハッシュ管理・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
+    References/
+      ReferenceExtractor.cs   — 対応言語向けの正規表現ベース参照抽出（型位置の `type_reference` エッジと nested generic 呼び出し向け depth-aware fallback を含む）
+      Support/
+        StructuralLineMasker.cs — 参照抽出で使う文字列・コメント・構造マスク用の共有ヘルパー
+        TypedLanguageReferenceExtractor.cs — 型付き言語の colon / arrow / heritage / generic type-position reference 用の共有スキャナヘルパー
+        TrailingLambdaReferenceExtractor.cs — Kotlin、Scala、Swift 向け trailing lambda / block call 共有ヘルパー
+        JvmMethodReferenceExtractor.cs — Java と Kotlin 向けの JVM method-reference 共有ヘルパー
+        SqlNameResolver.cs    — SQL 識別子の正規化とスコープ付き名前解決ヘルパー
+      Languages/
+        BatchReferenceExtractor.cs — Batch 固有の `goto` / `call` label target 参照抽出
+        CSharpReferenceExtractor.cs — C# 固有の constructor-chain 書き換え、type-position reference、XML-doc cref reference、qualified enum-member reference 参照抽出
+        CssReferenceExtractor.cs — CSS/SCSS 固有の custom property、animation、selector、variable、extend 参照抽出
+        CobolReferenceExtractor.cs — COBOL 固有の文ターゲット参照抽出と PERFORM 範囲展開
+        DockerfileReferenceExtractor.cs — Dockerfile 固有の名前付き stage 依存参照抽出
+        FSharpReferenceExtractor.cs — F# 固有の pipeline、space application、symbolic operator call 参照抽出
+        GradleReferenceExtractor.cs — Gradle/Groovy 固有の block / command-style DSL call 参照抽出
+        JavaScriptReferenceExtractor.cs — JavaScript/TypeScript 固有の括弧なし zero-argument constructor call 参照抽出
+        JavaReferenceExtractor.cs — Java 固有の constructor-chain 書き換え、same-line constructor container 復元、type-position reference、method reference、`.class` literal、module directive 参照抽出
+        KotlinReferenceExtractor.cs — Kotlin 固有の trailing lambda call、method reference、構造的 type-position reference 参照抽出
+        PhpReferenceExtractor.cs — PHP 固有の static access / object member access 参照抽出
+        PowerShellReferenceExtractor.cs — PowerShell 固有の cmdlet 形式呼び出し参照抽出
+        PythonReferenceExtractor.cs — Python 固有の bare decorator 参照抽出
+        RReferenceExtractor.cs  — R 固有の namespace 参照抽出
+        RubyReferenceExtractor.cs — Ruby 固有の command-style call、block call、DSL target 参照抽出
+        RustReferenceExtractor.cs — Rust 固有の macro call、raw identifier 正規化、構造的 type-position reference 参照抽出
+        ScalaReferenceExtractor.cs — Scala 固有の trailing block call と method reference 参照抽出
+        ShellReferenceExtractor.cs — Shell 固有の command-style function call、source、global alias 参照抽出
+        SwiftReferenceExtractor.cs — Swift 固有の trailing closure call と構造的 type-position reference 参照抽出
+        TerraformReferenceExtractor.cs — Terraform 固有の dotted dependency 形式の参照抽出
+        TypeScriptReferenceExtractor.cs — TypeScript 固有の型位置・宣言型参照抽出エントリポイント
+        SqlReferenceExtractor.cs — SQL 固有の source/target 依存、temp object 追跡、procedure call 参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
   Models/
