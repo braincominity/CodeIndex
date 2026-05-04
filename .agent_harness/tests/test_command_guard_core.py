@@ -222,6 +222,18 @@ class CommandGuardCoreTests(TestCase):
         decision = core.evaluate_bash_command("python3 -c 'print(1)'", cwd=root, project_root=root)
         self.assertFalse(decision.allowed)
 
+    def test_denies_inline_shell_execution(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "bash -c '/usr/local/bin/cdidx search Foo'",
+            "sh -lc '/opt/homebrew/bin/cdidx symbols'",
+            "zsh -c 'cdidx search Foo'",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
+
     def test_candidate_script_paths_detects_direct_and_interpreter_scripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -30,6 +30,7 @@ ALLOWED_INSTALLER_ENV_NAMES = {
 
 _SHELL_CONTROL_TOKENS = {"|", "||", "&", "&&", ";", "|&", "(", ")", "<", ">", "<<", ">>"}
 _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
+_INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 
 SEARCH_OR_DISCOVERY_RE = re.compile(
     r"""(?ix)
@@ -260,6 +261,21 @@ def _contains_inline_interpreter(command: str) -> bool:
     return bool(INLINE_INTERPRETER_RE.search(command))
 
 
+def _is_inline_shell_flag(token: str) -> bool:
+    if token in {"-c", "--command"}:
+        return True
+    return token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+
+
+def _contains_inline_shell_execution(command: str) -> bool:
+    tokens = _split_command(command)
+    if not tokens:
+        return False
+    if Path(tokens[0]).name not in _INLINE_SHELLS:
+        return False
+    return any(_is_inline_shell_flag(token) for token in tokens[1:])
+
+
 def _contains_secret_like_assignment(text: str) -> bool:
     return bool(INLINE_SECRET_RE.search(text))
 
@@ -423,6 +439,9 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
     if _contains_inline_interpreter(command):
         return _deny("inline interpreter execution is blocked; use a reviewed script file instead")
+
+    if _contains_inline_shell_execution(command):
+        return _deny("inline shell execution is blocked; use a reviewed script file instead")
 
     return _allow("bash-guard allow")
 
