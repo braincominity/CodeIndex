@@ -18808,6 +18808,10 @@ public class ReferenceExtractorTests
             class Service extends BaseService implements Runnable, Closeable {
                 load(input: User, options?: LoadOptions): Promise<Result> {
                     const current: User = input as User;
+                    const active = current as User && current.enabledFlag;
+                    const fallback = current as User || fallbackValue;
+                    const ready = current instanceof Service && current.readyFlag;
+                    const checked = current satisfies Runnable ? current : fallbackValue;
                     const handler: (variableInput: Request) => Response = makeHandler();
                     return build(current);
                 }
@@ -18839,6 +18843,9 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "callbackInput" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "variableInput" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "factoryInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fallbackValue" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "readyFlag" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "input" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
     }
@@ -18851,12 +18858,13 @@ public class ReferenceExtractorTests
 
             class Service<T : Entity>(private val repo: Repository) : BaseService(repo), Runnable where T : Auditable {
                 val current: User = repo.load() as User
+                val fallback = repo.load() as User ?: fallbackUser
 
                 fun load(input: User, options: LoadOptions): Result<User> {
                     return input
                 }
 
-                fun check(value: Any) = value is User
+                fun check(value: Any) = value is User && value.enabledFlag
             }
             """;
 
@@ -18875,6 +18883,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fallbackUser" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -18891,6 +18901,10 @@ public class ReferenceExtractorTests
                 func cast(_ value: Any) -> User? {
                     return value as? User
                 }
+
+                func check(_ value: Any) -> Bool {
+                    return value is User && value.isReady
+                }
             }
             """;
 
@@ -18905,6 +18919,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -18946,6 +18961,25 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "StoreImpl" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "self" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
+    {
+        const string content = """
+            struct FieldOnly {
+                repo: Repository,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Repository"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerKind == "struct"
+            && r.ContainerName == "FieldOnly");
     }
 
     [Fact]

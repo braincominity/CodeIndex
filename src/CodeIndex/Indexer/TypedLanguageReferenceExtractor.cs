@@ -322,7 +322,7 @@ internal static class TypedLanguageReferenceExtractor
                 if (typeStart >= line.Length)
                     continue;
 
-                var typeEnd = FindTypeExpressionEndForLanguage(line, typeStart, language);
+                var typeEnd = FindKeywordFollowingTypeExpressionEnd(line, typeStart, language);
                 if (typeEnd <= typeStart)
                     continue;
 
@@ -482,7 +482,12 @@ internal static class TypedLanguageReferenceExtractor
         }
     }
 
-    public static int FindTypeExpressionEnd(string text, int startIndex, bool stopAtComma = true, bool stopAtArrow = true)
+    public static int FindTypeExpressionEnd(
+        string text,
+        int startIndex,
+        bool stopAtComma = true,
+        bool stopAtArrow = true,
+        bool stopAtRuntimeOperator = false)
     {
         foreach (var (index, ch) in EnumerateTopLevelCharacters(text, startIndex))
         {
@@ -498,6 +503,8 @@ internal static class TypedLanguageReferenceExtractor
             }
             if (ch == '=')
                 return index;
+            if (stopAtRuntimeOperator && IsRuntimeExpressionOperatorTerminator(text, index, ch))
+                return index;
             if (IsTopLevelStopKeyword(text, index, "where")
                 || IsTopLevelStopKeyword(text, index, "implements")
                 || IsTopLevelStopKeyword(text, index, "extends"))
@@ -511,6 +518,31 @@ internal static class TypedLanguageReferenceExtractor
 
     private static int FindTypeExpressionEndForLanguage(string text, int startIndex, string language, bool stopAtComma = true)
         => FindTypeExpressionEnd(text, startIndex, stopAtComma, stopAtArrow: language != "typescript");
+
+    private static int FindKeywordFollowingTypeExpressionEnd(string text, int startIndex, string language)
+        => FindTypeExpressionEnd(
+            text,
+            startIndex,
+            stopAtArrow: language != "typescript",
+            stopAtRuntimeOperator: true);
+
+    private static bool IsRuntimeExpressionOperatorTerminator(string text, int index, char ch)
+    {
+        if (ch is ')' or ']' or '?' or ':' or '+' or '-' or '*' or '/' or '%')
+            return true;
+
+        if (index + 1 >= text.Length)
+            return false;
+
+        var next = text[index + 1];
+        return (ch == '&' && next == '&')
+               || (ch == '|' && next == '|')
+               || (ch == '?' && next == '?')
+               || (ch == '=' && next == '=')
+               || (ch == '!' && next == '=')
+               || (ch == '<' && next == '=')
+               || (ch == '>' && next == '=');
+    }
 
     public static int SkipTypePrefixTrivia(string text, int index)
     {

@@ -156,7 +156,7 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        if (container?.Kind != "class")
+        if (container?.Kind is not "class" and not "struct")
             return;
 
         var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':');

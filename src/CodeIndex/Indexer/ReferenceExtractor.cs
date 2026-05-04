@@ -767,8 +767,9 @@ public static class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                             (symbol.Kind == "function" || symbol.Kind == "class"
-                              || symbol.Kind == "namespace" || symbol.Kind == "property"))
+                              (symbol.Kind == "function" || symbol.Kind == "class"
+                               || symbol.Kind == "struct" || symbol.Kind == "namespace"
+                               || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
         var csharpXmlDocAttachmentScopeCandidates = language == "csharp"
