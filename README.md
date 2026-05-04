@@ -19,6 +19,22 @@ full-text, symbol, dependency, and inspection queries without repeatedly
 rescanning the same tree. It is built for humans and AI agents that need small,
 structured code context from local repositories.
 
+## Why cdidx
+
+> **Index once. Ask many times.** `cdidx` turns a repository into a local
+> retrieval runtime, so humans and AI agents can pull scoped code context
+> without rescanning or resending broad files every turn.
+
+| If your workflow is... | Best fit | Why |
+|---|---|---|
+| One-off string hunting | `rg` | zero setup, direct file scan |
+| Repeated repository investigation | `cdidx` | local SQLite FTS5 index, structured results, incremental refresh |
+| VS Code-only chat context | VS Code workspace index | editor-managed context inside the Copilot/VS Code UX |
+| Terminal, CI, scripts, or MCP clients | `cdidx` | explicit CLI + MCP boundary that works outside an IDE |
+
+Details: [why cdidx](USER_GUIDE.md#why-cdidx), [cdidx vs rg](USER_GUIDE.md#cdidx-vs-rg),
+and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-index).
+
 ## Quick Start
 
 ```bash
@@ -74,6 +90,22 @@ details.
 同じツリーを何度も読み直さずに全文検索、シンボル、依存関係、inspect
 クエリへ応答します。人間と AI エージェントの両方が、ローカルリポジトリから
 小さく構造化されたコード文脈を取り出すためのツールです。
+
+## なぜ cdidx なのか
+
+> **一度インデックスして、何度も聞く。** `cdidx` はリポジトリをローカルな
+> retrieval runtime に変え、人間と AI エージェントが毎回広いファイルを
+> 読み直さずに、必要なコード文脈だけを取り出せるようにします。
+
+| ワークフロー | 向いているもの | 理由 |
+|---|---|---|
+| 1回限りの文字列探し | `rg` | セットアップ不要で直接ファイルを読む |
+| 同じリポジトリの反復調査 | `cdidx` | SQLite FTS5 のローカル index、構造化結果、差分更新 |
+| VS Code 内だけの chat 文脈 | VS Code workspace index | Copilot / VS Code UX 内で editor が管理 |
+| ターミナル、CI、スクリプト、MCP client | `cdidx` | IDE 外でも使える明示的な CLI + MCP 境界 |
+
+詳細: [なぜ cdidx なのか](USER_GUIDE.md#なぜ-cdidx-なのか)、[rg との違い](USER_GUIDE.md#rg-との違い)、
+[VS Code workspace index との違い](USER_GUIDE.md#vs-code-workspace-index-との違い)。
 
 ## すぐに試す
 
