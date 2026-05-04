@@ -216,6 +216,23 @@ class CommandGuardCoreTests(TestCase):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
                 self.assertFalse(decision.allowed)
 
+    def test_denies_quote_concatenated_high_risk_commands(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "r''m -rf tmp",
+            "g''it reset --hard",
+            "su''do true",
+            "np''x cowsay hello",
+            "a''ws sts get-caller-identity",
+            "te''rraform apply",
+            "do''cker push example/image",
+            "gh pr me''rge 1",
+            "cat .e''nv",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+                self.assertFalse(decision.allowed)
+
     def test_denies_chained_local_cdidx(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -293,6 +310,17 @@ class CommandGuardCoreTests(TestCase):
             script = root / "tools" / "guard.sh"
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text("grep SymbolExtractor src\n", encoding="utf-8")
+
+            decision = core.check_script_file(script, project_root=root)
+
+            self.assertFalse(decision.allowed)
+
+    def test_check_script_file_denies_quote_concatenated_forbidden_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("r''m -rf tmp\n", encoding="utf-8")
 
             decision = core.check_script_file(script, project_root=root)
 

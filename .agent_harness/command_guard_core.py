@@ -52,6 +52,16 @@ _SEARCH_OR_DISCOVERY_COMMANDS = {
     "mdfind",
 }
 _NETWORK_COMMANDS = {"curl", "wget", "http", "https", "xh", "aria2c"}
+_DESTRUCTIVE_COMMANDS = {"rmdir", "unlink", "shred", "srm", "truncate"}
+_PRIVILEGE_COMMANDS = {"sudo", "su", "doas"}
+_PROCESS_KILL_COMMANDS = {"killall", "pkill"}
+_REMOTE_TRANSFER_COMMANDS = {"ssh", "scp", "sftp", "rsync", "rclone", "nc", "ncat", "netcat", "socat", "telnet", "ftp"}
+_CLIPBOARD_COMMANDS = {"pbcopy", "pbpaste"}
+_MACOS_AUTOMATION_COMMANDS = {"open", "osascript", "automator"}
+_MACOS_SYSTEM_COMMANDS = {"launchctl", "security", "tccutil", "spctl", "csrutil", "tmutil"}
+_CLOUD_COMMANDS = {"aws", "gcloud", "az"}
+_SECRET_FILE_READ_COMMANDS = {"cat", "less", "more", "head", "tail", "sed", "awk", "python", "python3", "node", "ruby", "perl", "sqlite3"}
+_SECRET_PATH_RE = re.compile(r"(?i)(?:\.env\b|\.env\.|\.pem\b|\.key\b|id_rsa|id_ed25519|credentials?|secrets?)")
 
 SEARCH_OR_DISCOVERY_RE = re.compile(
     r"""(?ix)
@@ -295,22 +305,179 @@ def _is_variable_command(token: str) -> bool:
     return bool(VARIABLE_COMMAND_RE.match(token))
 
 
-def _tokenized_forbidden_command_reason(command: str) -> str | None:
-    tokens = _split_command(command)
+def _short_flag_contains(token: str, flag: str) -> bool:
+    return token.startswith("-") and not token.startswith("--") and flag.lower() in token[1:].lower()
+
+
+def _has_short_flag(args: list[str], flag: str) -> bool:
+    return any(_short_flag_contains(arg, flag) for arg in args)
+
+
+def _has_recursive_flag(args: list[str]) -> bool:
+    return _has_short_flag(args, "r") or any(arg in {"--recursive", "--no-preserve-root"} for arg in args)
+
+
+def _first_arg(args: list[str]) -> str:
+    for arg in args:
+        if not arg.startswith("-"):
+            return arg
+    return ""
+
+
+def _tokenized_git_reason(args: list[str]) -> str | None:
+    subcommand = _git_subcommand(args)
+    if subcommand == "grep":
+        return "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
+    if subcommand == "tag":
+        return "git tag is blocked unless explicitly performed by the user"
+    if subcommand == "reset" and "--hard" in args:
+        return "git reset --hard is blocked"
+    if subcommand in {"checkout", "restore"} and "." in args:
+        return "checkout/restore of entire worktree is blocked"
+    if subcommand == "clean" and _has_short_flag(args, "f"):
+        return "git clean -f is blocked"
+    if subcommand == "add" and any(arg in {".", "-A", "--all"} for arg in args):
+        return "bulk git add is blocked; add explicit safe files only"
+    if subcommand == "commit" and "--amend" in args:
+        return "history rewriting is blocked"
+    if subcommand in {"rebase", "filter-branch", "update-ref"}:
+        return "history rewriting is blocked"
+    return None
+
+
+def _tokenized_package_reason(name: str, args: list[str]) -> str | None:
+    subcommand = _first_arg(args)
+    if name in {"npm", "yarn", "pnpm"} and subcommand == "publish":
+        return "package publishing is blocked"
+    if name == "dotnet" and len(args) >= 2 and args[0] == "nuget" and args[1] == "push":
+        return "package publishing is blocked"
+    if name == "nuget" and subcommand == "push":
+        return "package publishing is blocked"
+    if name == "npm" and subcommand in {"login", "adduser"}:
+        return "package registry login is blocked"
+    if name == "npx" or (name == "npm" and subcommand == "exec") or (name in {"yarn", "pnpm"} and subcommand == "dlx"):
+        return "ephemeral package execution is blocked"
+    return None
+
+
+def _tokenized_infra_reason(name: str, args: list[str]) -> str | None:
+    subcommand = _first_arg(args)
+    if name == "terraform" and subcommand in {"apply", "destroy"}:
+        return "infra mutation is blocked"
+    if name == "kubectl" and subcommand in {"apply", "delete"}:
+        return "infra mutation is blocked"
+    if name == "helm" and subcommand in {"install", "upgrade", "uninstall"}:
+        return "infra mutation is blocked"
+    return None
+
+
+def _tokenized_docker_reason(args: list[str]) -> str | None:
+    subcommand = _first_arg(args)
+    if subcommand in {"push", "login", "rm", "rmi"}:
+        return "dangerous docker operation is blocked"
+    if len(args) >= 2 and args[0] == "system" and args[1] == "prune":
+        return "dangerous docker operation is blocked"
+    if len(args) >= 2 and args[0] == "volume" and args[1] == "rm":
+        return "dangerous docker operation is blocked"
+    if len(args) >= 2 and args[0] == "buildx" and args[1] == "build" and "--push" in args:
+        return "dangerous docker operation is blocked"
+    return None
+
+
+def _tokenized_gh_reason(args: list[str]) -> str | None:
+    subcommand = _first_arg(args)
+    if subcommand in {"auth", "api", "secret", "release"}:
+        return "GitHub CLI high-risk operation is blocked"
+    if len(args) >= 2 and args[0] == "repo" and args[1] in {"create", "fork"}:
+        return "GitHub CLI high-risk operation is blocked"
+    if len(args) >= 2 and args[0] == "pr" and args[1] == "merge":
+        return "GitHub CLI high-risk operation is blocked"
+    return None
+
+
+def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
+    normalized = " ".join(tokens)
+    if _contains_secret_like_assignment(normalized):
+        return "inline secret-looking value in command is blocked"
+
     for index, token in enumerate(tokens):
         if not token or token.startswith("-") or _is_env_assignment(token):
             continue
         name = _token_command_name(token)
+        args = tokens[index + 1 :]
         if name in _SEARCH_OR_DISCOVERY_COMMANDS:
             return "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
         if name in _NETWORK_COMMANDS:
             return "network download/exfil command is blocked"
+        if name == "eval":
+            return "eval is blocked; use a direct reviewed command or script file instead."
+        if name == "rm" and _has_recursive_flag(args):
+            return "recursive rm is blocked"
+        if name in _DESTRUCTIVE_COMMANDS:
+            return "destructive filesystem command is blocked"
+        if name == "dd" and any(arg.startswith(("if=", "of=")) for arg in args):
+            return "dd raw device/file copy is blocked"
+        if name == "mkfs" or name.startswith("mkfs.") or name == "newfs":
+            return "filesystem formatting is blocked"
+        if name == "diskutil" and (
+            any(arg in {"erase", "partition"} for arg in args) or (len(args) >= 2 and args[0] == "apfs" and args[1] == "delete")
+        ):
+            return "disk erase/partition operation is blocked"
+        if name == "chmod" and ("777" in args or _has_recursive_flag(args)):
+            return "dangerous recursive permission/owner change is blocked"
+        if name in {"chown", "chgrp"} and _has_recursive_flag(args):
+            return "dangerous recursive permission/owner change is blocked"
+        if name in _PRIVILEGE_COMMANDS:
+            return "privilege escalation is blocked"
+        if name in _PROCESS_KILL_COMMANDS or (name == "kill" and "-9" in args):
+            return "broad process killing is blocked"
+        if name in _REMOTE_TRANSFER_COMMANDS:
+            return "remote shell/file transfer is blocked"
+        if name in _CLIPBOARD_COMMANDS:
+            return "clipboard access is blocked"
+        if name in _MACOS_AUTOMATION_COMMANDS or (name == "shortcuts" and _first_arg(args) == "run"):
+            return "macOS automation/app launching is blocked"
+        if name in _MACOS_SYSTEM_COMMANDS:
+            return "macOS security/system command is blocked"
+        if name == "defaults" and _first_arg(args) == "write":
+            return "macOS preference modification is blocked"
+        if name == "plutil" and "-replace" in args:
+            return "macOS preference modification is blocked"
         if name == "git":
-            rest = tokens[index + 1 :]
-            subcommand = _git_subcommand(rest)
-            if subcommand == "grep":
-                return "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
+            reason = _tokenized_git_reason(args)
+            if reason:
+                return reason
+        reason = _tokenized_package_reason(name, args)
+        if reason:
+            return reason
+        reason = _tokenized_infra_reason(name, args)
+        if reason:
+            return reason
+        if name == "docker":
+            reason = _tokenized_docker_reason(args)
+            if reason:
+                return reason
+        if name in _CLOUD_COMMANDS:
+            return "cloud CLI is blocked"
+        if name == "gh":
+            reason = _tokenized_gh_reason(args)
+            if reason:
+                return reason
+        if name in _SECRET_FILE_READ_COMMANDS and any(_SECRET_PATH_RE.search(arg) for arg in args):
+            return "reading secret-looking files is blocked"
     return None
+
+
+def _tokenized_forbidden_command_reason(command: str) -> str | None:
+    return _tokenized_forbidden_tokens_reason(_split_command(command))
+
+
+def _tokenized_forbidden_script_reason(text: str) -> str | None:
+    for line in text.splitlines():
+        reason = _tokenized_forbidden_command_reason(line)
+        if reason:
+            return reason
+    return _tokenized_forbidden_command_reason(text)
 
 
 def _git_subcommand(args: list[str]) -> str:
@@ -602,6 +769,9 @@ def check_script_file(path: Path, project_root: Path) -> GuardDecision:
         return _deny(f"could not inspect script before execution; failing closed: {path}: {exc}")
 
     text = data.decode("utf-8", errors="ignore")
+    tokenized_reason = _tokenized_forbidden_script_reason(text)
+    if tokenized_reason is not None:
+        return _deny(f"script contains blocked command: {tokenized_reason}: {path}")
     for pattern, reason in _SCRIPT_FORBIDDEN_PATTERNS:
         if pattern.search(text):
             return _deny(f"{reason}: {path}")

@@ -150,8 +150,7 @@ pre-hosted mirror instead.
 If port `18765` is already taken, move the local mirror to a different port:
 
 ```bash
-export CDIDX_LOCAL_MIRROR_PORT=18766
-bash ./install.sh --self-test-local-mirror
+CDIDX_LOCAL_MIRROR_PORT=18766 bash ./install.sh --self-test-local-mirror
 ```
 
 This mode uses a mock payload only to validate installer flow (download URL
@@ -503,8 +502,7 @@ bash ./install.sh --self-test-local-mirror --self-test-allow-overwrite
 既定ポート `18765` が使用中なら、local mirror を別ポートへ逃がせます:
 
 ```bash
-export CDIDX_LOCAL_MIRROR_PORT=18766
-bash ./install.sh --self-test-local-mirror
+CDIDX_LOCAL_MIRROR_PORT=18766 bash ./install.sh --self-test-local-mirror
 ```
 
 このモードは installer の処理経路（取得URL選択・checksum 検証・展開・配置）
