@@ -234,13 +234,81 @@ internal static class TypeScriptReferenceExtractor
     private static bool IsImportExportAliasLine(string preparedLine)
     {
         var trimmed = preparedLine.TrimStart();
-        return trimmed.StartsWith("import ", StringComparison.Ordinal)
-               || trimmed.StartsWith("import{", StringComparison.Ordinal)
-               || trimmed.StartsWith("export {", StringComparison.Ordinal)
-               || trimmed.StartsWith("export{", StringComparison.Ordinal)
-               || trimmed.StartsWith("export * as ", StringComparison.Ordinal)
-               || trimmed.StartsWith("export type {", StringComparison.Ordinal)
-               || trimmed.StartsWith("export type{", StringComparison.Ordinal)
-               || trimmed.StartsWith("export type * as ", StringComparison.Ordinal);
+        return IsImportDeclarationLine(trimmed)
+               || IsNamedExportLine(trimmed)
+               || IsExportStarAliasLine(trimmed);
     }
+
+    private static bool IsImportDeclarationLine(string text)
+    {
+        const string importKeyword = "import";
+        if (!text.StartsWith(importKeyword, StringComparison.Ordinal))
+            return false;
+
+        var index = importKeyword.Length;
+        if (index >= text.Length || IsTypeScriptIdentifierPart(text[index]))
+            return false;
+
+        return char.IsWhiteSpace(text[index]) || text[index] is '{' or '*';
+    }
+
+    private static bool IsNamedExportLine(string text)
+    {
+        var index = 0;
+        if (!TryConsumeKeyword(text, "export", ref index))
+            return false;
+
+        SkipWhitespace(text, ref index);
+        if (index < text.Length && text[index] == '{')
+            return true;
+
+        if (!TryConsumeKeyword(text, "type", ref index))
+            return false;
+
+        SkipWhitespace(text, ref index);
+        return index < text.Length && text[index] == '{';
+    }
+
+    private static bool IsExportStarAliasLine(string text)
+    {
+        var index = 0;
+        if (!TryConsumeKeyword(text, "export", ref index))
+            return false;
+
+        SkipWhitespace(text, ref index);
+        if (TryConsumeKeyword(text, "type", ref index))
+            SkipWhitespace(text, ref index);
+
+        if (index >= text.Length || text[index] != '*')
+            return false;
+
+        index++;
+        SkipWhitespace(text, ref index);
+        return TryConsumeKeyword(text, "as", ref index);
+    }
+
+    private static bool TryConsumeKeyword(string text, string keyword, ref int index)
+    {
+        if (index + keyword.Length > text.Length
+            || string.CompareOrdinal(text, index, keyword, 0, keyword.Length) != 0)
+        {
+            return false;
+        }
+
+        var after = index + keyword.Length;
+        if (after < text.Length && IsTypeScriptIdentifierPart(text[after]))
+            return false;
+
+        index = after;
+        return true;
+    }
+
+    private static void SkipWhitespace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+    }
+
+    private static bool IsTypeScriptIdentifierPart(char ch) =>
+        ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
 }

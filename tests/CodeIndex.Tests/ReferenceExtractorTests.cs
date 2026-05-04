@@ -18860,6 +18860,9 @@ public class ReferenceExtractorTests
             export type { Model as PublicModel } from "mod";
             export * as NamespaceMod from "mod";
             export type * as PublicNamespace from "mod";
+            import*as CompactImport from "mod";
+            export*as CompactNamespace from "mod";
+            export type*as CompactPublicNamespace from "mod";
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -18871,6 +18874,9 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "PublicModel" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "NamespaceMod" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "PublicNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactImport" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactPublicNamespace" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "from" && r.ReferenceKind == "type_reference");
     }
 
