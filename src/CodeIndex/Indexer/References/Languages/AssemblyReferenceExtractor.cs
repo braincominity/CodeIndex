@@ -167,6 +167,7 @@ internal static class AssemblyReferenceExtractor
         string[] prefixes =
         [
             "short", "near", "far", "ptr", "offset",
+            "byte", "word", "dword", "qword", "tword", "oword", "xmmword", "ymmword", "zmmword",
             "byte ptr", "word ptr", "dword ptr", "qword ptr", "tword ptr", "oword ptr",
         ];
 

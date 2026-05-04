@@ -269,6 +269,8 @@ public class ReferenceExtractorTests
                 b 1f
                 jmp 0x401000
                 call 1234h
+                call qword [rax]
+                jmp dword [target]
             .done:
                 ret
             helper:
@@ -312,6 +314,9 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "f");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "x401000");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "h");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "qword");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "dword");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "target");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored");
     }
 
