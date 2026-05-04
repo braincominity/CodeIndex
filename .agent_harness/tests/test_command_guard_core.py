@@ -103,6 +103,8 @@ class CommandGuardCoreTests(TestCase):
                 "bash ./install.sh --unknown",
                 "bash ./install.sh ; echo done",
                 "bash ./install.sh $(echo v1.2.3)",
+                "bash -c ./install.sh",
+                "bash -lc ./install.sh",
             ):
                 with self.subTest(command=command):
                     decision = core.evaluate_bash_command(command, cwd=root, project_root=root)

@@ -358,6 +358,8 @@ def _command_is_safe_repo_local_installer(command: str, cwd: Path, project_root:
         script_index: int | None = None
         for index, token in enumerate(tokens[1:], start=1):
             if token.startswith("-"):
+                if _is_inline_shell_flag(token):
+                    return False
                 continue
             if _token_is_repo_local_installer(token, cwd, project_root):
                 script_index = index
