@@ -672,9 +672,19 @@ def _expand_env_split_strings(tokens: list[str], depth: int = 0) -> list[str]:
 
 
 def _expand_env_split_strings_in_segment(segment: list[str], depth: int) -> list[str]:
-    tokens = _strip_leading_env_assignments(segment)
+    for index, token in enumerate(segment):
+        if _token_command_name(token) != "env":
+            continue
+        expanded = _expand_env_split_strings_from_env(segment[index:], depth)
+        if expanded != segment[index:]:
+            return segment[:index] + expanded
+    return segment
+
+
+def _expand_env_split_strings_from_env(tokens: list[str], depth: int) -> list[str]:
+    tokens = _strip_leading_env_assignments(tokens)
     if not tokens or _token_command_name(tokens[0]) != "env":
-        return segment
+        return tokens
 
     index = 1
     while index < len(tokens):
@@ -705,8 +715,8 @@ def _expand_env_split_strings_in_segment(segment: list[str], depth: int) -> list
         if token.startswith("-"):
             index += 1
             continue
-        return segment
-    return segment
+        return tokens
+    return tokens
 
 
 def _strip_leading_env_assignments(tokens: list[str]) -> list[str]:
