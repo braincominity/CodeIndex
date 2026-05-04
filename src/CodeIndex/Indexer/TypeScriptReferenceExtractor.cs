@@ -357,16 +357,22 @@ internal static class TypeScriptReferenceExtractor
         if (text.IndexOf(';') >= 0 || ContainsTopLevelKeyword(text, "from"))
             return false;
 
-        const string importKeyword = "import";
-        if (!text.StartsWith(importKeyword, StringComparison.Ordinal))
+        var index = 0;
+        if (!TryConsumeKeyword(text, "import", ref index))
             return false;
 
-        var index = importKeyword.Length;
+        SkipWhitespace(text, ref index);
         if (index >= text.Length)
             return true;
 
-        return !IsTypeScriptIdentifierPart(text[index])
-               && (char.IsWhiteSpace(text[index]) || text[index] is '{' or '*');
+        if (TryConsumeKeyword(text, "type", ref index))
+        {
+            SkipWhitespace(text, ref index);
+            if (index >= text.Length)
+                return true;
+        }
+
+        return text.TrimEnd().EndsWith(",", StringComparison.Ordinal);
     }
 
     private static bool ContainsTopLevelKeyword(string text, string keyword)
