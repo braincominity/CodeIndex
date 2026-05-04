@@ -72,15 +72,21 @@ OFFICIAL_INSTALLER_ONE_LINER_RE = re.compile(
     """
 )
 
-CDIDX_RESOLVER_RE = re.compile(
+CDIDX_RESOLVER_PRINT_COMMAND = (
+    "CDIDX_PATH=\"$(readlink -f \"$HOME/.local/bin/cdidx\" 2>/dev/null || "
+    "realpath \"$HOME/.local/bin/cdidx\")\"; printf '%s\\n' \"$CDIDX_PATH\""
+)
+
+CDIDX_MCP_INIT_SMOKE_RE = re.compile(
     r"""(?x)
     ^\s*
-    CDIDX="\$\(readlink\s+-f\s+"\$HOME/\.local/bin/cdidx"\s+2>/dev/null\s+\|\|\s+realpath\s+"\$HOME/\.local/bin/cdidx"\)"
+    echo\s+'\{"jsonrpc":"2\.0","id":1,"method":"initialize","params":\{\}\}'\s*
+    \|\s*
+    (?P<cdidx>/[^\s'"]+)
+    \s+mcp
     \s*$
     """
 )
-
-CDIDX_MCP_INIT_SMOKE_COMMAND = """echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp"""
 
 GIT_GREP_RE = re.compile(r"(?i)(^|[^\w./-])git\s+grep\b")
 LOCAL_CDIDX_DLL_RE = re.compile(r"(?i)cdidx\.dll")
@@ -209,11 +215,9 @@ def _command_is_safe_local_cdidx(command: str, cwd: Path, project_root: Path) ->
 def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
     if not token.startswith("/"):
         return False
-    path = _token_path(token, cwd)
-    if path is None:
-        return False
     try:
-        expected = (Path.home() / ".local" / "bin" / "cdidx").resolve()
+        path = Path(token)
+        expected = Path.home() / ".local" / "bin" / "cdidx"
     except Exception:
         return False
     return path == expected
@@ -222,6 +226,23 @@ def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
 def _command_mentions_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
     tokens = _split_command(command)
     return any(_token_is_expanded_installed_cdidx(token, cwd) for token in tokens)
+
+
+def _token_is_forbidden_cdidx_executable(token: str, cwd: Path) -> bool:
+    if not token or token.startswith("-") or _is_env_assignment(token):
+        return False
+    if token in {"cdidx", "$CDIDX", "${CDIDX}"}:
+        return True
+    try:
+        path = Path(os.path.expandvars(os.path.expanduser(token)))
+    except Exception:
+        return False
+    return path.name == "cdidx" and not _token_is_expanded_installed_cdidx(token, cwd)
+
+
+def _command_mentions_forbidden_cdidx_executable(command: str, cwd: Path) -> bool:
+    tokens = _split_command(command)
+    return any(_token_is_forbidden_cdidx_executable(token, cwd) for token in tokens)
 
 
 def _command_is_safe_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
@@ -341,11 +362,12 @@ def _command_is_safe_official_installer_one_liner(command: str) -> bool:
 
 
 def _command_is_safe_cdidx_resolver(command: str) -> bool:
-    return bool(CDIDX_RESOLVER_RE.match(command))
+    return command.strip() == CDIDX_RESOLVER_PRINT_COMMAND
 
 
-def _command_is_safe_cdidx_mcp_init_smoke(command: str) -> bool:
-    return command.strip() == CDIDX_MCP_INIT_SMOKE_COMMAND
+def _command_is_safe_cdidx_mcp_init_smoke(command: str, cwd: Path) -> bool:
+    match = CDIDX_MCP_INIT_SMOKE_RE.match(command)
+    return bool(match and _token_is_expanded_installed_cdidx(match.group("cdidx"), cwd))
 
 
 def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
@@ -372,7 +394,7 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
     if _command_is_safe_cdidx_resolver(command):
         return _allow("cdidx absolute-path resolver bootstrap")
 
-    if _command_is_safe_cdidx_mcp_init_smoke(command):
+    if _command_is_safe_cdidx_mcp_init_smoke(command, cwd):
         return _allow("cdidx mcp initialize smoke test")
 
     if _command_is_safe_expanded_installed_cdidx(command, cwd):
@@ -380,6 +402,12 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
     if _command_mentions_expanded_installed_cdidx(command, cwd):
         return _deny("expanded installed cdidx commands must not use shell control operators or command substitutions")
+
+    if _command_mentions_forbidden_cdidx_executable(command, cwd):
+        return _deny(
+            "global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead, "
+            "or the fully expanded installed path documented in CLOUD_BOOTSTRAP_PROMPT.md for no-SDK cloud bootstrap."
+        )
 
     if _command_is_safe_official_installer_one_liner(command):
         return _allow(ALLOW_REASON_OFFICIAL_INSTALLER)

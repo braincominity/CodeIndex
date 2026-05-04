@@ -734,16 +734,18 @@ exception for the official CodeIndex installer only. It allows the exact
 | bash` shape and direct repo-local `bash ./install.sh ...` invocations with
 the installer-supported flags (`--doctor`, `--self-test-local-mirror`,
 `--self-test-allow-overwrite`, and `--reinstall-real`). It also allows the
-exact absolute-path resolver assignment and fixed JSON-RPC `initialize` pipe
-printed in `CLOUD_BOOTSTRAP_PROMPT.md`. It still rejects
+exact absolute-path resolver-print command and fixed JSON-RPC `initialize` pipe
+with the fully expanded installed path printed in `CLOUD_BOOTSTRAP_PROMPT.md`.
+It still rejects
 arbitrary download-and-execute commands, unknown installer flags, shell-control
 wrappers around `install.sh`, bare `cdidx`, `~/.local/bin/cdidx`, and
-`$HOME/.local/bin/cdidx`. After installation, Codex operators should resolve
-`$HOME/.local/bin/cdidx` to its fully expanded absolute path and use that path
-for no-SDK code search, matching the tripwire guidance in
-`CLOUD_BOOTSTRAP_PROMPT.md`. This exception only unblocks the repository guard;
-it cannot bypass upstream proxy or egress policy denies such as `CONNECT tunnel
-failed, response 403`.
+`$HOME/.local/bin/cdidx`, plus other path-qualified global `cdidx` binaries and
+`$CDIDX` / `${CDIDX}` variable calls. After installation, Codex operators should
+resolve `$HOME/.local/bin/cdidx` to its fully expanded absolute path and paste
+that literal path into every no-SDK code-search command, matching the tripwire
+guidance in `CLOUD_BOOTSTRAP_PROMPT.md`. This exception only unblocks the
+repository guard; it cannot bypass upstream proxy or egress policy denies such
+as `CONNECT tunnel failed, response 403`.
 
 Codex cloud session には、リポジトリローカルの追加制約が 1 つあります。追跡対象の
 `.codex/hooks.json` Bash guard は、汎用ネットワークダウンロードと汎用グローバル
@@ -753,16 +755,17 @@ Codex cloud session には、リポジトリローカルの追加制約が 1 つ
 | bash` という正確な形と、installer が対応する flag（`--doctor`,
 `--self-test-local-mirror`, `--self-test-allow-overwrite`, `--reinstall-real`）を
 使う repo-local `bash ./install.sh ...` の直接実行だけです。さらに
-`CLOUD_BOOTSTRAP_PROMPT.md` に載せた絶対パス解決用 assignment と固定
-JSON-RPC `initialize` pipe の正確な形も許可します。任意の
-download-and-execute、未知の installer flag、`install.sh` を shell control で
-包む呼び出し、裸の `cdidx`、`~/.local/bin/cdidx`、`$HOME/.local/bin/cdidx` は
-引き続き拒否します。インストール後、Codex operator は
-`$HOME/.local/bin/cdidx` を完全展開済み絶対パスへ解決し、SDK なしのコード検索では
-そのパスを使ってください。これは `CLOUD_BOOTSTRAP_PROMPT.md` の tripwire
-guidance と同じです。この例外が解除するのはリポジトリ guard だけで、
-`CONNECT tunnel failed, response 403` のような upstream proxy / egress policy
-の拒否は迂回できません。
+`CLOUD_BOOTSTRAP_PROMPT.md` に載せた絶対パス表示コマンドと、完全展開済み
+インストールパスを直接使う固定 JSON-RPC `initialize` pipe の正確な形も
+許可します。任意の download-and-execute、未知の installer flag、`install.sh`
+を shell control で包む呼び出し、裸の `cdidx`、`~/.local/bin/cdidx`、
+`$HOME/.local/bin/cdidx`、その他のパス付きグローバル `cdidx`、
+`$CDIDX` / `${CDIDX}` 変数呼び出しは引き続き拒否します。インストール後、
+Codex operator は `$HOME/.local/bin/cdidx` を完全展開済み絶対パスへ解決し、
+SDK なしのコード検索ではその literal なパスを毎回貼り付けてください。
+これは `CLOUD_BOOTSTRAP_PROMPT.md` の tripwire guidance と同じです。この例外が
+解除するのはリポジトリ guard だけで、`CONNECT tunnel failed, response 403`
+のような upstream proxy / egress policy の拒否は迂回できません。
 
 For pre-release validation beyond the mock self-test, `install.sh
 --reinstall-real <version>` downloads and installs the requested release tag

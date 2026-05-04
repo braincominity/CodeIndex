@@ -29,9 +29,11 @@ For SDK-less Codex cloud sessions, use `CLOUD_BOOTSTRAP_PROMPT.md`. The guard
 permits only the official CodeIndex installer bootstrap forms: the exact
 `raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh | bash` one-liner
 and direct repo-local `bash ./install.sh ...` commands with supported installer
-flags, plus the exact resolver and MCP initialize smoke commands documented in
-that prompt. Arbitrary downloads and bare/global `cdidx` remain blocked.
+flags, plus the exact resolver-print command and MCP initialize smoke command
+documented in that prompt. Arbitrary downloads and bare/global `cdidx` remain
+blocked.
 
 After installation, invoke `cdidx` through the fully expanded absolute path
 documented in `CLOUD_BOOTSTRAP_PROMPT.md`; do not use bare `cdidx` or
-`$HOME/.local/bin/cdidx`.
+`$HOME/.local/bin/cdidx`, and do not use `$CDIDX` / `${CDIDX}` because the guard
+cannot validate variable contents.
