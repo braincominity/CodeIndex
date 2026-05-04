@@ -225,23 +225,18 @@ binary. Both are install-path bugs — inspect `install.sh` and the layout
 under `~/.local/bin/`, then peek inside the downloaded tarball with
 `tar tzf` to confirm what the release ships vs. what the installer places.
 
-### Known caveat: `--json` output
+### `--json` output
 
-The published binary is built with `PublishTrimmed=true`, which disables
-reflection-based `System.Text.Json` serialization. Any CLI command invoked
-with `--json` (for example `cdidx index --json`, `cdidx status --json`)
-currently fails fast with:
+The published `install.sh` binary is a trimmed self-contained release.
+CLI commands invoked with `--json` (for example `cdidx index --json`,
+`cdidx status --json`) are expected to emit machine-readable JSON because
+their DTOs are covered by source-generated serializers.
 
-> `Error: --json is not available on this trimmed build.`
->
-> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
-> `human-readable output, or use the NuGet/global-tool build if you need`
-> `CLI JSON.`
-
-MCP output is unaffected because the MCP path hand-rolls JSON. Until the
-trimming / source-gen JSON issue is fixed in a future release, prefer the
-default human-readable output, and use the MCP server when you need
-structured responses.
+If you see `Error: --json is not available on this trimmed build.`, you
+are running an old or custom binary that missed a CLI JSON serializer
+source-generation path. Reinstall with `install.sh` or use the
+NuGet/global-tool build; MCP remains available when you want structured
+responses through an MCP client.
 
 ### Step 3 — Operate within the no-SDK constraint
 
@@ -513,22 +508,17 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 `tar tzf` で覗いて、リリースが配っている内容とインストーラが配置している
 内容の差分を突き合わせてください。
 
-### 既知の注意点: `--json` 出力
+### `--json` 出力
 
-公開バイナリは `PublishTrimmed=true` でビルドされているため、リフレクション
-ベースの `System.Text.Json` 直列化が無効化されています。CLI で `--json` を
-付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は現状
-以下の専用エラーで即時失敗します:
+公開 `install.sh` バイナリは trim せずにビルドされるため、CLI で `--json` を
+付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は機械可読
+JSON を出力する想定です。
 
-> `Error: --json is not available on this trimmed build.`
->
-> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
-> `human-readable output, or use the NuGet/global-tool build if you need`
-> `CLI JSON.`
-
-MCP 出力は手書き JSON のため影響を受けません。将来のリリースで trimming /
-source-gen JSON 問題が解決するまでは、デフォルトの人間向け出力を使い、
-構造化レスポンスが必要な場面は MCP サーバー経由にしてください。
+`Error: --json is not available on this trimmed build.` が出る場合は、
+現在の公開 release ではなく、古いバイナリまたは custom trimmed binary を
+実行しています。`install.sh` で入れ直すか NuGet グローバルツール版を使って
+ください。MCP クライアント経由の構造化レスポンスが必要な場合は、引き続き
+MCP も利用できます。
 
 ### Step 3 — SDK なしの制約下で動く
 

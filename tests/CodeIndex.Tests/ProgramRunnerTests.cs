@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 
@@ -127,7 +128,7 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void Run_StatusJsonTrimFailure_ReturnsFeatureUnavailableInsteadOfDatabaseError()
+    public void Run_StatusJson_UsesSourceGeneratedSerializerWhenReflectionResolverFails()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("program_runner_json_status");
         try
@@ -141,10 +142,11 @@ public class ProgramRunnerTests
                 options,
                 "1.10.0"));
 
-            Assert.Equal(CommandExitCodes.FeatureUnavailable, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("--json is not available on this trimmed build", stderr);
-            Assert.Contains("use `cdidx mcp` for structured output", stderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("files").GetInt32());
+            Assert.Equal("1.10.0", document.RootElement.GetProperty("version").GetString());
+            Assert.Equal(string.Empty, stderr);
             Assert.DoesNotContain("database error", stderr, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -154,7 +156,7 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void Run_IndexJsonTrimFailure_ReturnsFeatureUnavailable()
+    public void Run_IndexJson_UsesSourceGeneratedSerializerWhenReflectionResolverFails()
     {
         var missingProject = Path.Combine(Path.GetTempPath(), $"program_runner_missing_{Guid.NewGuid():N}");
         var options = CreateTrimmedFailureJsonOptions();
@@ -164,9 +166,11 @@ public class ProgramRunnerTests
             options,
             "1.10.0"));
 
-        Assert.Equal(CommandExitCodes.FeatureUnavailable, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json is not available on this trimmed build", stderr);
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("directory not found", document.RootElement.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(string.Empty, stderr);
         Assert.DoesNotContain("directory not found", stderr, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -180,6 +184,8 @@ public class ProgramRunnerTests
 
     private static JsonSerializerOptions CreateTrimmedFailureJsonOptions() => new()
     {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         TypeInfoResolver = new ThrowingResolver(),
     };
 

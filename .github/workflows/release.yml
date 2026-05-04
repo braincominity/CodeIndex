@@ -325,21 +325,22 @@ jobs:
           "$CDIDX_INSTALL_DIR/cdidx" . >/dev/null
           "$CDIDX_INSTALL_DIR/cdidx" status >/dev/null
 
-          # CLI --json is currently unsupported on the trimmed self-contained
-          # release, but it must fail truthfully: no fake database error, and
-          # no exit code 3.
+          # CLI --json must work on the published trimmed self-contained release.
+          # Every CLI JSON DTO is covered by the source-generated serializer context.
           set +e
           "$CDIDX_INSTALL_DIR/cdidx" status --json >/tmp/cdidx_json_stdout.txt 2>/tmp/cdidx_json_stderr.txt
           JSON_EXIT="$?"
           set -e
-          [ "$JSON_EXIT" -eq 4 ] \
-            || { echo "Expected status --json to exit 4, got $JSON_EXIT" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
-          [ ! -s /tmp/cdidx_json_stdout.txt ] \
-            || { echo "Expected no stdout for status --json fail-fast path" >&2; cat /tmp/cdidx_json_stdout.txt >&2; exit 1; }
-          grep -F -- "--json is not available on this trimmed build." /tmp/cdidx_json_stderr.txt >/dev/null \
-            || { echo "Missing trimmed-build JSON guidance in stderr" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
-          ! grep -Fi -- "database error" /tmp/cdidx_json_stderr.txt >/dev/null \
-            || { echo "status --json still misclassified as a database error" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
+          [ "$JSON_EXIT" -eq 0 ] \
+            || { echo "Expected status --json to exit 0, got $JSON_EXIT" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
+          [ -s /tmp/cdidx_json_stdout.txt ] \
+            || { echo "Expected status --json stdout to contain a JSON object" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
+          [ ! -s /tmp/cdidx_json_stderr.txt ] \
+            || { echo "Expected no stderr for status --json" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
+          grep -F -- '"files":' /tmp/cdidx_json_stdout.txt >/dev/null \
+            || { echo "status --json stdout did not include files" >&2; cat /tmp/cdidx_json_stdout.txt >&2; exit 1; }
+          grep -F -- '"version":' /tmp/cdidx_json_stdout.txt >/dev/null \
+            || { echo "status --json stdout did not include version" >&2; cat /tmp/cdidx_json_stdout.txt >&2; exit 1; }
 
   publish-nuget:
     if: github.repository == 'Widthdom/CodeIndex'

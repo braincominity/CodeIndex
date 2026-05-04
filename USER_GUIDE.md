@@ -160,7 +160,7 @@ If `cdidx` is already installed in a healthy state and you rerun the one-liner w
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
-Note: the self-contained binaries installed by `install.sh` are currently built with `PublishTrimmed=true`. Their CLI `--json` mode is not available yet; commands fail fast with exit code `4` and a dedicated hint instead of emitting machine-readable JSON. `cdidx mcp` still provides structured MCP output, and unexpected serializer failures now return JSON-RPC errors instead of hanging. Use `cdidx mcp`, omit `--json`, or use the NuGet/global-tool build if you need structured CLI output today.
+Note: the self-contained binaries installed by `install.sh` are trimmed self-contained releases. CLI `--json` is backed by source-generated serializers, so commands such as `cdidx status --json` work from the release binary. `cdidx mcp` remains available when you want structured responses through an MCP client instead of direct CLI JSON.
 
 **Dockerfile example:**
 
@@ -561,7 +561,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `1` | Usage error (invalid arguments) |
 | `2` | Not found (no search results, missing directory) |
 | `3` | Database error |
-| `4` | Feature unavailable on this build (for example CLI `--json` on the trimmed self-contained release) |
+| `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
 
 ### Debugging reader errors
@@ -1194,7 +1194,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
-注意: `install.sh` で入る自己完結バイナリは現状 `PublishTrimmed=true` でビルドされています。この配布物では CLI の `--json` はまだ使えず、機械可読 JSON の代わりに終了コード `4` と専用ヒントで即時失敗します。`cdidx mcp` は引き続き構造化 MCP 出力を返し、予期しないシリアライズ失敗もハングではなく JSON-RPC エラーとして返すようになりました。構造化出力が必要な場合は `cdidx mcp` を使うか、`--json` を外すか、NuGet グローバルツール版を使ってください。
+注意: `install.sh` で入る自己完結バイナリは trim せずに publish されるため、CLI の `--json` は NuGet グローバルツール版と同じように使えます。MCP クライアント経由の構造化レスポンスが必要な場合は、引き続き `cdidx mcp` も利用できます。
 
 **Dockerfile の例:**
 

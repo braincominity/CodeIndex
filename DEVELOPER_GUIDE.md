@@ -40,6 +40,7 @@ src/CodeIndex/
       ChunkSplitter.cs        — 80-line chunks with 10-line overlap
     Symbols/
       SymbolExtractor.cs      — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
+      CSharpSymbolNameNormalizer.cs — C# persisted symbol-name canonicalization for verbatim identifiers, indexers, and conversion operators
     References/
       ReferenceExtractor.cs   — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
       Support/
@@ -782,7 +783,7 @@ Four artifacts have to end up in three correct places for `cdidx` to work:
 
 | Artifact | Origin | Final location | Required by |
 | --- | --- | --- | --- |
-| `cdidx` (self-contained single-file binary) | `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` in `release.yml` | `$HOME/.local/bin/cdidx` | User's `PATH` |
+| `cdidx` (trimmed self-contained single-file binary) | `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` in `release.yml` | `$HOME/.local/bin/cdidx` | User's `PATH` |
 | `libe_sqlite3.so` (Linux) / `libe_sqlite3.dylib` (macOS) | Native asset from the `Microsoft.Data.Sqlite` (SQLitePCLRaw) NuGet, copied into the publish output | `$HOME/.local/bin/` (next to the binary) | `SqliteConnection` static ctor → P/Invoke |
 | `version.json` | Repo root; `CodeIndex.csproj` copies it to the publish output as a `Content` item | `$HOME/.local/bin/` (next to the binary) | `ConsoleUi.LoadVersion()` via `AppContext.BaseDirectory` |
 | `sha256sums.txt` | `release.yml` computes it after packaging | Downloaded to a temp dir during install, not kept | `install.sh` integrity check |
@@ -1113,34 +1114,36 @@ the .NET host, `Program.Main`, CLI routing, and
 `ConsoleUi.LoadVersion()`, but not SQLite. (MCP tool *calls* like
 `search` do hit SQLite; `initialize` alone does not.)
 
-### Why published `--json` currently fails fast (and MCP does not)
+### Release `--json` policy and trimmed fallback
 
-`release.yml` builds with `-p:PublishTrimmed=true`. In .NET 8, trimming
-sets `JsonSerializerIsReflectionEnabledByDefault=false` implicitly. Any
-call to `JsonSerializer.Serialize<T>(...)` without a source-generated
-`JsonTypeInfo<T>` throws `InvalidOperationException: Reflection-based
-serialization has been disabled for this application`. The CLI
-`--json` paths in `IndexCommandRunner` / `QueryCommandRunner` use
-reflection-based serialization today, so the published trimmed binary
-cannot honor CLI `--json`. The current user-visible behavior is a
-dedicated stderr message plus exit code `4` (`FeatureUnavailable`)
-instead of a misleading `database error`. The MCP path does not — it
-manually builds `JsonObject` graphs and writes them — so it is
-unaffected. A full fix for CLI JSON still requires either disabling
-`PublishTrimmed`, setting `JsonSerializerIsReflectionEnabledByDefault=true`
-in the `.csproj`, or adding source-generated `JsonSerializerContext`
-classes for the serialized DTOs.
+`release.yml` publishes the self-contained binaries with
+`-p:PublishTrimmed=true`. CLI `--json` payloads such as `status --json`
+and `index --json` are covered by `CliJsonSerializerContext` source
+generation, so they do not depend on reflection-based `System.Text.Json`.
+The release verify step installs the tarball and runs `status --json` so
+this does not silently regress.
+
+`JsonOutputFailure` remains for manually modified or experimental builds.
+In .NET 8, trimming sets
+`JsonSerializerIsReflectionEnabledByDefault=false` implicitly. If a custom
+build reaches a reflection serializer path without a source-generated
+`JsonTypeInfo<T>`, CodeIndex fails fast with the dedicated stderr message
+and exit code `4` (`FeatureUnavailable`) instead of misclassifying the
+serializer failure as a database error. Any new CLI JSON DTO must be added
+to `CliJsonSerializerContext` before release artifacts can keep trimming
+enabled.
 
 ```mermaid
 flowchart TD
-    B["cdidx binary<br/>built with PublishTrimmed=true<br/>⇒ reflection-based JSON implicitly disabled"]
+    B["official release binary<br/>built with PublishTrimmed=true<br/>source-generated CLI JSON available"]
     B --> R{User command}
     R -->|cdidx status / index with --json| A["CLI runners call<br/>JsonSerializer.Serialize&lt;T&gt;(value)"]
     R -->|cdidx search / status without --json| H["Human-readable writer<br/>(no JSON)"]
     R -->|cdidx mcp| M["McpServer builds<br/>JsonObject / JsonArray graphs<br/>by hand, then Write()"]
-    A --> AX["❌ dedicated stderr error<br/>exit code 4 (FeatureUnavailable)"]
-    H --> HX["✅ works"]
-    M --> MX["✅ works (no reflection path)"]
+    A --> AX["works"]
+    H --> HX["works"]
+    M --> MX["works"]
+    T["custom build<br/>missing source-generated CLI DTO coverage"] --> TX["JsonOutputFailure fail-fast<br/>exit code 4 (FeatureUnavailable)"]
 ```
 
 ### Diagnostic table: symptom → cause → fix
@@ -1152,7 +1155,7 @@ flowchart TD
 | `install.sh` error: `musl-based Linux (e.g. Alpine) is not supported` | Container uses musl libc | Switch to a glibc-based image (debian/ubuntu) or install via `dotnet tool install -g cdidx` in an environment with the SDK |
 | `install.sh` error: `macOS x86_64 (Intel) binaries are not published` | Intel Mac hitting `osx-x64` RID | Run under Rosetta 2 with `osx-arm64`, or use `dotnet tool install -g cdidx` |
 | `install.sh` error: `Checksum mismatch!` | Tarball tampered with or transport corrupted | Retry; if persistent, check the `sha256sums.txt` and the tarball on the release page |
-| `Error: --json is not available on this trimmed build.` | `PublishTrimmed` + reflection-based `JsonSerializer` on the self-contained release | Current fail-fast behavior. Use the default human-readable output, the MCP server, or the NuGet/global-tool build until a source-gen or publish-configuration fix ships |
+| `Error: --json is not available on this trimmed build.` | Manual/custom build reached a reflection-based `JsonSerializer` path that is not covered by source generation | Use the official `install.sh` release or NuGet/global-tool build, omit `--json`, use MCP, or add the missing DTO to `CliJsonSerializerContext` before publishing |
 | `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
 | Every command shows `index fresh` but results are obviously stale | You indexed a different working copy | Re-run `cdidx . --commits HEAD` or `cdidx . --files <paths>` |
 | The host swallowed stderr and the user only knows "cdidx did not work" | The shell or launcher captured/discarded terminal stderr | Inspect the daily persistent stderr log in the per-user `cdidx/logs/` directory (`stderr-YYYYMMDD.log`); disable with `CDIDX_DISABLE_PERSISTENT_LOG=1` only when you intentionally do not want breadcrumbs |
@@ -1905,7 +1908,7 @@ Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は
 
 | アーティファクト | 由来 | 最終配置先 | 必要とする処理 |
 | --- | --- | --- | --- |
-| `cdidx`（自己完結型シングルファイルバイナリ） | `release.yml` 内の `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` | `$HOME/.local/bin/cdidx` | ユーザーの `PATH` |
+| `cdidx`（trim 済み自己完結型シングルファイルバイナリ） | `release.yml` 内の `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` | `$HOME/.local/bin/cdidx` | ユーザーの `PATH` |
 | `libe_sqlite3.so`（Linux）/ `libe_sqlite3.dylib`（macOS） | `Microsoft.Data.Sqlite`（SQLitePCLRaw）NuGet のネイティブ資産。publish 出力に同梱される | `$HOME/.local/bin/`（バイナリの隣） | `SqliteConnection` 静的コンストラクタ → P/Invoke |
 | `version.json` | リポジトリルート。`CodeIndex.csproj` が `Content` として publish 出力にコピー | `$HOME/.local/bin/`（バイナリの隣） | `AppContext.BaseDirectory` 経由の `ConsoleUi.LoadVersion()` |
 | `sha256sums.txt` | `release.yml` がパッケージング後に計算 | インストール中は一時ディレクトリに保持のみ | `install.sh` の整合性チェック |
@@ -2126,20 +2129,23 @@ sequenceDiagram
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
-### なぜ公開版の `--json` は現在 fail-fast する（そして MCP はしない）のか
+### release の `--json` 方針と trimmed fallback
 
-`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、公開された trim 済みバイナリでは CLI `--json` を成立させられない。現在のユーザー可視の挙動は、誤解を招く `database error` ではなく、専用の stderr メッセージと終了コード `4`（`FeatureUnavailable`）で fail-fast する形である。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスを根本的に直すには、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要である。
+`release.yml` は自己完結バイナリを `-p:PublishTrimmed=true` で publish する。`status --json` や `index --json` などの CLI JSON payload は `CliJsonSerializerContext` の source generation でカバーしているため、reflection-based `System.Text.Json` に依存しない。release verify step は tarball を install したうえで `status --json` を実行し、この性質が黙って壊れないようにしている。
+
+`JsonOutputFailure` は、手動変更ビルドや実験的なビルド向けの防御として残している。.NET 8 では trimming が暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない reflection serializer 経路に custom build が到達した場合、CodeIndex は serializer failure を database error と誤分類せず、専用 stderr メッセージと終了コード `4`（`FeatureUnavailable`）で fail-fast する。新しい CLI JSON DTO を追加するときは、release artifact の trim を維持できるよう `CliJsonSerializerContext` への登録も同時に行う。
 
 ```mermaid
 flowchart TD
-    B["cdidx バイナリ<br/>PublishTrimmed=true でビルド<br/>⇒ リフレクションベース JSON が暗黙に無効"]
+    B["公式 release バイナリ<br/>PublishTrimmed=true でビルド<br/>source-generated CLI JSON が有効"]
     B --> R{ユーザーコマンド}
     R -->|cdidx status / index --json| A["CLI ランナーが<br/>JsonSerializer.Serialize&lt;T&gt;(value) を呼ぶ"]
     R -->|cdidx search / status（--json なし）| H["人間向け出力<br/>（JSON 不使用）"]
     R -->|cdidx mcp| M["McpServer が<br/>JsonObject / JsonArray を<br/>手組みして Write()"]
-    A --> AX["❌ 専用の stderr エラー<br/>終了コード 4（FeatureUnavailable）"]
-    H --> HX["✅ 成功"]
-    M --> MX["✅ 成功（リフレクションパスを通らない）"]
+    A --> AX["成功"]
+    H --> HX["成功"]
+    M --> MX["成功"]
+    T["source-generated CLI DTO coverage の無い<br/>custom build"] --> TX["JsonOutputFailure fail-fast<br/>終了コード 4（FeatureUnavailable）"]
 ```
 
 ### 診断表: 症状 → 原因 → 対処
@@ -2151,7 +2157,7 @@ flowchart TD
 | `install.sh` のエラー: `musl-based Linux (e.g. Alpine) is not supported` | コンテナが musl libc を使用 | glibc ベース（debian/ubuntu）に切り替えるか、SDK のある環境で `dotnet tool install -g cdidx` を使う |
 | `install.sh` のエラー: `macOS x86_64 (Intel) binaries are not published` | Intel Mac が `osx-x64` RID に到達 | Rosetta 2 下で `osx-arm64` を使うか、`dotnet tool install -g cdidx` を使う |
 | `install.sh` のエラー: `Checksum mismatch!` | tarball の改ざんまたは転送時破損 | 再実行。それでも起きるならリリースページの `sha256sums.txt` と tarball を確認 |
-| `Error: --json is not available on this trimmed build.` | 自己完結リリースの `PublishTrimmed` + リフレクションベース `JsonSerializer` | 現在の fail-fast 挙動。ソース生成または publish 設定修正版が出るまでは、人間向け出力、MCP サーバー、または NuGet グローバルツール版を使う |
+| `Error: --json is not available on this trimmed build.` | 手動/custom build が source generation 未対応の reflection-based `JsonSerializer` 経路に到達した | 公式 `install.sh` release または NuGet グローバルツール版を使う、`--json` を外す、MCP を使う、または publish 前に不足 DTO を `CliJsonSerializerContext` へ追加する |
 | 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |
 | 全コマンドが `index fresh` だが結果は明らかに古い | 別の作業コピーにインデックスを張っている | `cdidx . --commits HEAD` または `cdidx . --files <paths>` を再実行 |
 | ホストが stderr を握りつぶし、ユーザーには「cdidx がうまく動かない」だけが見える | シェルやランチャーが端末 stderr を回収または破棄している | ユーザーごとの `cdidx/logs/` 配下にある日次の永続 stderr ログ（`stderr-YYYYMMDD.log`）を確認する。意図的に痕跡を残したくないときだけ `CDIDX_DISABLE_PERSISTENT_LOG=1` で無効化する |
