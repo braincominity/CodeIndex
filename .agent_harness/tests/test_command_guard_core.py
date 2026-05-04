@@ -169,6 +169,17 @@ class CommandGuardCoreTests(TestCase):
 
                 self.assertTrue(decision.allowed)
 
+    def test_denies_non_documented_cdidx_mcp_smoke_variants(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            """echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | $CDIDX mcp""",
+            """echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | /tmp/not-home/.local/bin/cdidx mcp""",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
+
     def test_denies_global_cdidx_and_search_tools(self) -> None:
         root = Path("/tmp")
         for command in (
@@ -176,6 +187,8 @@ class CommandGuardCoreTests(TestCase):
             "~/.local/bin/cdidx search SymbolExtractor",
             "$HOME/.local/bin/cdidx search SymbolExtractor",
             "${HOME}/.local/bin/cdidx search SymbolExtractor",
+            "$CDIDX search SymbolExtractor",
+            "${CDIDX} search SymbolExtractor",
             "grep -R SymbolExtractor src",
             "git grep SymbolExtractor",
             "find . -name '*.cs'",

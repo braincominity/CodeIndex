@@ -51,6 +51,9 @@ GLOBAL_CDIDX_RE = re.compile(
       |~/?\.local/bin/cdidx
       |\$HOME/\.local/bin/cdidx
       |\$\{HOME\}/\.local/bin/cdidx
+      |\$CDIDX
+      |\$\{CDIDX\}
+      |/[^\s'"]*/\.local/bin/cdidx
     )
     (?=$|[^\w./-])
     """
@@ -77,16 +80,7 @@ CDIDX_RESOLVER_RE = re.compile(
     """
 )
 
-CDIDX_MCP_INIT_SMOKE_RE = re.compile(
-    r"""(?x)
-    ^\s*
-    echo\s+'\{"jsonrpc":"2\.0","id":1,"method":"initialize","params":\{\}\}'\s*
-    \|\s*
-    (?:"\$CDIDX"|\$CDIDX|/[A-Za-z0-9_./-]+/\.local/bin/cdidx)
-    \s+mcp
-    \s*$
-    """
-)
+CDIDX_MCP_INIT_SMOKE_COMMAND = """echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp"""
 
 GIT_GREP_RE = re.compile(r"(?i)(^|[^\w./-])git\s+grep\b")
 LOCAL_CDIDX_DLL_RE = re.compile(r"(?i)cdidx\.dll")
@@ -351,7 +345,7 @@ def _command_is_safe_cdidx_resolver(command: str) -> bool:
 
 
 def _command_is_safe_cdidx_mcp_init_smoke(command: str) -> bool:
-    return bool(CDIDX_MCP_INIT_SMOKE_RE.match(command))
+    return command.strip() == CDIDX_MCP_INIT_SMOKE_COMMAND
 
 
 def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
