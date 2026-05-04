@@ -408,6 +408,8 @@ public class FileIndexerTests
         Assert.Equal("python", map["BUILD.bazel"]);
         Assert.Equal("python", map["pyproject.toml"]);
         Assert.Equal("python", map["requirements.txt"]);
+        Assert.Equal("assembly", map[".s"]);
+        Assert.Equal("assembly", map[".S"]);
 
         // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
         // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。

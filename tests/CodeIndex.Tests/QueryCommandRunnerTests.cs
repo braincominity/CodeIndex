@@ -2028,6 +2028,7 @@ jobs:
 
         var extensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
         Assert.Contains(".s", extensions);
+        Assert.Contains(".S", extensions);
         Assert.Contains(".asm", extensions);
         Assert.Contains(".nasm", extensions);
 

@@ -3634,6 +3634,7 @@ public class McpServerTests : IDisposable
         Assert.True(assembly["symbol_extraction"]!.GetValue<bool>());
         Assert.True(assembly["graph_queries"]!.GetValue<bool>());
         Assert.Contains(".asm", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains(".S", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains("assembler", assembly["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         // Verify a detection-only language / 検出のみの言語を検証
