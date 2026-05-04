@@ -362,9 +362,10 @@ You can fully validate changes in these areas without a .NET SDK:
 ### Everything else follows `CLAUDE.md` and `SELF_IMPROVEMENT.md`
 
 Per-commit checklist, bilingual English / Japanese documentation,
-`CHANGELOG.md` entries go under `[Unreleased]` only, no U+FFFD characters
-in changed files, no PR unless the user explicitly asks. Confirm before
-any destructive action.
+ordinary implementation PRs add bilingual fragments under
+`changelog.d/unreleased/` instead of editing `CHANGELOG.md`, no U+FFFD
+characters in changed files, no PR unless the user explicitly asks. Confirm
+before any destructive action.
 
 ---
 
@@ -717,7 +718,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | /root/.local
 
 ### その他は `CLAUDE.md` と `SELF_IMPROVEMENT.md` に従う
 
-コミット毎チェックリスト、英日併記ドキュメント、`CHANGELOG.md` の
-エントリは必ず `[Unreleased]` 配下のみ、変更ファイルに U+FFFD を混入
-させない、明示依頼がなければ PR は開かない。破壊的変更の前には必ず
-確認する。
+コミット毎チェックリスト、英日併記ドキュメント、通常の実装 PR では
+`CHANGELOG.md` を直接編集せず `changelog.d/unreleased/` に英日併記
+fragment を追加すること、変更ファイルに U+FFFD を混入させないこと、
+明示依頼がなければ PR は開かないこと。破壊的変更の前には必ず確認する。
