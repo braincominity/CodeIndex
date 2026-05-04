@@ -33,6 +33,25 @@ _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
 _INLINE_INTERPRETERS = {"python", "python3", "ruby", "perl", "node", "deno", "php"}
 _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
+_SEARCH_OR_DISCOVERY_COMMANDS = {
+    "grep",
+    "egrep",
+    "fgrep",
+    "zgrep",
+    "rgrep",
+    "rg",
+    "ripgrep",
+    "ag",
+    "ack",
+    "ack-grep",
+    "find",
+    "fd",
+    "fdfind",
+    "locate",
+    "mlocate",
+    "mdfind",
+}
+_NETWORK_COMMANDS = {"curl", "wget", "http", "https", "xh", "aria2c"}
 
 SEARCH_OR_DISCOVERY_RE = re.compile(
     r"""(?ix)
@@ -276,6 +295,42 @@ def _is_variable_command(token: str) -> bool:
     return bool(VARIABLE_COMMAND_RE.match(token))
 
 
+def _tokenized_forbidden_command_reason(command: str) -> str | None:
+    tokens = _split_command(command)
+    for index, token in enumerate(tokens):
+        if not token or token.startswith("-") or _is_env_assignment(token):
+            continue
+        name = _token_command_name(token)
+        if name in _SEARCH_OR_DISCOVERY_COMMANDS:
+            return "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
+        if name in _NETWORK_COMMANDS:
+            return "network download/exfil command is blocked"
+        if name == "git":
+            rest = tokens[index + 1 :]
+            subcommand = _git_subcommand(rest)
+            if subcommand == "grep":
+                return "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
+    return None
+
+
+def _git_subcommand(args: list[str]) -> str:
+    index = 0
+    options_with_values = {"-c", "-C", "--config-env", "--exec-path", "--git-dir", "--work-tree", "--namespace"}
+    while index < len(args):
+        arg = args[index]
+        if arg in options_with_values:
+            index += 2
+            continue
+        if any(arg.startswith(option + "=") for option in options_with_values if option.startswith("--")):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        return arg
+    return ""
+
+
 def _contains_inline_interpreter(command: str) -> bool:
     tokens = _split_command(command)
     for index, token in enumerate(tokens):
@@ -462,6 +517,10 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
         if _command_is_safe_repo_local_installer(command, cwd, project_root):
             return _allow(ALLOW_REASON_REPO_LOCAL_INSTALLER)
         return _deny("repo-local install.sh bootstrap must use a direct install.sh invocation with supported installer flags only")
+
+    tokenized_reason = _tokenized_forbidden_command_reason(command)
+    if tokenized_reason is not None:
+        return _deny(tokenized_reason)
 
     for pattern, reason in _FORBIDDEN_COMMAND_PATTERNS:
         if pattern.search(command):

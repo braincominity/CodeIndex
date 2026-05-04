@@ -729,7 +729,8 @@ must run in a less-restricted shell or against a pre-hosted mirror.
 Codex cloud sessions have one extra repository-local constraint: the tracked
 `.codex/hooks.json` Bash guard blocks generic network downloads and generic
 global `cdidx` use. The guard therefore has a deliberately narrow bootstrap
-exception for the official CodeIndex installer only. It allows the exact
+exception for official installer and repo-local installer bootstrap only. It
+allows the exact
 `curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
 | bash` shape and direct repo-local `bash ./install.sh ...` invocations with
 the installer-supported flags (`--doctor`, `--self-test-local-mirror`,
@@ -749,8 +750,8 @@ as `CONNECT tunnel failed, response 403`.
 
 Codex cloud session には、リポジトリローカルの追加制約が 1 つあります。追跡対象の
 `.codex/hooks.json` Bash guard は、汎用ネットワークダウンロードと汎用グローバル
-`cdidx` 利用をブロックします。そのため guard には、公式 CodeIndex installer だけを
-通す意図的に狭い bootstrap 例外を入れています。許可するのは
+`cdidx` 利用をブロックします。そのため guard には、公式 installer と
+repo-local installer bootstrap だけを通す意図的に狭い例外を入れています。許可するのは
 `curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
 | bash` という正確な形と、installer が対応する flag（`--doctor`,
 `--self-test-local-mirror`, `--self-test-allow-overwrite`, `--reinstall-real`）を
