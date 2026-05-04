@@ -10,12 +10,7 @@ internal static class ProgramRunner
     {
         appVersion ??= ConsoleUi.LoadVersion();
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
-        jsonOptions ??= new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            WriteIndented = false,
-        };
+        jsonOptions ??= CreateDefaultJsonOptions();
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -114,6 +109,14 @@ internal static class ProgramRunner
 
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+
+    internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+        TypeInfoResolver = CliJsonSerializerContext.Default,
+    };
 
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {

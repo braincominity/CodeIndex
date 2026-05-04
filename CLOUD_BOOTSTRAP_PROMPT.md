@@ -227,15 +227,16 @@ under `~/.local/bin/`, then peek inside the downloaded tarball with
 
 ### `--json` output
 
-The published `install.sh` binary is built without trimming, so CLI
-commands invoked with `--json` (for example `cdidx index --json`,
-`cdidx status --json`) are expected to emit machine-readable JSON.
+The published `install.sh` binary is a trimmed self-contained release.
+CLI commands invoked with `--json` (for example `cdidx index --json`,
+`cdidx status --json`) are expected to emit machine-readable JSON because
+their DTOs are covered by source-generated serializers.
 
 If you see `Error: --json is not available on this trimmed build.`, you
-are running an old or custom trimmed binary rather than the current
-published release. Reinstall with `install.sh` or use the NuGet/global-tool
-build; MCP remains available when you want structured responses through an
-MCP client.
+are running an old or custom binary that missed a CLI JSON serializer
+source-generation path. Reinstall with `install.sh` or use the
+NuGet/global-tool build; MCP remains available when you want structured
+responses through an MCP client.
 
 ### Step 3 — Operate within the no-SDK constraint
 

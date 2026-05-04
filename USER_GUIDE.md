@@ -160,7 +160,7 @@ If `cdidx` is already installed in a healthy state and you rerun the one-liner w
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
-Note: the self-contained binaries installed by `install.sh` are published without trimming so CLI `--json` works the same way as the NuGet/global-tool build. `cdidx mcp` remains available when you want structured responses through an MCP client instead of direct CLI JSON.
+Note: the self-contained binaries installed by `install.sh` are trimmed self-contained releases. CLI `--json` is backed by source-generated serializers, so commands such as `cdidx status --json` work from the release binary. `cdidx mcp` remains available when you want structured responses through an MCP client instead of direct CLI JSON.
 
 **Dockerfile example:**
 

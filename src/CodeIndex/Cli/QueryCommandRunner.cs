@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
@@ -121,7 +122,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -142,7 +143,9 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
             }
             else
             {
@@ -182,7 +185,7 @@ public static class QueryCommandRunner
         if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(options.Json
-                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, options.Query), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)
                 : "0");
             return CommandExitCodes.Success;
         }
@@ -271,9 +274,9 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteJsonResultWithExactSignal(r, exactSignal, jsonOptions);
+                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult, exactSignal, jsonOptions);
                     else
-                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult));
                 }
             }
             else
@@ -405,9 +408,9 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -527,9 +530,9 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -649,9 +652,9 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -719,7 +722,7 @@ public static class QueryCommandRunner
             {
                 var countQuery = options.Query ?? string.Join(" ", options.ExtraNames);
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, countQuery), CliJsonSerializerContext.Default.QueryCountFilesJsonResult)
+                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, countQuery), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)
                     : "0");
                 return CommandExitCodes.Success;
             }
@@ -818,9 +821,9 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (hasExactPredicate)
-                        WriteJsonResultWithExactSignal(r, exactSignal, jsonOptions);
+                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
                     else
-                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
                 }
             }
             else
@@ -869,7 +872,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountJsonResult(counts.Count), CliJsonSerializerContext.Default.QueryCountJsonResult)
+                    ? JsonSerializer.Serialize(new QueryCountJsonResult(counts.Count), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -891,7 +894,7 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileResult));
             }
             else
             {
@@ -1003,7 +1006,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(excerpt, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(excerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult));
             }
             else
             {
@@ -1076,7 +1079,7 @@ public static class QueryCommandRunner
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryFindCountJsonResult(counts.Count, counts.FileCount, counts.FileCount), CliJsonSerializerContext.Default.QueryFindCountJsonResult)
+                    ? JsonSerializer.Serialize(new QueryFindCountJsonResult(counts.Count, counts.FileCount, counts.FileCount), CliJsonSerializerContextFactory.Create(jsonOptions).QueryFindCountJsonResult)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -1089,7 +1092,7 @@ public static class QueryCommandRunner
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", extraFields: payload =>
                     {
                         payload["query"] = options.Query;
-                        payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, jsonOptions);
+                        payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
                         payload["exclude_tests"] = options.ExcludeTests;
                         payload["before"] = options.ContextBefore;
                         payload["after"] = options.ContextAfter;
@@ -1109,7 +1112,7 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult));
             }
             else
             {
@@ -1266,7 +1269,7 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult));
                 }
                 else
                 {
@@ -1277,7 +1280,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult));
             }
             else
             {
@@ -1376,7 +1379,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (options.Json)
             {
-                var payload = JsonSerializer.SerializeToNode(analysis, jsonOptions)!.AsObject();
+                var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
@@ -1457,7 +1460,7 @@ public static class QueryCommandRunner
             if (outline == null)
             {
                 if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContext.Default.QueryPathErrorJsonResult));
+                    Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContextFactory.Create(jsonOptions).QueryPathErrorJsonResult));
                 else
                     Console.Error.WriteLine($"Error: '{filePath}' not found in index.");
                 return CommandExitCodes.NotFound;
@@ -1465,7 +1468,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(outline, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
             }
             else
             {
@@ -1651,7 +1654,9 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(status, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    status,
+                    CliJsonSerializerContextFactory.Create(jsonOptions).StatusResult));
             }
             else
             {
@@ -1823,7 +1828,7 @@ public static class QueryCommandRunner
                                 zeroPayload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
                                 zeroPayload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
                                 zeroPayload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
-                                zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, jsonOptions);
+                                zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
                                 if (analysis.ZeroResultReason != null)
                                     zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
                                 if (analysis.Suggestion != null)
@@ -1910,7 +1915,7 @@ public static class QueryCommandRunner
                             zeroPayload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
                             zeroPayload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
                             zeroPayload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
-                            zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, jsonOptions);
+                            zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
                             if (analysis.ZeroResultReason != null)
                                 zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
                             if (analysis.Suggestion != null)
@@ -1976,14 +1981,14 @@ public static class QueryCommandRunner
                     ["truncated"] = analysis.Truncated,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,
-                    ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, jsonOptions),
-                    ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, jsonOptions),
+                    ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, CliJsonSerializerContextFactory.Create(jsonOptions).ListImpactResult),
+                    ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult),
                     ["definition_count"] = analysis.DefinitionCount,
                     ["definition_file_count"] = analysis.DefinitionFileCount,
                     ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
                     ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
                     ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
-                    ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, jsonOptions),
+                    ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult),
                 };
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
@@ -2074,7 +2079,7 @@ public static class QueryCommandRunner
                 var payload = new JsonObject
                 {
                     ["count"] = results.Count,
-                    ["edges"] = JsonSerializer.SerializeToNode(results, jsonOptions)
+                    ["edges"] = JsonSerializer.SerializeToNode(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult)
                 };
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -2183,24 +2188,24 @@ public static class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    var items = groupedResults.Select(g => new
-                    {
-                        name = g.Symbol.Name,
-                        kind = g.Symbol.Kind,
-                        path = g.Symbol.Path,
-                        line = g.Symbol.Line,
-                        reference_count = g.ReferenceCount,
-                        visibility = g.Symbol.Visibility,
-                        container = g.Symbol.ContainerName,
-                        definition_sites = g.DefinitionSites,
-                        paths = g.Paths,
-                    });
+                    var items = groupedResults
+                        .Select(g => new GroupedSymbolHotspotJsonResult(
+                            g.Symbol.Name,
+                            g.Symbol.Kind,
+                            g.Symbol.Path,
+                            g.Symbol.Line,
+                            g.ReferenceCount,
+                            g.Symbol.Visibility,
+                            g.Symbol.ContainerName,
+                            g.DefinitionSites,
+                            g.Paths))
+                        .ToList();
                     var payload = new JsonObject
                     {
                         ["count"] = groupedResults.Count,
                         ["definition_site_total"] = definitionSiteTotal,
                         ["grouped_by"] = HotspotsGroupedByNameKind,
-                        ["hotspots"] = JsonSerializer.SerializeToNode(items, jsonOptions)
+                        ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListGroupedSymbolHotspotJsonResult)
                     };
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -2309,11 +2314,20 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                var items = results.Select(r => new { name = r.Symbol.Name, kind = r.Symbol.Kind, path = r.Symbol.Path, line = r.Symbol.Line, reference_count = r.ReferenceCount, visibility = r.Symbol.Visibility, container = r.Symbol.ContainerName });
+                var items = results
+                    .Select(r => new SymbolHotspotJsonResult(
+                        r.Symbol.Name,
+                        r.Symbol.Kind,
+                        r.Symbol.Path,
+                        r.Symbol.Line,
+                        r.ReferenceCount,
+                        r.Symbol.Visibility,
+                        r.Symbol.ContainerName))
+                    .ToList();
                 var payload = new JsonObject
                 {
                     ["count"] = results.Count,
-                    ["hotspots"] = JsonSerializer.SerializeToNode(items, jsonOptions)
+                    ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult)
                 };
                 AddHotspotFamilyJsonFields(payload, hotspotSignal);
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2376,7 +2390,7 @@ public static class QueryCommandRunner
                     {
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
-                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), jsonOptions),
+                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
@@ -2482,14 +2496,14 @@ public static class QueryCommandRunner
 
     private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
     {
-        var resultList = results as IReadOnlyCollection<UnusedSymbolResult> ?? results.ToArray();
+        var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
         {
             ["count"] = resultList.Count,
             ["graph_supported"] = graphSupported,
             ["graph_support_reason"] = graphSupportReason,
-            ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), jsonOptions),
-            ["symbols"] = JsonSerializer.SerializeToNode(resultList, jsonOptions)
+            ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult)
         };
 
         if (!hasReferencesTable)
@@ -2554,7 +2568,7 @@ public static class QueryCommandRunner
                 Console.WriteLine(new JsonObject
                 {
                     ["count"] = issues.Count,
-                    ["issues"] = JsonSerializer.SerializeToNode(issues, jsonOptions),
+                    ["issues"] = JsonSerializer.SerializeToNode(issues, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue),
                 }.ToJsonString(jsonOptions));
             }
             else
@@ -2611,7 +2625,7 @@ public static class QueryCommandRunner
                 kv.Value.Aliases.OrderBy(a => a).ToList(),
                 kv.Value.Symbols,
                 kv.Value.Graph)).ToList();
-            Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContext.Default.LanguagesJsonResult));
+            Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
         }
         else
         {
@@ -3386,7 +3400,7 @@ public static class QueryCommandRunner
         var freshness = reader.GetFreshnessHint();
         payload["indexed_file_count"] = freshness.FileCount;
         payload["indexed_at"] = freshness.IndexedAt.HasValue
-            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
+            ? JsonValue.Create(freshness.IndexedAt.Value)
             : null;
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
@@ -3427,7 +3441,7 @@ public static class QueryCommandRunner
                 payload["degraded_reason"] = exactSignal.Value.DegradedReason;
         }
         if (exactZeroHint != null)
-            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
         AddFreshnessHint(payload, reader);
 
@@ -3891,7 +3905,7 @@ public static class QueryCommandRunner
         if (options.Exact || options.ExactName)
             AddExactGraphJsonFields(payload, exactSignal);
         if (exactZeroHint != null)
-            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
         if (count == 0)
             AddFreshnessHint(payload, reader);
@@ -3911,30 +3925,30 @@ public static class QueryCommandRunner
         if (exactSignal != null)
             AddExactGraphJsonFields(payload, exactSignal.Value);
         if (exactZeroHint != null)
-            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null, Action<JsonObject>? extraFields = null)
+    private static void WriteGraphJsonResult<T>(T result, JsonTypeInfo<T> jsonTypeInfo, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null, Action<JsonObject>? extraFields = null)
     {
-        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
+        var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         AddExactGraphJsonFields(payload, exactSignal);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         extraFields?.Invoke(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteJsonResult<T>(T result, JsonSerializerOptions jsonOptions, Action<JsonObject>? extraFields = null)
+    private static void WriteJsonResult<T>(T result, JsonTypeInfo<T> jsonTypeInfo, JsonSerializerOptions jsonOptions, Action<JsonObject>? extraFields = null)
     {
-        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
+        var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         extraFields?.Invoke(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteJsonResultWithExactSignal<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
+    private static void WriteJsonResultWithExactSignal<T>(T result, JsonTypeInfo<T> jsonTypeInfo, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
     {
-        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
+        var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         AddExactJsonFields(payload, exactSignal);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }

@@ -174,7 +174,7 @@ jobs:
           --runtime ${{ matrix.rid }}
           --self-contained true
           -p:PublishSingleFile=true
-          -p:PublishTrimmed=false
+          -p:PublishTrimmed=true
           --output publish
 
       - name: Remove debugging symbols (Linux/macOS)
@@ -325,9 +325,8 @@ jobs:
           "$CDIDX_INSTALL_DIR/cdidx" . >/dev/null
           "$CDIDX_INSTALL_DIR/cdidx" status >/dev/null
 
-          # CLI --json must work on the published self-contained release. These
-          # artifacts intentionally publish without trimming until every CLI JSON
-          # payload is covered by source-generated serializers.
+          # CLI --json must work on the published trimmed self-contained release.
+          # Every CLI JSON DTO is covered by the source-generated serializer context.
           set +e
           "$CDIDX_INSTALL_DIR/cdidx" status --json >/tmp/cdidx_json_stdout.txt 2>/tmp/cdidx_json_stderr.txt
           JSON_EXIT="$?"

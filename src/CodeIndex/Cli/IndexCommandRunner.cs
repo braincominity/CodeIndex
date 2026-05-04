@@ -14,6 +14,7 @@ public static class IndexCommandRunner
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(indexArgs);
+        var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
 
         if (options.ShowHelp)
         {
@@ -38,12 +39,11 @@ public static class IndexCommandRunner
         if (!Directory.Exists(options.ProjectPath))
         {
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    status = "error",
-                    message = $"directory not found: {options.ProjectPath}",
-                    hint = "Check the project path and rerun `cdidx index <projectPath>` with an existing directory."
-                }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
+                    "error",
+                    $"directory not found: {options.ProjectPath}",
+                    "Check the project path and rerun `cdidx index <projectPath>` with an existing directory."),
+                    jsonContext.CommandErrorJsonResult));
             else
             {
                 Console.Error.WriteLine($"Error: directory not found: {options.ProjectPath}");
@@ -55,12 +55,11 @@ public static class IndexCommandRunner
         if (options.Rebuild && isUpdateMode)
         {
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    status = "error",
-                    message = "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
-                    hint = "Drop `--rebuild` for partial updates, or rerun `cdidx index <projectPath> --rebuild` for a full rescan."
-                }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
+                    "error",
+                    "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
+                    "Drop `--rebuild` for partial updates, or rerun `cdidx index <projectPath> --rebuild` for a full rescan."),
+                    jsonContext.CommandErrorJsonResult));
             else
             {
                 Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
@@ -100,7 +99,7 @@ public static class IndexCommandRunner
         {
             var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
             IReadOnlyList<string> dryCandidates;
-            var errorList = new List<object>();
+            var errorList = new List<CliJsonMessage>();
             var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
 
             void RecordDryRunScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
@@ -111,7 +110,7 @@ public static class IndexCommandRunner
                     if (!dryScanErrorKeys.Add(key))
                         continue;
 
-                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                    errorList.Add(new CliJsonMessage(scanError.Path, scanError.Message));
                     if (!options.Json)
                         ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
                 }
@@ -190,7 +189,7 @@ public static class IndexCommandRunner
                     if (message != null)
                     {
                         var displayPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(options.ProjectPath, f));
-                        errorList.Add(new { file = displayPath, message });
+                        errorList.Add(new CliJsonMessage(displayPath, message));
                         if (!options.Json)
                             ConsoleUi.PrintWarning($"{displayPath}: {message}");
                     }
@@ -202,13 +201,13 @@ public static class IndexCommandRunner
             }
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
+                Console.WriteLine(JsonSerializer.Serialize(new IndexDryRunJsonResult
                 {
-                    status = "dry_run",
-                    files_total = dryFiles.Count,
-                    languages = langCounts,
-                    errors = errorList.Count > 0 ? errorList : null,
-                }, jsonOptions));
+                    Status = "dry_run",
+                    FilesTotal = dryFiles.Count,
+                    Languages = langCounts,
+                    Errors = errorList.Count > 0 ? errorList : null,
+                }, jsonContext.IndexDryRunJsonResult));
             }
             else
             {
@@ -286,6 +285,7 @@ public static class IndexCommandRunner
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseBackfillFoldArgs(cmdArgs);
+        var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         if (options.ShowHelp)
         {
             ConsoleUi.PrintUsage();
@@ -351,7 +351,7 @@ public static class IndexCommandRunner
                     verified,
                     userVersionBefore,
                     userVersionAfter,
-                    true), CliJsonSerializerContext.Default.BackfillFoldJsonResult));
+                    true), jsonContext.BackfillFoldJsonResult));
             }
             else
             {
@@ -529,6 +529,7 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot)
     {
+        var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -611,8 +612,8 @@ public static class IndexCommandRunner
         CancellationTokenSource? updateCts = null;
           var interactiveUpdateSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
-        var errorList = new List<object>();
-        var warningList = new List<object>();
+        var errorList = new List<CliJsonMessage>();
+        var warningList = new List<CliJsonMessage>();
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
@@ -669,12 +670,12 @@ public static class IndexCommandRunner
                 {
                     DemoteReadinessOnce();
                     errors++;
-                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                    errorList.Add(new CliJsonMessage(scanError.Path, scanError.Message));
                 }
                 else
                 {
                     warnings++;
-                    warningList.Add(new { file = scanError.Path, message = scanError.Message });
+                    warningList.Add(new CliJsonMessage(scanError.Path, scanError.Message));
                 }
 
                 if (!options.Json)
@@ -834,7 +835,7 @@ public static class IndexCommandRunner
                     DemoteReadinessOnce();
 
                     errors++;
-                    errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
+                    errorList.Add(new CliJsonMessage(relPath, "Could not probe file for indexability/language."));
                     if (!options.Json)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
@@ -946,7 +947,7 @@ public static class IndexCommandRunner
                 DemoteReadinessOnce();
 
                 errors++;
-                errorList.Add(new { file = relPath, message = ex.Message });
+                errorList.Add(new CliJsonMessage(relPath, ex.Message));
                 if (!options.Json)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
@@ -1086,42 +1087,42 @@ public static class IndexCommandRunner
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new
+            Console.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
             {
-                status = errors > 0 ? "partial" : "success",
-                mode = "update",
-                summary = new
+                Status = errors > 0 ? "partial" : "success",
+                Mode = "update",
+                Summary = new IndexUpdateSummaryJsonResult
                 {
-                    files_total = totalFiles,
-                    chunks_total = totalChunks,
-                    symbols_total = totalSymbols,
-                    references_total = totalReferences,
-                    updated,
-                    removed,
-                    skipped,
-                    warnings,
-                    errors,
+                    FilesTotal = totalFiles,
+                    ChunksTotal = totalChunks,
+                    SymbolsTotal = totalSymbols,
+                    ReferencesTotal = totalReferences,
+                    Updated = updated,
+                    Removed = removed,
+                    Skipped = skipped,
+                    Warnings = warnings,
+                    Errors = errors,
                 },
-                graph_table_available = graphTableAvailableAfter,
-                issues_table_available = issuesTableAvailableAfter,
-                sql_graph_contract_ready = sqlGraphContractReadyAfter,
-                sql_graph_contract_degraded_reason = sqlGraphContractDegradedReasonAfter,
-                hotspot_family_ready = hotspotFamilyReadyAfter,
-                hotspot_family_degraded_reason = hotspotFamilyDegradedReasonAfter,
-                csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
-                csharp_metadata_target_ready = csharpMetadataTargetReadyAfter,
+                GraphTableAvailable = graphTableAvailableAfter,
+                IssuesTableAvailable = issuesTableAvailableAfter,
+                SqlGraphContractReady = sqlGraphContractReadyAfter,
+                SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
+                HotspotFamilyReady = hotspotFamilyReadyAfter,
+                HotspotFamilyDegradedReason = hotspotFamilyDegradedReasonAfter,
+                CSharpSymbolNameReady = csharpSymbolNameReadyAfter,
+                CSharpMetadataTargetReady = csharpMetadataTargetReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
-                fold_ready = foldReadyAfter,
-                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
-                degraded_reason = foldOnlyRemediation?.DegradedReason,
-                recommended_action = foldOnlyRemediation?.RecommendedAction,
-                alternative_action = foldOnlyRemediation?.AlternativeAction,
-                errors = errorList.Count > 0 ? errorList : null,
-                warnings = warningList.Count > 0 ? warningList : null,
-                elapsed_ms = stopwatch.ElapsedMilliseconds,
-            }, jsonOptions));
+                FoldReady = foldReadyAfter,
+                FoldReadyReason = foldReadyAfter ? null : foldReadyReasonAfter,
+                DegradedReason = foldOnlyRemediation?.DegradedReason,
+                RecommendedAction = foldOnlyRemediation?.RecommendedAction,
+                AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                Errors = errorList.Count > 0 ? errorList : null,
+                Warnings = warningList.Count > 0 ? warningList : null,
+                ElapsedMs = stopwatch.ElapsedMilliseconds,
+            }, jsonContext.IndexUpdateJsonResult));
         }
         else
         {
@@ -1385,7 +1386,9 @@ public static class IndexCommandRunner
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult("error", message, hint), CliJsonSerializerContext.Default.CommandErrorJsonResult));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new CommandErrorJsonResult("error", message, hint),
+                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
         else
         {
             Console.Error.WriteLine($"Error: {message}");
@@ -1414,6 +1417,7 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot)
     {
+        var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
@@ -1451,10 +1455,10 @@ public static class IndexCommandRunner
             .Where(error => !error.IsFatal)
             .ToList();
         var errorList = fatalScanErrors
-            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .Select(error => new CliJsonMessage(error.Path, error.Message))
             .ToList();
         var warningList = warningScanErrors
-            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .Select(error => new CliJsonMessage(error.Path, error.Message))
             .ToList();
         if (!options.Json)
         {
@@ -1661,7 +1665,7 @@ public static class IndexCommandRunner
             catch (Exception ex)
             {
                 errors++;
-                errorList.Add(new { file = filePath, message = ex.Message });
+                errorList.Add(new CliJsonMessage(filePath, ex.Message));
                 if (!options.Json)
                 {
                     PauseIndexSpinnerForConsoleWrite();
@@ -1796,42 +1800,42 @@ public static class IndexCommandRunner
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new
+            Console.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
             {
-                status = errors > 0 ? "partial" : "success",
-                mode = options.Rebuild ? "rebuild" : "incremental",
-                summary = new
+                Status = errors > 0 ? "partial" : "success",
+                Mode = options.Rebuild ? "rebuild" : "incremental",
+                Summary = new IndexFullScanSummaryJsonResult
                 {
-                    files_total = totalFiles,
-                    chunks_total = totalChunks,
-                    symbols_total = totalSymbols,
-                    references_total = totalReferences,
-                    files_scanned = files.Count,
-                    files_skipped = skipped,
-                    files_purged = purged,
-                    warnings,
-                    errors,
+                    FilesTotal = totalFiles,
+                    ChunksTotal = totalChunks,
+                    SymbolsTotal = totalSymbols,
+                    ReferencesTotal = totalReferences,
+                    FilesScanned = files.Count,
+                    FilesSkipped = skipped,
+                    FilesPurged = purged,
+                    Warnings = warnings,
+                    Errors = errors,
                 },
-                graph_table_available = graphTableAvailableAfter,
-                issues_table_available = issuesTableAvailableAfter,
-                sql_graph_contract_ready = sqlGraphContractReadyAfter,
-                sql_graph_contract_degraded_reason = sqlGraphContractDegradedReasonAfter,
-                hotspot_family_ready = hotspotFamilyReadyAfter,
-                hotspot_family_degraded_reason = hotspotFamilyDegradedReasonAfter,
-                csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
-                csharp_metadata_target_ready = csharpMetadataTargetReadyAfter,
+                GraphTableAvailable = graphTableAvailableAfter,
+                IssuesTableAvailable = issuesTableAvailableAfter,
+                SqlGraphContractReady = sqlGraphContractReadyAfter,
+                SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
+                HotspotFamilyReady = hotspotFamilyReadyAfter,
+                HotspotFamilyDegradedReason = hotspotFamilyDegradedReasonAfter,
+                CSharpSymbolNameReady = csharpSymbolNameReadyAfter,
+                CSharpMetadataTargetReady = csharpMetadataTargetReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
-                fold_ready = foldReadyAfter,
-                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
-                degraded_reason = foldOnlyRemediation?.DegradedReason,
-                recommended_action = foldOnlyRemediation?.RecommendedAction,
-                alternative_action = foldOnlyRemediation?.AlternativeAction,
-                errors = errorList.Count > 0 ? errorList : null,
-                warnings = warningList.Count > 0 ? warningList : null,
-                elapsed_ms = stopwatch.ElapsedMilliseconds,
-            }, jsonOptions));
+                FoldReady = foldReadyAfter,
+                FoldReadyReason = foldReadyAfter ? null : foldReadyReasonAfter,
+                DegradedReason = foldOnlyRemediation?.DegradedReason,
+                RecommendedAction = foldOnlyRemediation?.RecommendedAction,
+                AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                Errors = errorList.Count > 0 ? errorList : null,
+                Warnings = warningList.Count > 0 ? warningList : null,
+                ElapsedMs = stopwatch.ElapsedMilliseconds,
+            }, jsonContext.IndexFullScanJsonResult));
         }
         else
         {

@@ -3,12 +3,12 @@ namespace CodeIndex.Tests;
 public class ReleaseWorkflowTests
 {
     [Fact]
-    public void ReleaseWorkflow_PublishesSelfContainedBinariesWithoutTrimmingAndVerifiesCliJson()
+    public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJson()
     {
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
 
-        Assert.Contains("-p:PublishTrimmed=false", workflow);
-        Assert.DoesNotContain("-p:PublishTrimmed=true", workflow);
+        Assert.Contains("-p:PublishTrimmed=true", workflow);
+        Assert.DoesNotContain("-p:PublishTrimmed=false", workflow);
         Assert.Contains("status --json", workflow);
         Assert.Contains("Expected status --json to exit 0", workflow);
         Assert.Contains("'\"files\":'", workflow);
