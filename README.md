@@ -58,9 +58,9 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
 ## License
 
-CodeIndex and official `cdidx` binaries are source-available under
-[FSL-1.1-ALv2](LICENSE), unless a specific file or directory says otherwise.
-Integration materials may be Apache-2.0 where marked.
+CodeIndex and official `cdidx` binaries are source-available / Fair Source-style
+software under [FSL-1.1-ALv2](LICENSE), unless a specific file or directory says
+otherwise. Integration materials may be Apache-2.0 where marked.
 
 See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md),
 and [TRADEMARKS.md](TRADEMARKS.md) for commercial, integration, and naming
@@ -113,8 +113,8 @@ cdidx mcp
 ## ライセンス
 
 CodeIndex と公式 `cdidx` バイナリは、ファイルやディレクトリで別途明記されない
-限り [FSL-1.1-ALv2](LICENSE) の source-available ソフトウェアです。統合用の
-素材は、明記されている場合 Apache-2.0 で利用できます。
+限り [FSL-1.1-ALv2](LICENSE) の source-available / Fair Source-style
+ソフトウェアです。統合用の素材は、明記されている場合 Apache-2.0 で利用できます。
 
 商用利用、統合、名称の扱いについては [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)、
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md)、[TRADEMARKS.md](TRADEMARKS.md) を
