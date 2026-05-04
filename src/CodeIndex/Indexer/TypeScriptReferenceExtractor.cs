@@ -354,6 +354,9 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsImportBracePrefix(string text)
     {
+        if (text.IndexOf(';') >= 0 || ContainsTopLevelKeyword(text, "from"))
+            return false;
+
         const string importKeyword = "import";
         if (!text.StartsWith(importKeyword, StringComparison.Ordinal))
             return false;
@@ -364,6 +367,14 @@ internal static class TypeScriptReferenceExtractor
 
         return !IsTypeScriptIdentifierPart(text[index])
                && (char.IsWhiteSpace(text[index]) || text[index] is '{' or '*');
+    }
+
+    private static bool ContainsTopLevelKeyword(string text, string keyword)
+    {
+        foreach (var _ in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(text, keyword))
+            return true;
+
+        return false;
     }
 
     private static bool IsNamedExportBracePrefix(string text)

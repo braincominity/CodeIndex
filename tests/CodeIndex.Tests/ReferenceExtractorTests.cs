@@ -18875,6 +18875,11 @@ public class ReferenceExtractorTests
             export type {
                 Internal as PublicInternal
             } from "mod";
+            import Existing from "mod";
+
+            {
+                const checked = value as RealType;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -18894,6 +18899,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "MultiBaz" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "PublicInternal" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "from" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RealType" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
