@@ -18798,6 +18798,268 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypedDeclarations_CaptureStructuralTypeReferences()
+    {
+        const string content = """
+            interface Handler extends BaseHandler<Request>, Disposable {
+                handle?: (callbackInput: Request) => Response;
+            }
+
+            class Service extends BaseService implements Runnable, Closeable {
+                load(input: User, options?: LoadOptions): Promise<Result> {
+                    const current: User = input as User;
+                    const active = current as User && current.enabledFlag;
+                    const fallback = current as User || fallbackValue;
+                    const ready = current instanceof Service && current.readyFlag;
+                    const checked = current satisfies Runnable ? current : fallbackValue;
+                    const handler: (variableInput: Request) => Response = makeHandler();
+                    return build(current);
+                }
+            }
+
+            type HandlerFactory = (factoryInput: Request) => Response;
+            type UserPick = Pick<User, "id">;
+
+            function runtime(input: unknown) {
+                return typeof input === "string";
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BaseHandler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Disposable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "BaseService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Runnable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Closeable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Promise" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Pick" && r.ReferenceKind == "type_reference");
+        Assert.Equal(3, references.Count(r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "callbackInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "variableInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "factoryInput" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fallbackValue" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "readyFlag" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "input" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptImportExportAliases_DoNotEmitTypeReferences()
+    {
+        const string content = """
+            import * as Mod from "mod";
+            import { Foo as Bar } from "mod";
+            export { Foo as Baz } from "mod";
+            export type { Model as PublicModel } from "mod";
+            export * as NamespaceMod from "mod";
+            export type * as PublicNamespace from "mod";
+            import*as CompactImport from "mod";
+            export*as CompactNamespace from "mod";
+            export type*as CompactPublicNamespace from "mod";
+            import {
+                MultiFoo as MultiBar
+            } from "mod";
+            import DefaultThing, {
+                Secondary as SecondaryAlias
+            } from "mod";
+            export {
+                MultiExport as MultiBaz
+            } from "mod";
+            export type {
+                Internal as PublicInternal
+            } from "mod";
+            import Existing from "mod";
+
+            {
+                const checked = value as RealType;
+            }
+            import "polyfill"
+
+            {
+                const checkedAfterSideEffect = value as AfterSideEffectType;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Mod" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Baz" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PublicModel" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NamespaceMod" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PublicNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactImport" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CompactPublicNamespace" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MultiBar" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "SecondaryAlias" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MultiBaz" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PublicInternal" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "from" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RealType" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "AfterSideEffectType" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinTypedDeclarations_CaptureStructuralTypeReferences()
+    {
+        const string content = """
+            interface Handler : BaseHandler<Request>, Closeable
+
+            class Service<T : Entity>(private val repo: Repository) : BaseService(repo), Runnable where T : Auditable {
+                val current: User = repo.load() as User
+                val fallback = repo.load() as User ?: fallbackUser
+
+                fun load(input: User, options: LoadOptions): Result<User> {
+                    return input
+                }
+
+                fun check(value: Any) = value is User && value.enabledFlag
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BaseHandler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Closeable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entity" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "BaseService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Runnable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Auditable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fallbackUser" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinImportAlias_DoesNotEmitTypeReference()
+    {
+        const string content = """
+            import com.example.Bar as Baz
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Baz" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypedDeclarations_CaptureStructuralTypeReferences()
+    {
+        const string content = """
+            class Service<T: Entity>: BaseService, Runnable where T: Auditable {
+                var current: User
+
+                func load(_ input: User, options: LoadOptions) -> Result<User> {
+                    return make(input)
+                }
+
+                func cast(_ value: Any) -> User? {
+                    return value as? User
+                }
+
+                func check(_ value: Any) -> Bool {
+                    return value is User && value.isReady
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Entity" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "BaseService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Runnable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Auditable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_RustTypedDeclarations_CaptureStructuralTypeReferences()
+    {
+        const string content = """
+            trait Handler: Sendable {
+                fn handle(&self, input: Request) -> Result<Response, Error>;
+            }
+
+            struct Service<T: Store> where T: Clone {
+                repo: Repository,
+                current: Option<User>,
+            }
+
+            impl Handler for Service<StoreImpl> {
+                fn handle(&self, input: Request) -> Result<Response, Error> {
+                    let current: Option<User> = None;
+                    let repo: Repository = make_repo();
+                    finish(current, repo)
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Sendable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Clone" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Option" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StoreImpl" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "self" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
+    {
+        const string content = """
+            struct FieldOnly {
+                repo: Repository,
+            }
+
+            struct UserId(Uuid);
+            pub struct Pair(pub User, Repository);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Repository"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerKind == "struct"
+            && r.ContainerName == "FieldOnly");
+        Assert.Contains(references, r => r.SymbolName == "Uuid" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

@@ -72,17 +72,20 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - [Integration Policy](INTEGRATION_POLICY.md): permitted CLI, JSON, MCP, and
   integration use.
 
-## License
+## License and Fair Source Use
 
-CodeIndex and official `cdidx` binaries are source-available / Fair Source-style
-software under [FSL-1.1-ALv2](LICENSE), unless a specific file or directory says
-otherwise. Integration materials may be Apache-2.0 where marked.
+CodeIndex and official `cdidx` binaries are source-available / Fair Source-style software
+under [FSL-1.1-ALv2](LICENSE), unless a specific file or directory says
+otherwise. Integration materials may be [Apache-2.0](LICENSES/Apache-2.0.txt)
+where marked.
 
 See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md),
 and [TRADEMARKS.md](TRADEMARKS.md) for commercial, integration, and naming
 details.
 
 # cdidx（日本語）
+
+![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 
 **ターミナルと MCP ワークフロー向けの、AI ネイティブなローカルコード検索です。**
 
@@ -142,11 +145,12 @@ cdidx mcp
   エージェント向けルール。
 - [統合ポリシー](INTEGRATION_POLICY.md): CLI、JSON、MCP、各種統合で許可される利用。
 
-## ライセンス
+## ライセンスと Fair Source の扱い
 
 CodeIndex と公式 `cdidx` バイナリは、ファイルやディレクトリで別途明記されない
-限り [FSL-1.1-ALv2](LICENSE) の source-available / Fair Source-style
-ソフトウェアです。統合用の素材は、明記されている場合 Apache-2.0 で利用できます。
+限り [FSL-1.1-ALv2](LICENSE) の source-available / Fair Source-style software
+です。統合用の素材は、明記されている場合 [Apache-2.0](LICENSES/Apache-2.0.txt)
+で利用できます。
 
 商用利用、統合、名称の扱いについては [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)、
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md)、[TRADEMARKS.md](TRADEMARKS.md) を
