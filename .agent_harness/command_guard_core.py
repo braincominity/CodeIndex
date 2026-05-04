@@ -50,6 +50,7 @@ GLOBAL_CDIDX_RE = re.compile(
       cdidx
       |~/?\.local/bin/cdidx
       |\$HOME/\.local/bin/cdidx
+      |\$\{HOME\}/\.local/bin/cdidx
     )
     (?=$|[^\w./-])
     """
@@ -64,6 +65,25 @@ OFFICIAL_INSTALLER_ONE_LINER_RE = re.compile(
     \s*\|\s*
     bash
     (?:\s+-s\s+--\s+v?[0-9][A-Za-z0-9._+-]*)?
+    \s*$
+    """
+)
+
+CDIDX_RESOLVER_RE = re.compile(
+    r"""(?x)
+    ^\s*
+    CDIDX="\$\(readlink\s+-f\s+"\$HOME/\.local/bin/cdidx"\s+2>/dev/null\s+\|\|\s+realpath\s+"\$HOME/\.local/bin/cdidx"\)"
+    \s*$
+    """
+)
+
+CDIDX_MCP_INIT_SMOKE_RE = re.compile(
+    r"""(?x)
+    ^\s*
+    echo\s+'\{"jsonrpc":"2\.0","id":1,"method":"initialize","params":\{\}\}'\s*
+    \|\s*
+    (?:"\$CDIDX"|\$CDIDX|/[A-Za-z0-9_./-]+/\.local/bin/cdidx)
+    \s+mcp
     \s*$
     """
 )
@@ -193,7 +213,7 @@ def _command_is_safe_local_cdidx(command: str, cwd: Path, project_root: Path) ->
 
 
 def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
-    if token.startswith("~") or token.startswith("$HOME"):
+    if not token.startswith("/"):
         return False
     path = _token_path(token, cwd)
     if path is None:
@@ -326,6 +346,14 @@ def _command_is_safe_official_installer_one_liner(command: str) -> bool:
     return bool(OFFICIAL_INSTALLER_ONE_LINER_RE.match(command))
 
 
+def _command_is_safe_cdidx_resolver(command: str) -> bool:
+    return bool(CDIDX_RESOLVER_RE.match(command))
+
+
+def _command_is_safe_cdidx_mcp_init_smoke(command: str) -> bool:
+    return bool(CDIDX_MCP_INIT_SMOKE_RE.match(command))
+
+
 def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
     return (
         decision.allowed
@@ -346,6 +374,12 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
 
     if LOCAL_CDIDX_DLL_RE.search(command):
         return _deny("use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead")
+
+    if _command_is_safe_cdidx_resolver(command):
+        return _allow("cdidx absolute-path resolver bootstrap")
+
+    if _command_is_safe_cdidx_mcp_init_smoke(command):
+        return _allow("cdidx mcp initialize smoke test")
 
     if _command_is_safe_expanded_installed_cdidx(command, cwd):
         return _allow(ALLOW_REASON_EXPANDED_INSTALLED_CDIDX)

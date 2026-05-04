@@ -733,7 +733,9 @@ exception for the official CodeIndex installer only. It allows the exact
 `curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
 | bash` shape and direct repo-local `bash ./install.sh ...` invocations with
 the installer-supported flags (`--doctor`, `--self-test-local-mirror`,
-`--self-test-allow-overwrite`, and `--reinstall-real`). It still rejects
+`--self-test-allow-overwrite`, and `--reinstall-real`). It also allows the
+exact absolute-path resolver assignment and fixed JSON-RPC `initialize` pipe
+printed in `CLOUD_BOOTSTRAP_PROMPT.md`. It still rejects
 arbitrary download-and-execute commands, unknown installer flags, shell-control
 wrappers around `install.sh`, bare `cdidx`, `~/.local/bin/cdidx`, and
 `$HOME/.local/bin/cdidx`. After installation, Codex operators should resolve
@@ -750,7 +752,9 @@ Codex cloud session には、リポジトリローカルの追加制約が 1 つ
 `curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh
 | bash` という正確な形と、installer が対応する flag（`--doctor`,
 `--self-test-local-mirror`, `--self-test-allow-overwrite`, `--reinstall-real`）を
-使う repo-local `bash ./install.sh ...` の直接実行だけです。任意の
+使う repo-local `bash ./install.sh ...` の直接実行だけです。さらに
+`CLOUD_BOOTSTRAP_PROMPT.md` に載せた絶対パス解決用 assignment と固定
+JSON-RPC `initialize` pipe の正確な形も許可します。任意の
 download-and-execute、未知の installer flag、`install.sh` を shell control で
 包む呼び出し、裸の `cdidx`、`~/.local/bin/cdidx`、`$HOME/.local/bin/cdidx` は
 引き続き拒否します。インストール後、Codex operator は

@@ -192,6 +192,8 @@ now has two intentionally narrow bootstrap exceptions:
 - a direct repo-local `install.sh` invocation such as `bash ./install.sh
   vX.Y.Z`, `bash ./install.sh --doctor vX.Y.Z`, or `bash ./install.sh
   --self-test-local-mirror`.
+- the exact absolute-path resolver assignment and JSON-RPC `initialize` pipe
+  shown in Step 1.5 / Step 2 below.
 
 Arbitrary `curl | bash`, unrelated download commands, bare `cdidx`,
 `~/.local/bin/cdidx`, and `$HOME/.local/bin/cdidx` remain blocked. After
@@ -496,6 +498,8 @@ bootstrap 例外を入れています:
 - `bash ./install.sh vX.Y.Z`、`bash ./install.sh --doctor vX.Y.Z`、
   `bash ./install.sh --self-test-local-mirror` のような、リポジトリ直下
   `install.sh` の直接実行。
+- 次の Step 1.5 / Step 2 に載せている、絶対パス解決用 assignment と
+  JSON-RPC `initialize` pipe の正確な形。
 
 任意の `curl | bash`、無関係な download コマンド、裸の `cdidx`、
 `~/.local/bin/cdidx`、`$HOME/.local/bin/cdidx` は引き続きブロックされます。

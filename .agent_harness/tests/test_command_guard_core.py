@@ -148,12 +148,34 @@ class CommandGuardCoreTests(TestCase):
         self.assertEqual(core.ALLOW_REASON_EXPANDED_INSTALLED_CDIDX, expanded_decision.reason)
         self.assertFalse(home_shortcut_decision.allowed)
 
+    def test_blocks_braced_home_installed_cdidx_shortcut(self) -> None:
+        root = Path("/tmp")
+        decision = core.evaluate_bash_command(
+            "${HOME}/.local/bin/cdidx search SymbolExtractor",
+            cwd=root,
+            project_root=root,
+        )
+
+        self.assertFalse(decision.allowed)
+
+    def test_allows_documented_cdidx_resolver_and_mcp_smoke_commands(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            'CDIDX="$(readlink -f "$HOME/.local/bin/cdidx" 2>/dev/null || realpath "$HOME/.local/bin/cdidx")"',
+            """echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp""",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertTrue(decision.allowed)
+
     def test_denies_global_cdidx_and_search_tools(self) -> None:
         root = Path("/tmp")
         for command in (
             "cdidx search SymbolExtractor",
             "~/.local/bin/cdidx search SymbolExtractor",
             "$HOME/.local/bin/cdidx search SymbolExtractor",
+            "${HOME}/.local/bin/cdidx search SymbolExtractor",
             "grep -R SymbolExtractor src",
             "git grep SymbolExtractor",
             "find . -name '*.cs'",
