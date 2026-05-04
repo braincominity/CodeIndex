@@ -424,6 +424,19 @@ class CommandGuardCoreTests(TestCase):
             self.assertEqual([script.resolve()], compact_scripts)
             self.assertFalse(script_decision.allowed)
 
+    def test_denies_cwd_changing_shell_builtins(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "cd tools && bash guard.sh",
+            "cd tools&&bash guard.sh",
+            "pushd tools",
+            "popd",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
+
     def test_wrapper_script_execution_is_scanned(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

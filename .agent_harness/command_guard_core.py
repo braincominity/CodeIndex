@@ -64,6 +64,7 @@ _MACOS_AUTOMATION_COMMANDS = {"open", "osascript", "automator"}
 _MACOS_SYSTEM_COMMANDS = {"launchctl", "security", "tccutil", "spctl", "csrutil", "tmutil"}
 _CLOUD_COMMANDS = {"aws", "gcloud", "az"}
 _SECRET_FILE_READ_COMMANDS = {"cat", "less", "more", "head", "tail", "sed", "awk", "python", "python3", "node", "ruby", "perl", "sqlite3"}
+_CWD_CHANGING_COMMANDS = {"cd", "pushd", "popd"}
 _SECRET_PATH_RE = re.compile(r"(?i)(?:\.env\b|\.env\.|\.pem\b|\.key\b|id_rsa|id_ed25519|credentials?|secrets?)")
 ANSI_C_QUOTE_RE = re.compile(r"\$'")
 
@@ -550,6 +551,8 @@ def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
             return "network download/exfil command is blocked"
         if name == "eval":
             return "eval is blocked; use a direct reviewed command or script file instead."
+        if name in _CWD_CHANGING_COMMANDS:
+            return "cwd-changing shell builtins are blocked; run from the target cwd directly"
         if name == "rm" and _has_recursive_flag(args):
             return "recursive rm is blocked"
         if name in _DESTRUCTIVE_COMMANDS:
