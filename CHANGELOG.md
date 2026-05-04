@@ -9,7 +9,129 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.19.0] - 2026-05-04
+
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+
+#### Added
+
+- **JSON `search --count` output now includes the original query on non-zero results** — count-based JSON search payloads now carry `query` alongside `count` and `files`, so machine consumers can correlate the summary with the exact search input.
+- **JSON search output now includes the original query string** — each compact `search` result row now carries `query`, and zero-result JSON payloads for `search` also include `query` so machine consumers can correlate results with the exact search input.
+- **Markdown now indexes Setext headings and local anchor references** — `SymbolExtractor` recognizes both ATX and Setext headings as `heading` symbols, and local `#anchor` link targets are surfaced as searchable `reference` symbols.
+- **Markdown headings now appear as `heading` symbols in `symbols` and `outline`** — `SymbolExtractor` indexes ATX headings outside fenced code blocks, the outline depth logic can nest them, and the MCP `languages` tool now reports Markdown as symbol-aware.
+- **Added `status --check` for exact DB/workspace freshness checks** — `cdidx status --check --json` now compares indexed file paths and raw-byte checksums against the current indexable workspace, returns `index_matches_workspace`, and exits `5` when the DB is stale so agents can skip unnecessary reindexing when the check passes.
+
+#### Changed
+
+- **Expanded non-C# reference extraction granularity** — TypeScript, Kotlin, Swift, and Rust now index more structural `type_reference` edges from declarations, inheritance/implementation clauses, generic bounds, type tests/casts, and typed variables so symbol workflows can find dependencies with finer language-aware precision.
+
+#### Fixed
+
+- **C functions with GCC/Clang/MSVC attribute specifiers now remain searchable** — `SymbolExtractor` now skips common attribute blocks such as `__attribute__((...))`, `__declspec(...)`, and `_Noreturn` when they appear before or between the return type and function name, so annotated C functions like `__attribute__((noreturn)) void die(void)` and `static inline __attribute__((always_inline)) int add(int, int)` surface in `symbols`.
+- **C search now covers older K&R-style declarations and more complex vendor attributes** — this follow-up to PR 1313 teaches `SymbolExtractor` to keep indexed names for old-style definitions such as `int legacy(a, b) int a; int b; { ... }` and for nested attribute forms such as `__attribute__((format(printf, 1, 2)))` or `__declspec(align(16))`, so annotated or legacy C functions stay searchable.
+- **COBOL procedural statements now surface as searchable references** - `ReferenceExtractor` now records common COBOL copybook includes and everyday statement targets such as `GO TO`, `READ`, `WRITE`, `OPEN`, `MOVE`, `ADD`, `COMPUTE`, and `SEARCH` as `reference` edges, so the names involved in COBOL control flow and data flow stay searchable instead of disappearing into plain text only.
+- **C++-style `.h` headers now promote to `cpp` when the content makes it obvious** — `FileIndexer` keeps plain `.h` files on the C path by default, but upgrades headers that clearly contain C++ markers such as `namespace`, `template`, `using`, `class`, or `std::` so symbol and reference search uses the richer C++ extraction.
+- **C++ `.hh` headers are now indexed as C++** — `FileIndexer` recognizes `.hh` as `cpp`, so C++ headers in that common naming style now participate in symbol and reference search instead of being left to the C fallback.
+- **C# exact `search` / `find` now canonicalize `global::` only at namespace starts** — `global::Foo.Bar` matches `Foo.Bar` in exact mode, while mid-path text such as `Foo.global::Bar` is left untouched. `find` now follows the same rule as `search`.
+- **C# exact substring search now canonicalizes `global::` prefixes** — `search` in `--exact` / `--exact-substring` mode now treats `global::Foo.Bar` the same as `Foo.Bar`, matching the existing verbatim `@` normalization so C# queries find canonical and source spellings consistently.
+- **C# literal-safe `search` now canonicalizes verbatim and `global::` spellings before FTS matching** — queries like `global::Foo.Bar` and `@Foo.@Bar` now search the same indexed C# text as `Foo.Bar`, so default search no longer misses canonical source spellings when the query uses C#-specific escapes.
+- **C# search snippets now normalize verbatim qualified names in all modes** — search excerpt generation now treats `@Foo.@Bar` and `Foo.Bar` as the same C# path even outside exact mode, so verbatim-qualified matches are highlighted consistently instead of depending on the source spelling.
+- **Razor pages now accept `cshtml` and `razor` as C# language filters** — `search --lang cshtml` and `search --lang razor` now normalize to `csharp`, so Razor/Blazor files stay searchable through the CLI and database query APIs.
+- **Razor language aliases are now discoverable in language help and completion** — `languages` and `--lang` help now surface `cshtml` and `razor`, and shell completions include those aliases so published CLI users can find the new search filters.
+- **CSS `animation-name` lists now reference every keyframe name** — comma-separated `animation-name` values such as `fade-in, none, slide-up` now emit references for each real keyframe name instead of only the first entry.
+- **CSS animation shorthand references now advance past timing tokens** - duration-first values such as `animation: 250ms ease-in fade-in` and keyword-only values such as `animation: none` no longer risk stalling reference extraction.
+- **CSS descendant selectors now keep nested class references visible** — `ReferenceExtractor` no longer skips selector lists that start with an element selector, so patterns like `button .card` continue to index `.card` as a searchable reference.
+- **CSS search now keeps class selectors visible inside mixed selector lists** — `ReferenceExtractor` now scans comma-separated selector parts individually, so nested selectors like `button, .card { ... }` still surface `.card` as a searchable reference instead of dropping it when the list starts with an element selector.
+- **`--lang` now recognizes the app's supported language aliases more consistently** — `DbReader` now normalizes language filters using the full target-language set plus common alias spellings such as `c#`, `c++`, `f#`, `vb.net`, `py3`, and SQL dialect variants, so search/definition/reference queries no longer miss matches just because the user used a supported shorthand.
+- **F# operator usages are now indexed as references** — symbolic operator forms such as `x ++ y`, `x >>= f`, and `(++)` now emit searchable `call`-style references, so `references` and `callers` can surface operator call sites alongside ordinary function calls.
+- **F# operator definitions are now indexed for search** — `let (++)`-style operator bindings are normalized to searchable `function` symbols, so `symbols`, `definition`, and related lookups can find them instead of skipping the operator form.
+- **Go embedded interface types are now indexed inside interface bodies** — embedded constraints such as `io.Reader` and `io.Writer` are surfaced as standalone `import` symbols, so `search` can find interface constraints instead of silently skipping them.
+- **Go interface methods are now indexed as functions** — `search`, `definition`, and other symbol-driven flows now surface method names declared inside Go interface bodies, including grouped `type (...)` blocks and single-line interface bodies.
+- **`--lang` now accepts common C# and Kotlin aliases** — query commands treat `c#` and `cs` as `csharp`, and `kt` and `kts` as `kotlin`, so language-filtered searches line up with the shorthand developers already use.
+- **Java, Kotlin, and C# exact search now canonicalize escaped source identifiers** — exact `search` and `find` now treat Java Unicode escapes, Kotlin backticked identifiers, and C# verbatim / `global::` spellings as the same source identifier so canonical and source forms match consistently.
+- **Java search now accepts a shorthand `jav` language filter** — query commands normalize `jav` to `java` and advertise it in language help/completion, so Java searches work with the same style of shorthand already available for other major languages.
+- **Java search now normalizes canonical `Java` language filters too** — the database query layer now treats `Java` the same as `java` and `jav`, so direct search callers keep matching Java rows even when they pass the canonical language name in mixed case.
+- **JavaScript CommonJS search now resolves bracket-notation exports to leaf names** — exact symbol and reference searches now normalize `module.exports["foo"]` and `exports['bar']` to the exported leaf name, so JavaScript CommonJS queries behave consistently across dot and bracket syntax.
+- **JavaScript CommonJS export queries now resolve to leaf symbols** — exact symbol searches now normalize `module.exports.foo` and `exports.bar` to the canonical leaf name, so CommonJS export surfaces are searchable with the same spelling users see in extracted symbols.
+- **JavaScript search now normalizes `Javascript`, `js`, `jsx`, `cjs`, and `mjs` spelling variants** — direct search calls now canonicalize the JavaScript language filter before applying the SQL `lang` predicate, so mixed-casing spellings like `Javascript`, `JS`, `JSX`, `CJS`, and `MJS` still return the indexed JavaScript rows users expect.
+- **TypeScript `import foo = require(...)` lines now index both the alias and module path, even with trailing comments** — `SymbolExtractor` now treats import-equals declarations as searchable anchors for the local alias and the required module target, and it accepts same-line `//` or `/* ... */` comments after the statement terminator.
+- **Perl imports and POD sections are now handled more accurately** - `use` and `require` statements now index module dependencies as `import` symbols, while POD blocks are masked so documentation text in `*.pod` files does not leak fake packages or calls into search results.
+- **Perl package and subroutine symbols are now searchable** - `perl` files now index `package Foo::Bar;` as namespaces and `sub name { ... }` as functions, and Perl is included in reference extraction so `#` comments no longer leak false call hits.
+- **PHP object-member navigation now emits searchable references** — `->member` and `?->member` accesses are now indexed as `reference` edges, while method calls continue to flow through the existing PHP call matcher. This makes property and chained member lookups searchable without adding duplicate call noise.
+- **PHP static access now emits namespace-qualified type references when the target is qualified** — fully-qualified forms like `\App\Models\Config::class` and `\App\Models\Config::rebuild()` now add a `type_reference` edge for `App\Models\Config` as well as the short `Config`, which makes class navigation and search more precise for namespaced PHP code.
+- **PHP static access now leaves searchable type references on the class side** — `Foo::bar()`, `Foo::CONST`, and `Foo::class` now emit `type_reference` edges for the class name, while `self::`, `static::`, and `parent::` stay suppressed so PHP class search picks up the useful static-access sites without adding pseudo-type noise.
+- **Python from-imports now index qualified module paths for search** — `from package import submodule` and similar forms now add `package.submodule`-style import symbols in addition to the leaf names, so exact-name searches can find re-export and nested-import patterns more naturally.
+- **Python `__init__.py` alias re-exports now index qualified package names** — when a package initializer re-exports a module or alias with `import` / `from . import ... as ...`, cdidx now adds `package.alias`-style names alongside the leaf symbol so exact-name search can find those public re-exports.
+- **Python `__all__` re-exports now carry qualified package names in `__init__.py` files** — when a package `__init__.py` lists submodules in `__all__`, cdidx now indexes `package.submodule`-style names in addition to the leaf exports, so exact-name search can find re-exported modules more naturally.
+- **Python `__init__.py` direct imports no longer over-qualify dotted import paths** — when a package initializer imports a dotted module path such as `import package.submodule as alias`, cdidx now avoids synthesizing an extra `package.package.submodule`-style exact-name candidate, reducing noisy matches in larger package trees while keeping the useful leaf and alias lookups.
+- **Python `__init__.py` direct imports now index package-qualified module names** — when a package initializer re-exports a sibling module with `import submodule` or `import submodule as alias`, cdidx now adds the `package.submodule` search name alongside the local symbol so exact-name lookup can find the public module path too.
+- **Python queries now accept `py` as a language alias** — `--lang py` now normalizes to `python` in the query layer and completion aliases, so Python searches and symbol lookups no longer miss the common shorthand.
+- **R namespace references now emit package-qualified reference edges** — `pkg::fun` and `pkg:::fun` are now indexed both as leaf `reference` rows and as package-qualified `pkg::fun` / `pkg:::fun` rows, so namespace-specific searches can disambiguate same-named symbols.
+- **R package loads now index quoted names and `requireNamespace()` imports** — `library("pkg")`, `require("pkg")`, and `requireNamespace("pkg")` now produce import symbols, while `requireNamespace` is suppressed from call-style reference noise so R package usage stays searchable without extra chatter.
+- **Ruby and F# now accept their common short language aliases** — `--lang rb` and `--lang fs` now normalize to `ruby` and `fsharp`, so the query layer and completion aliases accept the short forms people usually type.
+- **Rust search now accepts `rs` as a language alias** — query commands normalize `rs`, `r-s`, and `r s` to `rust`, and the CLI help alias list now advertises the shorthand, so Rust searches work with the form many users type first.
+- **Rust multiline `fn` headers now keep their symbol positions** — wrapped function signatures are collected as a single statement before matching, so `pub unsafe extern` headers and similar multiline forms still index the function name on the correct line and column.
+- **Rust multiline `impl` headers now keep their symbol positions** — wrapped `unsafe impl` / `impl ... for ...` blocks are now collected as a single statement before matching, so the implementing type is indexed even when the header spans several lines.
+- **Rust `use` trees now index across line breaks** — symbol extraction now reads multi-line Rust `use` statements before splitting the tree, so formatted imports like `use std::{ ... }` and `pub(crate) use crate::{ ... }` surface the same import symbols as single-line forms.
+- **Rust qualified exact-search now preserves the full symbol path for exact symbol lookups (#1357)** — Qualified Rust symbol queries now match against the qualified container path instead of collapsing to the leaf name first, so exact searches disambiguate same-named symbols in different modules. The regression test covers the path-aware contract.
+- **Rust exact macro queries now keep their qualified path** — exact searches for qualified Rust macro invocations no longer collapse to the leaf name first, so `crate::macros::build!` resolves the intended path-specific reference instead of overmatching sibling macros.
+- **Rust search now accepts raw identifiers without the `r#` prefix** — symbol and reference queries for names like `r#type` now resolve to the canonical stored form, so search entrypoints match Rust source spellings that use raw identifiers.
+- **Rust raw identifiers now search by canonical names** — Rust symbol extraction strips `r#` from declared names before indexing, so `r#type` is stored and searched as `type`. Symbol search queries also keep matching the canonical name when users include the raw prefix.
+- **Rust raw identifier macro calls are now captured in reference data** — the Rust call extractor recognizes invocations such as `r#type!()` and `crate::r#type!()`, so raw-identifier macro sites are no longer dropped and bare exact searches such as `r#type!` resolve to the canonical stored name.
+- **Rust exact reference search now keeps qualified raw macro spellings path-aware** — queries such as `crate::r#type!` stay on the qualified `crate::type` form instead of collapsing to the bare leaf, so the follow-up candidate from PR #1342 is addressed without changing the broader bare `r#type!` behavior.
+- **Rust multiline `use` imports now preserve per-item positions** — the import symbols emitted from formatted Rust `use` trees now keep the correct line and column for each item instead of falling back to the opening `use` line, which makes search and symbol navigation land on the real import entry.
+- **Shell source-reference indexing now handles quoted operands and dot-sourcing** — `source "./quoted env.sh"` and `. ./lib/common.sh` now emit `reference` edges for the sourced file path, making Linux shell dependency searches and file lookups more complete.
+- **Shell `source` file loads are now indexed as references** — shell scripts that load another script with `source ./env.sh` now emit `reference` edges for the imported path, which makes dependency-style searches and reference lookups more complete on Linux shell projects.
+- **SQL-family language aliases now normalize consistently across the query stack** — `transact-sql`, `transact sql`, and the surfaced `transactsql` spelling now resolve to `sql` the same way `tsql`, `mssql`, and `sqlserver` do, so SQL users get the same behavior whether the spelling reaches the CLI parser or the database reader directly.
+- **SQLite connection setup now enables `busy_timeout` before the first setup PRAGMA** — `DbContext` applies the timeout immediately after opening the connection, before registering functions or switching journal mode, so concurrent read opens are less likely to fail with transient `database is locked` errors on macOS.
+- **Swift declarations with same-line attributes now stay searchable** — the Swift symbol extractor now accepts common attributes such as `@available(...)` and `@discardableResult` before declaration keywords, so annotated `func`, `struct`, `typealias`, `extension`, and related symbols are indexed correctly.
+- **Swift exact symbol search now matches backtick-escaped identifiers by plain name** — exact symbol queries such as `repeat` now also resolve declarations stored as `` `repeat` ``, so Swift search behaves more like the other language-specific exact-name normalizers.
+- **Swift setter-restricted stored properties now keep backtick-escaped names searchable** — Swift property extraction now accepts `private(set)` / `fileprivate(set)` stored properties whose names are written as escaped identifiers, so `symbols` and related search flows can find declarations such as ``private(set) var `class`: Int``.
+- **`--lang` now accepts common T-SQL spellings** — `cdidx search` and the other query commands now normalize `t-sql` and `transact-sql` to `sql`, so T-SQL users no longer need to remember the exact canonical filter spelling.
+- **SQL Server language aliases now resolve to `sql` in query commands** — `search`, `symbols`, `references`, `callers`, `callees`, and `impact` now treat `tsql`, `t-sql`, `mssql`, and `sqlserver` as the same SQL language filter, so T-SQL users can reach indexed files with the spellings they actually type.
+- **TypeScript `export as namespace` declarations are now searchable as namespaces** — `SymbolExtractor` now recognizes UMD-style `export as namespace Foo;` declarations, so legacy declaration files expose their namespace anchors to `search` and other symbol-driven flows.
+- **TypeScript generic type aliases now stay searchable when they use default type parameters** — `SymbolExtractor` now recognizes `type Foo<T = string> = ...`-style aliases instead of missing them, so TypeScript symbol search covers a common generic form that previously fell through.
+- **TypeScript `import = require(...)` declarations are now searchable as imports** — `cdidx` now indexes `import foo = require('bar')` forms so dependency lookups can find legacy TypeScript modules by path.
+- **`--lang ts` now filters TypeScript results** — query commands treat `ts` as `typescript`, and TypeScript is now listed among the language aliases, so searches and completions accept the common shorthand instead of requiring the full language name.
+- **TypeScript language shorthands now cover the full file-extension family** — `--lang` accepts `ts`, `tsx`, `cts`, and `mts`, the language metadata/completion aliases surface the same set, and the CLI help text now advertises them so TypeScript-family files can be filtered with the shorthand that matches their extension.
+- **XAML `x:Type` markup extensions now surface their referenced types as searchable class symbols** — the extractor now scans generic `{x:Type ...}` and `{x:TypeExtension ...}` markup extensions in addition to the existing type-bearing attributes and property/object elements, so type references embedded in ordinary attribute values are discoverable by `symbols` and `RunSymbols`.
+- **XAML language aliases now resolve to XML search** — query filters now canonicalize `xaml` and `axaml` to `xml`, so indexed `.xaml` and `.axaml` files stay searchable whether users type the file format name or the canonical language name.
+- **XAML `x:Static` member references now surface their containing types as searchable class symbols** — following up on PR #1333, the extractor now indexes type names referenced by `x:Static` expressions such as `x:Static local:Keys.AccentBrush` and `x:Static Member={x:Type local:Keys}.PrimaryStyleKey`, so resource-key style markup can still lead search to the owning type.
+- **XAML `TargetType` values are now indexed as searchable class symbols** — `Style`, `ControlTemplate`, and similar XAML elements now surface their `TargetType` values alongside `x:DataType`, so `symbols` and `definition` can find controls declared through XML markup instead of only matching the raw text.
+- **XAML `x:Type` object-element syntax is now indexed as searchable class symbols** — following up on PR #1331, the extractor now recognizes `<x:Type ... TypeName="..."/>` and related `x:TypeExtension` forms, so object-element markup can surface referenced types even when the type name is wrapped across lines.
+- **XAML `x:Type.TypeName` property-element syntax is now indexed as searchable class symbols** — following up on PR #1332, the extractor now recognizes property-element forms such as `<x:Type.TypeName>` and `<x:TypeExtension.TypeName>`, so type names can still be searched when markup uses property-element syntax instead of attributes or object elements.
+- **XAML `x:TypeArguments` now expands nested and wrapped generic constructor shapes** — continuing the follow-up work from PR #1320, the extractor now recursively peels generic type arguments like `Outer(Inner(A, B), C)` even when they are wrapped across lines, so `symbols` and `definition` can find the referenced types inside more complex XAML markup.
+- **XAML `x:TypeArguments` values are now indexed as searchable class symbols** — continuing the follow-up work from PR #1316, generic XAML declarations now surface each type argument so `symbols` and `definition` can find the referenced types instead of treating the generic markup as an opaque string.
+- **Wrapped XAML type-bearing attributes are now indexed as searchable class symbols** — continuing the follow-up work from PR #1329, the extractor now picks up `x:Class`, `x:DataType`, and `TargetType` values even when the attribute value is wrapped onto later lines, so `symbols` and `definition` can find the referenced types inside multiline XAML markup.
+- **`--lang yml` now resolves to `yaml`** — query commands accept the common YML shorthand as an alias, so `search`, `files`, `symbols`, and related filters no longer return zero rows when users pass the file-format name they expect.
+- **YML now appears in language discovery output** — `cdidx languages`, MCP `languages`, and shell completion now surface `yml` alongside `yaml`, so discoverability matches the query alias that `--lang yml` already accepts.
+
+#### Documentation
+
+- **Restored README Fair Source license parity** — the Japanese README section now mirrors the English FSL badge, Fair Source heading, and Apache-2.0 license link expected by the repository license policy tests.
+- **README now focuses on first-time GitHub readers** - moved the extended install, command, MCP, and language documentation into `USER_GUIDE.md` while keeping compact comparison guidance and links from the concise README.
+
+#### Internal
+
+- **COBOL reference extraction was split out of the large shared extractor** - COBOL statement regexes and `PERFORM ... THRU ...` range expansion now live in a dedicated helper, reducing repetition in the shared `ReferenceExtractor` while preserving the indexed reference behavior.
+- **Split C# constructor reference handling into a dedicated helper** — C# constructor-chain rewrites now live in `CSharpReferenceExtractor`, reducing `ReferenceExtractor` size while preserving existing `this(...)` and `base(...)` reference output.
+- **Routed remaining C# reference scanners through the C# helper** — C# type-position references, XML-doc `cref` references, pattern-head suppression, switch-expression patterns, and qualified enum-member references now enter through `CSharpReferenceExtractor` while preserving existing extraction behavior.
+- **CSS/SCSS reference extraction was split out of the large shared extractor** - custom property, animation, selector, variable, and extend references now use a dedicated helper with shared reference-emission loops, reducing `ReferenceExtractor` size while preserving indexed behavior.
+- **Dockerfile reference extraction was split out of the large shared extractor** - named stage dependency detection for `FROM ... AS` and `COPY --from=` now lives in a dedicated helper while preserving indexed reference behavior.
+- **Extracted the F# reference helper** — F# pipeline, space-application, and symbolic operator call references now live in a dedicated helper while preserving existing reference output.
+- **Split Java constructor reference handling into a dedicated helper** — Java constructor-chain rewrites and same-line constructor container recovery now live in `JavaReferenceExtractor`, reducing `ReferenceExtractor` size while preserving existing reference output.
+- **Moved remaining Java type-position reference extraction into the Java helper** — Java `extends` / `implements`, generic bounds, `throws`, declaration types, and `instanceof` references now live in `JavaReferenceExtractor` while preserving existing reference output.
+- **Expanded the Java reference helper** — Java `.class` type literals and JPMS module directive references now live in the Java helper while preserving existing type-reference output.
+- **Split JavaScript and TypeScript constructor reference handling into a dedicated helper** — parenless zero-argument constructor reference emission now lives in `JavaScriptReferenceExtractor`, reducing `ReferenceExtractor` size while preserving existing JS/TS reference output.
+- **Extracted JVM method-reference helpers** — Java, Kotlin, and Scala `::` method-reference indexing now enters through language-specific helpers backed by a shared JVM scanner.
+- **Extracted the Ruby reference helper** — Ruby command-style calls, block calls, and DSL target references now live in a dedicated helper while preserving existing reference output.
+- **Extracted Scala and Gradle reference helpers** — Scala trailing block calls and Gradle/Groovy DSL call passes now live in dedicated helpers while preserving existing reference output.
+- **Extracted additional scripting-language reference helpers** — Python decorator references, R namespace references, PHP member/type references, and PowerShell cmdlet-style calls now live in dedicated helper classes while preserving the existing reference emission path.
+- **Extracted Shell and Batch reference helpers** — Shell command/source/global-alias references and Batch `goto` / `call` label-target references now live in dedicated helper classes while preserving existing reference output.
+- **Split SQL reference extraction into a dedicated helper** — SQL source/target reference emission, temp-object tracking, and procedure-call suppression now live in `SqlReferenceExtractor`, reducing `ReferenceExtractor` size without changing indexed reference behavior.
+- **Extracted Swift and Kotlin reference helpers** — Swift trailing closure and Kotlin trailing lambda call references now enter through dedicated helpers backed by a shared scanner.
+- **Terraform reference extraction was split out of the large shared extractor** - dotted Terraform dependency forms now use a dedicated helper with a shared pattern loop, reducing repeated reference-emission code while preserving indexed behavior.
+- **Added TypeScript and Rust reference-extractor helpers** — TypeScript type-reference emission now routes through a dedicated helper, and Rust macro/raw-identifier reference handling moved into `RustReferenceExtractor` without changing indexed reference semantics.
 
 ### [1.18.0] - 2026-05-02
 
@@ -1229,7 +1351,129 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.19.0] - 2026-05-04
+
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+#### 追加
+
+- **JSON 形式の `search --count` 出力が非0件でも元の検索文字列を含むようになりました** — count ベースの JSON search payload に `count` と `files` に加えて `query` も載せることで、要約結果と検索入力を機械処理側で正確に対応付けられるようにしました。
+- **JSON 形式の search 出力に元の検索文字列が含まれるようになりました** — `search` の compact 結果行に `query` を追加し、`search` の 0 件 JSON payload にも `query` を含めることで、機械処理側で結果と検索入力を正確に対応付けやすくしました。
+- **Markdown で Setext 見出しと local anchor 参照を索引するようになりました** — `SymbolExtractor` は ATX と Setext の両方を `heading` シンボルとして認識し、`#anchor` の local 参照も検索可能な `reference` シンボルとして表面化します。
+- **Markdown の見出しが `symbols` と `outline` で `heading` シンボルとして見えるようになりました** — `SymbolExtractor` は fenced code block 外の ATX 見出しを索引し、outline の深さ計算でネストを表現できるようになり、MCP の `languages` ツールでも Markdown がシンボル対応言語として表示されます。
+- **DB と workspace の完全一致を確認する `status --check` を追加** — `cdidx status --check --json` は indexed file の path と raw-byte checksum を現在の index 対象 workspace と比較し、`index_matches_workspace` を返します。不一致なら終了コード `5` になるため、agent は一致時に不要な再インデックスを避けられます。
+
+#### 変更
+
+- **C# 以外の参照抽出粒度を拡張しました** — TypeScript、Kotlin、Swift、Rust で宣言、継承/実装句、generic 境界、型テスト/キャスト、型付き変数からより多くの構造的な `type_reference` エッジを索引化し、シンボル系ワークフローが依存関係をより細かい言語別精度で辿れるようになりました。
+
+#### 修正
+
+- **GCC/Clang/MSVC の attribute specifier 付き C 関数も検索できるようになりました** — `SymbolExtractor` が `__attribute__((...))`、`__declspec(...)`、`_Noreturn` のような attribute ブロックを、戻り値型の前や戻り値型と関数名の間でスキップするため、`__attribute__((noreturn)) void die(void)` や `static inline __attribute__((always_inline)) int add(int, int)` のような注釈付き C 関数が `symbols` に現れるようになります。
+- **C 検索が古い K&R 形式の宣言と、より複雑な vendor 属性に対応しました** — PR 1313 の follow-up として、`SymbolExtractor` が `int legacy(a, b) int a; int b; { ... }` のような old-style 定義や、`__attribute__((format(printf, 1, 2)))` / `__declspec(align(16))` のような入れ子属性でも名前を索引するため、注釈付き・古い書き方の C 関数も引き続き検索できます。
+- **COBOL の手続き文が検索可能な reference として出るようになりました** - `ReferenceExtractor` が COBOL の copybook include に加えて `GO TO`、`READ`、`WRITE`、`OPEN`、`MOVE`、`ADD`、`COMPUTE`、`SEARCH` などの文の対象名も `reference` edge として記録するため、COBOL の制御フローやデータフローに出てくる名前を全文検索だけに頼らず辿れます。
+- **C++ らしい `.h` ヘッダーは内容から明白な場合に `cpp` へ昇格するようになりました** — `FileIndexer` は通常の `.h` を既定で C のまま扱いますが、`namespace`、`template`、`using`、`class`、`std::` などの C++ マーカーが明確なヘッダーは C++ 抽出を使うように切り替え、symbol / reference search を強化します。
+- **C++ の `.hh` ヘッダーを C++ として index するようになりました** — `FileIndexer` が `.hh` を `cpp` として認識するため、その一般的な命名規則の C++ ヘッダーも C のフォールバックに落ちず、symbol / reference search に参加します。
+- **C# の exact `search` / `find` で `global::` を namespace 開始位置に限って正規化するようになりました** — exact モードでは `global::Foo.Bar` を `Foo.Bar` と同一視しつつ、`Foo.global::Bar` のような途中の文字列はそのまま残します。`find` も `search` と同じルールに追従します。
+- **C# の exact / exact-substring 検索で `global::` 接頭辞を正規化するようになりました** — `search` の `--exact` / `--exact-substring` モードで `global::Foo.Bar` を `Foo.Bar` と同一視し、既存の verbatim `@` 正規化と同じく C# の canonical 表記と source 表記を一貫して検索できるようにしました。
+- **C# の literal-safe `search` で verbatim / `global::` 表記を FTS 前に正規化するようになりました** — `global::Foo.Bar` や `@Foo.@Bar` のようなクエリでも、`Foo.Bar` と同じ C# インデックス済みテキストを検索するため、C# 固有の escape 表記が原因で canonical な source 表記を取りこぼさなくなります。
+- **C# の search snippet で verbatim 修飾名を全モードで正規化するようになりました** — search excerpt の生成時に exact 以外でも `@Foo.@Bar` と `Foo.Bar` を同じ C# の経路として扱うため、verbatim 修飾名の一致が source の綴りに左右されず一貫してハイライトされます。
+- **Razor ページで `cshtml` と `razor` を C# の言語フィルタとして使えるようにしました** — `search --lang cshtml` と `search --lang razor` が `csharp` に正規化されるため、Razor/Blazor ファイルを CLI と DB クエリ API の両方から引き続き検索できます。
+- **Razor の言語エイリアスが language help と補完で見つけやすくなりました** — `languages` と `--lang` のヘルプで `cshtml` と `razor` が表示され、シェル補完にも含まれるため、公開済み CLI から新しい検索フィルタを見つけやすくなります。
+- **CSS の `animation-name` リストが全 keyframe 名を参照化するようになりました** — `fade-in, none, slide-up` のようなカンマ区切りの `animation-name` 値で、先頭だけでなく実際の keyframe 名すべてを reference として発行します。
+- **CSS animation shorthand reference が timing token を読み飛ばして進むようになりました** - `animation: 250ms ease-in fade-in` のような duration-first 値や `animation: none` のような keyword-only 値で reference 抽出が停止するリスクをなくしました。
+- **CSS の descendant selector でも入れ子の class reference が見えるようになりました** — `ReferenceExtractor` は要素セレクタで始まる selector list もスキップしなくなり、`button .card` のようなパターンでも `.card` が検索可能な reference として index されます。
+- **CSS 検索で mixed selector list 内の class selector を取りこぼさなくなりました** — `ReferenceExtractor` が comma 区切りの selector 部分を個別に見るようになり、`button, .card { ... }` のような nested selector でも `.card` を検索可能な reference として拾えるようになりました。selector list が要素セレクタから始まっても落ちません。
+- **`--lang` がアプリの対象言語 alias をより一貫して認識するようになりました** — `DbReader` は対象言語の一覧に加えて `c#`、`c++`、`f#`、`vb.net`、`py3`、SQL 方言の表記ゆれなどの alias も正規化するため、検索 / 定義 / 参照クエリでサポート済みの短縮表記を使っても取りこぼしにくくなりました。
+- **F# の operator 使用箇所が reference としてインデックスされるようになりました** — `x ++ y` / `x >>= f` / `(++)` のような symbolic operator 形も検索可能な `call` 風 reference を出すため、`references` / `callers` で通常の関数呼び出しと同様に operator の呼び出し箇所を辿れるようになりました。
+- **F# の operator 定義が検索対象としてインデックスされるようになりました** — `let (++)` のような operator binding を検索可能な `function` シンボルに正規化することで、`symbols` / `definition` などの検索で operator 形が取りこぼされなくなりました。
+- **Go の埋め込み interface 型が interface 本体内でもインデックスされるようになりました** — `io.Reader` や `io.Writer` のような埋め込み制約を standalone な `import` シンボルとして表に出すため、`search` で interface 制約を見つけられるようになり、無言で取りこぼされなくなります。
+- **Go の interface メソッドが function としてインデックスされるようになりました** — Go の interface 本体内で宣言されたメソッド名が `search` / `definition` などのシンボル駆動フローに現れるようになり、`type (...)` の grouped block や 1 行 interface body も対象になります。
+- **`--lang` が C# と Kotlin の一般的な別名を受け付けるようになりました** — クエリ系コマンドで `c#` と `cs` は `csharp`、`kt` と `kts` は `kotlin` として扱うため、普段使いの省略形でも言語フィルタ付き検索をそのまま使えます。
+- **Java / Kotlin / C# の exact 検索で escaped source identifier を正規化するようになりました** — exact `search` / `find` では Java の Unicode escape、Kotlin の backticked identifier、C# の verbatim / `global::` 表記を同一視し、canonical と source の表記を一貫して検索できるようにしました。
+- **Java 検索で `jav` という省略形の言語フィルタを使えるようになりました** — クエリ系コマンドは `jav` を `java` に正規化し、言語ヘルプ / 補完にも表示するため、他の主要言語と同じ感覚で Java 検索を省略形でも実行できます。
+- **Java 検索で canonical な `Java` 言語フィルタも正規化するようになりました** — データベースのクエリ層で `Java` を `java` / `jav` と同一視するため、直接 search を呼ぶ側が canonical 名を大文字小文字混在で渡しても Java 行を取りこぼしません。
+- **JavaScript の CommonJS 検索でブラケット記法の export を leaf 名へ解決するようになりました** — exact な symbol / reference 検索が `module.exports["foo"]` と `exports['bar']` を export 先の leaf 名へ正規化するため、JavaScript CommonJS の query がドット記法とブラケット記法の間で一貫して動作します。
+- **JavaScript の CommonJS export クエリが leaf シンボルへ解決されるようになりました** — exact symbol search で `module.exports.foo` や `exports.bar` を canonical な leaf 名へ正規化するため、CommonJS export surface を抽出済みシンボルと同じ綴りで検索できます。
+- **JavaScript 検索で `Javascript`、`js`、`jsx`、`cjs`、`mjs` の表記ゆれを正規化するようになりました** — 直接検索呼び出しでも JavaScript の言語フィルタを SQL の `lang` 条件にかける前に canonical 化するため、`Javascript` / `JS` / `JSX` / `CJS` / `MJS` のような表記ゆれでも期待どおり indexed 済みの JavaScript 行が返ります。
+- **TypeScript の `import foo = require(...)` 行で alias と module path の両方を、行末コメント付きでも索引するようになりました** — `SymbolExtractor` は import-equals 宣言をローカル alias と require された module 先の両方に対する検索アンカーとして扱い、文末の `//` / `/* ... */` コメントも受け付けます。
+- **Perl の import と POD セクションをより正確に扱うようになりました** - `use` / `require` 文は module dependency を `import` symbol として index し、POD ブロックはマスクすることで `*.pod` の文書テキストが偽の package / call として検索結果に漏れなくなります。
+- **Perl の package と subroutine が検索できるようになりました** - `perl` ファイルでは `package Foo::Bar;` を namespace、`sub name { ... }` を function として index し、reference extraction にも Perl を追加したので `#` コメントから誤った call が漏れなくなります。
+- **PHP の object-member navigation が検索可能な reference として索引されるようになりました** — `->member` と `?->member` のアクセスを `reference` edge として index し、method call は従来の PHP call matcher にそのまま流すようにしました。これにより、property や連鎖した member lookup を重複した call ノイズなしで検索できます。
+- **PHP の静的アクセスで、修飾済みターゲットに namespace-qualified な type reference を追加しました** — `\App\Models\Config::class` や `\App\Models\Config::rebuild()` のような fully-qualified 形では、短い `Config` に加えて `App\Models\Config` への `type_reference` も出すようにし、名前空間付き PHP コードでのクラス検索とナビゲーションをより正確にしました。
+- **PHP の静的アクセスでクラス側に検索可能な type reference を出すようになりました** — `Foo::bar()`、`Foo::CONST`、`Foo::class` からクラス名への `type_reference` を追加し、`self::`、`static::`、`parent::` は抑止したままにすることで、PHP のクラス検索で有用な static access を拾いつつ pseudo-type のノイズを増やさないようにしました。
+- **Python の from-import でも修飾済みモジュール名を検索用に索引するようになりました** — `from package import submodule` のような形でも `package.submodule` 形式の import symbol を leaf 名と併せて追加するため、exact-name 検索で re-export や入れ子 import を見つけやすくなります。
+- **Python の `__init__.py` における alias 再エクスポートは修飾済み package 名でも索引されます** — package initializer が `import` や `from . import ... as ...` で module や alias を再エクスポートしている場合、cdidx は leaf symbol に加えて `package.alias` 形式の名前も追加するため、exact-name 検索で公開 re-export を見つけやすくなります。
+- **Python の `__all__` 再エクスポートは `__init__.py` で修飾済み package 名も持つようになりました** — package の `__init__.py` が `__all__` に submodule を列挙している場合、cdidx は leaf export に加えて `package.submodule` 形式の名前も索引するため、exact-name 検索で再エクスポートされたモジュールを見つけやすくなります。
+- **Python の `__init__.py` における direct import は dotted な import path を過剰に修飾しなくなりました** — package initializer が `import package.submodule as alias` のように dotted module path を import する場合、cdidx は `package.package.submodule` のような余計な exact-name 候補を生成しないため、大きな package tree でのノイズを減らしつつ leaf / alias の検索性は維持します。
+- **Python の `__init__.py` における direct import は package 修飾済みの module 名も索引するようになりました** — package initializer が `import submodule` や `import submodule as alias` で sibling module を再エクスポートしている場合、cdidx は local symbol に加えて `package.submodule` の検索名も追加するため、exact-name 検索で公開された module パスも見つけられます。
+- **Python の検索で `py` を言語エイリアスとして受け付けるようになりました** — `--lang py` はクエリ層と補完用エイリアスの両方で `python` に正規化されるため、Python の検索やシンボル検索で一般的な短縮入力を取りこぼさなくなりました。
+- **R の namespace 参照が package 修飾つきの reference edge として出るようになりました** — `pkg::fun` と `pkg:::fun` を leaf の `reference` 行に加えて `pkg::fun` / `pkg:::fun` の package 修飾名でも索引するため、同名 symbol を namespace 単位で見分けながら検索できます。
+- **R の package 読み込みで引用付き名前と `requireNamespace()` を import として索引するようになりました** — `library("pkg")` / `require("pkg")` / `requireNamespace("pkg")` が import symbol を生成し、`requireNamespace` は call 由来のノイズからも除外されるため、R の package 利用を余計な雑音なしで検索しやすくなります。
+- **Ruby と F# でも一般的な短縮言語名を受け付けるようになりました** — `--lang rb` と `--lang fs` はそれぞれ `ruby` と `fsharp` に正規化されるため、クエリ層と補完エイリアスで普段入力される短縮形をそのまま使えます。
+- **Rust 検索で `rs` を言語別名として受け付けるようになりました** — クエリ系コマンドが `rs`、`r-s`、`r s` を `rust` に正規化し、CLI の別名一覧にも短縮形が載るため、Rust 検索を多くの利用者が最初に入力する表記で実行できます。
+- **Rust の複数行 `fn` ヘッダが symbol 位置を保持するようになりました** — 折り返された関数シグネチャを 1 つの statement としてまとめてから照合するため、`pub unsafe extern` のような複数行形式でも関数名を正しい行・列で索引できるようになりました。
+- **Rust の複数行 `impl` ヘッダが symbol 位置を保持するようになりました** — 折り返された `unsafe impl` / `impl ... for ...` ブロックを 1 つの statement としてまとめてから照合するため、ヘッダが複数行にまたがっても実装対象型を索引できるようになりました。
+- **Rust の `use` tree を改行またぎで索引するようになりました** — symbol extraction が複数行の Rust `use` 文を先にまとめてから tree を分解するため、`use std::{ ... }` や `pub(crate) use crate::{ ... }` のような整形済み import でも 1 行版と同じ import symbol が出るようになりました。
+- **Rust の qualified exact-search は exact symbol lookup で完全な symbol path を保つようになりました (#1357)** — qualified Rust symbol query は leaf 名へ畳み込むのではなく、qualified container path に対して照合されるため、異なる module にある同名 symbol を exact search で区別できます。regression test で path-aware 契約を確認しています。
+- **Rust の exact な macro クエリが qualified path を保持するようになりました** — qualified な Rust macro 呼び出しの exact search では leaf 名に潰さず、そのまま path を使って照合するため、`crate::macros::build!` が sibling macro に誤って広がらず、意図した参照だけを返します。
+- **Rust 検索が `r#` プレフィックスなしの raw identifier を受け付けるようになりました** — `r#type` のような名前の symbol / reference query が、DB に保存されている正規化済みの形式へ解決されるため、raw identifier を使う Rust ソース表記でも検索入口が一致するようになります。
+- **Rust の raw identifier が canonical 名で検索できるようになりました** — Rust のシンボル抽出では宣言名から `r#` を取り除いて index するため、`r#type` は `type` として保存・検索されます。検索クエリ側も raw prefix を付けた入力を canonical 名に合わせて扱います。
+- **Rust の raw identifier を使った macro 呼び出しが reference data に載るようになりました** — Rust の call extractor が `r#type!()` や `crate::r#type!()` のような呼び出しを認識するため、raw identifier の macro site が落ちなくなり、`r#type!` のような bare な exact search も保存済みの canonical 名に解決されます。
+- **Rust の exact な reference search で qualified な raw macro 表記を path-aware のまま扱うようにしました** — `crate::r#type!` のような query は bare な leaf へ潰さず `crate::type` のまま扱うため、PR #1342 の follow-up candidate を解消しつつ、bare な `r#type!` の挙動はそのまま維持しています。
+- **Rust の複数行 `use` import が item ごとの位置を保持するようになりました** — 整形された Rust `use` tree から出力される import symbol が、先頭の `use` 行ではなく各 item の正しい行・列を保持するため、検索や symbol ナビゲーションが実際の import 項目に着地するようになります。
+- **Shell の source 参照索引が quoted operand と dot-sourcing に対応しました** — `source "./quoted env.sh"` と `. ./lib/common.sh` が参照先のファイルパスに対して `reference` エッジを出力するようになり、Linux shell の依存関係検索とファイル検索がより完全になります。
+- **Shell の `source` によるファイル読込を参照として索引するようになりました** — `source ./env.sh` で別スクリプトを読み込む shell スクリプトは、読み込まれたパスに対して `reference` エッジを出力するため、Linux shell プロジェクトでの依存関係検索と参照検索がより完全になります。
+- **SQL 系の言語別名がクエリスタック全体で一貫して正規化されるようになりました** — `transact-sql`、`transact sql`、そして表示される `transactsql` 表記も `tsql`、`mssql`、`sqlserver` と同様に `sql` へ解決されるため、CLI パーサー経由でも DB reader 直呼びでも同じ挙動になります。
+- **SQLite の接続初期化で最初の setup PRAGMA より前に `busy_timeout` を有効化するようにしました** — `DbContext` は接続を開いた直後、関数登録や journal mode 切り替えの前にタイムアウトを設定するため、macOS での並行 read open が一時的な `database is locked` で失敗しにくくなります。
+- **Swift の同一行属性付き宣言も検索できるようになりました** — Swift のシンボル抽出で `@available(...)` や `@discardableResult` などの一般的な属性を宣言キーワードの前に受け入れるようにし、注釈付きの `func` / `struct` / `typealias` / `extension` などが正しくインデックスされるようになりました。
+- **Swift の exact symbol search でバッククォート付き識別子を素の名前でも引けるようにしました** — `repeat` のような exact クエリが `` `repeat` `` として保存された Swift 宣言にも一致するようになり、他言語の exact-name 正規化と同じ感覚で検索できるようになりました。
+- **Swift の setter 制限付き stored property でもバッククォート付き名前を検索できるようにしました** — Swift の property 抽出で `private(set)` / `fileprivate(set)` の stored property に加えてエスケープ識別子の名前を受け付けるようになり、``private(set) var `class`: Int`` のような宣言も `symbols` や関連する検索フローから見つけられるようになりました。
+- **`--lang` が一般的な T-SQL 表記を受け付けるようになりました** — `cdidx search` を含む各種 query コマンドが `t-sql` と `transact-sql` を `sql` に正規化するため、T-SQL 利用時に canonical なフィルタ表記を覚えていなくても検索できます。
+- **SQL Server の言語別名がクエリコマンドで `sql` に正規化されるようになりました** — `search`、`symbols`、`references`、`callers`、`callees`、`impact` が `tsql`、`t-sql`、`mssql`、`sqlserver` を同じ SQL 言語フィルタとして扱うため、T-SQL 利用者が実際に入力しがちな綴りでインデックス済みファイルに到達できます。
+- **TypeScript の `export as namespace` 宣言を namespace として検索できるようになりました** — `SymbolExtractor` が UMD 形式の `export as namespace Foo;` 宣言を認識するため、古い declaration file でも namespace の検索アンカーが `search` などの symbol ベースの処理に現れます。
+- **TypeScript の generic type alias が default type parameter を使っていても検索対象に残るようになりました** — `SymbolExtractor` が `type Foo<T = string> = ...` 形式の alias を取りこぼさず認識するため、TypeScript の symbol search でよくある generic 形式を拾えるようになりました。
+- **TypeScript の `import = require(...)` 宣言も import として検索できるようになりました** — `cdidx` は `import foo = require('bar')` 形式を index するため、従来型の TypeScript モジュールもパス指定で見つけやすくなります。
+- **`--lang ts` で TypeScript の結果を絞り込めるようになりました** — クエリ系コマンドで `ts` を `typescript` として扱い、TypeScript も言語別名として列挙するため、検索や補完で長い正式名を毎回入力しなくても済みます。
+- **TypeScript の言語 shorthand が拡張子ファミリー全体をカバーするようになりました** — `--lang` は `ts` / `tsx` / `cts` / `mts` を受け付け、言語メタデータと補完の alias も同じ集合を返し、CLI の help でもその alias 群を案内するため、TypeScript 系ファイルを拡張子に沿った shorthand で絞り込めます。
+- **XAML の `x:Type` markup extension から参照 type を検索可能な class シンボルとして拾うようになりました** — 既存の type-bearing 属性や property/object element に加えて、一般的な `{x:Type ...}` / `{x:TypeExtension ...}` markup extension も走査するようにし、通常の属性値に埋め込まれた type 参照も `symbols` と `RunSymbols` から辿れるようにしました。
+- **XAML の言語別名が XML 検索に正規化されるようになりました** — クエリフィルタが `xaml` と `axaml` を `xml` に正規化するため、`xml` で索引された `.xaml` / `.axaml` ファイルをファイル形式名でも canonical な言語名でも検索できます。
+- **XAML の `x:Static` メンバー参照から包含 type を検索可能な class シンボルとして拾うようになりました** — PR #1333 の follow-up として、`x:Static local:Keys.AccentBrush` や `x:Static Member={x:Type local:Keys}.PrimaryStyleKey` のような式から type 名を index し、リソースキー系のマークアップでも所有 type に検索で辿れるようになりました。
+- **XAML の `TargetType` 値を検索可能な class シンボルとして index するようになりました** — `Style` や `ControlTemplate` などの XAML 要素で指定された `TargetType` を `x:DataType` と同様に拾うため、`symbols` / `definition` で XML マークアップ経由のコントロール定義を raw text だけに頼らず見つけられるようになりました。
+- **XAML の `x:Type` object-element 構文を検索可能な class シンボルとして index するようになりました** — PR #1331 の follow-up として、`<x:Type ... TypeName="..."/>` および関連する `x:TypeExtension` 形を認識し、TypeName が複数行に折り返されていても object-element マークアップ内の参照型を拾えるようになりました。
+- **XAML の `x:Type.TypeName` property-element 構文を検索可能な class シンボルとして index するようになりました** — PR #1332 の follow-up として、`<x:Type.TypeName>` や `<x:TypeExtension.TypeName>` のような property-element 形を認識し、属性や object-element ではなく property-element 構文を使っていても参照型を検索できるようになりました。
+- **XAML の `x:TypeArguments` が入れ子かつ折り返し付きの generic constructor 形状を展開するようになりました** — PR #1320 の follow-up として、`Outer(Inner(A, B), C)` のような generic 型引数を改行をまたいでいても再帰的に展開し、`symbols` / `definition` がより複雑な XAML マークアップ内の参照型も見つけられるようになりました。
+- **XAML の `x:TypeArguments` 値を検索可能な class シンボルとして index するようになりました** — PR #1316 の follow-up として、generic な XAML 宣言で使われる各 type argument を拾うため、`symbols` / `definition` で generic マークアップ全体を不透明な文字列として扱わず、参照先の型を直接見つけられるようになりました。
+- **折り返しされた XAML の型関連属性を検索可能な class シンボルとして index するようになりました** — PR #1329 の follow-up として、`x:Class` / `x:DataType` / `TargetType` の値が後続行に折り返されていても拾えるようにし、`symbols` / `definition` が multiline XAML マークアップ内の参照型を見つけられるようになりました。
+- **`--lang yml` が `yaml` として解決されるようになりました** — クエリ系コマンドが YML の慣用表記を別名として受け付けるため、`search` / `files` / `symbols` などで、期待するファイル形式名をそのまま指定しても 0 件になりにくくなります。
+- **YML が言語探索結果に表示されるようになりました** — `cdidx languages`、MCP の `languages`、および shell completion が `yaml` と並んで `yml` を出すため、`--lang yml` で受け付ける別名と discoverability が一致します。
+
+#### ドキュメント
+
+- **README の Fair Source ライセンス表記の整合性を復元しました** — 日本語版 README セクションでも、リポジトリのライセンスポリシーテストが期待する FSL バッジ、Fair Source 見出し、Apache-2.0 ライセンスリンクを英語版と揃えました。
+- **README を GitHub の初回訪問者向けの要点に絞りました** - 詳細なインストール、コマンド、MCP、対応言語の説明を `USER_GUIDE.md` に移し、簡潔な README には短い比較案内と参照リンクを残しました。
+
+#### 内部変更
+
+- **COBOL reference 抽出を大きな共通 extractor から分離しました** - COBOL 文の regex と `PERFORM ... THRU ...` の範囲展開を専用 helper に移し、indexed reference の挙動を保ったまま共通 `ReferenceExtractor` 内の重複を減らしました。
+- **C# のコンストラクタ参照処理を専用ヘルパーへ分離** — C# の constructor-chain 書き換えを `CSharpReferenceExtractor` に移し、既存の `this(...)` / `base(...)` 参照出力を維持したまま `ReferenceExtractor` を小さくしました。
+- **残っていた C# 参照スキャナーを C# helper 経由にしました** — C# の type-position reference、XML-doc `cref` reference、pattern-head 抑制、switch expression pattern、qualified enum member reference が `CSharpReferenceExtractor` を入口にし、既存の抽出挙動は維持しました。
+- **CSS/SCSS reference 抽出を大きな共通 extractor から分離しました** - custom property、animation、selector、variable、extend の参照を専用 helper と共通 reference 出力 loop に移し、indexed behavior を維持したまま `ReferenceExtractor` の肥大化を抑えました。
+- **Dockerfile reference 抽出を大きな共通 extractor から分離しました** - `FROM ... AS` と `COPY --from=` の名前付き stage 依存検出を専用 helper に移し、indexed reference の挙動は維持しました。
+- **F# の reference helper を分割しました** — F# の pipeline、space application、symbolic operator call 参照を専用 helper へ移し、既存の reference 出力は維持しました。
+- **Java のコンストラクタ参照処理を専用ヘルパーへ分離** — Java の constructor-chain 書き換えと same-line constructor container 復元を `JavaReferenceExtractor` に移し、既存の参照出力を維持したまま `ReferenceExtractor` を小さくしました。
+- **残っていた Java type-position 参照抽出を Java helper へ移しました** — Java の `extends` / `implements`、generic bound、`throws`、宣言型、`instanceof` 参照を `JavaReferenceExtractor` に移し、既存の参照出力は維持しました。
+- **Java reference helper を拡張しました** — Java の `.class` type literal と JPMS module directive 参照を Java helper へ移し、既存の type-reference 出力は維持しました。
+- **JavaScript / TypeScript のコンストラクタ参照処理を専用ヘルパーへ分離** — 括弧なし zero-argument constructor の参照発行を `JavaScriptReferenceExtractor` に移し、既存の JS/TS 参照出力を維持したまま `ReferenceExtractor` を小さくしました。
+- **JVM method-reference helper を分割しました** — Java、Kotlin、Scala の `::` method-reference 索引化を言語別 helper 経由にし、共通 JVM scanner で重複を避けました。
+- **Ruby の reference helper を分割しました** — Ruby の command-style call、block call、DSL target 参照を専用 helper へ移し、既存の reference 出力は維持しました。
+- **Scala と Gradle の reference helper を分割しました** — Scala の trailing block call と Gradle/Groovy の DSL call pass を専用 helper へ移し、既存の reference 出力は維持しました。
+- **追加のスクリプト系 reference helper を分割しました** — Python decorator 参照、R namespace 参照、PHP の member / type 参照、PowerShell の cmdlet 形式呼び出しを専用 helper へ移し、既存の reference 発行経路は維持しました。
+- **Shell と Batch の reference helper を分割しました** — Shell の command / source / global alias 参照と Batch の `goto` / `call` label target 参照を専用 helper へ移し、既存の reference 出力は維持しました。
+- **SQL の参照抽出を専用ヘルパーへ分離** — SQL の source/target 参照発行、temp object 追跡、procedure call 抑止を `SqlReferenceExtractor` に移し、インデックスされる参照挙動を変えずに `ReferenceExtractor` を小さくしました。
+- **Swift と Kotlin の reference helper を分割しました** — Swift の trailing closure と Kotlin の trailing lambda call 参照を専用 helper 経由にし、共通 scanner で重複を避けました。
+- **Terraform reference 抽出を大きな共通 extractor から分離しました** - Terraform の dotted dependency 形式を専用 helper と共通 pattern loop に移し、indexed behavior を維持したまま reference 出力コードの重複を減らしました。
+- **TypeScript と Rust の reference extractor helper を追加しました** — TypeScript の型参照発行を専用 helper 経由にし、Rust の macro / raw identifier 参照処理を `RustReferenceExtractor` へ移して、既存のインデックス済み reference の意味は維持しました。
 
 ### [1.18.0] - 2026-05-02
 
@@ -2425,7 +2669,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.18.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.19.0...HEAD
+[1.19.0]: https://github.com/Widthdom/CodeIndex/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/Widthdom/CodeIndex/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0
