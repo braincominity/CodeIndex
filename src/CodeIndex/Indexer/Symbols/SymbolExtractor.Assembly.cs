@@ -18,7 +18,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex AssemblyNamedSectionRegex = new(
-        @"^\s*(?:section|\.section|segment)\s+(?<name>[A-Za-z_.$?@][A-Za-z0-9_.$?@]*)\b",
+        @"^\s*(?:section|\.section|segment)\s+(?<name>[^,\s]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex AssemblyBareSectionRegex = new(

@@ -283,12 +283,14 @@ public class SymbolExtractorTests
 
             section .data
             message: db "hello;not-comment", 0
+            .section .note.GNU-stack,"",@progbits
             """;
 
         var symbols = SymbolExtractor.Extract(1, "assembly", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".text");
         Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".data");
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".note.GNU-stack");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "_start" && symbol.ContainerName == ".text");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == ".loop");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == ".done");

@@ -74,7 +74,12 @@ internal static class AssemblyReferenceExtractor
 
     private static bool IsTargetBearingInstruction(string mnemonic)
     {
-        var lower = mnemonic.ToLowerInvariant();
+        var lower = NormalizeTargetMnemonic(mnemonic);
+        return IsBaseTargetBearingInstruction(lower);
+    }
+
+    private static bool IsBaseTargetBearingInstruction(string lower)
+    {
         return lower is "call" or "callq" or "lcall" or "bl" or "blx" or "bsr" or "jsr" or "rcall"
             || lower is "jmp" or "jmpq" or "ljmp" or "bra" or "br" or "b"
             || lower.StartsWith("j", StringComparison.Ordinal)
@@ -85,6 +90,19 @@ internal static class AssemblyReferenceExtractor
             || lower is "loop" or "loope" or "loopne" or "loopnz" or "loopz";
     }
 
+    private static string NormalizeTargetMnemonic(string mnemonic)
+    {
+        var lower = mnemonic.ToLowerInvariant();
+        if (lower.EndsWith(".n", StringComparison.Ordinal) || lower.EndsWith(".w", StringComparison.Ordinal))
+        {
+            var baseMnemonic = lower[..^2];
+            if (IsBaseTargetBearingInstruction(baseMnemonic))
+                return baseMnemonic;
+        }
+
+        return lower;
+    }
+
     private static bool TryResolveTargetOperand(string mnemonic, string operands, out string targetOperand)
     {
         targetOperand = string.Empty;
@@ -92,7 +110,7 @@ internal static class AssemblyReferenceExtractor
         if (parts.Count == 0)
             return false;
 
-        var lower = mnemonic.ToLowerInvariant();
+        var lower = NormalizeTargetMnemonic(mnemonic);
         targetOperand = lower is "call" or "callq" or "lcall" or "bl" or "blx" or "bsr" or "jsr" or "rcall"
             ? parts[0]
             : parts[^1];

@@ -260,7 +260,10 @@ public class ReferenceExtractorTests
                 jmp .done
             .loop:
                 bl helper
+                blx.w helper
                 bne .loop
+                bne.n .loop
+                bne.w .loop
                 tbz x0, #3, .done
                 bsf ecx, mask
                 lea foo(%rip), %rax
@@ -282,7 +285,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
 
         Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "assembly");
-        Assert.Equal(6, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "call"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "printf"
             && reference.ReferenceKind == "call"
@@ -299,10 +302,18 @@ public class ReferenceExtractorTests
             reference.SymbolName == "helper"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == ".loop");
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == ".loop"));
         Assert.Contains(references, reference =>
             reference.SymbolName == ".loop"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == ".loop");
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == ".loop"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == ".loop"));
         Assert.Contains(references, reference =>
             reference.SymbolName == ".done"
             && reference.ReferenceKind == "call"
