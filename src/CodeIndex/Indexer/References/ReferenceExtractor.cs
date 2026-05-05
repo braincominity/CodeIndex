@@ -827,7 +827,9 @@ public static partial class ReferenceExtractor
             : null;
         var referenceStructuralLines = language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
-            : structuralLines;
+            : UsesCStyleBlockComments(language)
+                ? MaskCStyleBlockCommentLines(structuralLines)
+                : structuralLines;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);

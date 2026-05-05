@@ -313,11 +313,12 @@ internal static class BroadLanguageReferenceExtractor
     {
         var result = new bool[originalLines.Count];
         var inImportBlock = false;
+        var inBlockComment = false;
 
         for (var i = 0; i < originalLines.Count; i++)
         {
             var line = originalLines[i];
-            var codeLine = StripGoLineComment(line);
+            var codeLine = StripGoComments(line, ref inBlockComment);
             var trimmed = codeLine.Trim();
             if (!inImportBlock)
             {
@@ -340,10 +341,22 @@ internal static class BroadLanguageReferenceExtractor
         return result;
     }
 
-    private static string StripGoLineComment(string line)
+    private static string StripGoComments(string line, ref bool inBlockComment)
     {
+        var chars = line.ToCharArray();
         for (var i = 0; i < line.Length; i++)
         {
+            if (inBlockComment)
+            {
+                chars[i] = ' ';
+                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    chars[++i] = ' ';
+                    inBlockComment = false;
+                }
+                continue;
+            }
+
             if (line[i] is '"' or '`')
             {
                 i = SkipGoStringLiteral(line, i);
@@ -351,10 +364,21 @@ internal static class BroadLanguageReferenceExtractor
             }
 
             if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
-                return line[..i];
+            {
+                for (; i < chars.Length; i++)
+                    chars[i] = ' ';
+                break;
+            }
+
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                chars[i++] = ' ';
+                chars[i] = ' ';
+                inBlockComment = true;
+            }
         }
 
-        return line;
+        return new string(chars);
     }
 
     private static int SkipGoStringLiteral(string line, int start)
@@ -747,7 +771,9 @@ internal static class BroadLanguageReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var includeMatch = CppIncludeRegex.Match(originalLine);
+        var includeMatch = !string.IsNullOrWhiteSpace(preparedLine)
+            ? CppIncludeRegex.Match(originalLine)
+            : Match.Empty;
         if (includeMatch.Success)
         {
             var group = includeMatch.Groups["name"];
@@ -801,9 +827,11 @@ internal static class BroadLanguageReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         bool isImportBlockLine)
     {
-        var importMatch = isImportBlockLine
-            ? GoImportBlockEntryRegex.Match(originalLine)
-            : GoImportRegex.Match(originalLine);
+        var importMatch = !string.IsNullOrWhiteSpace(preparedLine)
+            ? isImportBlockLine
+                ? GoImportBlockEntryRegex.Match(originalLine)
+                : GoImportRegex.Match(originalLine)
+            : Match.Empty;
         if (importMatch.Success)
         {
             var group = importMatch.Groups["name"];
@@ -827,8 +855,40 @@ internal static class BroadLanguageReferenceExtractor
         foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
+            if (!IsGoCompositeLiteralContext(preparedLine, group.Index, group.Value.Length))
+                continue;
+
             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
         }
+    }
+
+    private static bool IsGoCompositeLiteralContext(string line, int nameIndex, int nameLength)
+    {
+        var openBraceIndex = line.IndexOf('{', nameIndex + nameLength);
+        if (openBraceIndex < 0)
+            return false;
+
+        var trimmed = line.TrimStart();
+        var firstBraceIndex = line.IndexOf('{');
+        if (trimmed.StartsWith("func ", StringComparison.Ordinal) && firstBraceIndex == openBraceIndex)
+            return false;
+
+        var previous = nameIndex - 1;
+        while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+            previous--;
+        if (previous < 0)
+            return false;
+
+        if (line[previous] is '=' or ':' or '(' or '[' or '{' or ',' or '!' or '&' or '*')
+            return true;
+        if (line[previous] == ']')
+            return !trimmed.StartsWith("func ", StringComparison.Ordinal);
+
+        var tokenEnd = previous + 1;
+        while (previous >= 0 && IsSimpleIdentifierPart(line[previous]))
+            previous--;
+        var token = line[(previous + 1)..tokenEnd];
+        return string.Equals(token, "return", StringComparison.Ordinal);
     }
 
     private static void EmitDartTypeReferences(

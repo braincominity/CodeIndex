@@ -8,7 +8,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PascalEndRegex = new(@"\bend\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex PascalNestedEndBlockStartRegex = new(@"\b(?:case|try)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex PascalRoutineStartRegex = new(@"^\s*(?:(?:class|static)\s+)?(?:procedure|function|constructor|destructor)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex PascalRangeBoundaryRegex = new(@"^\s*(?:interface|implementation|initialization|finalization|end\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PascalRangeBoundaryRegex = new(@"^\s*(?:interface|implementation|initialization|finalization)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPascalRange(string[] lines, int startIndex)
     {
@@ -30,7 +30,7 @@ public static partial class SymbolExtractor
                 if (PascalRoutineStartRegex.IsMatch(trimmed) || PascalRangeBoundaryRegex.IsMatch(trimmed))
                     return (startIndex + 1, null, null);
 
-                var beginCount = CountPascalRangeBlockStarts(code);
+                var beginCount = PascalBeginRegex.Matches(code).Count;
                 if (beginCount == 0)
                     continue;
 

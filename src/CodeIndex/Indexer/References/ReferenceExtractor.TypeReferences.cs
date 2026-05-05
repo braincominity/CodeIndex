@@ -1842,6 +1842,45 @@ public static partial class ReferenceExtractor
         return result;
     }
 
+    private static bool UsesCStyleBlockComments(string language) =>
+        language is "c" or "cpp" or "go" or "objc" or "dart";
+
+    private static string[] MaskCStyleBlockCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var inBlockComment = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            for (var cursor = 0; cursor < chars.Length; cursor++)
+            {
+                if (inBlockComment)
+                {
+                    chars[cursor] = ' ';
+                    if (line[cursor] == '*' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    {
+                        chars[++cursor] = ' ';
+                        inBlockComment = false;
+                    }
+                    continue;
+                }
+
+                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor] = ' ';
+                    inBlockComment = true;
+                }
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
     private static readonly Regex VisualBasicRemCommentRegex = new(
         @"(?:^|:)\s*Rem\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

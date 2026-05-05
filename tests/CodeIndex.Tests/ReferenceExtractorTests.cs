@@ -7014,6 +7014,9 @@ public class ReferenceExtractorTests
     {
         const string content = """
             #include "base/widget.h"
+            /*
+            #include "phantom/widget.h"
+            */
 
             class Service : public BaseService, private IFace {
               Repository* repo;
@@ -7030,6 +7033,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "base/widget.h" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom/widget.h" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "BaseService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IFace" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
@@ -7047,6 +7051,9 @@ public class ReferenceExtractorTests
             import (
                 repo "example.com/app/repo"
                 "example.com/app/model" // )
+                /*
+                "example.com/app/phantom"
+                */
                 "example.com/app/after"
             )
 
@@ -7056,6 +7063,9 @@ public class ReferenceExtractorTests
             }
 
             func Load(input User, options LoadOptions) (Result, error) {
+                if Ready {
+                    cleanup()
+                }
                 defer cleanup
                 item := User{Name: "Ada"}
                 return finish(item, options)
@@ -7077,12 +7087,15 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "after" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate" && r.Context.StartsWith("func Load", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, r => r.SymbolName == "main" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "cleanup" && r.ReferenceKind == "type_reference");
@@ -7269,6 +7282,10 @@ public class ReferenceExtractorTests
               begin
               end;
             }
+            type
+              TLocal = record
+                Value: Integer;
+              end;
             begin
               {
                 case input.Status of
