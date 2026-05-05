@@ -1877,6 +1877,7 @@ public static partial class ReferenceExtractor
 
                 if (inGoRawString)
                 {
+                    chars[cursor] = ' ';
                     if (line[cursor] == '`')
                         inGoRawString = false;
                     cursor++;
@@ -1887,11 +1888,13 @@ public static partial class ReferenceExtractor
                 {
                     if (IsTripleQuoteAt(line, cursor, dartTripleQuote))
                     {
+                        ReplaceWithSpaces(chars, cursor, 3);
                         dartTripleQuote = '\0';
                         cursor += 3;
                         continue;
                     }
 
+                    chars[cursor] = ' ';
                     cursor++;
                     continue;
                 }
@@ -1900,8 +1903,12 @@ public static partial class ReferenceExtractor
                 {
                     var closeIndex = line.IndexOf(cppRawStringTerminator, cursor, StringComparison.Ordinal);
                     if (closeIndex < 0)
+                    {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
                         break;
+                    }
 
+                    ReplaceWithSpaces(chars, cursor, closeIndex + cppRawStringTerminator.Length - cursor);
                     cursor = closeIndex + cppRawStringTerminator.Length;
                     cppRawStringTerminator = null;
                     continue;
@@ -1912,6 +1919,7 @@ public static partial class ReferenceExtractor
 
                 if (language == "go" && line[cursor] == '`')
                 {
+                    chars[cursor] = ' ';
                     inGoRawString = true;
                     cursor++;
                     continue;
@@ -1922,10 +1930,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = IndexOfTripleQuote(line, cursor + dartOpeningLength, dartQuote);
                     if (closeIndex < 0)
                     {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
                         dartTripleQuote = dartQuote;
                         break;
                     }
 
+                    ReplaceWithSpaces(chars, cursor, closeIndex + 3 - cursor);
                     cursor = closeIndex + 3;
                     continue;
                 }
@@ -1935,10 +1945,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = line.IndexOf(rawTerminator, cursor + rawOpeningLength, StringComparison.Ordinal);
                     if (closeIndex < 0)
                     {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
                         cppRawStringTerminator = rawTerminator;
                         break;
                     }
 
+                    ReplaceWithSpaces(chars, cursor, closeIndex + rawTerminator.Length - cursor);
                     cursor = closeIndex + rawTerminator.Length;
                     continue;
                 }

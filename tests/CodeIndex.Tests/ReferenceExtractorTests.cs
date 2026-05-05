@@ -7026,6 +7026,7 @@ public class ReferenceExtractorTests
                 auto item = new Derived<User>();
                 auto raw = R"(not a comment
             /* still raw text
+            auto ghost = new Phantom();
             )";
                 const char* marker = "/*";
                 // docs: /*
@@ -7044,6 +7045,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Phantom");
         Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
     }
 
@@ -7085,6 +7087,7 @@ public class ReferenceExtractorTests
             func RawString() {
                 raw := `not a comment
             /* still raw text
+            _ = Ghost{}
             done`
                 afterRaw(raw)
             }
@@ -7112,6 +7115,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Context.Contains("model.User", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ghost");
         Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate" && r.Context.StartsWith("func Load", StringComparison.Ordinal));
         Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, r => r.SymbolName == "main" && r.ReferenceKind == "type_reference");
@@ -7135,6 +7139,7 @@ public class ReferenceExtractorTests
                 final parsed = const User.fromJson(data);
                 final raw = r'''
             /* still raw text
+            final ghost = Phantom();
             ''';
                 afterRaw();
                 return const UserCard(user);
@@ -7154,6 +7159,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Phantom");
         Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
     }
 
