@@ -426,6 +426,12 @@ internal static class BroadLanguageReferenceExtractor
                     continue;
                 }
 
+                if (chars[cursor] is '"' or '\'')
+                {
+                    cursor = SkipQuotedLiteral(line, cursor);
+                    continue;
+                }
+
                 if (chars[cursor] == '-' && cursor + 3 < chars.Length && chars[cursor + 1] == '-' && chars[cursor + 2] == '[' && chars[cursor + 3] == '[')
                 {
                     chars[cursor++] = ' ';
@@ -435,6 +441,9 @@ internal static class BroadLanguageReferenceExtractor
                     inLongText = true;
                     continue;
                 }
+
+                if (chars[cursor] == '-' && cursor + 1 < chars.Length && chars[cursor + 1] == '-')
+                    break;
 
                 if (chars[cursor] == '[' && cursor + 1 < chars.Length && chars[cursor + 1] == '[')
                 {
@@ -938,6 +947,8 @@ internal static class BroadLanguageReferenceExtractor
 
         if (line[previous] is '=' or ':' or '(' or '[' or '{' or ',' or '!' or '&' or '*')
             return true;
+        if (line[previous] == '.')
+            return previous > 0 && IsSimpleIdentifierPart(line[previous - 1]);
         if (line[previous] == ']')
             return !trimmed.StartsWith("func ", StringComparison.Ordinal);
 

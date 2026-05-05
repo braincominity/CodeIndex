@@ -2075,6 +2075,9 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
+                if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    break;
+
                 if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
                 {
                     chars[cursor] = ' ';

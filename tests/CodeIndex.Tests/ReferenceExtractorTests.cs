@@ -7074,6 +7074,7 @@ public class ReferenceExtractorTests
                 }
                 defer cleanup
                 item := User{Name: "Ada"}
+                qualified := model.User{Name: "Ada"}
                 return finish(item, options)
             }
 
@@ -7108,6 +7109,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Context.Contains("model.User", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate" && r.Context.StartsWith("func Load", StringComparison.Ordinal));
@@ -7418,6 +7420,10 @@ public class ReferenceExtractorTests
             commented value = phantom value
             -}
 
+            -- TODO {- this line comment must not hide later code
+            afterComment :: Extra -> Output
+            afterComment input = finalize input options
+
             render value = format value
             """;
 
@@ -7427,6 +7433,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Extra" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "finalize" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "format" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Phantom" && r.ReferenceKind == "type_reference");
@@ -7485,6 +7493,8 @@ public class ReferenceExtractorTests
             require "longstring"
             stringRender "value"
             ]]
+            local marker = "[["
+            -- docs [[
 
             function run()
               render "value"
