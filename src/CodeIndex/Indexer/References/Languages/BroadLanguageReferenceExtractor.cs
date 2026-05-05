@@ -103,7 +103,7 @@ internal static class BroadLanguageReferenceExtractor
         @"^\s*[a-z_]\w*\s*::\s*(?<types>.+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex HaskellSpaceCallRegex = new(
-        @"(?<![:\w'])(?<name>[a-z_]\w*)\s+(?=(?:[A-Za-z_(]))",
+        @"^\s*(?<name>[a-z_]\w*)\s+(?=(?:[A-Za-z_(]))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex HaskellDefinitionRegex = new(
         @"^\s*(?<name>[a-z_]\w*)\b.*=",
@@ -683,8 +683,7 @@ internal static class BroadLanguageReferenceExtractor
 
         foreach (Match match in SmalltalkMessageSendRegex.Matches(preparedLine))
         {
-            var rawName = match.Groups["selector"].Value;
-            var name = rawName.TrimEnd(':');
+            var name = match.Groups["selector"].Value;
             if (definitionNames?.Contains(name) == true)
                 continue;
             addCallLikeReference(name, match.Groups["selector"].Index);

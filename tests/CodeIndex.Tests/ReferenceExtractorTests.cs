@@ -7279,7 +7279,7 @@ public class ReferenceExtractorTests
     {
         const string content = """
             process :: Repository -> User -> Result
-            process repo user = finalize user
+            process repo user = finalize user options
 
             render value = format value
             """;
@@ -7296,6 +7296,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "repo" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "user" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "options" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "call");
     }
 
@@ -7360,6 +7361,7 @@ public class ReferenceExtractorTests
             UserService >> run
                 self prepare.
                 repository loadUser.
+                repository save: user.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
@@ -7367,6 +7369,8 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "prepare" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "save:" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "repository" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "subclass" && r.ReferenceKind == "call");
