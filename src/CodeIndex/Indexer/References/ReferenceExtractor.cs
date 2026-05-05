@@ -836,6 +836,9 @@ public static partial class ReferenceExtractor
         var goImportBlockLines = language == "go"
             ? BroadLanguageReferenceExtractor.BuildGoImportBlockLineMap(lines)
             : null;
+        var luaReferenceLines = language == "lua"
+            ? BroadLanguageReferenceExtractor.MaskLuaLongCommentAndStringLines(lines)
+            : null;
         var razorReferenceLines = isRazorFile
             ? BroadLanguageReferenceExtractor.MaskRazorCommentLines(lines)
             : null;
@@ -1411,7 +1414,7 @@ public static partial class ReferenceExtractor
                 BroadLanguageReferenceExtractor.EmitTypePositionReferences(
                     language,
                     preparedLine,
-                    originalLine,
+                    luaReferenceLines?[i] ?? originalLine,
                     references,
                     seen,
                     fileId,

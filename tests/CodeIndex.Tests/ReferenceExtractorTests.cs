@@ -7052,6 +7052,7 @@ public class ReferenceExtractorTests
 
             import (
                 repo "example.com/app/repo"
+                jsoniter "github.com/json-iterator/go"
                 "example.com/app/model" // )
                 /*
                 "example.com/app/phantom"
@@ -7087,6 +7088,8 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "jsoniter" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "go" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "after" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "type_reference");
@@ -7206,7 +7209,7 @@ public class ReferenceExtractorTests
 
                 Public Sub New(service As UserService)
                     Dim item As New User()
-                    AddHandler button.Click, AddressOf HandleClick
+                    AddHandler button.Click, AddressOf Me.HandleClick
                 End Sub
 
                 Private Sub OnSave() Handles button.Click
@@ -7224,6 +7227,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Me" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
     }
@@ -7449,6 +7453,12 @@ public class ReferenceExtractorTests
             local json = require "dkjson"
             -- require "commented"
             local text = 'require "stringed"'
+            --[[
+            require "longcomment"
+            ]]
+            local block = [[
+            require "longstring"
+            ]]
 
             function run()
               render "value"
@@ -7464,6 +7474,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "commented" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "stringed" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "longcomment" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "longstring" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "local" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "function" && r.ReferenceKind == "call");
     }

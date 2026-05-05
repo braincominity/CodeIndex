@@ -19,13 +19,13 @@ internal static class BroadLanguageReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex GoImportRegex = new(
-        @"^\s*import\s+(?:(?:[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
+        @"^\s*import\s+(?:(?<alias>[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportBlockStartRegex = new(
         @"^\s*import\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportBlockEntryRegex = new(
-        @"^\s*(?:(?:[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
+        @"^\s*(?:(?<alias>[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoVarTypeRegex = new(
         @"\b(?:var|const)\s+[A-Za-z_]\w*\s+(?<type>[\*\[\]\w.]+)",
@@ -60,7 +60,7 @@ internal static class BroadLanguageReferenceExtractor
         @"\b(?:As|New|Inherits|Implements|Of)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
-        @"\bAddressOf\s+(?<name>[A-Za-z_]\w*)",
+        @"\bAddressOf\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbHandlesRegex = new(
         @"\bHandles\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
@@ -399,6 +399,55 @@ internal static class BroadLanguageReferenceExtractor
         }
 
         return line.Length;
+    }
+
+    public static string[] MaskLuaLongCommentAndStringLines(IReadOnlyList<string> originalLines)
+    {
+        var result = new string[originalLines.Count];
+        var inLongText = false;
+
+        for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
+        {
+            var line = originalLines[lineIndex];
+            var chars = line.ToCharArray();
+            for (var cursor = 0; cursor < chars.Length; cursor++)
+            {
+                if (inLongText)
+                {
+                    if (chars[cursor] == ']' && cursor + 1 < chars.Length && chars[cursor + 1] == ']')
+                    {
+                        chars[cursor++] = ' ';
+                        chars[cursor] = ' ';
+                        inLongText = false;
+                        continue;
+                    }
+
+                    chars[cursor] = ' ';
+                    continue;
+                }
+
+                if (chars[cursor] == '-' && cursor + 3 < chars.Length && chars[cursor + 1] == '-' && chars[cursor + 2] == '[' && chars[cursor + 3] == '[')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor++] = ' ';
+                    chars[cursor++] = ' ';
+                    chars[cursor] = ' ';
+                    inLongText = true;
+                    continue;
+                }
+
+                if (chars[cursor] == '[' && cursor + 1 < chars.Length && chars[cursor + 1] == '[')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor] = ' ';
+                    inLongText = true;
+                }
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
     }
 
     public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
@@ -835,9 +884,17 @@ internal static class BroadLanguageReferenceExtractor
         if (importMatch.Success)
         {
             var group = importMatch.Groups["name"];
-            var packageName = LastPathSegment(group.Value);
-            var packageOffset = group.Value.LastIndexOf(packageName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, packageName, group.Index + Math.Max(0, packageOffset), "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            var aliasGroup = importMatch.Groups["alias"];
+            if (aliasGroup.Success && aliasGroup.Value is not "." and not "_")
+            {
+                ReferenceExtractor.AddReference(references, seen, fileId, aliasGroup.Value, aliasGroup.Index, "type_reference", context, lineNumber, resolveContainerForColumn(aliasGroup.Index));
+            }
+            else
+            {
+                var packageName = LastPathSegment(group.Value);
+                var packageOffset = group.Value.LastIndexOf(packageName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, packageName, group.Index + Math.Max(0, packageOffset), "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
@@ -957,7 +1014,13 @@ internal static class BroadLanguageReferenceExtractor
         }
 
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "call", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+        {
+            var group = match.Groups["name"];
+            var name = LastQualifiedSegment(group.Value);
+            var nameOffset = group.Value.LastIndexOf(name, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
 
         foreach (Match match in VbHandlesRegex.Matches(preparedLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
