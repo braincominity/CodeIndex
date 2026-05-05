@@ -1867,6 +1867,15 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
+                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    break;
+
+                if (line[cursor] is '"' or '\'' or '`')
+                {
+                    cursor = SkipCStyleQuotedLiteral(line, cursor);
+                    continue;
+                }
+
                 if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
                 {
                     chars[cursor++] = ' ';
@@ -1879,6 +1888,26 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static int SkipCStyleQuotedLiteral(string line, int start)
+    {
+        var quote = line[start];
+        var cursor = start + 1;
+        while (cursor < line.Length)
+        {
+            if (quote != '`' && line[cursor] == '\\' && cursor + 1 < line.Length)
+            {
+                cursor += 2;
+                continue;
+            }
+
+            if (line[cursor] == quote)
+                return cursor;
+            cursor++;
+        }
+
+        return line.Length;
     }
 
     private static readonly Regex VisualBasicRemCommentRegex = new(

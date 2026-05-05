@@ -7024,6 +7024,8 @@ public class ReferenceExtractorTests
 
               void Run() {
                 auto item = new Derived<User>();
+                const char* marker = "/*";
+                // docs: /*
                 helper(item);
               }
             };
