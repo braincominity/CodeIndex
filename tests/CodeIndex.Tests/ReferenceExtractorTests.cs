@@ -6985,6 +6985,19 @@ public class ReferenceExtractorTests
         Assert.True(ReferenceExtractor.SupportsLanguage(lang));
     }
 
+    [Theory]
+    [InlineData("fortran")]
+    [InlineData("pascal")]
+    [InlineData("objc")]
+    [InlineData("smalltalk")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void SupportsLanguage_AdditionalDetailedReferenceLanguages_ReturnsTrue(string lang)
+    {
+        Assert.True(ReferenceExtractor.SupportsLanguage(lang));
+    }
+
     [Fact]
     public void Extract_Dart_DetectsCallSites()
     {
@@ -6994,6 +7007,341 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "runApp");
         Assert.Contains(references, r => r.SymbolName == "MyApp");
+    }
+
+    [Fact]
+    public void Extract_CppDetailedReferences_CapturesIncludesBaseTypesFieldsAndInstantiation()
+    {
+        const string content = """
+            #include "base/widget.h"
+
+            class Service : public BaseService, private IFace {
+              Repository* repo;
+              std::vector<User> users;
+
+              void Run() {
+                auto item = new Derived<User>();
+                helper(item);
+              }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "base/widget.h" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "BaseService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IFace" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
+    {
+        const string content = """
+            package main
+
+            import "example.com/app/repo"
+
+            type Service struct {
+                Repo repo.Repository
+                Current *User
+            }
+
+            func Load(input User, options LoadOptions) (Result, error) {
+                defer cleanup
+                item := User{Name: "Ada"}
+                return finish(item, options)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "main" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "cleanup" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "error" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
+    {
+        const string content = """
+            class Screen extends BaseScreen with Trackable implements RouteAware {
+              @override
+              Widget build(BuildContext context) {
+                final User user = repo.load() as User;
+                return const UserCard(user);
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+        var references = ReferenceExtractor.Extract(1, "dart", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RouteAware" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "BuildContext" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_RazorBlazor_CapturesComponentsDirectivesInjectionAndEventHandlers()
+    {
+        const string content = """
+            @inherits App.Pages.BasePage
+            @inject Services.UserService UserService
+
+            <UserCard User="CurrentUser" />
+            <Shared.DetailPanel />
+            <button @onclick="HandleClick">Save</button>
+
+            @code {
+                void HandleClick() { UserService.Save(); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content, "Pages/User.razor");
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols, "Pages/User.razor");
+        var aliasReferences = ReferenceExtractor.Extract(1, "razor", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+        Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesTypePositionsAddressOfAndHandles()
+    {
+        const string content = """
+            Public Class Controller
+                Inherits BaseController
+                Implements IRequestHandler
+
+                Private ReadOnly repo As Repository(Of User)
+
+                Public Sub New(service As UserService)
+                    Dim item As New User()
+                    AddHandler button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub OnSave() Handles button.Click
+                    Save()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BaseController" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IRequestHandler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
+    {
+        const string content = """
+            module demo_mod
+              use iso_c_binding
+            contains
+              subroutine run(repo)
+                type(Repository) :: repo
+                class(User), allocatable :: current
+                call process(repo)
+              end subroutine run
+            end module demo_mod
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fortran", content);
+        var references = ReferenceExtractor.Extract(1, "fortran", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PascalDetailedReferences_CapturesUsesBasesFieldsParametersAndBareCalls()
+    {
+        const string content = """
+            unit Demo;
+
+            interface
+
+            uses SysUtils, AppTypes;
+
+            type
+              TService = class(TBaseService, IRunner)
+              private
+                FRepo: TRepository;
+              public
+                procedure Run(input: TUser);
+              end;
+
+            implementation
+
+            procedure TService.Run(input: TUser);
+            begin
+              ProcessUser;
+            end;
+
+            end.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "pascal", content);
+        var references = ReferenceExtractor.Extract(1, "pascal", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "SysUtils" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "AppTypes" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "TBaseService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IRunner" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "TRepository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "TUser" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "ProcessUser" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ObjCDetailedReferences_CapturesInterfacesProtocolsMessageSendsAndSelectors()
+    {
+        const string content = """
+            @interface UserController : UIViewController <UITableViewDelegate, UserServiceDelegate>
+            @property (nonatomic) UserService *service;
+            @end
+
+            @implementation UserController
+            - (void)run {
+                User *user = [User new];
+                [self handleUser:user];
+                [service loadUser];
+                SEL sel = @selector(handleUser:);
+            }
+            @end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "objc", content);
+        var references = ReferenceExtractor.Extract(1, "objc", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "UIViewController" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UITableViewDelegate" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserServiceDelegate" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "handleUser" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_HaskellDetailedReferences_CapturesSignaturesAndSpaceCalls()
+    {
+        const string content = """
+            process :: Repository -> User -> Result
+            process repo user = finalize user
+
+            render value = format value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+        var references = ReferenceExtractor.Extract(1, "haskell", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "finalize" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "format" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ElixirDetailedReferences_CapturesAliasesBehavioursAndParenlessCalls()
+    {
+        const string content = """
+            defmodule Demo do
+              alias App.Accounts.User
+              import App.Workers.Loader
+              @behaviour App.Behaviour
+
+              def run(user) do
+                process user
+                send_event :saved
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "App.Accounts.User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "App.Workers.Loader" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "App.Behaviour" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "send_event" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_LuaDetailedReferences_CapturesRequiresAndCommandCalls()
+    {
+        const string content = """
+            local json = require "dkjson"
+
+            function run()
+              render "value"
+              app.save { id = 1 }
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "lua", content);
+        var references = ReferenceExtractor.Extract(1, "lua", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "dkjson" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SmalltalkDetailedReferences_CapturesMessageSends()
+    {
+        const string content = """
+            Object subclass: #UserService
+
+            UserService >> run
+                self prepare.
+                repository loadUser.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
+        var references = ReferenceExtractor.Extract(1, "smalltalk", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "prepare" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
     }
 
     [Fact]

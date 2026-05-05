@@ -42,7 +42,7 @@ src/CodeIndex/
       SymbolExtractor.cs      — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods and semicolon-terminated interface/abstract properties, Java method guards for generic type-parameter prefixes and statement keywords, C/C++ out-of-class member definitions / operators / concepts / inline namespaces / modules, CSS grouping/nesting selectors and selector lists / named at-rules, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
       CSharpSymbolNameNormalizer.cs — C# persisted symbol-name canonicalization for verbatim identifiers, indexers, and conversion operators
     References/
-      ReferenceExtractor.cs   — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+      ReferenceExtractor.cs   — Orchestrates regex-based call/reference extraction across graph-supported languages, including JSX component open tags in `.jsx` / `.tsx` files, method-reference / method-group handoffs, shared call/instantiate paths, and a depth-aware fallback for nested-generic call sites (44 graph language filters)
       Support/
         StructuralLineMasker.cs — Shared string/comment/structure masking helpers used by reference extraction
         TypedLanguageReferenceExtractor.cs — Shared scanner helpers for colon/arrow/heritage/generic type-position references in typed languages
@@ -50,6 +50,7 @@ src/CodeIndex/
         JvmMethodReferenceExtractor.cs — Shared JVM method-reference helpers for Java and Kotlin
         SqlNameResolver.cs    — SQL identifier normalization and scoped name resolution helpers
       Languages/
+        BroadLanguageReferenceExtractor.cs — Shared broad-language heuristics for C/C++, Dart, Go, VB.NET, Fortran, Pascal, Objective-C, Haskell, Elixir, Lua, Smalltalk, and Razor/Blazor reference edges
         BatchReferenceExtractor.cs — Batch-specific reference extraction for `goto` / `call` label targets
         CSharpReferenceExtractor.cs — C#-specific reference extraction for constructor-chain rewrites, type-position references, XML-doc cref references, and qualified enum-member references
         CssReferenceExtractor.cs — CSS/SCSS-specific reference extraction for custom properties, animations, selectors, variables, and extends

@@ -11209,6 +11209,73 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Pascal_DetectsUnitsTypesMembersAndUses()
+    {
+        var content = """
+            unit Demo;
+
+            interface
+
+            uses SysUtils, AppTypes;
+
+            type
+              TColor = (Red, Green, Blue);
+              TPoint = record
+                X: Integer;
+              end;
+              IService = interface
+              end;
+              TService = class
+              public
+                constructor Create;
+                procedure Run(input: TUser);
+                property Name: string read FName;
+              end;
+
+            implementation
+
+            function BuildService: TService;
+            begin
+            end;
+
+            end.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "pascal", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "TColor");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "TPoint");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IService");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "TService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BuildService");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "SysUtils, AppTypes");
+    }
+
+    [Fact]
+    public void Extract_Smalltalk_DetectsClassesAndMethods()
+    {
+        var content = """
+            Object subclass: #UserService
+
+            UserService >> run
+                self prepare.
+
+            UserService class >> save:
+                self flush.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save:");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
         var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";

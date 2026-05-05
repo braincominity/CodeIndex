@@ -1732,6 +1732,19 @@ public static partial class ReferenceExtractor
                 result = result[..dashCommentIndex];
         }
 
+        if (lang is "fortran")
+        {
+            var bangCommentIndex = result.IndexOf('!');
+            if (bangCommentIndex >= 0)
+                result = result[..bangCommentIndex];
+        }
+
+        if (lang is "pascal")
+        {
+            result = PascalBraceCommentRegex.Replace(result, " ");
+            result = PascalParenStarCommentRegex.Replace(result, " ");
+        }
+
         // VB.NET uses Rem and ' for line comments / VB.NET は Rem と ' を行コメントに使う
         if (lang is "vb")
         {
@@ -1750,6 +1763,8 @@ public static partial class ReferenceExtractor
     private static readonly Regex VisualBasicRemCommentRegex = new(
         @"(?:^|:)\s*Rem\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PascalBraceCommentRegex = new(@"\{[^}\r\n]*\}", RegexOptions.Compiled);
+    private static readonly Regex PascalParenStarCommentRegex = new(@"\(\*.*?\*\)", RegexOptions.Compiled);
 
     private static string MaskPythonSingleLineFStrings(string line)
     {
