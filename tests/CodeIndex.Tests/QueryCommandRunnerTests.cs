@@ -105,6 +105,7 @@ public class QueryCommandRunnerTests
 
     [Theory]
     [InlineData("c#", "csharp")]
+    [InlineData("blazor", "csharp")]
     [InlineData("c++", "cpp")]
     [InlineData("fs", "fsharp")]
     [InlineData("py", "python")]
@@ -134,6 +135,16 @@ public class QueryCommandRunnerTests
         Assert.Contains("transactsql", aliases);
         Assert.Contains("sqlserver", aliases);
         Assert.Contains("mssql", aliases);
+    }
+
+    [Fact]
+    public void GetLanguageAliases_ReportsRazorBlazorAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("csharp");
+
+        Assert.Contains("cshtml", aliases);
+        Assert.Contains("razor", aliases);
+        Assert.Contains("blazor", aliases);
     }
 
     [Fact]
@@ -229,6 +240,7 @@ public class QueryCommandRunnerTests
     [InlineData("sqlserver", "sql")]
     [InlineData("mssql", "sql")]
     [InlineData("c#", "csharp")]
+    [InlineData("blazor", "csharp")]
     [InlineData("c++", "cpp")]
     [InlineData("f#", "fsharp")]
     [InlineData("vb.net", "vb")]

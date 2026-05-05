@@ -7,6 +7,10 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly Regex FortranRoutineStartLineRegex = new(
+        @"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:subroutine\b|(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindFortranRange(string[] lines, int startIndex)
     {
         if (!TryGetFortranBlockStartKind(lines[startIndex], out var blockKind))
@@ -14,15 +18,26 @@ public static partial class SymbolExtractor
 
         int? bodyStartLine = null;
         var endLine = startIndex + 1;
+        var nestedRoutineDepth = 0;
 
         for (int i = startIndex + 1; i < lines.Length; i++)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = StripFortranComment(MaskFortranStringLiterals(lines[i])).Trim();
             if (trimmed.Length == 0 || trimmed.StartsWith('!'))
                 continue;
 
-            if (IsFortranModuleProcedureEndLine(trimmed))
+            if (blockKind == "module" && IsFortranModuleProcedureEndLine(trimmed))
                 continue;
+
+            if (blockKind is "subroutine" or "function" && IsFortranRoutineEndLine(trimmed))
+            {
+                if (nestedRoutineDepth > 0)
+                {
+                    nestedRoutineDepth--;
+                    endLine = i + 1;
+                    continue;
+                }
+            }
 
             if (IsFortranBlockEndLine(trimmed, blockKind))
             {
@@ -34,6 +49,12 @@ public static partial class SymbolExtractor
 
             if (bodyStartLine == null)
                 bodyStartLine = i + 1;
+
+            if (blockKind is "subroutine" or "function"
+                && IsFortranRoutineStartLine(trimmed))
+            {
+                nestedRoutineDepth++;
+            }
 
             endLine = i + 1;
         }
@@ -171,6 +192,18 @@ public static partial class SymbolExtractor
             return true;
         }
 
+        if (ContainsFortranWord(trimmed, "subroutine"))
+        {
+            kind = "subroutine";
+            return true;
+        }
+
+        if (ContainsFortranWord(trimmed, "function"))
+        {
+            kind = "function";
+            return true;
+        }
+
         return false;
     }
 
@@ -180,6 +213,9 @@ public static partial class SymbolExtractor
             return false;
 
         var remainder = trimmedLine["end".Length..].TrimStart();
+        if (remainder.Length == 0)
+            return blockKind is "subroutine" or "function";
+
         if (!StartsWithFortranWord(remainder, blockKind))
             return false;
 
@@ -203,12 +239,75 @@ public static partial class SymbolExtractor
         return StartsWithFortranWord(afterModule, "procedure");
     }
 
+    private static bool IsFortranRoutineEndLine(string trimmedLine)
+    {
+        if (!StartsWithFortranWord(trimmedLine, "end"))
+            return false;
+
+        var remainder = trimmedLine["end".Length..].TrimStart();
+        return remainder.Length == 0
+            || StartsWithFortranWord(remainder, "subroutine")
+            || StartsWithFortranWord(remainder, "function");
+    }
+
+    private static bool IsFortranRoutineStartLine(string trimmedLine) =>
+        !StartsWithFortranWord(trimmedLine, "end")
+        && FortranRoutineStartLineRegex.IsMatch(trimmedLine);
+
+    private static string MaskFortranStringLiterals(string line)
+    {
+        var chars = line.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] is not ('\'' or '"'))
+                continue;
+
+            var quote = chars[i];
+            chars[i] = ' ';
+            i++;
+            while (i < chars.Length)
+            {
+                if (chars[i] == quote && i + 1 < chars.Length && chars[i + 1] == quote)
+                {
+                    chars[i++] = ' ';
+                    chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                var closes = chars[i] == quote;
+                chars[i] = ' ';
+                if (closes)
+                    break;
+                i++;
+            }
+        }
+
+        return new string(chars);
+    }
+
     private static bool StartsWithFortranWord(string input, string word)
     {
         if (!input.StartsWith(word, StringComparison.OrdinalIgnoreCase))
             return false;
 
         return input.Length == word.Length || !char.IsLetterOrDigit(input[word.Length]) && input[word.Length] != '_';
+    }
+
+    private static bool ContainsFortranWord(string input, string word)
+    {
+        for (var index = input.IndexOf(word, StringComparison.OrdinalIgnoreCase);
+             index >= 0;
+             index = input.IndexOf(word, index + word.Length, StringComparison.OrdinalIgnoreCase))
+        {
+            var beforeOk = index == 0 || !char.IsLetterOrDigit(input[index - 1]) && input[index - 1] != '_';
+            var afterIndex = index + word.Length;
+            var afterOk = afterIndex == input.Length || !char.IsLetterOrDigit(input[afterIndex]) && input[afterIndex] != '_';
+            if (beforeOk && afterOk)
+                return true;
+        }
+
+        return false;
     }
 
 }

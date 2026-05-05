@@ -51,6 +51,8 @@ public class FileIndexerTests
     [InlineData("Counter.razor", "csharp")]
     [InlineData("MainWindow.xaml", "xml")]
     [InlineData("App.axaml", "xml")]
+    [InlineData("Point.st", "smalltalk")]
+    [InlineData("Point.smalltalk", "smalltalk")]
     [InlineData("MyApp.csproj", "msbuild")]
     [InlineData("MyApp.fsproj", "msbuild")]
     [InlineData("MyApp.vbproj", "msbuild")]

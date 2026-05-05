@@ -181,6 +181,8 @@ public class FileIndexer
         [".pas"]    = "pascal",
         [".pp"]     = "pascal",
         [".dpr"]    = "pascal",
+        [".st"]     = "smalltalk",
+        [".smalltalk"] = "smalltalk",
         [".ada"]    = "ada",
         [".adb"]    = "ada",
         [".ads"]    = "ada",

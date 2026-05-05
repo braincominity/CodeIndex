@@ -801,6 +801,7 @@ public partial class DbReader
             AddQueryLanguageAlias(aliases, pattern, lang);
 
         AddQueryLanguageAlias(aliases, "c#", "csharp");
+        AddQueryLanguageAlias(aliases, "blazor", "csharp");
         AddQueryLanguageAlias(aliases, "c++", "cpp");
         AddQueryLanguageAlias(aliases, "cplusplus", "cpp");
         AddQueryLanguageAlias(aliases, "f#", "fsharp");

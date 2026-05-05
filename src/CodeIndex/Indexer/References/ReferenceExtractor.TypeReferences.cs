@@ -1732,6 +1732,19 @@ public static partial class ReferenceExtractor
                 result = result[..dashCommentIndex];
         }
 
+        if (lang is "fortran")
+        {
+            var bangCommentIndex = result.IndexOf('!');
+            if (bangCommentIndex >= 0)
+                result = result[..bangCommentIndex];
+        }
+
+        if (lang is "pascal")
+        {
+            result = PascalBraceCommentRegex.Replace(result, " ");
+            result = PascalParenStarCommentRegex.Replace(result, " ");
+        }
+
         // VB.NET uses Rem and ' for line comments / VB.NET は Rem と ' を行コメントに使う
         if (lang is "vb")
         {
@@ -1747,9 +1760,379 @@ public static partial class ReferenceExtractor
         return result;
     }
 
+    private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var inBraceComment = false;
+        var inParenStarComment = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+
+            while (cursor < chars.Length)
+            {
+                if (inBraceComment)
+                {
+                    var closes = chars[cursor] == '}';
+                    chars[cursor++] = ' ';
+                    if (closes)
+                        inBraceComment = false;
+                    continue;
+                }
+
+                if (inParenStarComment)
+                {
+                    if (chars[cursor] == '*' && cursor + 1 < chars.Length && chars[cursor + 1] == ')')
+                    {
+                        chars[cursor++] = ' ';
+                        chars[cursor++] = ' ';
+                        inParenStarComment = false;
+                        continue;
+                    }
+
+                    chars[cursor++] = ' ';
+                    continue;
+                }
+
+                if (chars[cursor] == '\'')
+                {
+                    cursor++;
+                    while (cursor < chars.Length)
+                    {
+                        if (chars[cursor] == '\'')
+                        {
+                            cursor++;
+                            if (cursor < chars.Length && chars[cursor] == '\'')
+                            {
+                                cursor++;
+                                continue;
+                            }
+                            break;
+                        }
+
+                        cursor++;
+                    }
+                    continue;
+                }
+
+                if (chars[cursor] == '{')
+                {
+                    chars[cursor++] = ' ';
+                    inBraceComment = true;
+                    continue;
+                }
+
+                if (chars[cursor] == '(' && cursor + 1 < chars.Length && chars[cursor + 1] == '*')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor++] = ' ';
+                    inParenStarComment = true;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
+    private static bool UsesCStyleBlockComments(string language) =>
+        language is "c" or "cpp" or "go" or "objc" or "dart";
+
+    private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var inBlockComment = false;
+        var inGoRawString = false;
+        char dartTripleQuote = '\0';
+        string? cppRawStringTerminator = null;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+            while (cursor < chars.Length)
+            {
+                if (inBlockComment)
+                {
+                    chars[cursor] = ' ';
+                    if (line[cursor] == '*' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    {
+                        chars[cursor + 1] = ' ';
+                        inBlockComment = false;
+                        cursor += 2;
+                        continue;
+                    }
+
+                    cursor++;
+                    continue;
+                }
+
+                if (inGoRawString)
+                {
+                    chars[cursor] = ' ';
+                    if (line[cursor] == '`')
+                        inGoRawString = false;
+                    cursor++;
+                    continue;
+                }
+
+                if (dartTripleQuote != '\0')
+                {
+                    if (IsTripleQuoteAt(line, cursor, dartTripleQuote))
+                    {
+                        ReplaceWithSpaces(chars, cursor, 3);
+                        dartTripleQuote = '\0';
+                        cursor += 3;
+                        continue;
+                    }
+
+                    chars[cursor] = ' ';
+                    cursor++;
+                    continue;
+                }
+
+                if (cppRawStringTerminator != null)
+                {
+                    var closeIndex = line.IndexOf(cppRawStringTerminator, cursor, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                    {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        break;
+                    }
+
+                    ReplaceWithSpaces(chars, cursor, closeIndex + cppRawStringTerminator.Length - cursor);
+                    cursor = closeIndex + cppRawStringTerminator.Length;
+                    cppRawStringTerminator = null;
+                    continue;
+                }
+
+                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    break;
+
+                if (language == "go" && line[cursor] == '`')
+                {
+                    chars[cursor] = ' ';
+                    inGoRawString = true;
+                    cursor++;
+                    continue;
+                }
+
+                if (language == "dart" && TryGetDartTripleStringStart(line, cursor, out var dartQuote, out var dartOpeningLength))
+                {
+                    var closeIndex = IndexOfTripleQuote(line, cursor + dartOpeningLength, dartQuote);
+                    if (closeIndex < 0)
+                    {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        dartTripleQuote = dartQuote;
+                        break;
+                    }
+
+                    ReplaceWithSpaces(chars, cursor, closeIndex + 3 - cursor);
+                    cursor = closeIndex + 3;
+                    continue;
+                }
+
+                if (language == "cpp" && TryGetCppRawStringTerminator(line, cursor, out var rawTerminator, out var rawOpeningLength))
+                {
+                    var closeIndex = line.IndexOf(rawTerminator, cursor + rawOpeningLength, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                    {
+                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        cppRawStringTerminator = rawTerminator;
+                        break;
+                    }
+
+                    ReplaceWithSpaces(chars, cursor, closeIndex + rawTerminator.Length - cursor);
+                    cursor = closeIndex + rawTerminator.Length;
+                    continue;
+                }
+
+                if (line[cursor] is '"' or '\'' or '`')
+                {
+                    cursor = SkipCStyleQuotedLiteral(line, cursor) + 1;
+                    continue;
+                }
+
+                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
+                {
+                    chars[cursor] = ' ';
+                    cursor++;
+                    chars[cursor] = ' ';
+                    inBlockComment = true;
+                    cursor++;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
+    private static bool TryGetDartTripleStringStart(string line, int start, out char quote, out int openingLength)
+    {
+        quote = '\0';
+        openingLength = 0;
+        var quoteIndex = start;
+
+        if (line[start] is 'r' or 'R')
+        {
+            if (start > 0 && IsIdentifierChar(line[start - 1]))
+                return false;
+            quoteIndex = start + 1;
+        }
+
+        if (quoteIndex + 2 >= line.Length)
+            return false;
+
+        quote = line[quoteIndex];
+        if (quote is not ('"' or '\'') || !IsTripleQuoteAt(line, quoteIndex, quote))
+            return false;
+
+        openingLength = quoteIndex - start + 3;
+        return true;
+    }
+
+    private static bool IsTripleQuoteAt(string line, int start, char quote) =>
+        start + 2 < line.Length
+        && line[start] == quote
+        && line[start + 1] == quote
+        && line[start + 2] == quote;
+
+    private static int IndexOfTripleQuote(string line, int start, char quote)
+    {
+        for (var i = start; i + 2 < line.Length; i++)
+        {
+            if (IsTripleQuoteAt(line, i, quote))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool TryGetCppRawStringTerminator(string line, int start, out string terminator, out int openingLength)
+    {
+        terminator = string.Empty;
+        openingLength = 0;
+        if (line[start] != 'R' || start + 2 >= line.Length || line[start + 1] != '"')
+            return false;
+
+        var delimiterStart = start + 2;
+        var parenIndex = line.IndexOf('(', delimiterStart);
+        if (parenIndex < 0)
+            return false;
+
+        for (var i = delimiterStart; i < parenIndex; i++)
+        {
+            if (char.IsWhiteSpace(line[i]) || line[i] is '(' or ')' or '\\')
+                return false;
+        }
+
+        terminator = ")" + line[delimiterStart..parenIndex] + "\"";
+        openingLength = parenIndex - start + 1;
+        return true;
+    }
+
+    private static string[] MaskHaskellBlockCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var blockDepth = 0;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+
+            while (cursor < chars.Length)
+            {
+                if (blockDepth > 0)
+                {
+                    if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    {
+                        chars[cursor] = ' ';
+                        chars[cursor + 1] = ' ';
+                        blockDepth++;
+                        cursor += 2;
+                        continue;
+                    }
+
+                    if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '}')
+                    {
+                        chars[cursor] = ' ';
+                        chars[cursor + 1] = ' ';
+                        blockDepth--;
+                        cursor += 2;
+                        continue;
+                    }
+
+                    chars[cursor++] = ' ';
+                    continue;
+                }
+
+                if (line[cursor] == '"')
+                {
+                    cursor = SkipCStyleQuotedLiteral(line, cursor) + 1;
+                    continue;
+                }
+
+                if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    break;
+
+                if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                {
+                    chars[cursor] = ' ';
+                    chars[cursor + 1] = ' ';
+                    blockDepth = 1;
+                    cursor += 2;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
+    private static int SkipCStyleQuotedLiteral(string line, int start)
+    {
+        var quote = line[start];
+        var cursor = start + 1;
+        while (cursor < line.Length)
+        {
+            if (quote != '`' && line[cursor] == '\\' && cursor + 1 < line.Length)
+            {
+                cursor += 2;
+                continue;
+            }
+
+            if (line[cursor] == quote)
+                return cursor;
+            cursor++;
+        }
+
+        return line.Length;
+    }
+
     private static readonly Regex VisualBasicRemCommentRegex = new(
         @"(?:^|:)\s*Rem\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PascalBraceCommentRegex = new(@"\{[^}\r\n]*\}", RegexOptions.Compiled);
+    private static readonly Regex PascalParenStarCommentRegex = new(@"\(\*.*?\*\)", RegexOptions.Compiled);
 
     private static string MaskPythonSingleLineFStrings(string line)
     {
@@ -2704,7 +3087,7 @@ public static partial class ReferenceExtractor
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
             and not "makefile" and not "terraform" and not "dockerfile"
-            and not "css";
+            and not "css" and not "fortran";
 
     private static bool UsesDashDashComments(string lang) =>
         lang is "lua" or "sql" or "haskell";

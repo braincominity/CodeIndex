@@ -25,7 +25,7 @@ public static partial class ReferenceExtractor
         "assembly",
         "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
-        "zig", "css"
+        "zig", "css", "fortran", "pascal", "objc", "smalltalk"
     ];
 
 
@@ -107,6 +107,47 @@ public static partial class ReferenceExtractor
         {
             "macro_rules",
         },
+        ["c"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "auto", "break", "case", "const", "continue", "default", "extern", "goto",
+            "inline", "register", "restrict", "static", "switch", "typedef", "volatile",
+        },
+        ["cpp"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "alignas", "auto", "break", "case", "catch", "concept", "const", "constexpr",
+            "consteval", "constinit", "continue", "co_await", "co_return", "co_yield",
+            "decltype", "default", "delete", "explicit", "extern", "friend", "inline",
+            "mutable", "noexcept", "operator", "override", "private", "protected", "public",
+            "requires", "static", "template", "this", "typedef", "typename", "using", "virtual",
+            "volatile",
+        },
+        ["go"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "append", "cap", "close", "copy", "delete", "len", "make", "new", "panic", "recover",
+            "chan", "defer", "fallthrough", "func", "go", "interface", "map", "package",
+            "range", "select", "type", "var",
+        },
+        ["dart"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "abstract", "assert", "async", "base", "const", "covariant", "deferred", "dynamic",
+            "export", "extends", "extension", "external", "factory", "final", "hide", "implements",
+            "import", "late", "library", "mixin", "on", "operator", "part", "required", "show",
+            "typedef", "void", "with",
+        },
+        ["elixir"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "alias", "after", "behaviour", "case", "catch", "cond", "def", "defdelegate",
+            "defguard", "defguardp", "defimpl", "defmacro", "defmacrop", "defmodule", "defp",
+            "defprotocol", "defstruct", "do", "else", "end", "for", "fn", "if", "impl",
+            "import", "quote", "receive", "require", "rescue", "try", "unless", "unquote",
+            "use", "with",
+        },
+        ["lua"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
+            "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
+            "while",
+        },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -185,7 +226,49 @@ public static partial class ReferenceExtractor
         {
             "data", "newtype", "instance", "deriving", "infixl", "infixr", "infix",
             "qualified", "hiding", "forall", "Just", "Nothing", "Left", "Right", "True", "False",
+            "case", "class", "default", "foreign", "import", "let", "module", "of", "type", "where",
             "putStrLn", "putStr", "print",
+        },
+        ["vb"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "AddHandler", "AddressOf", "Alias", "And", "AndAlso", "As", "ByRef", "ByVal",
+            "Call", "Case", "Catch", "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
+            "GetXMLNamespace", "Global", "Handles", "Inherits", "Implements", "Imports", "Me",
+            "Module", "MustInherit", "MustOverride", "MyBase", "MyClass", "Namespace", "Narrowing",
+            "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
+            "Overloads", "Overrides", "ParamArray", "Partial", "RaiseEvent", "ReadOnly",
+            "RemoveHandler", "Resume", "Return", "Select", "Set", "Shadows", "Shared", "Static",
+            "Step", "Stop", "SyncLock", "Then", "TryCast", "Using", "When", "Widening", "With",
+            "WithEvents", "WriteOnly", "Xor",
+        },
+        ["fortran"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "allocatable", "allocate", "associate", "call", "case", "class", "contains", "cycle",
+            "deallocate", "do", "elemental", "else", "elseif", "end", "entry", "equivalence",
+            "exit", "function", "if", "implicit", "include", "intent", "interface", "intrinsic",
+            "module", "namelist", "none", "only", "operator", "optional", "parameter", "pointer",
+            "private", "procedure", "program", "public", "pure", "recursive", "result", "return",
+            "select", "submodule", "subroutine", "then", "type", "use", "where",
+        },
+        ["pascal"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "and", "array", "begin", "case", "class", "const", "constructor", "destructor", "div",
+            "do", "downto", "else", "end", "except", "exports", "file", "finally", "for",
+            "function", "goto", "if", "implementation", "in", "inherited", "interface", "is",
+            "label", "mod", "nil", "not", "object", "of", "or", "packed", "private", "procedure",
+            "program", "property", "protected", "public", "published", "raise", "record", "repeat",
+            "set", "shl", "shr", "then", "threadvar", "to", "try", "type", "unit", "until",
+            "uses", "var", "while", "with", "xor",
+        },
+        ["objc"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "BOOL", "Class", "YES", "NO", "Nil", "SEL", "alloc", "autorelease", "copy", "id",
+            "init", "nonatomic", "nullable", "nonnull", "readwrite", "readonly", "retain",
+            "self", "strong", "super", "weak",
+        },
+        ["smalltalk"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "false", "nil", "self", "super", "thisContext", "true",
         },
         // Gradle/Groovy keywords / Gradle/Groovy キーワード
         ["gradle"] = new HashSet<string>(StringComparer.Ordinal)
@@ -502,6 +585,54 @@ public static partial class ReferenceExtractor
             "Self", "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
             "str", "u8", "u16", "u32", "u64", "u128", "usize",
         },
+        ["c"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "bool", "char", "double", "float", "int", "long", "short", "signed", "size_t",
+            "ssize_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "unsigned", "void",
+        },
+        ["cpp"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "bool", "char", "char8_t", "char16_t", "char32_t", "double", "float", "int", "long",
+            "short", "signed", "size_t", "ssize_t", "std", "string", "unsigned", "void",
+            "wchar_t",
+        },
+        ["go"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "any", "bool", "byte", "comparable", "complex64", "complex128", "error", "float32",
+            "float64", "int", "int8", "int16", "int32", "int64", "rune", "string", "uint",
+            "uint8", "uint16", "uint32", "uint64", "uintptr", "chan", "func", "interface",
+            "map", "struct",
+        },
+        ["dart"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "bool", "double", "dynamic", "Function", "int", "Never", "Null", "num", "Object",
+            "String", "void",
+        },
+        ["vb"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Boolean", "Byte", "Char", "Date", "Decimal", "Double", "Integer", "Long", "Object",
+            "SByte", "Short", "Single", "String", "UInteger", "ULong", "UShort", "Void",
+        },
+        ["fortran"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "character", "complex", "double", "integer", "logical", "precision", "real",
+        },
+        ["pascal"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "AnsiString", "Boolean", "Byte", "Cardinal", "Char", "Double", "Extended", "Integer",
+            "LongInt", "LongWord", "Pointer", "Real", "ShortInt", "Single", "SmallInt", "String",
+            "Variant", "WideString", "Word",
+        },
+        ["objc"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "BOOL", "Class", "CGFloat", "NSInteger", "NSUInteger", "SEL", "bool", "char", "double",
+            "float", "id", "instancetype", "int", "long", "short", "void",
+        },
+        ["haskell"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Bool", "Char", "Double", "Either", "False", "Float", "IO", "Int", "Integer", "Maybe",
+            "Nothing", "String", "True",
+        },
     };
     // C# pattern-only keywords / literals that can appear after `is` / `case not` but are never
     // real user-defined types. Filter them before AddTypeExpressionSegments so `is not null`,
@@ -558,7 +689,7 @@ public static partial class ReferenceExtractor
     // `impact` に metadata edge が混入する。
     private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
     {
-        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle",
+        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle", "dart",
     };
 
     // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,
@@ -570,10 +701,14 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => SupportedLanguages.Concat(new[] { "vue", "svelte" }).ToArray();
+        => SupportedLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte" ? "typescript" : lang;
+        => lang is "vue" or "svelte"
+            ? "typescript"
+            : lang is "razor" or "blazor" or "cshtml"
+                ? "csharp"
+                : lang;
 
     public static bool SupportsLanguage(string? lang) =>
         NormalizeLanguage(lang) is string normalized && SupportedLanguages.Contains(normalized);
@@ -644,12 +779,14 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         string? path = null)
     {
+        var requestedLanguage = lang;
         if (!SupportsLanguage(lang))
             return [];
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
         var isJsxFile = IsJsxFilePath(path);
+        var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
@@ -688,9 +825,32 @@ public static partial class ReferenceExtractor
         var csharpLinesInsideBlockComment = language == "csharp"
             ? BuildCSharpBlockCommentLines(lines)
             : null;
+        var referenceStructuralLines = language == "pascal"
+            ? MaskPascalBlockCommentLines(structuralLines)
+            : language == "haskell"
+                ? MaskHaskellBlockCommentLines(structuralLines)
+                : UsesCStyleBlockComments(language)
+                    ? MaskCStyleBlockCommentLines(language, structuralLines)
+                    : structuralLines;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
-            preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+            preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
+        var goImportBlockLines = language == "go"
+            ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
+            : null;
+        var luaReferenceLines = language == "lua"
+            ? LuaReferenceExtractor.MaskLongCommentAndStringLines(lines)
+            : null;
+        string[]? luaPreparedLines = null;
+        if (luaReferenceLines != null)
+        {
+            luaPreparedLines = new string[luaReferenceLines.Length];
+            for (var pi = 0; pi < luaReferenceLines.Length; pi++)
+                luaPreparedLines[pi] = PrepareLine(language, luaReferenceLines[pi]);
+        }
+        var razorReferenceLines = isRazorFile
+            ? RazorReferenceExtractor.MaskCommentLines(lines)
+            : null;
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -853,7 +1013,7 @@ public static partial class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = preparedLines[i];
+            var preparedLine = luaPreparedLines?[i] ?? preparedLines[i];
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             if (language == "csharp"
@@ -1258,6 +1418,28 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall,
                     container);
             }
+            else if (language == "c")
+                CReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "cpp")
+                CppReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "go")
+                GoReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, goImportBlockLines?[i] == true);
+            else if (language == "dart")
+                DartReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "vb")
+                VisualBasicReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "fortran")
+                FortranReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "pascal")
+                PascalReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "objc")
+                ObjectiveCReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "haskell")
+                HaskellReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
+            else if (language == "elixir")
+                ElixirReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
+            else if (language == "lua")
+                LuaReferenceExtractor.EmitTypePositionReferences(luaReferenceLines?[i] ?? originalLine, references, seen, fileId, context, lineNumber, container);
             else if (language == "css")
             {
                 CssReferenceExtractor.EmitCss(
@@ -1612,6 +1794,8 @@ public static partial class ReferenceExtractor
                     var callIndex = match.Groups["name"].Index;
                     if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                         continue;
+                    if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
+                        continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
@@ -1675,6 +1859,21 @@ public static partial class ReferenceExtractor
                         preparedLine,
                         AddGradleDslReference);
                 }
+
+                if (language == "fortran")
+                    FortranReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
+                else if (language == "pascal")
+                    PascalReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "objc")
+                    ObjectiveCReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+                else if (language == "haskell")
+                    HaskellReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "elixir")
+                    ElixirReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "lua")
+                    LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "smalltalk")
+                    SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
                 // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
@@ -1849,6 +2048,19 @@ public static partial class ReferenceExtractor
                 }
             }
 
+            if (isRazorFile && language == "csharp")
+            {
+                RazorReferenceExtractor.EmitReferences(
+                    razorReferenceLines?[i] ?? originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    definitionNames);
+            }
+
             if (language == "python")
             {
                 PythonReferenceExtractor.EmitDecoratorReferences(
@@ -1966,6 +2178,20 @@ public static partial class ReferenceExtractor
         return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsRazorFilePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var extension = Path.GetExtension(path);
+        return string.Equals(extension, ".razor", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".cshtml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsObjCSelectorLiteralCall(string line, string name, int nameIndex) =>
+        string.Equals(NormalizeAtPrefixedIdentifier(name), "selector", StringComparison.Ordinal)
+        && (name.StartsWith('@') || nameIndex > 0 && line[nameIndex - 1] == '@');
 
     /// <summary>
     /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are

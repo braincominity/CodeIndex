@@ -10041,7 +10041,12 @@ public class SymbolExtractorTests
               end subroutine split_subroutine
 
               recursive subroutine normalize(v)
-              end subroutine normalize
+                call normalize2(v) ! function phantom()
+                print *, "subroutine phantom"
+              contains
+                subroutine normalize_inner()
+                end subroutine normalize_inner
+              end
               end module procedure normalize_iface
               recursive subroutine normalize2(v)
               end subroutine normalize2
@@ -10094,6 +10099,13 @@ public class SymbolExtractorTests
         var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Equal("namespace", normalize.ContainerKind);
         Assert.Equal("math_utils", normalize.ContainerName);
+        Assert.NotNull(normalize.BodyStartLine);
+        Assert.NotNull(normalize.BodyEndLine);
+
+        var normalizeInner = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_inner");
+        Assert.Equal("namespace", normalizeInner.ContainerKind);
+        Assert.Equal("math_utils", normalizeInner.ContainerName);
+        Assert.True(normalize.BodyEndLine > normalizeInner.EndLine);
 
         var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
         Assert.Equal("namespace", expand.ContainerKind);
@@ -10102,6 +10114,7 @@ public class SymbolExtractorTests
         var normalize2 = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize2");
         Assert.Equal("namespace", normalize2.ContainerKind);
         Assert.Equal("math_utils", normalize2.ContainerName);
+        Assert.True(normalize.BodyEndLine < normalize2.StartLine);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "subroutine");
 
@@ -11206,6 +11219,85 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "move");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "describe");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation/Foundation.h");
+    }
+
+    [Fact]
+    public void Extract_Pascal_DetectsUnitsTypesMembersAndUses()
+    {
+        var content = """
+            unit Demo;
+
+            interface
+
+            uses SysUtils, AppTypes;
+
+            type
+              TColor = (Red, Green, Blue);
+              TPoint = record
+                X: Integer;
+              end;
+              IService = interface
+              end;
+              TService = class
+              public
+                constructor Create;
+                procedure Run(input: TUser);
+                property Name: string read FName;
+              end;
+
+            implementation
+
+            function BuildService: TService;
+            begin
+            end;
+
+            end.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "pascal", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "TColor");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "TPoint");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IService");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "TService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+        var buildService = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "BuildService");
+        Assert.NotNull(buildService.BodyStartLine);
+        Assert.NotNull(buildService.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "SysUtils, AppTypes");
+    }
+
+    [Fact]
+    public void Extract_Smalltalk_DetectsClassesAndMethods()
+    {
+        var content = """
+            Object subclass: #UserService
+
+            UserService >> run
+                self prepare.
+
+            UserService class >> save:
+                self flush.
+
+            UserService >> save: user with: options
+                self persist.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        var run = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "run");
+        var save = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "save:");
+        var saveWith = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "save:with:");
+        Assert.NotNull(run.BodyStartLine);
+        Assert.NotNull(run.BodyEndLine);
+        Assert.NotNull(save.BodyStartLine);
+        Assert.NotNull(save.BodyEndLine);
+        Assert.NotNull(saveWith.BodyStartLine);
+        Assert.NotNull(saveWith.BodyEndLine);
     }
 
     [Fact]
