@@ -252,6 +252,65 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Assembly_DetectsLabelsSectionsDirectivesAndConstants()
+    {
+        const string content = """
+            ; fake_label: should stay a comment
+            section .text
+            global _start
+            extern printf
+            %include "runtime.inc"
+            #include "config.inc"
+            %define BUFFER_SIZE 64
+            #define PAGE_SIZE 4096
+            TABLE_SIZE = 128
+
+            print_line MACRO msg
+            ENDM
+
+            _start:
+                call printf
+                jmp .done
+            .loop:
+                bl helper
+                bne .loop
+            .done:
+                ret
+
+            helper PROC
+                ret
+            helper ENDP
+
+            section .data
+            message: db "hello;not-comment", 0
+            .section .note.GNU-stack,"",@progbits
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "assembly", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".text");
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".data");
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == ".note.GNU-stack");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "_start" && symbol.ContainerName == ".text");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == ".loop");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == ".done");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "print_line");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "message" && symbol.ContainerName == ".data");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "printf");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "runtime.inc");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "config.inc");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "BUFFER_SIZE");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "PAGE_SIZE");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "TABLE_SIZE");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake_label");
+
+        var helper = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "helper"));
+        var dataSection = Assert.Single(symbols.Where(symbol => symbol.Kind == "namespace" && symbol.Name == ".data"));
+        Assert.Equal(dataSection.StartLine - 1, helper.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsEnumPackageOneofExtendAndService()
     {
         var content = """

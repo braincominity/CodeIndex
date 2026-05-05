@@ -1763,6 +1763,11 @@ public static partial class SymbolExtractor
             // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
             new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
+        // Assembly uses a dedicated line scanner because label body ranges extend until
+        // the next label/section rather than a brace or indentation boundary.
+        // assembly は label の body range が次の label / section まで続くため、
+        // brace / indent 境界ではなく専用の行走査で抽出する。
+        ["assembly"] = [],
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
@@ -1880,6 +1885,9 @@ public static partial class SymbolExtractor
         // レビュー blocker 対応としてここで専用抽出に分岐する。
         if (lang == "html")
             return ExtractHtmlSymbols(fileId, lines);
+
+        if (lang == "assembly")
+            return ExtractAssemblySymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var cssScannerLines = lang == "css"

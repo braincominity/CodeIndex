@@ -252,6 +252,11 @@ public class FileIndexer
         [".fish"]   = "shell",
     };
 
+    private static readonly (string Pattern, string Language)[] DisplayOnlyLanguageExtensions =
+    [
+        (".S", "assembly"),
+    ];
+
     // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -875,7 +880,13 @@ public class FileIndexer
     {
         // Merge extension map and filename map for a complete view
         // 完全な一覧のため拡張子マップとファイル名マップを統合
-        var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (pattern, lang) in LangMap)
+            merged.TryAdd(pattern, lang);
+        // Keep display-only case variants that collapse in the case-insensitive detection map.
+        // case-insensitive な検出マップでは潰れる表示用 case variant を保持する。
+        foreach (var (pattern, lang) in DisplayOnlyLanguageExtensions)
+            merged.TryAdd(pattern, lang);
         foreach (var (name, lang) in FileNameMap)
             merged.TryAdd(name, lang);
         // Surface suffixed variants like Dockerfile.dev / Makefile.am as `<Prefix><suffix>` entries

@@ -112,6 +112,9 @@ public class QueryCommandRunnerTests
     [InlineData("rb", "ruby")]
     [InlineData("python3", "python")]
     [InlineData("sqlserver", "sql")]
+    [InlineData("asm", "assembly")]
+    [InlineData("assembler", "assembly")]
+    [InlineData("GNU assembler", "assembly")]
     public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["RunSearch", "--lang", input], jsonDefault: false, allowNamedQuery: true);
@@ -158,6 +161,19 @@ public class QueryCommandRunnerTests
         var aliases = QueryCommandRunner.GetLanguageAliases("java");
 
         Assert.Contains("jav", aliases);
+    }
+
+    [Fact]
+    public void GetLanguageAliases_ReportsAssemblyAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("assembly");
+
+        Assert.Contains("asm", aliases);
+        Assert.Contains("assembler", aliases);
+        Assert.Contains("nasm", aliases);
+        Assert.Contains("gas", aliases);
+        Assert.Contains("gnuasm", aliases);
+        Assert.Contains("gnu assembler", aliases);
     }
 
     [Fact]
@@ -217,6 +233,9 @@ public class QueryCommandRunnerTests
     [InlineData("f#", "fsharp")]
     [InlineData("vb.net", "vb")]
     [InlineData("py3", "python")]
+    [InlineData("assembler", "assembly")]
+    [InlineData("gas", "assembly")]
+    [InlineData("gnu asm", "assembly")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
@@ -1990,6 +2009,35 @@ jobs:
         Assert.Contains(".htm", extensions);
         Assert.Contains(".xhtml", extensions);
         Assert.Contains(".shtml", extensions);
+    }
+
+    [Fact]
+    public void RunLanguages_JsonListsAssemblyWithSymbolExtractionGraphAndAliases()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var assembly = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "assembly");
+
+        Assert.True(assembly.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(assembly.GetProperty("graph_queries").GetBoolean());
+
+        var extensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".s", extensions);
+        Assert.Contains(".S", extensions);
+        Assert.Contains(".asm", extensions);
+        Assert.Contains(".nasm", extensions);
+
+        var aliases = assembly.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()).ToList();
+        Assert.Contains("asm", aliases);
+        Assert.Contains("assembler", aliases);
+        Assert.Contains("gas", aliases);
+        Assert.Contains("gnuasm", aliases);
+        Assert.Contains("gnu assembler", aliases);
     }
 
     [Fact]

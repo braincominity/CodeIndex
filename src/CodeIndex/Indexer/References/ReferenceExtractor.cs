@@ -22,6 +22,7 @@ public static partial class ReferenceExtractor
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol", "batch",
+        "assembly",
         "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css"
@@ -1568,6 +1569,16 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
+            if (language is "assembly")
+                AssemblyReferenceExtractor.EmitInstructionTargetReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+
             var matchedCallIndices = new HashSet<int>();
             if (language is "powershell")
             {
@@ -1587,6 +1598,11 @@ public static partial class ReferenceExtractor
                     shellGlobalAliasNames,
                     ResolveContainerForCall,
                     AddCallLikeReference);
+            }
+            else if (language is "assembly")
+            {
+                // Assembly references are operand-driven, not `name(...)` call syntax. Running the
+                // shared CallRegex would misread addressing forms such as `foo(%rip)` as calls.
             }
             else
             {
