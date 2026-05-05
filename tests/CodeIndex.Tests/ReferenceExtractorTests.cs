@@ -7064,6 +7064,7 @@ public class ReferenceExtractorTests
                 */
                 "example.com/app/after"
             )
+            import (compact "example.com/app/compact")
 
             type Service struct {
                 Repo repo.Repository
@@ -7106,6 +7107,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "go" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "after" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");

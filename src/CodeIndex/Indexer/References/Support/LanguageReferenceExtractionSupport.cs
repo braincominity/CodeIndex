@@ -19,7 +19,7 @@ internal static class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex GoImportRegex = new(
-        @"^\s*import\s+(?:(?<alias>[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
+        @"^\s*import\s+(?:\(\s*)?(?:(?<alias>[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""(?:\s*\))?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportBlockStartRegex = new(
         @"^\s*import\s*\(",
