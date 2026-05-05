@@ -58,7 +58,10 @@ public sealed class ChangelogToolTests
         Assert.Contains("Japanese release note", changelog);
         Assert.Contains("Existing English unreleased note", changelog);
         Assert.Contains("Existing Japanese unreleased note", changelog);
-        Assert.Contains("### [Unreleased]\n\n### [1.17.0] - 2026-05-01", changelog.Replace("\r\n", "\n"));
+        Assert.Contains("### [Unreleased]\n\n- **Pending changelog fragments live under `changelog.d/unreleased/`**", changelog.Replace("\r\n", "\n"));
+        Assert.Contains("### [Unreleased]\n\n- **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています**", changelog.Replace("\r\n", "\n"));
+        Assert.Equal(1, CountOccurrences(changelog, "Pending changelog fragments live under `changelog.d/unreleased/`"));
+        Assert.Equal(1, CountOccurrences(changelog, "未リリースの変更内容は `changelog.d/unreleased/` にまとまっています"));
         Assert.Contains("[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...HEAD", changelog);
         Assert.Contains("[1.17.0]: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0", changelog);
         Assert.Contains("[1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0", changelog);
@@ -237,12 +240,16 @@ public sealed class ChangelogToolTests
 
         ### [Unreleased]
 
+        - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+
         #### Fixed
         - Existing English unreleased note.
 
         ## 日本語
 
         ### [Unreleased]
+
+        - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
         #### 修正
         - Existing Japanese unreleased note.

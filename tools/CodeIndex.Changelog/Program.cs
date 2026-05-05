@@ -181,6 +181,8 @@ public sealed class ChangelogTool
     private static readonly Regex FooterLinkRegex = new(@"^\[(?<label>[^\]]+)\]: https://github\.com/Widthdom/CodeIndex/compare/v(?<base>\d+\.\d+\.\d+)(?:\.\.\.v(?<target>\d+\.\d+\.\d+)|\.\.\.HEAD)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FooterTagLinkRegex = new(@"^\[(?<label>[^\]]+)\]: https://github\.com/Widthdom/CodeIndex/releases/tag/v(?<version>\d+\.\d+\.\d+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex BulletRegex = new(@"^\s*-\s+\S", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string EnglishUnreleasedNotice = "- **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.";
+    private const string JapaneseUnreleasedNotice = "- **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。";
 
     private readonly string _repositoryRoot;
 
@@ -502,11 +504,17 @@ public sealed class ChangelogTool
 
         var existingTargetBody = targetIndex >= 0 ? orderedBlocks[targetIndex].BodyLines : Array.Empty<string>();
         var unreleasedBody = orderedBlocks[unreleasedIndex].BodyLines;
+        var unreleasedNotice = GetUnreleasedNotice(language);
+        var pinnedUnreleasedBody = unreleasedBody.Contains(unreleasedNotice, StringComparer.Ordinal)
+            ? new[] { unreleasedNotice }
+            : Array.Empty<string>();
+        var releasableUnreleasedBody = unreleasedBody.Where(line => !string.Equals(line, unreleasedNotice, StringComparison.Ordinal)).ToList();
+        var cleanedExistingTargetBody = existingTargetBody.Where(line => !string.Equals(line, unreleasedNotice, StringComparison.Ordinal)).ToList();
 
         var renderedFragments = RenderFragmentsForLanguage(fragments, language);
-        var combinedTargetBody = CombineBodies(existingTargetBody, unreleasedBody, renderedFragments);
+        var combinedTargetBody = CombineBodies(cleanedExistingTargetBody, releasableUnreleasedBody, renderedFragments);
 
-        orderedBlocks[unreleasedIndex] = orderedBlocks[unreleasedIndex] with { BodyLines = Array.Empty<string>() };
+        orderedBlocks[unreleasedIndex] = orderedBlocks[unreleasedIndex] with { BodyLines = pinnedUnreleasedBody };
 
         var targetBlock = new VersionBlock(targetHeading, combinedTargetBody);
         if (targetIndex >= 0)
@@ -520,6 +528,9 @@ public sealed class ChangelogTool
 
         return orderedBlocks;
     }
+
+    private static string GetUnreleasedNotice(Language language) =>
+        language == Language.English ? EnglishUnreleasedNotice : JapaneseUnreleasedNotice;
 
     private static List<string> CombineBodies(params IReadOnlyList<string>[] pieces)
     {
