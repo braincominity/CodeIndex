@@ -488,15 +488,20 @@ internal static class BroadLanguageReferenceExtractor
             if (chars[cursor] == '{')
             {
                 codeDepth++;
+                chars[cursor] = ' ';
                 continue;
             }
 
             if (chars[cursor] == '}' && codeDepth > 0)
             {
                 codeDepth--;
+                chars[cursor] = ' ';
                 if (codeDepth == 0)
                     inCodeBlock = false;
+                continue;
             }
+
+            chars[cursor] = ' ';
         }
     }
 
@@ -776,12 +781,102 @@ internal static class BroadLanguageReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in LuaRequireRegex.Matches(originalLine))
+        foreach (var (name, index) in EnumerateLuaRequireReferences(originalLine))
+            ReferenceExtractor.AddReference(references, seen, fileId, name, index, "type_reference", context, lineNumber, container);
+    }
+
+    private static IEnumerable<(string Name, int Index)> EnumerateLuaRequireReferences(string line)
+    {
+        for (var cursor = 0; cursor < line.Length; cursor++)
         {
-            var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
+            if (line[cursor] == '-' && cursor + 1 < line.Length && line[cursor + 1] == '-')
+                yield break;
+
+            if (line[cursor] is '"' or '\'')
+            {
+                cursor = SkipQuotedLiteral(line, cursor);
+                continue;
+            }
+
+            if (line[cursor] == '[' && cursor + 1 < line.Length && line[cursor + 1] == '[')
+            {
+                var close = line.IndexOf("]]", cursor + 2, StringComparison.Ordinal);
+                cursor = close < 0 ? line.Length : close + 1;
+                continue;
+            }
+
+            if (!IsIdentifierAt(line, cursor, "require"))
+                continue;
+
+            var argStart = cursor + "require".Length;
+            while (argStart < line.Length && char.IsWhiteSpace(line[argStart]))
+                argStart++;
+            if (argStart < line.Length && line[argStart] == '(')
+            {
+                argStart++;
+                while (argStart < line.Length && char.IsWhiteSpace(line[argStart]))
+                    argStart++;
+            }
+
+            if (argStart >= line.Length || line[argStart] is not ('"' or '\''))
+                continue;
+
+            var quote = line[argStart++];
+            var nameStart = argStart;
+            while (argStart < line.Length)
+            {
+                if (line[argStart] == '\\' && argStart + 1 < line.Length)
+                {
+                    argStart += 2;
+                    continue;
+                }
+
+                if (line[argStart] == quote)
+                    break;
+                argStart++;
+            }
+
+            if (argStart > nameStart)
+                yield return (line[nameStart..argStart], nameStart);
+            cursor = argStart;
         }
     }
+
+    private static int SkipQuotedLiteral(string line, int start)
+    {
+        var quote = line[start];
+        var cursor = start + 1;
+        while (cursor < line.Length)
+        {
+            if (line[cursor] == '\\' && cursor + 1 < line.Length)
+            {
+                cursor += 2;
+                continue;
+            }
+
+            if (line[cursor] == quote)
+                return cursor;
+            cursor++;
+        }
+
+        return line.Length;
+    }
+
+    private static bool IsIdentifierAt(string line, int index, string identifier)
+    {
+        if (index < 0 || index + identifier.Length > line.Length)
+            return false;
+        if (string.CompareOrdinal(line, index, identifier, 0, identifier.Length) != 0)
+            return false;
+        if (index > 0 && IsSimpleIdentifierPart(line[index - 1]))
+            return false;
+
+        var after = index + identifier.Length;
+        return after >= line.Length || !IsSimpleIdentifierPart(line[after]);
+    }
+
+    private static bool IsSimpleIdentifierPart(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {

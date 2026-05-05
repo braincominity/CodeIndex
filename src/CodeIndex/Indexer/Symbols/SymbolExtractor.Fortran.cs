@@ -14,6 +14,7 @@ public static partial class SymbolExtractor
 
         int? bodyStartLine = null;
         var endLine = startIndex + 1;
+        var nestedRoutineDepth = 0;
 
         for (int i = startIndex + 1; i < lines.Length; i++)
         {
@@ -23,6 +24,16 @@ public static partial class SymbolExtractor
 
             if (blockKind == "module" && IsFortranModuleProcedureEndLine(trimmed))
                 continue;
+
+            if (blockKind is "subroutine" or "function" && IsFortranRoutineEndLine(trimmed))
+            {
+                if (nestedRoutineDepth > 0)
+                {
+                    nestedRoutineDepth--;
+                    endLine = i + 1;
+                    continue;
+                }
+            }
 
             if (IsFortranBlockEndLine(trimmed, blockKind))
             {
@@ -34,6 +45,13 @@ public static partial class SymbolExtractor
 
             if (bodyStartLine == null)
                 bodyStartLine = i + 1;
+
+            if (blockKind is "subroutine" or "function"
+                && TryGetFortranBlockStartKind(trimmed, out var nestedKind)
+                && nestedKind is "subroutine" or "function")
+            {
+                nestedRoutineDepth++;
+            }
 
             endLine = i + 1;
         }
@@ -216,6 +234,17 @@ public static partial class SymbolExtractor
 
         var afterModule = remainder["module".Length..].TrimStart();
         return StartsWithFortranWord(afterModule, "procedure");
+    }
+
+    private static bool IsFortranRoutineEndLine(string trimmedLine)
+    {
+        if (!StartsWithFortranWord(trimmedLine, "end"))
+            return false;
+
+        var remainder = trimmedLine["end".Length..].TrimStart();
+        return remainder.Length == 0
+            || StartsWithFortranWord(remainder, "subroutine")
+            || StartsWithFortranWord(remainder, "function");
     }
 
     private static bool StartsWithFortranWord(string input, string word)

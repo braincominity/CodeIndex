@@ -7135,6 +7135,7 @@ public class ReferenceExtractorTests
 
             @code {
                 var sample = "<CodeStringPanel />";
+                List<CodeGenericPanel> panels = new();
                 // <CodeCommentPanel />
                 void HandleClick() { UserService.Save(); }
             }
@@ -7158,6 +7159,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AuditPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeStringPanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CodeGenericPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeCommentPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
@@ -7372,6 +7374,8 @@ public class ReferenceExtractorTests
     {
         const string content = """
             local json = require "dkjson"
+            -- require "commented"
+            local text = 'require "stringed"'
 
             function run()
               render "value"
@@ -7385,6 +7389,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "dkjson" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "commented" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "stringed" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "local" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "function" && r.ReferenceKind == "call");
     }
