@@ -7430,6 +7430,9 @@ public class ReferenceExtractorTests
             afterComment :: Extra -> Output
             afterComment input = finalize input options
 
+            mapMaybe :: (a -> Box b) -> [a] -> [b]
+            mapMaybe input = finalize input options
+
             render value = format value
             """;
 
@@ -7441,10 +7444,12 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Extra" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "finalize" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "format" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Phantom" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ghost" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "a" or "b" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
@@ -7499,6 +7504,14 @@ public class ReferenceExtractorTests
             require "longstring"
             stringRender "value"
             ]]
+            --[=[
+            require "equalscomment"
+            equalsCommentRender "value"
+            ]=]
+            local equalBlock = [==[
+            require "equalsstring"
+            equalsStringRender "value"
+            ]==]
             local marker = "[["
             -- docs [[
 
@@ -7518,8 +7531,12 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "stringed" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "longcomment" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "longstring" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "equalscomment" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "equalsstring" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "commentRender" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "stringRender" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "equalsCommentRender" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "equalsStringRender" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "local" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "function" && r.ReferenceKind == "call");
     }

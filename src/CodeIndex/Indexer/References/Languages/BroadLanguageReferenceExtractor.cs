@@ -404,7 +404,7 @@ internal static class BroadLanguageReferenceExtractor
     public static string[] MaskLuaLongCommentAndStringLines(IReadOnlyList<string> originalLines)
     {
         var result = new string[originalLines.Count];
-        var inLongText = false;
+        var longTextEqualsCount = -1;
 
         for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
         {
@@ -412,13 +412,13 @@ internal static class BroadLanguageReferenceExtractor
             var chars = line.ToCharArray();
             for (var cursor = 0; cursor < chars.Length; cursor++)
             {
-                if (inLongText)
+                if (longTextEqualsCount >= 0)
                 {
-                    if (chars[cursor] == ']' && cursor + 1 < chars.Length && chars[cursor + 1] == ']')
+                    if (TryGetLuaLongBracketClose(line, cursor, longTextEqualsCount, out var closeLength))
                     {
-                        chars[cursor++] = ' ';
-                        chars[cursor] = ' ';
-                        inLongText = false;
+                        MaskRange(chars, cursor, cursor + closeLength);
+                        cursor += closeLength - 1;
+                        longTextEqualsCount = -1;
                         continue;
                     }
 
@@ -432,24 +432,25 @@ internal static class BroadLanguageReferenceExtractor
                     continue;
                 }
 
-                if (chars[cursor] == '-' && cursor + 3 < chars.Length && chars[cursor + 1] == '-' && chars[cursor + 2] == '[' && chars[cursor + 3] == '[')
+                if (chars[cursor] == '-'
+                    && cursor + 2 < chars.Length
+                    && chars[cursor + 1] == '-'
+                    && TryGetLuaLongBracketOpen(line, cursor + 2, out var commentEqualsCount, out var commentOpenLength))
                 {
-                    chars[cursor++] = ' ';
-                    chars[cursor++] = ' ';
-                    chars[cursor++] = ' ';
-                    chars[cursor] = ' ';
-                    inLongText = true;
+                    MaskRange(chars, cursor, cursor + 2 + commentOpenLength);
+                    cursor += 1 + commentOpenLength;
+                    longTextEqualsCount = commentEqualsCount;
                     continue;
                 }
 
                 if (chars[cursor] == '-' && cursor + 1 < chars.Length && chars[cursor + 1] == '-')
                     break;
 
-                if (chars[cursor] == '[' && cursor + 1 < chars.Length && chars[cursor + 1] == '[')
+                if (TryGetLuaLongBracketOpen(line, cursor, out var stringEqualsCount, out var stringOpenLength))
                 {
-                    chars[cursor++] = ' ';
-                    chars[cursor] = ' ';
-                    inLongText = true;
+                    MaskRange(chars, cursor, cursor + stringOpenLength);
+                    cursor += stringOpenLength - 1;
+                    longTextEqualsCount = stringEqualsCount;
                 }
             }
 
@@ -457,6 +458,48 @@ internal static class BroadLanguageReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool TryGetLuaLongBracketOpen(string line, int start, out int equalsCount, out int length)
+    {
+        equalsCount = 0;
+        length = 0;
+        if (start < 0 || start >= line.Length || line[start] != '[')
+            return false;
+
+        var cursor = start + 1;
+        while (cursor < line.Length && line[cursor] == '=')
+        {
+            equalsCount++;
+            cursor++;
+        }
+
+        if (cursor >= line.Length || line[cursor] != '[')
+            return false;
+
+        length = cursor - start + 1;
+        return true;
+    }
+
+    private static bool TryGetLuaLongBracketClose(string line, int start, int equalsCount, out int length)
+    {
+        length = 0;
+        if (start < 0 || start >= line.Length || line[start] != ']')
+            return false;
+
+        var cursor = start + 1;
+        for (var i = 0; i < equalsCount; i++)
+        {
+            if (cursor >= line.Length || line[cursor] != '=')
+                return false;
+            cursor++;
+        }
+
+        if (cursor >= line.Length || line[cursor] != ']')
+            return false;
+
+        length = cursor - start + 1;
+        return true;
     }
 
     public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
@@ -1151,7 +1194,41 @@ internal static class BroadLanguageReferenceExtractor
             return;
 
         var group = match.Groups["types"];
-        ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, container, "haskell");
+        ReferenceExtractor.AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            group.Value,
+            group.Index,
+            context,
+            lineNumber,
+            container,
+            "haskell",
+            BuildHaskellIgnoredTypeVariables(group.Value));
+    }
+
+    private static IReadOnlySet<string>? BuildHaskellIgnoredTypeVariables(string expression)
+    {
+        HashSet<string>? ignored = null;
+        for (var cursor = 0; cursor < expression.Length; cursor++)
+        {
+            if (!IsSimpleIdentifierPart(expression[cursor]))
+                continue;
+
+            var start = cursor;
+            while (cursor < expression.Length && IsSimpleIdentifierPart(expression[cursor]))
+                cursor++;
+
+            if (char.IsLower(expression[start]))
+            {
+                ignored ??= new HashSet<string>(StringComparer.Ordinal);
+                ignored.Add(expression[start..cursor]);
+            }
+
+            cursor--;
+        }
+
+        return ignored;
     }
 
     private static void EmitElixirTypeReferences(
