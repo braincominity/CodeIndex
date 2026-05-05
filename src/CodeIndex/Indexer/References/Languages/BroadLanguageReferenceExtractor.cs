@@ -418,6 +418,12 @@ internal static class BroadLanguageReferenceExtractor
                     razorControlDepth = Math.Max(0, razorControlDepth + delta);
                     pendingRazorControlBlock = delta <= 0;
                 }
+                else if (IndexOfRazorBareControlContinuation(chars) is var continuationStart && continuationStart >= 0)
+                {
+                    var delta = MaskRazorControlCodeLine(chars, continuationStart, ref inRazorControlBlockComment);
+                    razorControlDepth = Math.Max(0, razorControlDepth + delta);
+                    pendingRazorControlBlock = delta <= 0;
+                }
                 else if (pendingRazorControlBlock && IsRazorCodeLineInsideControl(chars))
                 {
                     var delta = MaskRazorControlCodeLine(chars, FirstNonWhitespaceIndex(chars), ref inRazorControlBlockComment);
@@ -452,6 +458,25 @@ internal static class BroadLanguageReferenceExtractor
             var afterOk = afterIndex == line.Length || char.IsWhiteSpace(line[afterIndex]) || line[afterIndex] == '{';
             if (beforeOk && afterOk)
                 return index;
+        }
+
+        return -1;
+    }
+
+    private static int IndexOfRazorBareControlContinuation(char[] chars)
+    {
+        var index = FirstNonWhitespaceIndex(chars);
+        if (index < 0)
+            return -1;
+
+        var line = new string(chars);
+        foreach (var keyword in new[] { "else", "catch", "finally" })
+        {
+            if (line.AsSpan(index).StartsWith(keyword, StringComparison.Ordinal)
+                && (index + keyword.Length == line.Length || !IsSimpleIdentifierPart(line[index + keyword.Length])))
+            {
+                return index;
+            }
         }
 
         return -1;
@@ -879,9 +904,39 @@ internal static class BroadLanguageReferenceExtractor
 
         foreach (Match match in PascalTypeAfterColonRegex.Matches(preparedLine))
         {
+            if (!IsPascalColonTypeReferenceContext(preparedLine, lineNumber, container))
+                continue;
+
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "pascal");
         }
+    }
+
+    private static bool IsPascalColonTypeReferenceContext(string preparedLine, int lineNumber, SymbolRecord? container)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (container?.Kind != "function"
+            || !container.BodyStartLine.HasValue
+            || lineNumber < container.BodyStartLine.Value)
+        {
+            return true;
+        }
+
+        return StartsWithPascalDeclarationKeyword(trimmed);
+    }
+
+    private static bool StartsWithPascalDeclarationKeyword(string trimmedLine)
+    {
+        foreach (var keyword in new[] { "var", "const", "type", "property", "procedure", "function", "constructor", "destructor" })
+        {
+            if (trimmedLine.StartsWith(keyword, StringComparison.OrdinalIgnoreCase)
+                && (trimmedLine.Length == keyword.Length || !IsSimpleIdentifierPart(trimmedLine[keyword.Length])))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void EmitObjCTypeReferences(

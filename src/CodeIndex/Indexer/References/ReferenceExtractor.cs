@@ -1773,6 +1773,8 @@ public static partial class ReferenceExtractor
                     var callIndex = match.Groups["name"].Index;
                     if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                         continue;
+                    if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
+                        continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
@@ -2163,6 +2165,10 @@ public static partial class ReferenceExtractor
         return string.Equals(extension, ".razor", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".cshtml", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsObjCSelectorLiteralCall(string line, string name, int nameIndex) =>
+        string.Equals(NormalizeAtPrefixedIdentifier(name), "selector", StringComparison.Ordinal)
+        && (name.StartsWith('@') || nameIndex > 0 && line[nameIndex - 1] == '@');
 
     /// <summary>
     /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are

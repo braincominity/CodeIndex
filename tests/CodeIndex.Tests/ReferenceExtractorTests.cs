@@ -7144,6 +7144,10 @@ public class ReferenceExtractorTests
             {
                 var inline = "<InlineCodePanel />";
             }
+            else
+            {
+                var fallback = "<ElseCodePanel />";
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content, "Pages/User.razor");
@@ -7167,6 +7171,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeGenericPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeCommentPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "InlineCodePanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ElseCodePanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
@@ -7267,6 +7272,16 @@ public class ReferenceExtractorTests
                 AnotherCommentedProcess;
               *)
               WriteLn('not end');
+              case input.Status of
+                Red: ProcessUser;
+              end;
+              AfterCaseCall;
+              try
+                ProcessUser;
+              finally
+                CleanupUser;
+              end;
+              AfterTryCall;
               AfterStringCall;
               ProcessUser;
             end;
@@ -7289,6 +7304,16 @@ public class ReferenceExtractorTests
             && r.ContainerKind == "function"
             && r.ContainerName == "Run");
         Assert.Contains(references, r =>
+            r.SymbolName == "AfterCaseCall"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "AfterTryCall"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Run");
+        Assert.Contains(references, r =>
             r.SymbolName == "AfterStringCall"
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
@@ -7296,6 +7321,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "CommentedProcess" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AnotherCommentedProcess" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "TCommented" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ProcessUser" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -7327,6 +7353,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "handleUser" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "selector" && r.ReferenceKind == "call");
     }
 
     [Fact]
