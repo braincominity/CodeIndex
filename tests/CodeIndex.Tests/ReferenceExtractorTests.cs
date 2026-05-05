@@ -7139,6 +7139,11 @@ public class ReferenceExtractorTests
                 // <CodeCommentPanel />
                 void HandleClick() { UserService.Save(); }
             }
+
+            @if (ShowInline)
+            {
+                var inline = "<InlineCodePanel />";
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content, "Pages/User.razor");
@@ -7161,6 +7166,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeStringPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeGenericPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CodeCommentPanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "InlineCodePanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
@@ -7210,6 +7216,7 @@ public class ReferenceExtractorTests
               subroutine run(repo)
                 type(Repository) :: repo
                 class(User), allocatable :: current
+                value = prefix() // suffix()
                 call process(repo)
               end subroutine run
             end module demo_mod
@@ -7221,6 +7228,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "call");
         Assert.Contains(references, r =>
             r.SymbolName == "process"
             && r.ReferenceKind == "call"
@@ -7257,6 +7266,8 @@ public class ReferenceExtractorTests
               (*
                 AnotherCommentedProcess;
               *)
+              WriteLn('not end');
+              AfterStringCall;
               ProcessUser;
             end;
 
@@ -7274,6 +7285,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "TUser" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r =>
             r.SymbolName == "ProcessUser"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "AfterStringCall"
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
             && r.ContainerName == "Run");

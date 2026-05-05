@@ -17,7 +17,7 @@ public static partial class SymbolExtractor
 
         for (var i = startIndex + 1; i < lines.Length; i++)
         {
-            var code = StripPascalRangeComments(lines[i]);
+            var code = StripPascalRangeComments(MaskPascalRangeStrings(lines[i]));
             var trimmed = code.Trim();
             if (trimmed.Length == 0)
                 continue;
@@ -49,6 +49,37 @@ public static partial class SymbolExtractor
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (lines.Length, bodyStartLine, lines.Length);
+    }
+
+    private static string MaskPascalRangeStrings(string line)
+    {
+        var chars = line.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] != '\'')
+                continue;
+
+            chars[i] = ' ';
+            i++;
+            while (i < chars.Length)
+            {
+                if (chars[i] == '\'' && i + 1 < chars.Length && chars[i + 1] == '\'')
+                {
+                    chars[i++] = ' ';
+                    chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                var closes = chars[i] == '\'';
+                chars[i] = ' ';
+                if (closes)
+                    break;
+                i++;
+            }
+        }
+
+        return new string(chars);
     }
 
     private static string StripPascalRangeComments(string line)

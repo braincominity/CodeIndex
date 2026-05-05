@@ -7,6 +7,10 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly Regex FortranRoutineStartLineRegex = new(
+        @"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:subroutine\b|(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindFortranRange(string[] lines, int startIndex)
     {
         if (!TryGetFortranBlockStartKind(lines[startIndex], out var blockKind))
@@ -18,7 +22,7 @@ public static partial class SymbolExtractor
 
         for (int i = startIndex + 1; i < lines.Length; i++)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = StripFortranComment(MaskFortranStringLiterals(lines[i])).Trim();
             if (trimmed.Length == 0 || trimmed.StartsWith('!'))
                 continue;
 
@@ -47,8 +51,7 @@ public static partial class SymbolExtractor
                 bodyStartLine = i + 1;
 
             if (blockKind is "subroutine" or "function"
-                && TryGetFortranBlockStartKind(trimmed, out var nestedKind)
-                && nestedKind is "subroutine" or "function")
+                && IsFortranRoutineStartLine(trimmed))
             {
                 nestedRoutineDepth++;
             }
@@ -245,6 +248,42 @@ public static partial class SymbolExtractor
         return remainder.Length == 0
             || StartsWithFortranWord(remainder, "subroutine")
             || StartsWithFortranWord(remainder, "function");
+    }
+
+    private static bool IsFortranRoutineStartLine(string trimmedLine) =>
+        !StartsWithFortranWord(trimmedLine, "end")
+        && FortranRoutineStartLineRegex.IsMatch(trimmedLine);
+
+    private static string MaskFortranStringLiterals(string line)
+    {
+        var chars = line.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] is not ('\'' or '"'))
+                continue;
+
+            var quote = chars[i];
+            chars[i] = ' ';
+            i++;
+            while (i < chars.Length)
+            {
+                if (chars[i] == quote && i + 1 < chars.Length && chars[i + 1] == quote)
+                {
+                    chars[i++] = ' ';
+                    chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                var closes = chars[i] == quote;
+                chars[i] = ' ';
+                if (closes)
+                    break;
+                i++;
+            }
+        }
+
+        return new string(chars);
     }
 
     private static bool StartsWithFortranWord(string input, string word)

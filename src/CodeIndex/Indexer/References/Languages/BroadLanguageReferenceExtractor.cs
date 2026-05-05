@@ -347,6 +347,9 @@ internal static class BroadLanguageReferenceExtractor
         var inCodeBlock = false;
         var codeDepth = 0;
         var inCSharpBlockComment = false;
+        var razorControlDepth = 0;
+        var inRazorControlBlockComment = false;
+        var pendingRazorControlBlock = false;
 
         for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
         {
@@ -396,10 +399,39 @@ internal static class BroadLanguageReferenceExtractor
                 codeScanStart = IndexOfRazorCodeDirective(chars);
                 if (codeScanStart >= 0)
                     inCodeBlock = true;
+                else
+                {
+                    codeScanStart = IndexOfRazorExplicitCodeBlock(chars);
+                    if (codeScanStart >= 0)
+                        inCodeBlock = true;
+                }
             }
 
             if (inCodeBlock)
                 MaskCSharpStringsAndCommentsInRazorCode(chars, Math.Max(0, codeScanStart), ref codeDepth, ref inCodeBlock, ref inCSharpBlockComment);
+            else
+            {
+                var controlStart = IndexOfRazorControlDirective(chars);
+                if (controlStart >= 0)
+                {
+                    var delta = MaskRazorControlCodeLine(chars, controlStart, ref inRazorControlBlockComment);
+                    razorControlDepth = Math.Max(0, razorControlDepth + delta);
+                    pendingRazorControlBlock = delta <= 0;
+                }
+                else if (pendingRazorControlBlock && IsRazorCodeLineInsideControl(chars))
+                {
+                    var delta = MaskRazorControlCodeLine(chars, FirstNonWhitespaceIndex(chars), ref inRazorControlBlockComment);
+                    razorControlDepth = Math.Max(0, razorControlDepth + delta);
+                    if (delta != 0)
+                        pendingRazorControlBlock = false;
+                }
+                else if (razorControlDepth > 0 && IsRazorCodeLineInsideControl(chars))
+                {
+                    razorControlDepth = Math.Max(
+                        0,
+                        razorControlDepth + MaskRazorControlCodeLine(chars, FirstNonWhitespaceIndex(chars), ref inRazorControlBlockComment));
+                }
+            }
 
             result[lineIndex] = new string(chars);
         }
@@ -423,6 +455,142 @@ internal static class BroadLanguageReferenceExtractor
         }
 
         return -1;
+    }
+
+    private static int IndexOfRazorExplicitCodeBlock(char[] chars)
+    {
+        var line = new string(chars);
+        var index = line.IndexOf("@{", StringComparison.Ordinal);
+        return index >= 0 ? index : -1;
+    }
+
+    private static int IndexOfRazorControlDirective(char[] chars)
+    {
+        var line = new string(chars);
+        foreach (var directive in new[] { "@if", "@foreach", "@for", "@while", "@switch", "@using", "@lock", "@try", "@catch", "@finally", "@do" })
+        {
+            for (var index = line.IndexOf(directive, StringComparison.Ordinal);
+                 index >= 0;
+                 index = line.IndexOf(directive, index + directive.Length, StringComparison.Ordinal))
+            {
+                var beforeOk = index == 0 || char.IsWhiteSpace(line[index - 1]) || line[index - 1] == '}';
+                var afterIndex = index + directive.Length;
+                var afterOk = afterIndex == line.Length || !IsSimpleIdentifierPart(line[afterIndex]);
+                if (beforeOk && afterOk)
+                    return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsRazorCodeLineInsideControl(char[] chars)
+    {
+        var index = FirstNonWhitespaceIndex(chars);
+        if (index < 0)
+            return false;
+
+        return !LooksLikeRazorMarkupStart(new string(chars), index);
+    }
+
+    private static int FirstNonWhitespaceIndex(char[] chars)
+    {
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (!char.IsWhiteSpace(chars[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool LooksLikeRazorMarkupStart(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length)
+            return false;
+        if (line[index] == '<')
+            return true;
+
+        return line[index] == '@'
+            && index + 1 < line.Length
+            && line[index + 1] is ':' or '<';
+    }
+
+    private static int MaskRazorControlCodeLine(char[] chars, int start, ref bool inBlockComment)
+    {
+        var line = new string(chars);
+        var firstOpenBrace = -1;
+        var delta = CountCSharpBraceDelta(line, start, ref inBlockComment, ref firstOpenBrace);
+        if (firstOpenBrace >= 0 && LooksLikeRazorMarkupStart(line, firstOpenBrace + 1))
+        {
+            MaskRange(chars, start, firstOpenBrace + 1);
+            return delta;
+        }
+
+        MaskRange(chars, start, chars.Length);
+        return delta;
+    }
+
+    private static int CountCSharpBraceDelta(string line, int start, ref bool inBlockComment, ref int firstOpenBrace)
+    {
+        var delta = 0;
+        for (var cursor = Math.Max(0, start); cursor < line.Length; cursor++)
+        {
+            if (inBlockComment)
+            {
+                if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == '/')
+                {
+                    inBlockComment = false;
+                    cursor++;
+                }
+
+                continue;
+            }
+
+            if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '/')
+                break;
+
+            if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '*')
+            {
+                inBlockComment = true;
+                cursor++;
+                continue;
+            }
+
+            if (line[cursor] is '"' or '\'')
+            {
+                var quote = line[cursor++];
+                while (cursor < line.Length)
+                {
+                    if (line[cursor] == '\\' && cursor + 1 < line.Length)
+                    {
+                        cursor += 2;
+                        continue;
+                    }
+
+                    if (line[cursor] == quote)
+                        break;
+                    cursor++;
+                }
+
+                continue;
+            }
+
+            if (line[cursor] == '{')
+            {
+                if (firstOpenBrace < 0)
+                    firstOpenBrace = cursor;
+                delta++;
+            }
+            else if (line[cursor] == '}')
+            {
+                delta--;
+            }
+        }
+
+        return delta;
     }
 
     private static void MaskCSharpStringsAndCommentsInRazorCode(

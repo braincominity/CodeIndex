@@ -10041,7 +10041,8 @@ public class SymbolExtractorTests
               end subroutine split_subroutine
 
               recursive subroutine normalize(v)
-                call normalize2(v)
+                call normalize2(v) ! function phantom()
+                print *, "subroutine phantom"
               contains
                 subroutine normalize_inner()
                 end subroutine normalize_inner
