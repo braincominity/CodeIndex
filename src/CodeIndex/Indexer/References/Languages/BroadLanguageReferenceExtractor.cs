@@ -126,8 +126,11 @@ internal static class BroadLanguageReferenceExtractor
         @"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s+(?=[""'{A-Za-z_])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex SmalltalkMessageRegex = new(
-        @"(?<![#\w])(?<name>[a-z]\w*:?)",
+    private static readonly Regex SmalltalkClassDeclarationRegex = new(
+        @"^\s*(?:(?:[A-Za-z_]\w*)\s+subclass:|Class\s+named:|Object\s+subclass:)\s*#",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SmalltalkMessageSendRegex = new(
+        @"(?<![#\w])(?<receiver>[A-Za-z_]\w*)\s+(?<selector>[a-z]\w*:?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SmalltalkMethodDefinitionRegex = new(
         @">>\s*(?<name>[A-Za-z_]\w*:?)",
@@ -143,7 +146,7 @@ internal static class BroadLanguageReferenceExtractor
         @"^\s*@inject\s+(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RazorEventHandlerRegex = new(
-        @"@\w+\s*=\s*""(?<name>[A-Za-z_]\w*)""",
+        @"@on[A-Za-z_]\w*\s*=\s*""(?<name>[A-Za-z_]\w*)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitTypePositionReferences(
@@ -624,12 +627,24 @@ internal static class BroadLanguageReferenceExtractor
     {
         var definitionMatch = HaskellDefinitionRegex.Match(preparedLine);
         var definitionName = definitionMatch.Success ? definitionMatch.Groups["name"].Value : null;
-        foreach (Match match in HaskellSpaceCallRegex.Matches(preparedLine))
+        var scanStart = 0;
+        var scanText = preparedLine;
+        if (definitionMatch.Success)
+        {
+            var equalsIndex = preparedLine.IndexOf('=');
+            if (equalsIndex >= 0)
+            {
+                scanStart = equalsIndex + 1;
+                scanText = preparedLine[scanStart..];
+            }
+        }
+
+        foreach (Match match in HaskellSpaceCallRegex.Matches(scanText))
         {
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true || string.Equals(name, definitionName, StringComparison.Ordinal))
                 continue;
-            addCallLikeReference(name, match.Groups["name"].Index);
+            addCallLikeReference(name, scanStart + match.Groups["name"].Index);
         }
     }
 
@@ -659,14 +674,16 @@ internal static class BroadLanguageReferenceExtractor
     private static void EmitSmalltalkMessageReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
         var definitionMatch = SmalltalkMethodDefinitionRegex.Match(preparedLine);
-        var definitionName = definitionMatch.Success ? definitionMatch.Groups["name"].Value.TrimEnd(':') : null;
-        foreach (Match match in SmalltalkMessageRegex.Matches(preparedLine))
+        if (definitionMatch.Success || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
+            return;
+
+        foreach (Match match in SmalltalkMessageSendRegex.Matches(preparedLine))
         {
-            var rawName = match.Groups["name"].Value;
+            var rawName = match.Groups["selector"].Value;
             var name = rawName.TrimEnd(':');
-            if (definitionNames?.Contains(name) == true || string.Equals(name, definitionName, StringComparison.Ordinal))
+            if (definitionNames?.Contains(name) == true)
                 continue;
-            addCallLikeReference(name, match.Groups["name"].Index);
+            addCallLikeReference(name, match.Groups["selector"].Index);
         }
     }
 

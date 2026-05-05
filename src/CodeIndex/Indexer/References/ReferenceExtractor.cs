@@ -134,6 +134,20 @@ public static partial class ReferenceExtractor
             "import", "late", "library", "mixin", "on", "operator", "part", "required", "show",
             "typedef", "void", "with",
         },
+        ["elixir"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "alias", "after", "behaviour", "case", "catch", "cond", "def", "defdelegate",
+            "defguard", "defguardp", "defimpl", "defmacro", "defmacrop", "defmodule", "defp",
+            "defprotocol", "defstruct", "do", "else", "end", "for", "fn", "if", "impl",
+            "import", "quote", "receive", "require", "rescue", "try", "unless", "unquote",
+            "use", "with",
+        },
+        ["lua"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
+            "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
+            "while",
+        },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
