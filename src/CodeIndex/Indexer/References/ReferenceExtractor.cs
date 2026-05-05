@@ -827,9 +827,11 @@ public static partial class ReferenceExtractor
             : null;
         var referenceStructuralLines = language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
-            : UsesCStyleBlockComments(language)
-                ? MaskCStyleBlockCommentLines(structuralLines)
-                : structuralLines;
+            : language == "haskell"
+                ? MaskHaskellBlockCommentLines(structuralLines)
+                : UsesCStyleBlockComments(language)
+                    ? MaskCStyleBlockCommentLines(language, structuralLines)
+                    : structuralLines;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
@@ -839,6 +841,13 @@ public static partial class ReferenceExtractor
         var luaReferenceLines = language == "lua"
             ? BroadLanguageReferenceExtractor.MaskLuaLongCommentAndStringLines(lines)
             : null;
+        string[]? luaPreparedLines = null;
+        if (luaReferenceLines != null)
+        {
+            luaPreparedLines = new string[luaReferenceLines.Length];
+            for (var pi = 0; pi < luaReferenceLines.Length; pi++)
+                luaPreparedLines[pi] = PrepareLine(language, luaReferenceLines[pi]);
+        }
         var razorReferenceLines = isRazorFile
             ? BroadLanguageReferenceExtractor.MaskRazorCommentLines(lines)
             : null;
@@ -1004,7 +1013,7 @@ public static partial class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = preparedLines[i];
+            var preparedLine = luaPreparedLines?[i] ?? preparedLines[i];
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             if (language == "csharp"

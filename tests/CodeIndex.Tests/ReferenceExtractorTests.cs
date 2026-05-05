@@ -7024,6 +7024,9 @@ public class ReferenceExtractorTests
 
               void Run() {
                 auto item = new Derived<User>();
+                auto raw = R"(not a comment
+            /* still raw text
+            )";
                 const char* marker = "/*";
                 // docs: /*
                 helper(item);
@@ -7078,6 +7081,13 @@ public class ReferenceExtractorTests
                 return Result{}
             }
 
+            func RawString() {
+                raw := `not a comment
+            /* still raw text
+            done`
+                afterRaw(raw)
+            }
+
             var routes = []string{
                 "health",
                 "metrics",
@@ -7099,6 +7109,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate" && r.Context.StartsWith("func Load", StringComparison.Ordinal));
         Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, r => r.SymbolName == "main" && r.ReferenceKind == "type_reference");
@@ -7120,6 +7131,10 @@ public class ReferenceExtractorTests
               Widget build(BuildContext context) {
                 final User user = repo.load() as User;
                 final parsed = const User.fromJson(data);
+                final raw = r'''
+            /* still raw text
+            ''';
+                afterRaw();
                 return const UserCard(user);
               }
             }
@@ -7136,6 +7151,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
     }
 
@@ -7397,6 +7413,11 @@ public class ReferenceExtractorTests
             process :: Repository -> User -> Result
             process repo user = finalize user options
 
+            {-
+            commented :: Phantom -> Ghost
+            commented value = phantom value
+            -}
+
             render value = format value
             """;
 
@@ -7408,6 +7429,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "finalize" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "format" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Phantom" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ghost" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "repo" && r.ReferenceKind == "call");
@@ -7455,9 +7479,11 @@ public class ReferenceExtractorTests
             local text = 'require "stringed"'
             --[[
             require "longcomment"
+            commentRender "value"
             ]]
             local block = [[
             require "longstring"
+            stringRender "value"
             ]]
 
             function run()
@@ -7476,6 +7502,8 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "stringed" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "longcomment" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "longstring" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "commentRender" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "stringRender" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "local" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "function" && r.ReferenceKind == "call");
     }

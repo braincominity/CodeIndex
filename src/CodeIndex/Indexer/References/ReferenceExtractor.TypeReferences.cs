@@ -1845,43 +1845,246 @@ public static partial class ReferenceExtractor
     private static bool UsesCStyleBlockComments(string language) =>
         language is "c" or "cpp" or "go" or "objc" or "dart";
 
-    private static string[] MaskCStyleBlockCommentLines(IReadOnlyList<string> lines)
+    private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
         var result = new string[lines.Count];
         var inBlockComment = false;
+        var inGoRawString = false;
+        char dartTripleQuote = '\0';
+        string? cppRawStringTerminator = null;
 
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
             var chars = line.ToCharArray();
-            for (var cursor = 0; cursor < chars.Length; cursor++)
+            var cursor = 0;
+            while (cursor < chars.Length)
             {
                 if (inBlockComment)
                 {
                     chars[cursor] = ' ';
                     if (line[cursor] == '*' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
                     {
-                        chars[++cursor] = ' ';
+                        chars[cursor + 1] = ' ';
                         inBlockComment = false;
+                        cursor += 2;
+                        continue;
                     }
+
+                    cursor++;
+                    continue;
+                }
+
+                if (inGoRawString)
+                {
+                    if (line[cursor] == '`')
+                        inGoRawString = false;
+                    cursor++;
+                    continue;
+                }
+
+                if (dartTripleQuote != '\0')
+                {
+                    if (IsTripleQuoteAt(line, cursor, dartTripleQuote))
+                    {
+                        dartTripleQuote = '\0';
+                        cursor += 3;
+                        continue;
+                    }
+
+                    cursor++;
+                    continue;
+                }
+
+                if (cppRawStringTerminator != null)
+                {
+                    var closeIndex = line.IndexOf(cppRawStringTerminator, cursor, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                        break;
+
+                    cursor = closeIndex + cppRawStringTerminator.Length;
+                    cppRawStringTerminator = null;
                     continue;
                 }
 
                 if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
                     break;
 
+                if (language == "go" && line[cursor] == '`')
+                {
+                    inGoRawString = true;
+                    cursor++;
+                    continue;
+                }
+
+                if (language == "dart" && TryGetDartTripleStringStart(line, cursor, out var dartQuote, out var dartOpeningLength))
+                {
+                    var closeIndex = IndexOfTripleQuote(line, cursor + dartOpeningLength, dartQuote);
+                    if (closeIndex < 0)
+                    {
+                        dartTripleQuote = dartQuote;
+                        break;
+                    }
+
+                    cursor = closeIndex + 3;
+                    continue;
+                }
+
+                if (language == "cpp" && TryGetCppRawStringTerminator(line, cursor, out var rawTerminator, out var rawOpeningLength))
+                {
+                    var closeIndex = line.IndexOf(rawTerminator, cursor + rawOpeningLength, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                    {
+                        cppRawStringTerminator = rawTerminator;
+                        break;
+                    }
+
+                    cursor = closeIndex + rawTerminator.Length;
+                    continue;
+                }
+
                 if (line[cursor] is '"' or '\'' or '`')
                 {
-                    cursor = SkipCStyleQuotedLiteral(line, cursor);
+                    cursor = SkipCStyleQuotedLiteral(line, cursor) + 1;
                     continue;
                 }
 
                 if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
                 {
-                    chars[cursor++] = ' ';
+                    chars[cursor] = ' ';
+                    cursor++;
                     chars[cursor] = ' ';
                     inBlockComment = true;
+                    cursor++;
+                    continue;
                 }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
+    private static bool TryGetDartTripleStringStart(string line, int start, out char quote, out int openingLength)
+    {
+        quote = '\0';
+        openingLength = 0;
+        var quoteIndex = start;
+
+        if (line[start] is 'r' or 'R')
+        {
+            if (start > 0 && IsIdentifierChar(line[start - 1]))
+                return false;
+            quoteIndex = start + 1;
+        }
+
+        if (quoteIndex + 2 >= line.Length)
+            return false;
+
+        quote = line[quoteIndex];
+        if (quote is not ('"' or '\'') || !IsTripleQuoteAt(line, quoteIndex, quote))
+            return false;
+
+        openingLength = quoteIndex - start + 3;
+        return true;
+    }
+
+    private static bool IsTripleQuoteAt(string line, int start, char quote) =>
+        start + 2 < line.Length
+        && line[start] == quote
+        && line[start + 1] == quote
+        && line[start + 2] == quote;
+
+    private static int IndexOfTripleQuote(string line, int start, char quote)
+    {
+        for (var i = start; i + 2 < line.Length; i++)
+        {
+            if (IsTripleQuoteAt(line, i, quote))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool TryGetCppRawStringTerminator(string line, int start, out string terminator, out int openingLength)
+    {
+        terminator = string.Empty;
+        openingLength = 0;
+        if (line[start] != 'R' || start + 2 >= line.Length || line[start + 1] != '"')
+            return false;
+
+        var delimiterStart = start + 2;
+        var parenIndex = line.IndexOf('(', delimiterStart);
+        if (parenIndex < 0)
+            return false;
+
+        for (var i = delimiterStart; i < parenIndex; i++)
+        {
+            if (char.IsWhiteSpace(line[i]) || line[i] is '(' or ')' or '\\')
+                return false;
+        }
+
+        terminator = ")" + line[delimiterStart..parenIndex] + "\"";
+        openingLength = parenIndex - start + 1;
+        return true;
+    }
+
+    private static string[] MaskHaskellBlockCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var blockDepth = 0;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+
+            while (cursor < chars.Length)
+            {
+                if (blockDepth > 0)
+                {
+                    if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    {
+                        chars[cursor] = ' ';
+                        chars[cursor + 1] = ' ';
+                        blockDepth++;
+                        cursor += 2;
+                        continue;
+                    }
+
+                    if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '}')
+                    {
+                        chars[cursor] = ' ';
+                        chars[cursor + 1] = ' ';
+                        blockDepth--;
+                        cursor += 2;
+                        continue;
+                    }
+
+                    chars[cursor++] = ' ';
+                    continue;
+                }
+
+                if (line[cursor] == '"')
+                {
+                    cursor = SkipCStyleQuotedLiteral(line, cursor) + 1;
+                    continue;
+                }
+
+                if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                {
+                    chars[cursor] = ' ';
+                    chars[cursor + 1] = ' ';
+                    blockDepth = 1;
+                    cursor += 2;
+                    continue;
+                }
+
+                cursor++;
             }
 
             result[lineIndex] = new string(chars);
