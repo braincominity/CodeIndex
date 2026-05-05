@@ -825,9 +825,12 @@ public static partial class ReferenceExtractor
         var csharpLinesInsideBlockComment = language == "csharp"
             ? BuildCSharpBlockCommentLines(lines)
             : null;
+        var referenceStructuralLines = language == "pascal"
+            ? MaskPascalBlockCommentLines(structuralLines)
+            : structuralLines;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
-            preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+            preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
         var goImportBlockLines = language == "go"
             ? BroadLanguageReferenceExtractor.BuildGoImportBlockLineMap(lines)
             : null;

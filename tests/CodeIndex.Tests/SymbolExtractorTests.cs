@@ -10042,7 +10042,7 @@ public class SymbolExtractorTests
 
               recursive subroutine normalize(v)
                 call normalize2(v)
-              end subroutine normalize
+              end
               end module procedure normalize_iface
               recursive subroutine normalize2(v)
               end subroutine normalize2
@@ -10105,6 +10105,7 @@ public class SymbolExtractorTests
         var normalize2 = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize2");
         Assert.Equal("namespace", normalize2.ContainerKind);
         Assert.Equal("math_utils", normalize2.ContainerName);
+        Assert.True(normalize.BodyEndLine < normalize2.StartLine);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "subroutine");
 

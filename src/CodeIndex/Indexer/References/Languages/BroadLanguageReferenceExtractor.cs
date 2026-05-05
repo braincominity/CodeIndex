@@ -344,6 +344,9 @@ internal static class BroadLanguageReferenceExtractor
         var result = new string[originalLines.Count];
         var inRazorComment = false;
         var inHtmlComment = false;
+        var inCodeBlock = false;
+        var codeDepth = 0;
+        var inCSharpBlockComment = false;
 
         for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
         {
@@ -387,10 +390,114 @@ internal static class BroadLanguageReferenceExtractor
                 cursor++;
             }
 
+            var codeScanStart = 0;
+            if (!inCodeBlock)
+            {
+                codeScanStart = IndexOfRazorCodeDirective(chars);
+                if (codeScanStart >= 0)
+                    inCodeBlock = true;
+            }
+
+            if (inCodeBlock)
+                MaskCSharpStringsAndCommentsInRazorCode(chars, Math.Max(0, codeScanStart), ref codeDepth, ref inCodeBlock, ref inCSharpBlockComment);
+
             result[lineIndex] = new string(chars);
         }
 
         return result;
+    }
+
+    private static int IndexOfRazorCodeDirective(char[] chars)
+    {
+        var line = new string(chars);
+        foreach (var directive in new[] { "@code", "@functions" })
+        {
+            var index = line.IndexOf(directive, StringComparison.Ordinal);
+            if (index < 0)
+                continue;
+            var beforeOk = index == 0 || char.IsWhiteSpace(line[index - 1]);
+            var afterIndex = index + directive.Length;
+            var afterOk = afterIndex == line.Length || char.IsWhiteSpace(line[afterIndex]) || line[afterIndex] == '{';
+            if (beforeOk && afterOk)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static void MaskCSharpStringsAndCommentsInRazorCode(
+        char[] chars,
+        int start,
+        ref int codeDepth,
+        ref bool inCodeBlock,
+        ref bool inBlockComment)
+    {
+        for (var cursor = start; cursor < chars.Length; cursor++)
+        {
+            if (inBlockComment)
+            {
+                if (chars[cursor] == '*' && cursor + 1 < chars.Length && chars[cursor + 1] == '/')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor] = ' ';
+                    inBlockComment = false;
+                    continue;
+                }
+
+                chars[cursor] = ' ';
+                continue;
+            }
+
+            if (chars[cursor] == '/' && cursor + 1 < chars.Length && chars[cursor + 1] == '/')
+            {
+                MaskRange(chars, cursor, chars.Length);
+                break;
+            }
+
+            if (chars[cursor] == '/' && cursor + 1 < chars.Length && chars[cursor + 1] == '*')
+            {
+                chars[cursor++] = ' ';
+                chars[cursor] = ' ';
+                inBlockComment = true;
+                continue;
+            }
+
+            if (chars[cursor] is '"' or '\'')
+            {
+                var quote = chars[cursor];
+                chars[cursor++] = ' ';
+                while (cursor < chars.Length)
+                {
+                    if (chars[cursor] == '\\' && cursor + 1 < chars.Length)
+                    {
+                        chars[cursor++] = ' ';
+                        chars[cursor] = ' ';
+                        cursor++;
+                        continue;
+                    }
+
+                    var closes = chars[cursor] == quote;
+                    chars[cursor++] = ' ';
+                    if (closes)
+                        break;
+                }
+                cursor--;
+                continue;
+            }
+
+            if (chars[cursor] == '{')
+            {
+                codeDepth++;
+                continue;
+            }
+
+            if (chars[cursor] == '}' && codeDepth > 0)
+            {
+                codeDepth--;
+                if (codeDepth == 0)
+                    inCodeBlock = false;
+            }
+        }
     }
 
     private static void EmitCppTypeReferences(

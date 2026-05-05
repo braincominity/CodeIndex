@@ -7134,6 +7134,8 @@ public class ReferenceExtractorTests
             <!-- <AuditPanel /> -->
 
             @code {
+                var sample = "<CodeStringPanel />";
+                // <CodeCommentPanel />
                 void HandleClick() { UserService.Save(); }
             }
             """;
@@ -7155,6 +7157,8 @@ public class ReferenceExtractorTests
         Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AuditPanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CodeStringPanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CodeCommentPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
@@ -7244,6 +7248,13 @@ public class ReferenceExtractorTests
 
             procedure TService.Run(input: TUser);
             begin
+              {
+                CommentedProcess;
+                CommentedValue: TCommented;
+              }
+              (*
+                AnotherCommentedProcess;
+              *)
               ProcessUser;
             end;
 
@@ -7264,6 +7275,9 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
             && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CommentedProcess" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AnotherCommentedProcess" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TCommented" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

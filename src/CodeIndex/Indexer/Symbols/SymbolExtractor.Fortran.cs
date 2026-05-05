@@ -192,6 +192,9 @@ public static partial class SymbolExtractor
             return false;
 
         var remainder = trimmedLine["end".Length..].TrimStart();
+        if (remainder.Length == 0)
+            return blockKind is "subroutine" or "function";
+
         if (!StartsWithFortranWord(remainder, blockKind))
             return false;
 

@@ -1760,6 +1760,88 @@ public static partial class ReferenceExtractor
         return result;
     }
 
+    private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new string[lines.Count];
+        var inBraceComment = false;
+        var inParenStarComment = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+
+            while (cursor < chars.Length)
+            {
+                if (inBraceComment)
+                {
+                    var closes = chars[cursor] == '}';
+                    chars[cursor++] = ' ';
+                    if (closes)
+                        inBraceComment = false;
+                    continue;
+                }
+
+                if (inParenStarComment)
+                {
+                    if (chars[cursor] == '*' && cursor + 1 < chars.Length && chars[cursor + 1] == ')')
+                    {
+                        chars[cursor++] = ' ';
+                        chars[cursor++] = ' ';
+                        inParenStarComment = false;
+                        continue;
+                    }
+
+                    chars[cursor++] = ' ';
+                    continue;
+                }
+
+                if (chars[cursor] == '\'')
+                {
+                    cursor++;
+                    while (cursor < chars.Length)
+                    {
+                        if (chars[cursor] == '\'')
+                        {
+                            cursor++;
+                            if (cursor < chars.Length && chars[cursor] == '\'')
+                            {
+                                cursor++;
+                                continue;
+                            }
+                            break;
+                        }
+
+                        cursor++;
+                    }
+                    continue;
+                }
+
+                if (chars[cursor] == '{')
+                {
+                    chars[cursor++] = ' ';
+                    inBraceComment = true;
+                    continue;
+                }
+
+                if (chars[cursor] == '(' && cursor + 1 < chars.Length && chars[cursor + 1] == '*')
+                {
+                    chars[cursor++] = ' ';
+                    chars[cursor++] = ' ';
+                    inParenStarComment = true;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
     private static readonly Regex VisualBasicRemCommentRegex = new(
         @"(?:^|:)\s*Rem\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
