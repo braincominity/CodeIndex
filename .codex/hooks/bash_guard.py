@@ -88,6 +88,8 @@ def main() -> None:
         deny(decision.reason)
 
     for script in core.candidate_script_paths(command, cwd):
+        if core.should_skip_script_scan(decision, script, project_root):
+            continue
         script_decision = core.check_script_file(script, project_root)
         if not script_decision.allowed:
             deny(script_decision.reason)
