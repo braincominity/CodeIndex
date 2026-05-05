@@ -11,6 +11,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.20.0] - 2026-05-06
+
+#### Added
+
+- **Assembly files now support symbols and graph queries** — `cdidx` indexes assembly labels, PROC/MACRO blocks, sections/segments, extern/include/import directives, constants, and direct call/branch targets so `symbols`, `outline`, `references`, `callers`, and `callees` work for `.s`, `.S`, `.asm`, and `.nasm` files.
+- **Expanded multi-language reference extraction** - `references`, `callers`, `callees`, and `impact` now include deeper language-specific graph edges for C/C++, Dart, Go, Elixir, Lua, Haskell, VB.NET, Razor/Blazor, Fortran, Pascal, Objective-C, and Smalltalk, including type-position references, imports/uses, component tags, message sends, parenless calls, constructors, and composite literals.
+
+#### Fixed
+
+- **Codex cloud bootstrap can use the official installer without weakening the guard** — the Codex Bash guard now permits only the official CodeIndex installer one-liner, direct repo-local `install.sh` bootstrap commands, and the documented resolver / MCP smoke commands, then requires installed `cdidx` to be invoked through the expanded absolute path while arbitrary downloads and bare/global `cdidx` remain blocked.
+- **`cdidx index --rebuild --json` now reports rebuild mode** — successful rebuild scans now emit `"mode": "rebuild"` instead of `"incremental"`.
+- **Published trimmed self-contained binaries now support CLI JSON** — release artifacts are trimmed again, with every CLI JSON DTO routed through source-generated serializers so commands such as `cdidx status --json` work from the `install.sh` binary; the release verification step still asserts that JSON output succeeds.
+
+#### Internal
+
+- **C# symbol-name normalization now lives outside the large symbol extractor** — verbatim identifier, indexer, and conversion-operator canonicalization moved into `CSharpSymbolNameNormalizer`, reducing `SymbolExtractor` size while preserving existing extracted symbol names.
+- **Rebuild scans avoid unnecessary unchanged-file lookups** — `cdidx index --rebuild` now skips the per-file reuse query after dropping the database, reducing rebuild-time database work without changing incremental indexing behavior.
+
 ### [1.19.0] - 2026-05-04
 
 #### Added
@@ -1353,6 +1371,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.20.0] - 2026-05-06
+
+#### 追加
+
+- **Assembly ファイルがシンボル抽出と graph query に対応しました** — `.s`、`.S`、`.asm`、`.nasm` でラベル、PROC/MACRO、section/segment、extern/include/import、定数、直接 call/branch ターゲットを索引し、`symbols`、`outline`、`references`、`callers`、`callees` で扱えるようにしました。
+- **複数言語の参照抽出を拡張** - `references`、`callers`、`callees`、`impact` が C/C++、Dart、Go、Elixir、Lua、Haskell、VB.NET、Razor/Blazor、Fortran、Pascal、Objective-C、Smalltalk の言語固有 graph edge をより詳細に扱うようになりました。型位置参照、import / uses、component tag、message send、括弧なし呼び出し、constructor、composite literal などを含みます。
+
+#### 修正
+
+- **Codex cloud bootstrap が guard を弱めずに公式 installer を使えるようになりました** — Codex Bash guard は公式 CodeIndex installer ワンライナー、repo-local `install.sh` の直接 bootstrap 実行、ドキュメント化した resolver / MCP smoke コマンドだけを許可し、インストール後の `cdidx` は展開済み絶対パスで呼ぶ契約にしたまま、任意のダウンロードや裸・グローバル `cdidx` は引き続きブロックします。
+- **`cdidx index --rebuild --json` が rebuild mode を返すようにしました** — rebuild scan 成功時の JSON が `"incremental"` ではなく `"rebuild"` を出力します。
+- **公開 trim 済み self-contained バイナリで CLI JSON が使えるようにしました** — release artifact を再び trim しつつ、全 CLI JSON DTO を source-generated serializer 経路に載せたため、`install.sh` で入るバイナリでも `cdidx status --json` などが動作します。release verify step も JSON 出力の成功を検証します。
+
+#### 内部変更
+
+- **C# シンボル名正規化を巨大な symbol extractor から分離しました** — verbatim 識別子、indexer、conversion operator の canonical 化を `CSharpSymbolNameNormalizer` に移し、既存の抽出シンボル名を保ったまま `SymbolExtractor` のサイズを削減しました。
+- **rebuild scan で不要な unchanged-file lookup を避けるようにしました** — `cdidx index --rebuild` はデータベース全削除後のファイルごとの再利用クエリを省き、incremental index の挙動は変えずに rebuild 時の DB 作業を減らします。
+
 ### [1.19.0] - 2026-05-04
 
 #### 追加
@@ -2669,7 +2705,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.19.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.20.0...HEAD
+[1.20.0]: https://github.com/Widthdom/CodeIndex/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/Widthdom/CodeIndex/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/Widthdom/CodeIndex/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...v1.17.1
