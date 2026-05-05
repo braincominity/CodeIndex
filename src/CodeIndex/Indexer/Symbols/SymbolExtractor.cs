@@ -1500,7 +1500,7 @@ public static partial class SymbolExtractor
         [
             new("class",    new Regex(@"^\s*(?:[A-Za-z_]\w*)\s+subclass:\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?:Class\s+named:|Object\s+subclass:)\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.SmalltalkMethod),
+            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?(?:\s+[A-Za-z_]\w+\s+[A-Za-z_]\w*:)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.SmalltalkMethod),
         ],
         ["graphql"] =
         [
@@ -7450,10 +7450,27 @@ public static partial class SymbolExtractor
             "fsharp" => FSharpSymbolNameNormalizer.Normalize(name),
             "kotlin" => KotlinSymbolNameNormalizer.Normalize(name, matchLine),
             "rust" => RustSymbolNameNormalizer.Normalize(name),
+            "smalltalk" => NormalizeSmalltalkSelectorName(name),
             "swift" => SwiftSymbolNameNormalizer.Normalize(name),
             "sql" => SqlSymbolNameNormalizer.Normalize(name),
             _ => name,
         };
+    }
+
+    private static string NormalizeSmalltalkSelectorName(string name)
+    {
+        var trimmed = name.Trim();
+        if (!trimmed.Contains(':'))
+            return trimmed;
+
+        var builder = new StringBuilder(trimmed.Length);
+        foreach (var token in trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.EndsWith(':'))
+                builder.Append(token);
+        }
+
+        return builder.Length == 0 ? trimmed : builder.ToString();
     }
 
     private static readonly Regex ComplexityRegex = new(

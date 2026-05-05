@@ -7551,6 +7551,10 @@ public class ReferenceExtractorTests
                 self prepare.
                 repository loadUser.
                 repository save: user.
+                repository save: user with: options.
+
+            UserService >> save: user with: options
+                self flush.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
@@ -7559,6 +7563,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "prepare" && r.ReferenceKind == "call" && r.ContainerName == "run");
         Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call" && r.ContainerName == "run");
         Assert.Contains(references, r => r.SymbolName == "save:" && r.ReferenceKind == "call" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "save:with:" && r.ReferenceKind == "call" && r.ContainerName == "run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "with:" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "repository" && r.ReferenceKind == "call");

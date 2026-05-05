@@ -11281,6 +11281,9 @@ public class SymbolExtractorTests
 
             UserService class >> save:
                 self flush.
+
+            UserService >> save: user with: options
+                self persist.
             """;
 
         var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
@@ -11288,10 +11291,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
         var run = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "run");
         var save = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "save:");
+        var saveWith = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "save:with:");
         Assert.NotNull(run.BodyStartLine);
         Assert.NotNull(run.BodyEndLine);
         Assert.NotNull(save.BodyStartLine);
         Assert.NotNull(save.BodyEndLine);
+        Assert.NotNull(saveWith.BodyStartLine);
+        Assert.NotNull(saveWith.BodyEndLine);
     }
 
     [Fact]

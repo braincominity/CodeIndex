@@ -1449,13 +1449,76 @@ internal static class BroadLanguageReferenceExtractor
         if (definitionMatch.Success || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
             return;
 
+        var consumedUntil = 0;
         foreach (Match match in SmalltalkMessageSendRegex.Matches(preparedLine))
         {
-            var name = match.Groups["selector"].Value;
+            if (match.Index < consumedUntil)
+                continue;
+
+            var selectorGroup = match.Groups["selector"];
+            var name = ReadSmalltalkSelector(preparedLine, selectorGroup.Index, out var selectorEndIndex);
+            consumedUntil = Math.Max(consumedUntil, selectorEndIndex);
             if (definitionNames?.Contains(name) == true)
                 continue;
-            addCallLikeReference(name, match.Groups["selector"].Index);
+            addCallLikeReference(name, selectorGroup.Index);
         }
+    }
+
+    private static string ReadSmalltalkSelector(string line, int selectorIndex, out int endIndex)
+    {
+        if (!TryReadSmalltalkSelectorPart(line, selectorIndex, out var firstPart, out var cursor))
+        {
+            endIndex = selectorIndex;
+            return string.Empty;
+        }
+
+        if (!firstPart.EndsWith(':'))
+        {
+            endIndex = cursor;
+            return firstPart;
+        }
+
+        var selector = firstPart;
+        while (true)
+        {
+            var argumentStart = SkipWhitespace(line, cursor);
+            if (argumentStart >= line.Length || !IsIdentifierStart(line[argumentStart]))
+                break;
+
+            var argumentEnd = argumentStart + 1;
+            while (argumentEnd < line.Length && IsSimpleIdentifierPart(line[argumentEnd]))
+                argumentEnd++;
+
+            var nextSelectorStart = SkipWhitespace(line, argumentEnd);
+            if (!TryReadSmalltalkSelectorPart(line, nextSelectorStart, out var nextPart, out var nextEnd)
+                || !nextPart.EndsWith(':'))
+            {
+                break;
+            }
+
+            selector += nextPart;
+            cursor = nextEnd;
+        }
+
+        endIndex = cursor;
+        return selector;
+    }
+
+    private static bool TryReadSmalltalkSelectorPart(string line, int start, out string part, out int end)
+    {
+        part = string.Empty;
+        end = start;
+        if (start >= line.Length || !IsIdentifierStart(line[start]))
+            return false;
+
+        end = start + 1;
+        while (end < line.Length && IsSimpleIdentifierPart(line[end]))
+            end++;
+        if (end < line.Length && line[end] == ':')
+            end++;
+
+        part = line[start..end];
+        return true;
     }
 
     private static void EmitGoFunctionSignatureTypes(
@@ -1664,6 +1727,13 @@ internal static class BroadLanguageReferenceExtractor
     {
         for (var i = start; i < end && i < chars.Length; i++)
             chars[i] = ' ';
+    }
+
+    private static int SkipWhitespace(string line, int start)
+    {
+        while (start < line.Length && char.IsWhiteSpace(line[start]))
+            start++;
+        return start;
     }
 
     private static bool IsIdentifierStart(char ch) =>
