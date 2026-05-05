@@ -19,7 +19,13 @@ internal static class BroadLanguageReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex GoImportRegex = new(
-        @"^\s*(?:import\s+)?(?:[A-Za-z_]\w*\s+)?""(?<name>[^""]+)""",
+        @"^\s*import\s+(?:(?:[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoImportBlockStartRegex = new(
+        @"^\s*import\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoImportBlockEntryRegex = new(
+        @"^\s*(?:(?:[A-Za-z_]\w*|\.)\s+)?""(?<name>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoVarTypeRegex = new(
         @"\b(?:var|const)\s+[A-Za-z_]\w*\s+(?<type>[\*\[\]\w.]+)",
@@ -159,7 +165,8 @@ internal static class BroadLanguageReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        bool isGoImportBlockLine = false)
     {
         switch (language)
         {
@@ -168,7 +175,7 @@ internal static class BroadLanguageReferenceExtractor
                 EmitCppTypeReferences(language, preparedLine, originalLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 break;
             case "go":
-                EmitGoTypeReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                EmitGoTypeReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, isGoImportBlockLine);
                 break;
             case "dart":
                 EmitDartTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -302,6 +309,90 @@ internal static class BroadLanguageReferenceExtractor
         }
     }
 
+    public static bool[] BuildGoImportBlockLineMap(IReadOnlyList<string> originalLines)
+    {
+        var result = new bool[originalLines.Count];
+        var inImportBlock = false;
+
+        for (var i = 0; i < originalLines.Count; i++)
+        {
+            var line = originalLines[i];
+            var trimmed = line.Trim();
+            if (!inImportBlock)
+            {
+                if (GoImportBlockStartRegex.IsMatch(line))
+                    inImportBlock = !trimmed.Contains(')');
+                continue;
+            }
+
+            if (trimmed.StartsWith(')'))
+            {
+                inImportBlock = false;
+                continue;
+            }
+
+            result[i] = GoImportBlockEntryRegex.IsMatch(line);
+            if (trimmed.Contains(')'))
+                inImportBlock = false;
+        }
+
+        return result;
+    }
+
+    public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
+    {
+        var result = new string[originalLines.Count];
+        var inRazorComment = false;
+        var inHtmlComment = false;
+
+        for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
+        {
+            var line = originalLines[lineIndex];
+            var chars = line.ToCharArray();
+            var cursor = 0;
+            while (cursor < line.Length)
+            {
+                if (inRazorComment)
+                {
+                    var close = line.IndexOf("*@", cursor, StringComparison.Ordinal);
+                    var end = close < 0 ? line.Length : close + 2;
+                    MaskRange(chars, cursor, end);
+                    inRazorComment = close < 0;
+                    cursor = end;
+                    continue;
+                }
+
+                if (inHtmlComment)
+                {
+                    var close = line.IndexOf("-->", cursor, StringComparison.Ordinal);
+                    var end = close < 0 ? line.Length : close + 3;
+                    MaskRange(chars, cursor, end);
+                    inHtmlComment = close < 0;
+                    cursor = end;
+                    continue;
+                }
+
+                if (line.AsSpan(cursor).StartsWith("@*", StringComparison.Ordinal))
+                {
+                    inRazorComment = true;
+                    continue;
+                }
+
+                if (line.AsSpan(cursor).StartsWith("<!--", StringComparison.Ordinal))
+                {
+                    inHtmlComment = true;
+                    continue;
+                }
+
+                cursor++;
+            }
+
+            result[lineIndex] = new string(chars);
+        }
+
+        return result;
+    }
+
     private static void EmitCppTypeReferences(
         string language,
         string preparedLine,
@@ -364,9 +455,12 @@ internal static class BroadLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        bool isImportBlockLine)
     {
-        var importMatch = GoImportRegex.Match(originalLine);
+        var importMatch = isImportBlockLine
+            ? GoImportBlockEntryRegex.Match(originalLine)
+            : GoImportRegex.Match(originalLine);
         if (importMatch.Success)
         {
             var group = importMatch.Groups["name"];
@@ -890,6 +984,12 @@ internal static class BroadLanguageReferenceExtractor
     {
         foreach (Match match in regex.Matches(input))
             yield return match;
+    }
+
+    private static void MaskRange(char[] chars, int start, int end)
+    {
+        for (var i = start; i < end && i < chars.Length; i++)
+            chars[i] = ' ';
     }
 
     private static bool IsIdentifierStart(char ch) =>

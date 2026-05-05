@@ -293,6 +293,8 @@ public static partial class SymbolExtractor
         FortranEnd,
         ElixirEnd,
         VisualBasicEnd,
+        PascalEnd,
+        SmalltalkMethod,
         SqlProcBody,
     }
 
@@ -1157,11 +1159,11 @@ public static partial class SymbolExtractor
             // Program units / プログラム本体
             new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Subroutines / サブルーチン
-            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Procedure declarations in interfaces / interface 内の手続き宣言
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*(?:(?:module\s+)?procedure)(?:\s*\([^)]+\))?(?:\s*,\s*[A-Za-z_]\w*)*\s*(?:::\s*)?(?<name>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Typed or untyped functions / 型付き・型なし関数
-            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*(?:(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)|procedure\s*\([^)]+\))\s+)?function\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
         ],
         ["rust"] =
         [
@@ -1490,7 +1492,7 @@ public static partial class SymbolExtractor
             new("struct",   new Regex(@"^\s*(?<name>[A-Za-z_]\w*)\s*=\s*record\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("interface", new Regex(@"^\s*(?<name>[A-Za-z_]\w*)\s*=\s*interface\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("enum",     new Regex(@"^\s*(?<name>[A-Za-z_]\w*)\s*=\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:class|static)\s+)?(?:procedure|function|constructor|destructor)\s+(?:(?:[A-Za-z_]\w*)\.)?(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:class|static)\s+)?(?:procedure|function|constructor|destructor)\s+(?:(?:[A-Za-z_]\w*)\.)?(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
             new("property", new Regex(@"^\s*property\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*uses\s+(?<name>.+?)(?:;|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
@@ -1498,7 +1500,7 @@ public static partial class SymbolExtractor
         [
             new("class",    new Regex(@"^\s*(?:[A-Za-z_]\w*)\s+subclass:\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?:Class\s+named:|Object\s+subclass:)\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.SmalltalkMethod),
         ],
         ["graphql"] =
         [
@@ -3666,10 +3668,12 @@ public static partial class SymbolExtractor
               BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
               BodyStyle.Indent => FindIndentRange(lines, startIndex),
               BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
-              BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
-              BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
-              BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
-              BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
+                BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
+                BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
+                BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
+                BodyStyle.PascalEnd => FindPascalRange(lines, startIndex),
+                BodyStyle.SmalltalkMethod => FindSmalltalkMethodRange(lines, startIndex),
+                BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
               _ => (startIndex + 1, null, null),
           };
     }

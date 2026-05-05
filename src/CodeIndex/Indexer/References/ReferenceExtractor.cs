@@ -828,6 +828,12 @@ public static partial class ReferenceExtractor
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+        var goImportBlockLines = language == "go"
+            ? BroadLanguageReferenceExtractor.BuildGoImportBlockLineMap(lines)
+            : null;
+        var razorReferenceLines = isRazorFile
+            ? BroadLanguageReferenceExtractor.MaskRazorCommentLines(lines)
+            : null;
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -1407,7 +1413,8 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    container);
+                    container,
+                    goImportBlockLines?[i] == true);
             }
             else if (language == "css")
             {
@@ -2016,7 +2023,7 @@ public static partial class ReferenceExtractor
             if (isRazorFile && language == "csharp")
             {
                 BroadLanguageReferenceExtractor.EmitRazorReferences(
-                    originalLine,
+                    razorReferenceLines?[i] ?? originalLine,
                     references,
                     seen,
                     fileId,

@@ -10041,6 +10041,7 @@ public class SymbolExtractorTests
               end subroutine split_subroutine
 
               recursive subroutine normalize(v)
+                call normalize2(v)
               end subroutine normalize
               end module procedure normalize_iface
               recursive subroutine normalize2(v)
@@ -10094,6 +10095,8 @@ public class SymbolExtractorTests
         var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Equal("namespace", normalize.ContainerKind);
         Assert.Equal("math_utils", normalize.ContainerName);
+        Assert.NotNull(normalize.BodyStartLine);
+        Assert.NotNull(normalize.BodyEndLine);
 
         var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
         Assert.Equal("namespace", expand.ContainerKind);
@@ -11250,7 +11253,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "TService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BuildService");
+        var buildService = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "BuildService");
+        Assert.NotNull(buildService.BodyStartLine);
+        Assert.NotNull(buildService.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "SysUtils, AppTypes");
     }
@@ -11271,8 +11276,12 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save:");
+        var run = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "run");
+        var save = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "save:");
+        Assert.NotNull(run.BodyStartLine);
+        Assert.NotNull(run.BodyEndLine);
+        Assert.NotNull(save.BodyStartLine);
+        Assert.NotNull(save.BodyEndLine);
     }
 
     [Fact]

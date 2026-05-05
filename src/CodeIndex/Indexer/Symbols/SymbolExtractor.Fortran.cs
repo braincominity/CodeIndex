@@ -21,7 +21,7 @@ public static partial class SymbolExtractor
             if (trimmed.Length == 0 || trimmed.StartsWith('!'))
                 continue;
 
-            if (IsFortranModuleProcedureEndLine(trimmed))
+            if (blockKind == "module" && IsFortranModuleProcedureEndLine(trimmed))
                 continue;
 
             if (IsFortranBlockEndLine(trimmed, blockKind))
@@ -171,6 +171,18 @@ public static partial class SymbolExtractor
             return true;
         }
 
+        if (ContainsFortranWord(trimmed, "subroutine"))
+        {
+            kind = "subroutine";
+            return true;
+        }
+
+        if (ContainsFortranWord(trimmed, "function"))
+        {
+            kind = "function";
+            return true;
+        }
+
         return false;
     }
 
@@ -209,6 +221,22 @@ public static partial class SymbolExtractor
             return false;
 
         return input.Length == word.Length || !char.IsLetterOrDigit(input[word.Length]) && input[word.Length] != '_';
+    }
+
+    private static bool ContainsFortranWord(string input, string word)
+    {
+        for (var index = input.IndexOf(word, StringComparison.OrdinalIgnoreCase);
+             index >= 0;
+             index = input.IndexOf(word, index + word.Length, StringComparison.OrdinalIgnoreCase))
+        {
+            var beforeOk = index == 0 || !char.IsLetterOrDigit(input[index - 1]) && input[index - 1] != '_';
+            var afterIndex = index + word.Length;
+            var afterOk = afterIndex == input.Length || !char.IsLetterOrDigit(input[afterIndex]) && input[afterIndex] != '_';
+            if (beforeOk && afterOk)
+                return true;
+        }
+
+        return false;
     }
 
 }

@@ -7044,7 +7044,10 @@ public class ReferenceExtractorTests
         const string content = """
             package main
 
-            import "example.com/app/repo"
+            import (
+                repo "example.com/app/repo"
+                "example.com/app/model"
+            )
 
             type Service struct {
                 Repo repo.Repository
@@ -7060,12 +7063,18 @@ public class ReferenceExtractorTests
             func LoadGrouped(a, b User) (x, y Result) {
                 return Result{}
             }
+
+            var routes = []string{
+                "health",
+                "metrics",
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
@@ -7078,6 +7087,8 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "error" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "a" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "health" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "metrics" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -7119,6 +7130,8 @@ public class ReferenceExtractorTests
             <Shared.DetailPanel />
             <button @onclick="HandleClick">Save</button>
             <input @ref="inputRef" @key="person" @bind="Value" />
+            @* <AdminPanel /> *@
+            <!-- <AuditPanel /> -->
 
             @code {
                 void HandleClick() { UserService.Save(); }
@@ -7140,6 +7153,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AuditPanel" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
@@ -7200,7 +7215,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "process" && r.ReferenceKind == "call");
+        Assert.Contains(references, r =>
+            r.SymbolName == "process"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "run");
     }
 
     [Fact]
@@ -7240,7 +7259,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "IRunner" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "TRepository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "TUser" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "ProcessUser" && r.ReferenceKind == "call");
+        Assert.Contains(references, r =>
+            r.SymbolName == "ProcessUser"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Run");
     }
 
     [Fact]
@@ -7367,9 +7390,9 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "smalltalk", content);
         var references = ReferenceExtractor.Extract(1, "smalltalk", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "prepare" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "save:" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "prepare" && r.ReferenceKind == "call" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "loadUser" && r.ReferenceKind == "call" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "save:" && r.ReferenceKind == "call" && r.ContainerName == "run");
         Assert.DoesNotContain(references, r => r.SymbolName == "save" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "repository" && r.ReferenceKind == "call");
