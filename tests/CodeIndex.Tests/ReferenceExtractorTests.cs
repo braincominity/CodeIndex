@@ -7046,7 +7046,8 @@ public class ReferenceExtractorTests
 
             import (
                 repo "example.com/app/repo"
-                "example.com/app/model"
+                "example.com/app/model" // )
+                "example.com/app/after"
             )
 
             type Service struct {
@@ -7075,6 +7076,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "after" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "LoadOptions" && r.ReferenceKind == "type_reference");
@@ -7263,12 +7265,21 @@ public class ReferenceExtractorTests
             implementation
 
             procedure TService.Run(input: TUser);
+            {
+              begin
+              end;
+            }
             begin
               {
+                case input.Status of
+                  Red: TCommented;
+                end;
                 CommentedProcess;
                 CommentedValue: TCommented;
               }
               (*
+                try
+                end;
                 AnotherCommentedProcess;
               *)
               WriteLn('not end');

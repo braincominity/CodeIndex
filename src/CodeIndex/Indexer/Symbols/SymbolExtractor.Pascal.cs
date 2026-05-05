@@ -15,10 +15,12 @@ public static partial class SymbolExtractor
         var opened = false;
         var depth = 0;
         int? bodyStartLine = null;
+        var inBraceComment = false;
+        var inParenStarComment = false;
 
         for (var i = startIndex + 1; i < lines.Length; i++)
         {
-            var code = StripPascalRangeComments(MaskPascalRangeStrings(lines[i]));
+            var code = StripPascalRangeComments(MaskPascalRangeStrings(lines[i]), ref inBraceComment, ref inParenStarComment);
             var trimmed = code.Trim();
             if (trimmed.Length == 0)
                 continue;
@@ -86,28 +88,52 @@ public static partial class SymbolExtractor
         return new string(chars);
     }
 
-    private static string StripPascalRangeComments(string line)
+    private static string StripPascalRangeComments(string line, ref bool inBraceComment, ref bool inParenStarComment)
     {
-        var slashComment = line.IndexOf("//", StringComparison.Ordinal);
-        if (slashComment >= 0)
-            line = line[..slashComment];
-
-        line = StripPascalDelimitedComment(line, "{", "}");
-        line = StripPascalDelimitedComment(line, "(*", "*)");
-        return line;
-    }
-
-    private static string StripPascalDelimitedComment(string line, string open, string close)
-    {
-        while (true)
+        var chars = line.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
         {
-            var start = line.IndexOf(open, StringComparison.Ordinal);
-            if (start < 0)
-                return line;
-            var end = line.IndexOf(close, start + open.Length, StringComparison.Ordinal);
-            line = end < 0
-                ? line[..start]
-                : line[..start] + new string(' ', end + close.Length - start) + line[(end + close.Length)..];
+            if (inBraceComment)
+            {
+                chars[i] = ' ';
+                if (line[i] == '}')
+                    inBraceComment = false;
+                continue;
+            }
+
+            if (inParenStarComment)
+            {
+                chars[i] = ' ';
+                if (line[i] == '*' && i + 1 < chars.Length && line[i + 1] == ')')
+                {
+                    chars[++i] = ' ';
+                    inParenStarComment = false;
+                }
+                continue;
+            }
+
+            if (line[i] == '/' && i + 1 < chars.Length && line[i + 1] == '/')
+            {
+                for (; i < chars.Length; i++)
+                    chars[i] = ' ';
+                break;
+            }
+
+            if (line[i] == '{')
+            {
+                chars[i] = ' ';
+                inBraceComment = true;
+                continue;
+            }
+
+            if (line[i] == '(' && i + 1 < chars.Length && line[i + 1] == '*')
+            {
+                chars[i++] = ' ';
+                chars[i] = ' ';
+                inParenStarComment = true;
+            }
         }
+
+        return new string(chars);
     }
 }

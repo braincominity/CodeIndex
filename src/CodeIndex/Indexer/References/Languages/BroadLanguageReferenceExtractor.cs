@@ -317,10 +317,11 @@ internal static class BroadLanguageReferenceExtractor
         for (var i = 0; i < originalLines.Count; i++)
         {
             var line = originalLines[i];
-            var trimmed = line.Trim();
+            var codeLine = StripGoLineComment(line);
+            var trimmed = codeLine.Trim();
             if (!inImportBlock)
             {
-                if (GoImportBlockStartRegex.IsMatch(line))
+                if (GoImportBlockStartRegex.IsMatch(codeLine))
                     inImportBlock = !trimmed.Contains(')');
                 continue;
             }
@@ -331,12 +332,49 @@ internal static class BroadLanguageReferenceExtractor
                 continue;
             }
 
-            result[i] = GoImportBlockEntryRegex.IsMatch(line);
+            result[i] = GoImportBlockEntryRegex.IsMatch(codeLine);
             if (trimmed.Contains(')'))
                 inImportBlock = false;
         }
 
         return result;
+    }
+
+    private static string StripGoLineComment(string line)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] is '"' or '`')
+            {
+                i = SkipGoStringLiteral(line, i);
+                continue;
+            }
+
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
+                return line[..i];
+        }
+
+        return line;
+    }
+
+    private static int SkipGoStringLiteral(string line, int start)
+    {
+        var quote = line[start];
+        var i = start + 1;
+        while (i < line.Length)
+        {
+            if (quote == '"' && line[i] == '\\' && i + 1 < line.Length)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (line[i] == quote)
+                return i;
+            i++;
+        }
+
+        return line.Length;
     }
 
     public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
