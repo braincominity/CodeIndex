@@ -248,20 +248,24 @@ internal static class BroadLanguageReferenceExtractor
     {
         foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
         {
-            var name = LastQualifiedSegment(match.Groups["name"].Value);
+            var group = match.Groups["name"];
+            var rawName = group.Value;
+            var name = LastQualifiedSegment(rawName);
             if (definitionNames?.Contains(name) == true)
                 continue;
+            var nameOffset = rawName.LastIndexOf(name, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
 
             ReferenceExtractor.AddReference(
                 references,
                 seen,
                 fileId,
                 name,
-                match.Groups["name"].Index,
+                nameIndex,
                 "call",
                 context,
                 lineNumber,
-                resolveContainerForColumn(match.Groups["name"].Index));
+                resolveContainerForColumn(nameIndex));
         }
 
         foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine).Concat(EnumerateMatches(RazorInjectRegex, originalLine)))
@@ -436,7 +440,7 @@ internal static class BroadLanguageReferenceExtractor
         foreach (Match match in DartCtorRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, LastQualifiedSegment(group.Value), group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
         }
     }
 
@@ -756,20 +760,33 @@ internal static class BroadLanguageReferenceExtractor
             return;
 
         var list = line[start..end];
+        var pendingSingleExpressions = new List<(string Expression, int AbsoluteStart)>();
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var fragment = list.Substring(segmentStart, segmentLength).Trim();
+            var rawSegment = list.Substring(segmentStart, segmentLength);
+            var fragment = rawSegment.Trim();
             if (fragment.Length == 0)
                 continue;
 
+            var fragmentTrimStart = rawSegment.IndexOf(fragment, StringComparison.Ordinal);
+            var absoluteFragmentStart = start + segmentStart + Math.Max(0, fragmentTrimStart);
             var typeStartInFragment = LastWhitespaceSeparatedTokenStart(fragment);
             if (typeStartInFragment < 0)
                 continue;
+            if (typeStartInFragment == 0)
+            {
+                pendingSingleExpressions.Add((fragment, absoluteFragmentStart));
+                continue;
+            }
 
+            pendingSingleExpressions.Clear();
             var expression = fragment[typeStartInFragment..];
-            var absoluteStart = start + segmentStart + list.Substring(segmentStart, segmentLength).IndexOf(expression, StringComparison.Ordinal);
+            var absoluteStart = absoluteFragmentStart + typeStartInFragment;
             EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+
+        foreach (var (expression, absoluteStart) in pendingSingleExpressions)
+            EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoTypeExpression(

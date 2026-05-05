@@ -7056,6 +7056,10 @@ public class ReferenceExtractorTests
                 item := User{Name: "Ada"}
                 return finish(item, options)
             }
+
+            func LoadGrouped(a, b User) (x, y Result) {
+                return Result{}
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
@@ -7072,6 +7076,8 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "cleanup" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "error" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "a" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -7082,6 +7088,7 @@ public class ReferenceExtractorTests
               @override
               Widget build(BuildContext context) {
                 final User user = repo.load() as User;
+                final parsed = const User.fromJson(data);
                 return const UserCard(user);
               }
             }
@@ -7097,6 +7104,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
     }
 
     [Fact]
@@ -7119,11 +7128,15 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content, "Pages/User.razor");
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols, "Pages/User.razor");
         var aliasReferences = ReferenceExtractor.Extract(1, "razor", content, symbols);
+        var qualifiedComponentColumn = content
+            .Split('\n')
+            .Single(line => line.Contains("Shared.DetailPanel", StringComparison.Ordinal))
+            .IndexOf("DetailPanel", StringComparison.Ordinal) + 1;
 
         Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
