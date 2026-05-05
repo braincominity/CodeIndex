@@ -3392,8 +3392,10 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (lang is "javascript" or "typescript")
-            ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
+        if (lang == "javascript")
+            ExtractJavaScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
+        else if (lang == "typescript")
+            ExtractTypeScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")

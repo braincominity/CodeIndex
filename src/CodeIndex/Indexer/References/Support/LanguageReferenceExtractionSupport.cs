@@ -3,7 +3,7 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
-internal static class BroadLanguageReferenceExtractor
+internal static class LanguageReferenceExtractionSupport
 {
     private static readonly Regex CppIncludeRegex = new(
         @"^\s*#\s*(?:include|import)\s*[<""](?<name>[^>""]+)[>""]",

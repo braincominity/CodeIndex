@@ -836,10 +836,10 @@ public static partial class ReferenceExtractor
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
         var goImportBlockLines = language == "go"
-            ? BroadLanguageReferenceExtractor.BuildGoImportBlockLineMap(lines)
+            ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
             : null;
         var luaReferenceLines = language == "lua"
-            ? BroadLanguageReferenceExtractor.MaskLuaLongCommentAndStringLines(lines)
+            ? LuaReferenceExtractor.MaskLongCommentAndStringLines(lines)
             : null;
         string[]? luaPreparedLines = null;
         if (luaReferenceLines != null)
@@ -849,7 +849,7 @@ public static partial class ReferenceExtractor
                 luaPreparedLines[pi] = PrepareLine(language, luaReferenceLines[pi]);
         }
         var razorReferenceLines = isRazorFile
-            ? BroadLanguageReferenceExtractor.MaskRazorCommentLines(lines)
+            ? RazorReferenceExtractor.MaskCommentLines(lines)
             : null;
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
@@ -1418,21 +1418,28 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall,
                     container);
             }
-            else if (language is "c" or "cpp" or "go" or "dart" or "vb" or "fortran" or "pascal" or "objc" or "haskell" or "elixir" or "lua")
-            {
-                BroadLanguageReferenceExtractor.EmitTypePositionReferences(
-                    language,
-                    preparedLine,
-                    luaReferenceLines?[i] ?? originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall,
-                    container,
-                    goImportBlockLines?[i] == true);
-            }
+            else if (language == "c")
+                CReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "cpp")
+                CppReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "go")
+                GoReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, goImportBlockLines?[i] == true);
+            else if (language == "dart")
+                DartReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "vb")
+                VisualBasicReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+            else if (language == "fortran")
+                FortranReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "pascal")
+                PascalReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "objc")
+                ObjectiveCReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+            else if (language == "haskell")
+                HaskellReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
+            else if (language == "elixir")
+                ElixirReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
+            else if (language == "lua")
+                LuaReferenceExtractor.EmitTypePositionReferences(luaReferenceLines?[i] ?? originalLine, references, seen, fileId, context, lineNumber, container);
             else if (language == "css")
             {
                 CssReferenceExtractor.EmitCss(
@@ -1853,18 +1860,20 @@ public static partial class ReferenceExtractor
                         AddGradleDslReference);
                 }
 
-                BroadLanguageReferenceExtractor.EmitAdditionalCallReferences(
-                    language,
-                    preparedLine,
-                    originalLine,
-                    AddCallLikeReference,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall,
-                    definitionNames);
+                if (language == "fortran")
+                    FortranReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
+                else if (language == "pascal")
+                    PascalReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "objc")
+                    ObjectiveCReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
+                else if (language == "haskell")
+                    HaskellReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "elixir")
+                    ElixirReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "lua")
+                    LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "smalltalk")
+                    SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
                 // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
@@ -2041,7 +2050,7 @@ public static partial class ReferenceExtractor
 
             if (isRazorFile && language == "csharp")
             {
-                BroadLanguageReferenceExtractor.EmitRazorReferences(
+                RazorReferenceExtractor.EmitReferences(
                     razorReferenceLines?[i] ?? originalLine,
                     references,
                     seen,

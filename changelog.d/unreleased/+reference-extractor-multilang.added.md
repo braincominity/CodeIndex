@@ -3,7 +3,20 @@ category: added
 affected:
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
-  - src/CodeIndex/Indexer/References/Languages/BroadLanguageReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/CReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/CppReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/DartReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/ElixirReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/FortranReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/GoReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/HaskellReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/LuaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/ObjectiveCReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/PascalReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/RazorReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/SmalltalkReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/VisualBasicReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
   - src/CodeIndex/Cli/QueryCommandRunner.cs
   - src/CodeIndex/Database/DbReader.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
