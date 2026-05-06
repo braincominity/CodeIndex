@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.20.1] - 2026-05-06
+
+#### Fixed
+
+- **Aligned human-readable status labels** — `cdidx index` and `cdidx status` now pad shorter summary labels to the longest label in the block, so `SQL graph:` and `Languages:` line up with surrounding fields without shifting only the long labels.
+
+#### Documentation
+
+- **Polished Japanese and maintainer-facing documentation** — aligned Japanese README badges, updated guide cross-links to their Japanese sections, simplified stale implementation notes, and refreshed user/developer guide examples so GitHub rendering and agent-facing instructions stay current.
+
 ### [1.20.0] - 2026-05-06
 
 #### Added
@@ -1371,6 +1381,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.20.1] - 2026-05-06
+
+#### 修正
+
+- **人間向けステータス表示のラベル位置を揃えました** — `cdidx index` と `cdidx status` は、ブロック内の最長ラベルに合わせて短いサマリラベルをパディングするようになり、`SQL graph:` と `Languages:` だけをずらさずに周辺項目とコロン位置が揃います。
+
+#### ドキュメント
+
+- **日本語版と maintainer 向けドキュメントを整理しました** — 日本語 README のバッジ、各ガイドの日本語セクションへのリンク、古い実装メモの簡略化、ユーザー / 開発者ガイドの例を更新し、GitHub 表示と AI エージェント向け手順が現状に合うようにしました。
+
 ### [1.20.0] - 2026-05-06
 
 #### 追加
@@ -2705,7 +2725,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.20.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.20.1...HEAD
+[1.20.1]: https://github.com/Widthdom/CodeIndex/compare/v1.20.0...v1.20.1
 [1.20.0]: https://github.com/Widthdom/CodeIndex/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/Widthdom/CodeIndex/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/Widthdom/CodeIndex/compare/v1.17.1...v1.18.0
