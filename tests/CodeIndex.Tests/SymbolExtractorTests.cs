@@ -9206,6 +9206,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialConstructors()
+    {
+        var content = """
+            public partial class Widget
+            {
+                public partial Widget();
+                public partial Widget() { }
+                unsafe public partial Widget(int* ptr) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "Widget"
+            && s.Line == 3
+            && s.Visibility == "public");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "Widget"
+            && s.Line == 4
+            && s.Visibility == "public"
+            && s.BodyStartLine is not null
+            && s.BodyEndLine is not null);
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "Widget"
+            && s.Line == 5
+            && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsGenericMethodOverloads()
     {
         // Issue #41: generic method overloads should both be extracted as definitions
