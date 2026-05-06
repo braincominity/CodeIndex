@@ -2900,6 +2900,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsDestructuredNamedExports()
+    {
+        var content = """
+            const source = {};
+            export const { foo, renamed: localName, nested: { leaf }, items: [first], ...rest } = source;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "localName" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "leaf" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "first" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "rest" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && (s.Name == "renamed" || s.Name == "nested" || s.Name == "items"));
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsMultiLineObjectLiteralBinding()
     {
         // The `{` may sit on a line after the `=` binding; collector must thread
@@ -19493,6 +19510,23 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultiLineDestructuredNamedExports()
+    {
+        var content = """
+            const cfg = {} as Config;
+            export const {
+                alpha,
+                renamed: beta,
+            }: Pick<Config, "alpha" | "renamed"> = cfg;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alpha" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "beta" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "renamed");
     }
 
     [Fact]
