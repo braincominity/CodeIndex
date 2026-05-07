@@ -3731,6 +3731,23 @@ public class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsTemplateLiteralDynamicImportSymbols(string language)
+    {
+        var content = """
+            const view = import(`./view.js`);
+            const computed = import(`./${name}.js`);
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
+        Assert.Equal(1, viewImport.Line);
+        Assert.Contains("`./view.js`", viewImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
     public void Extract_JavaScriptTypeScript_DetectsStaticImportModuleSymbols(string language)
     {
         var content = """

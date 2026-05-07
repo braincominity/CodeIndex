@@ -694,7 +694,7 @@ Local named export lists such as `export { foo, local as publicName }` and TypeS
 
 Default-export functions such as `export default function Page() {}` are indexed as `function` symbols by their declared name; anonymous forms such as `export default function () {}` and default arrow exports such as `export default () => value` / `export default async () => {}` are indexed as the module `default` function surface.
 
-Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`, and when the call includes import options such as `import("./data.json", { with: { type: "json" } })`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
+Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`, when the call uses a no-substitution template literal such as `` import(`./view.js`) ``, and when it includes import options such as `import("./data.json", { with: { type: "json" } })`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
 
 Static JavaScript/TypeScript imports also surface their source module specifier as an `import` symbol, including side-effect imports such as `import "./setup"`, multiline `import { ... } from "./module"` declarations, and import-attributes suffixes.
 
@@ -1689,7 +1689,7 @@ JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as 
 
 `export default function Page() {}` のような default export 関数は宣言名の `function` シンボルとして索引され、`export default function () {}` のような無名形式や `export default () => value` / `export default async () => {}` のような default arrow export はモジュールの `default` 関数面として索引されます。
 
-runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合や、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
+runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合、`` import(`./view.js`) `` のような no-substitution template literal を使う場合、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
 
 静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
 

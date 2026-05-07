@@ -513,7 +513,32 @@ public static partial class SymbolExtractor
         }
 
         moduleName = rawModuleLine.Substring(moduleStartColumn, moduleEndColumn - moduleStartColumn);
+        if (quoteChar == '`'
+            && ContainsJavaScriptTypeScriptTemplateInterpolation(rawModuleLine, moduleStartColumn, moduleEndColumn))
+        {
+            moduleName = string.Empty;
+            return false;
+        }
+
         return true;
+    }
+
+    private static bool ContainsJavaScriptTypeScriptTemplateInterpolation(string rawLine, int startColumn, int endColumn)
+    {
+        for (var column = Math.Max(0, startColumn); column + 1 < endColumn && column + 1 < rawLine.Length; column++)
+        {
+            if (rawLine[column] != '$' || rawLine[column + 1] != '{')
+                continue;
+
+            var backslashCount = 0;
+            for (var probe = column - 1; probe >= startColumn && rawLine[probe] == '\\'; probe--)
+                backslashCount++;
+
+            if (backslashCount % 2 == 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static bool TryFindJavaScriptTypeScriptStaticImportEnd(
@@ -649,7 +674,7 @@ public static partial class SymbolExtractor
         }
 
         var sanitizedQuote = sanitizedLines[moduleLineIndex][moduleQuoteColumn];
-        if (sanitizedQuote is not '\'' and not '"')
+        if (sanitizedQuote is not '\'' and not '"' and not '`')
             return false;
 
         if (!TryReadJavaScriptTypeScriptQuotedModuleName(
