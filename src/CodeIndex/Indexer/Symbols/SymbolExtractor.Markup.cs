@@ -714,6 +714,7 @@ public static partial class SymbolExtractor
         AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
@@ -1433,6 +1434,111 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void AddXamlReferenceSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        foreach (var prefix in XamlReferenceMarkupPrefixes)
+            AddXamlReferenceMarkupSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+
+        foreach (var prefix in XamlReferenceObjectElementPrefixes)
+            AddXamlReferenceObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+
+        foreach (Match nameMatch in XamlReferenceNamePropertyElementRegex.Matches(rawText))
+        {
+            var value = NormalizeXamlElementReferenceValue(nameMatch.Groups["value"].Value);
+            if (value.Length == 0)
+                continue;
+
+            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, nameMatch.Index, "property", value);
+        }
+    }
+
+    private static void AddXamlReferenceMarkupSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols,
+        string prefix)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var braceIndex = rawText.IndexOf(prefix, cursor, StringComparison.Ordinal);
+            if (braceIndex < 0)
+                break;
+
+            var afterPrefix = braceIndex + prefix.Length;
+            if (afterPrefix < rawText.Length && IsXamlMarkupNameChar(rawText[afterPrefix]))
+            {
+                cursor = afterPrefix;
+                continue;
+            }
+
+            var closingBraceIndex = FindMatchingBrace(rawText, braceIndex);
+            if (closingBraceIndex < 0)
+            {
+                cursor = braceIndex + 1;
+                continue;
+            }
+
+            var value = NormalizeXamlRequiredMarkupArgumentValue(rawText[braceIndex..(closingBraceIndex + 1)]);
+            if (value.Length > 0)
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, braceIndex, "property", value);
+
+            cursor = closingBraceIndex + 1;
+        }
+    }
+
+    private static void AddXamlReferenceObjectElementSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols,
+        string prefix)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var tagIndex = rawText.IndexOf(prefix, cursor, StringComparison.Ordinal);
+            if (tagIndex < 0)
+                break;
+
+            var nameEnd = tagIndex + prefix.Length;
+            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            {
+                cursor = nameEnd;
+                continue;
+            }
+
+            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+            if (tagEnd < 0)
+                break;
+
+            var nameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "Name", nameEnd, tagEnd);
+            if (nameAttributeIndex >= 0
+                && TryReadXamlAttributeValue(rawText, "Name", nameAttributeIndex, out var valueStart, out var valueEnd)
+                && valueEnd <= tagEnd)
+            {
+                AddXamlAttributeSymbol(
+                    fileId,
+                    lines,
+                    lineStarts,
+                    symbols,
+                    nameAttributeIndex,
+                    "property",
+                    NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
+            }
+
+            cursor = tagEnd + 1;
+        }
+    }
+
     private static void AddXamlResourceReferenceSymbols(
         long fileId,
         string rawText,
@@ -1495,6 +1601,9 @@ public static partial class SymbolExtractor
     }
 
     private static string NormalizeXamlResourceReferenceValue(string value)
+        => NormalizeXamlRequiredMarkupArgumentValue(value);
+
+    private static string NormalizeXamlRequiredMarkupArgumentValue(string value)
     {
         value = value.Trim();
         if (value.Length == 0 || value[0] != '{')

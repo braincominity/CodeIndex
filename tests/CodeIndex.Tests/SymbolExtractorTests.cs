@@ -20315,7 +20315,7 @@ public class SymbolExtractorTests
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                          xmlns:vm="clr-namespace:Sample.ViewModels">
-                <StackPanel DataContext="{Binding Source={x:Reference Root}, Path=ViewModel}">
+                <StackPanel DataContext="{Binding Source=Root, Path=ViewModel}">
                     <Label Text="{Binding
                         Title}" />
                     <Button Command="{x:Bind
@@ -20395,7 +20395,7 @@ public class SymbolExtractorTests
                     <TextBlock.Text>
                         <MultiBinding StringFormat="{}{0} {1}">
                             <Binding
-                                Source="{x:Reference Root}"
+                                Source="Root"
                                 ConverterParameter="Path='Ignored'"
                                 Path="ViewModel.FirstName" />
                             <Binding Path="vm:PersonViewModel.LastName" />
@@ -20415,6 +20415,38 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DisplayName");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Root");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Ignored");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlCapturesXReferenceTargets()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:local="clr-namespace:Sample.ViewModels">
+                <Grid>
+                    <TextBlock Text="{Binding Source={x:Reference RootPanel}, Path=Title}" />
+                    <TextBlock Text="{Binding Source={x:Reference Name=NamedTarget}, Path=Title}" />
+                    <TextBlock Text="{Binding Source={x:ReferenceExtension Name=ExtensionTarget}, Path=Title}" />
+                    <x:Reference ToolTip="Name='Ignored'" Name="ObjectTarget" />
+                    <x:Reference.Name>
+                        PropertyTarget
+                    </x:Reference.Name>
+                </Grid>
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
+
+        Assert.Contains("RootPanel", propertyNames);
+        Assert.Contains("NamedTarget", propertyNames);
+        Assert.Contains("ExtensionTarget", propertyNames);
+        Assert.Contains("ObjectTarget", propertyNames);
+        Assert.Contains("PropertyTarget", propertyNames);
+        Assert.Contains("Title", propertyNames);
+        Assert.DoesNotContain("Ignored", propertyNames);
+        Assert.DoesNotContain("x:Reference", propertyNames);
     }
 
     [Fact]
