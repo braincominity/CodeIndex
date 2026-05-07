@@ -20333,6 +20333,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesTemplateBindingProperties()
+    {
+        var content = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:local="clr-namespace:Sample.Controls">
+                <ControlTemplate TargetType="{x:Type local:ButtonChrome}">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding Property=local:ButtonChrome.BorderBrush}" />
+                </ControlTemplate>
+            </ResourceDictionary>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Background");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BorderBrush");
+    }
+
+    [Fact]
     public void Extract_Xml_NonXamlXmlDoesNotEmitXamlSymbols()
     {
         var content = """

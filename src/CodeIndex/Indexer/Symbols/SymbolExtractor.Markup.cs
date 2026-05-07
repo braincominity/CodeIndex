@@ -1231,15 +1231,18 @@ public static partial class SymbolExtractor
         if (content.Length == 0)
             return content;
 
+        var isTemplateBinding = kind.Equals("TemplateBinding", StringComparison.OrdinalIgnoreCase);
         var payload = kind.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
             ? $"x:Bind {content}"
-            : $"Binding {content}";
+            : isTemplateBinding
+                ? $"TemplateBinding {content}"
+                : $"Binding {content}";
 
-        var firstPath = NormalizeXamlBindingPath(payload);
+        var firstPath = NormalizeXamlBindingPath(payload, isTemplateBinding);
         return firstPath.Length > 0 ? firstPath : content;
     }
 
-    private static string NormalizeXamlBindingPath(string value)
+    private static string NormalizeXamlBindingPath(string value, bool allowPropertyArgument)
     {
         value = value.Trim();
         if (value.Length == 0)
@@ -1256,18 +1259,24 @@ public static partial class SymbolExtractor
         string? fallback = null;
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
-            var normalized = NormalizeXamlBindingArgument(argument);
-            if (normalized.Length == 0)
-                continue;
-
-            if (argument.IndexOf('=', StringComparison.Ordinal) >= 0)
+            var equalsIndex = IndexOfTopLevelEquals(argument);
+            if (equalsIndex >= 0)
             {
-                var argumentName = argument[..argument.IndexOf('=')].Trim();
-                if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase))
-                    return normalized;
+                var argumentName = argument[..equalsIndex].Trim();
+                if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase)
+                    || (allowPropertyArgument && string.Equals(argumentName, "Property", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var pathValue = NormalizeXamlBindingPathValue(argument[(equalsIndex + 1)..]);
+                    if (pathValue.Length > 0)
+                        return pathValue;
+                }
 
                 continue;
             }
+
+            var normalized = NormalizeXamlBindingArgument(argument);
+            if (normalized.Length == 0)
+                continue;
 
             fallback ??= normalized;
         }
