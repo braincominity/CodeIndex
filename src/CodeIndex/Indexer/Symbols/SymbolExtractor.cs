@@ -225,12 +225,62 @@ public static partial class SymbolExtractor
     private static readonly Regex XamlKeyRegex = new(
         @"\bx:Key\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] XamlEventAttributeNames =
+    [
+        "Clicked",
+        "Tapped",
+        "Loaded",
+        "Unloaded",
+        "SelectionChanged",
+        "TextChanged",
+        "CheckedChanged",
+        "Unchecked",
+        "SelectedIndexChanged",
+        "PointerPressed",
+        "PointerReleased",
+        "PointerEntered",
+        "PointerExited",
+        "Drop",
+        "DragOver",
+        "Completed",
+        "Appearing",
+        "Disappearing",
+        "NavigatedTo",
+        "NavigatedFrom",
+        "SizeChanged",
+    ];
     private static readonly Regex XamlEventHandlerRegex = new(
-        @"\b(?:Clicked|Tapped|Loaded|Unloaded|SelectionChanged|TextChanged|CheckedChanged|Unchecked|SelectedIndexChanged|PointerPressed|PointerReleased|PointerEntered|PointerExited|Drop|DragOver|Completed|Appearing|Disappearing|NavigatedTo|NavigatedFrom|SizeChanged)\s*=\s*[""'](?<value>[^""']+)[""']",
+        @"\b(?:" + string.Join("|", XamlEventAttributeNames) + @")\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlBindingRegex = new(
-        @"\{(?<kind>Binding|x:Bind)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
+        @"\{(?<kind>Binding|x:Bind|TemplateBinding|CompiledBinding|ReflectionBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlBindingPathPropertyElementRegex = new(
+        @"<\s*Binding\.Path\b[^>]*>(?<value>.*?)</\s*Binding\.Path\s*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex XamlBindingElementNamePropertyElementRegex = new(
+        @"<\s*Binding\.ElementName\b[^>]*>(?<value>.*?)</\s*Binding\.ElementName\s*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex XamlReferenceNamePropertyElementRegex = new(
+        @"<\s*(?<owner>x:Reference(?:Extension)?)\.Name\b[^>]*>(?<value>.*?)</\s*\k<owner>\.Name\s*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly string[] XamlResourceReferenceMarkupPrefixes =
+    [
+        "{StaticResource",
+        "{StaticResourceExtension",
+        "{DynamicResource",
+        "{DynamicResourceExtension",
+    ];
+    private static readonly string[] XamlReferenceMarkupPrefixes =
+    [
+        "{x:ReferenceExtension",
+        "{x:Reference",
+    ];
+    private static readonly string[] XamlReferenceObjectElementPrefixes =
+    [
+        "<x:ReferenceExtension",
+        "<x:Reference",
+    ];
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
