@@ -14,7 +14,7 @@ internal static class KotlinReferenceExtractor
     // Kotlin class literal。末尾セグメントを型名らしい形に絞り、`value::class` のような
     // 式レシーバーを type_reference 化しない。
     private static readonly Regex ClassLiteralRegex = new(
-        @"(?<![\w$])(?<type>(?:[_\p{L}][\w$]*\.)*[_\p{Lu}][\w$]*)\s*::\s*class\b",
+        @"(?<![\w$])(?<type>(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)\.)*(?:[_\p{Lu}][\w$]*|`[^`\r\n]+`))\s*::\s*class\b",
         RegexOptions.Compiled);
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
@@ -107,7 +107,7 @@ internal static class KotlinReferenceExtractor
         foreach (Match match in ClassLiteralRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
-            ReferenceExtractor.AddTypeReferenceSegments(
+            ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
                 fileId,

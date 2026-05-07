@@ -12836,6 +12836,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickClassLiterals_NormalizesTypeReferenceNames()
+    {
+        // Kotlin class literals can target backticked type names too; keep them aligned with
+        // the declaration's canonical name instead of treating the backticks as a string.
+        // Kotlin の class literal でも backtick 付き型名を対象にできるため、backtick を
+        // 文字列扱いせず、宣言側と同じ canonical 名で参照を発行する。
+        const string content = """
+            class `Display Name`
+
+            class Demo {
+                val token = `Display Name`::class
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
