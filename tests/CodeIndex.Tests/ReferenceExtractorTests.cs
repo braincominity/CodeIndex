@@ -12859,6 +12859,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickMethodReferenceOwners_CaptureTypeReference()
+    {
+        // JVM method references already emit owner type edges for Java/Kotlin; Kotlin backtick
+        // owners need the same canonical name handling as declarations and type positions.
+        // JVM method reference の owner 型 edge は Java/Kotlin で発行しているため、
+        // Kotlin の backtick owner でも宣言・型位置と同じ canonical 名に揃える。
+        const string content = """
+            class `Display Name` {
+                fun render() {}
+            }
+
+            class Demo {
+                val handler = `Display Name`::render
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

@@ -6,9 +6,10 @@ namespace CodeIndex.Indexer;
 internal static class JvmMethodReferenceExtractor
 {
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
+    private const string JvmMethodReferenceIdentifierPattern = @"(?:@?[_\p{L}\$][\w$]*|`[^`\r\n]+`)";
 
     private static readonly Regex MethodReferenceRegex = new(
-        $@"(?<![\w$])(?:(?<owner>(?:this|super|{FunctionalIdentifierPattern}(?:\.{FunctionalIdentifierPattern})*))\s*)?::\s*(?<name>{FunctionalIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
+        $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceIdentifierPattern}(?:\.{JvmMethodReferenceIdentifierPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
         RegexOptions.Compiled);
 
     public static void EmitMethodReferenceReferences(
@@ -72,11 +73,11 @@ internal static class JvmMethodReferenceExtractor
         if (ownerGroup.Value is "this" or "super")
             return;
 
-        var leafStartInOwner = ownerGroup.Value.LastIndexOf('.') + 1;
+        var leafStartInOwner = FindLastUnquotedDot(ownerGroup.Value) + 1;
         if (leafStartInOwner >= ownerGroup.Value.Length)
             return;
 
-        var leaf = ownerGroup.Value[leafStartInOwner..];
+        var leaf = StripBacktickIdentifier(ownerGroup.Value[leafStartInOwner..]);
         if (!IsLikelyJvmTypeName(leaf))
             return;
 
@@ -90,6 +91,33 @@ internal static class JvmMethodReferenceExtractor
             lineNumber,
             container,
             language);
+    }
+
+    private static int FindLastUnquotedDot(string text)
+    {
+        var last = -1;
+        var inBacktickIdentifier = false;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (ch == '`')
+            {
+                inBacktickIdentifier = !inBacktickIdentifier;
+                continue;
+            }
+
+            if (!inBacktickIdentifier && ch == '.')
+                last = index;
+        }
+
+        return last;
+    }
+
+    private static string StripBacktickIdentifier(string name)
+    {
+        if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+            return name[1..^1];
+        return name;
     }
 
     private static bool IsLikelyJvmTypeName(string name)
