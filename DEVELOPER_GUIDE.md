@@ -354,7 +354,7 @@ Supported symbol kinds by language:
 | JavaScript | functions, arrows, methods, class expressions, class-field arrows, export-surface properties | ESM imports/re-exports, CommonJS named exports, tagged-template calls | yes |
 | TypeScript | JavaScript coverage plus typed arrows, generic methods, interfaces, enums, type aliases | ESM/TS imports/re-exports, CommonJS named exports, declaration type references | yes |
 | C# | methods, constructors, operators, conversion operators, indexers, properties, fields, events, delegates, classes, records, structs, interfaces, enums, enum members, `#region` | `using`, `using` alias, `extern alias`, XML-doc `cref`, type-position references | yes |
-| Java | methods, compact constructors, enum constants, classes, records, interfaces, annotations, enums, record components | imports and `module-info.java` directives | yes |
+| Java | methods, compact constructors, enum constants, classes, records, interfaces, annotations, enums, record components | imports, sealed `permits`, and `module-info.java` directives | yes |
 | Kotlin | functions, extension functions, secondary constructors, classes, objects, interfaces, enum classes, enum entries, properties | imports, type aliases, trailing-lambda calls | yes |
 | Go | functions, methods, type aliases, structs, interfaces | imports and type-position references | yes |
 | Rust | functions, macros, `const`, `static`, impl/type aliases, structs, unions, traits, enums | `use`, turbofish and structural type-position references | yes |
@@ -1473,7 +1473,7 @@ JS/TS の export surface 走査は、`export const { foo, renamed: localName } =
 | JavaScript | function、arrow、method、class expression、class-field arrow、export surface property | ESM import/re-export、CommonJS named export、tagged-template call | yes |
 | TypeScript | JavaScript 相当 + typed arrow、generic method、interface、enum、type alias | ESM/TS import/re-export、CommonJS named export、declaration type reference | yes |
 | C# | method、constructor、operator、conversion operator、indexer、property、field、event、delegate、class、record、struct、interface、enum、enum member、`#region` | `using`、`using` alias、`extern alias`、XML-doc `cref`、type-position reference | yes |
-| Java | method、compact constructor、enum constant、class、record、interface、annotation、enum、record component | import、`module-info.java` directive | yes |
+| Java | method、compact constructor、enum constant、class、record、interface、annotation、enum、record component | import、sealed `permits`、`module-info.java` directive | yes |
 | Kotlin | function、extension function、secondary constructor、class、object、interface、enum class、enum entry、property | import、type alias、trailing-lambda call | yes |
 | Go | function、method、type alias、struct、interface | import、type-position reference | yes |
 | Rust | function、macro、`const`、`static`、impl/type alias、struct、union、trait、enum | `use`、turbofish、structural type-position reference | yes |

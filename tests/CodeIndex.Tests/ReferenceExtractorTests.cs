@@ -15211,6 +15211,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_SealedPermitsList_EmitsTypeReferences()
+    {
+        const string content = """
+            sealed interface Shape permits Circle, Square {}
+            final class Circle implements Shape {}
+            non-sealed class Square implements Shape {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Circle"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.StartsWith("sealed interface Shape permits", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Square"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.StartsWith("sealed interface Shape permits", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_SqlExecNoParens_CapturesStoredProcedureCall()
     {
         // issue #232: T-SQL `EXEC <proc>;` (no parentheses) is the dominant stored-procedure

@@ -690,6 +690,7 @@ internal static class JavaReferenceExtractor
     {
         EmitKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitKeywordTypeListReferences(preparedLine, "permits", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         ReferenceExtractor.EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
