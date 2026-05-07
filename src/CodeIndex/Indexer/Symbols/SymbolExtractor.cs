@@ -660,7 +660,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
-        $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
+        $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*(?:['""](?<bracketName>[^'""]*)['""]|(?<numericBracketName>\d+(?:\.\d+)?))\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsDefaultExportAssignmentRegex = new(

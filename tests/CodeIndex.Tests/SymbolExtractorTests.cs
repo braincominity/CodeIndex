@@ -2801,6 +2801,23 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsNumericBracketNamedExportAssignments(string language)
+    {
+        var content = """
+            exports[404] = notFound;
+            module.exports[500] = function serverError() { return 500; };
+            exports[dynamicKey] = hidden;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "500" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
     {

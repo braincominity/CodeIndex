@@ -2755,6 +2755,7 @@ public static partial class SymbolExtractor
                 }
 
                 var name = TryGetGroup(match, "name")
+                    ?? TryGetGroup(match, "numericBracketName")
                     ?? GetJavaScriptTypeScriptCommonJsBracketName(rawLines[i], absoluteMatchIndex + match.Groups["bracketName"].Index, match.Groups["bracketName"].Length);
                 if (name == null)
                 {
