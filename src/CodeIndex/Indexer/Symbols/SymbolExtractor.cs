@@ -253,7 +253,7 @@ public static partial class SymbolExtractor
         @"\b(?:" + string.Join("|", XamlEventAttributeNames) + @")\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlBindingRegex = new(
-        @"\{(?<kind>Binding|x:Bind|TemplateBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
+        @"\{(?<kind>Binding|x:Bind|TemplateBinding|CompiledBinding|ReflectionBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlBindingPathPropertyElementRegex = new(
         @"<\s*Binding\.Path\b[^>]*>(?<value>.*?)</\s*Binding\.Path\s*>",
