@@ -559,6 +559,17 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpDocCrefRegex = new(
         @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Javadoc / KDoc cross-reference links (`{@link Foo#bar}`, `@see Foo`, `[Foo.bar]`).
+    // Javadoc / KDoc の cross-reference link。
+    private static readonly Regex JvmDocInlineLinkRegex = new(
+        @"\{@(?:link|linkplain|value)\s+(?<target>[^\s}]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex JvmDocSeeReferenceRegex = new(
+        @"(?:^|\s)@(?:see|throws|exception)\s+(?<target>[^\s}]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex KDocBracketLinkRegex = new(
+        @"\[(?<target>#?(?:[_\p{L}][\w$]*|`[^`\r\n]+`)(?:(?:\.|#)(?:[_\p{L}][\w$]*|`[^`\r\n]+`))*)\](?!\s*(?:\(|\[))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
     // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
@@ -1027,6 +1038,7 @@ public static partial class ReferenceExtractor
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
+        var jvmInDelimitedDocComment = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1082,6 +1094,41 @@ public static partial class ReferenceExtractor
                     }
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
+            }
+            else if (language is "java" or "kotlin"
+                     && TryGetJvmDocCommentSpan(
+                         originalLine,
+                         jvmInDelimitedDocComment,
+                         out var jvmDocCommentStartIndex,
+                         out var jvmDocCommentEndExclusive,
+                         out var jvmSameLineDeclarationStartColumn,
+                         out var nextJvmDelimitedDocComment))
+            {
+                if (jvmDocCommentEndExclusive > jvmDocCommentStartIndex)
+                {
+                    var docContainer = FindJvmDocumentedContainer(
+                        containerCandidates,
+                        lines,
+                        structuralLines[i],
+                        lineNumber,
+                        jvmSameLineDeclarationStartColumn);
+                    if (docContainer != null)
+                    {
+                        var docText = originalLine[jvmDocCommentStartIndex..jvmDocCommentEndExclusive];
+                        EmitJvmDocLinkReferences(
+                            language,
+                            docText,
+                            references,
+                            seen,
+                            fileId,
+                            jvmDocCommentStartIndex,
+                            docText.Trim(),
+                            lineNumber,
+                            docContainer);
+                    }
+                }
+
+                jvmInDelimitedDocComment = nextJvmDelimitedDocComment;
             }
 
             if (string.IsNullOrWhiteSpace(preparedLine))

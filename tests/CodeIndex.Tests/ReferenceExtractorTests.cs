@@ -10941,6 +10941,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaDocLinks_CaptureTypeReferences()
+    {
+        const string content = """
+            package demo;
+
+            class User {
+                void save() {}
+            }
+
+            class Helper {}
+            class Hidden {}
+
+            class Service {
+                /**
+                 * Uses {@link User#save()} and {@linkplain java.util.List<User>}.
+                 * @see Helper
+                 * @see <a href="https://example.invalid">external</a>
+                 */
+                void run() {}
+
+                void other() {
+                    /** {@link Hidden} */
+                    int local = 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "save" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "href" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Hidden" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpTypePositions_CaptureTypeReferences()
     {
         // issue #256: base lists, declaration types, generic constraints, type tests,
@@ -19849,6 +19888,40 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "class"
             && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinKDocLinks_CaptureTypeReferences()
+    {
+        const string content = """
+            class User
+            class Helper
+            class Hidden
+
+            class Service {
+                /**
+                 * Loads [User] and [User.name].
+                 * See [docs](https://example.invalid) and [alias][User].
+                 * @see Helper
+                 */
+                fun load() {}
+
+                fun other() {
+                    /** [Hidden] */
+                    val local = 0
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.Contains(references, r => r.SymbolName == "name" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.Contains(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.DoesNotContain(references, r => r.SymbolName == "docs" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "alias" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Hidden" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

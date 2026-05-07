@@ -320,6 +320,84 @@ public static partial class ReferenceExtractor
         }
     }
 
+    internal static void EmitJvmDocLinkReferences(
+        string language,
+        string docText,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        int columnOffset,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in JvmDocInlineLinkRegex.Matches(docText))
+            EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+
+        foreach (Match match in JvmDocSeeReferenceRegex.Matches(docText))
+            EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+
+        if (language == "kotlin")
+        {
+            foreach (Match match in KDocBracketLinkRegex.Matches(docText))
+                EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+        }
+    }
+
+    private static void EmitJvmDocTargetReference(
+        string language,
+        Group targetGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        int columnOffset,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var normalized = NormalizeJvmDocLinkTarget(targetGroup.Value);
+        if (normalized.Length == 0)
+            return;
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            normalized,
+            columnOffset + targetGroup.Index + CountLeadingTrimmedJvmDocTargetChars(targetGroup.Value),
+            context,
+            lineNumber,
+            container,
+            language);
+    }
+
+    private static string NormalizeJvmDocLinkTarget(string target)
+    {
+        var text = target.Trim();
+        if (text.Length == 0)
+            return string.Empty;
+        if (text[0] is '<' or '"' or '\'' || text.Contains("://", StringComparison.Ordinal))
+            return string.Empty;
+
+        var paren = text.IndexOf('(');
+        if (paren >= 0)
+            text = text.Substring(0, paren);
+
+        var label = text.IndexOf('|');
+        if (label >= 0)
+            text = text.Substring(0, label);
+
+        return text.Trim().Replace('#', '.');
+    }
+
+    private static int CountLeadingTrimmedJvmDocTargetChars(string target)
+    {
+        var count = 0;
+        while (count < target.Length && char.IsWhiteSpace(target[count]))
+            count++;
+        return count;
+    }
+
     private static void TryEmitCSharpBaseListReferences(
         string line,
         List<ReferenceRecord> references,
