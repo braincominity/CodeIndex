@@ -225,8 +225,32 @@ public static partial class SymbolExtractor
     private static readonly Regex XamlKeyRegex = new(
         @"\bx:Key\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] XamlEventAttributeNames =
+    [
+        "Clicked",
+        "Tapped",
+        "Loaded",
+        "Unloaded",
+        "SelectionChanged",
+        "TextChanged",
+        "CheckedChanged",
+        "Unchecked",
+        "SelectedIndexChanged",
+        "PointerPressed",
+        "PointerReleased",
+        "PointerEntered",
+        "PointerExited",
+        "Drop",
+        "DragOver",
+        "Completed",
+        "Appearing",
+        "Disappearing",
+        "NavigatedTo",
+        "NavigatedFrom",
+        "SizeChanged",
+    ];
     private static readonly Regex XamlEventHandlerRegex = new(
-        @"\b(?:Clicked|Tapped|Loaded|Unloaded|SelectionChanged|TextChanged|CheckedChanged|Unchecked|SelectedIndexChanged|PointerPressed|PointerReleased|PointerEntered|PointerExited|Drop|DragOver|Completed|Appearing|Disappearing|NavigatedTo|NavigatedFrom|SizeChanged)\s*=\s*[""'](?<value>[^""']+)[""']",
+        @"\b(?:" + string.Join("|", XamlEventAttributeNames) + @")\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex XamlBindingRegex = new(
         @"\{(?<kind>Binding|x:Bind)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",

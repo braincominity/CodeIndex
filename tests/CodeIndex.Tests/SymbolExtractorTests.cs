@@ -20275,6 +20275,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesWrappedSearchAttributesAcrossLines()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:local="clr-namespace:Sample.ViewModels">
+                <ContentPage.Resources>
+                    <SolidColorBrush
+                        x:Key=
+                            "{x:Static Member={x:Type local:Keys}.AccentBrush}"
+                        Color="Tomato" />
+                </ContentPage.Resources>
+                <VerticalStackLayout>
+                    <Button
+                        x:Name=
+                            "SaveButton"
+                        Clicked=
+                            "OnSaveClicked" />
+                    <Entry
+                        TextChanged=
+                            "OnFilterTextChanged" />
+                </VerticalStackLayout>
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "local:Keys.AccentBrush"));
+        Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SaveButton"));
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "OnSaveClicked"));
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "OnFilterTextChanged"));
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesBindingPaths()
     {
         var content = """

@@ -709,6 +709,7 @@ public static partial class SymbolExtractor
 
         AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
@@ -890,6 +891,129 @@ public static partial class SymbolExtractor
                 cursor = valueEnd + 1;
             }
         }
+    }
+
+    private static void AddWrappedXamlSearchAttributeSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
+            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+
+        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Key"))
+            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", NormalizeXamlKeyValue(occurrence.Value));
+
+        foreach (var attributeName in XamlEventAttributeNames)
+        {
+            foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, attributeName))
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value.Trim());
+        }
+    }
+
+    private static IEnumerable<(int AttributeIndex, string Value)> EnumerateWrappedXamlAttributeValues(
+        string rawText,
+        int[] lineStarts,
+        string attributeName)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var attributeIndex = rawText.IndexOf(attributeName, cursor, StringComparison.Ordinal);
+            if (attributeIndex < 0)
+                yield break;
+
+            if (!TryReadXamlAttributeValue(rawText, attributeName, attributeIndex, out var valueStart, out var valueEnd))
+            {
+                cursor = attributeIndex + 1;
+                continue;
+            }
+
+            if (FindHtmlLineNumber(lineStarts, valueEnd) != FindHtmlLineNumber(lineStarts, attributeIndex))
+                yield return (attributeIndex, rawText[valueStart..valueEnd]);
+
+            cursor = valueEnd + 1;
+        }
+    }
+
+    private static bool TryReadXamlAttributeValue(
+        string rawText,
+        string attributeName,
+        int attributeIndex,
+        out int valueStart,
+        out int valueEnd)
+    {
+        valueStart = -1;
+        valueEnd = -1;
+
+        if (!IsXamlAttributeNameMatch(rawText, attributeIndex, attributeName.Length))
+            return false;
+
+        var cursor = attributeIndex + attributeName.Length;
+        while (cursor < rawText.Length && char.IsWhiteSpace(rawText[cursor]))
+            cursor++;
+
+        if (cursor >= rawText.Length || rawText[cursor] != '=')
+            return false;
+
+        cursor++;
+        while (cursor < rawText.Length && char.IsWhiteSpace(rawText[cursor]))
+            cursor++;
+
+        if (cursor >= rawText.Length)
+            return false;
+
+        var quote = rawText[cursor];
+        if (quote is not ('"' or '\''))
+            return false;
+
+        valueStart = cursor + 1;
+        valueEnd = valueStart;
+        while (valueEnd < rawText.Length && rawText[valueEnd] != quote)
+            valueEnd++;
+
+        return valueEnd < rawText.Length;
+    }
+
+    private static bool IsXamlAttributeNameMatch(string rawText, int index, int length)
+    {
+        if (index > 0 && IsXamlAttributeNameChar(rawText[index - 1]))
+            return false;
+
+        var after = index + length;
+        return after >= rawText.Length || !IsXamlAttributeNameChar(rawText[after]);
+    }
+
+    private static bool IsXamlAttributeNameChar(char c)
+        => IsXamlMarkupNameChar(c) || c == '-';
+
+    private static void AddXamlAttributeSymbol(
+        long fileId,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols,
+        int attributeIndex,
+        string kind,
+        string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return;
+
+        var startLine = FindHtmlLineNumber(lineStarts, attributeIndex);
+        var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = kind,
+            Name = value,
+            Line = startLine,
+            StartLine = startLine,
+            EndLine = startLine,
+            Signature = lines[signatureIndex].Trim(),
+        });
     }
 
     private static void AddXamlTypeObjectElementSymbols(
