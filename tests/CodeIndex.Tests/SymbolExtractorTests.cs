@@ -3636,6 +3636,41 @@ public class SymbolExtractorTests
     }
 
     [Theory]
+    [InlineData("javascript", "export default\n  (value) => value;", null, null)]
+    [InlineData("typescript", "export default\n  (value) => value;", null, null)]
+    [InlineData("javascript", "export default async (value) => {\n  return value;\n};", 1, 3)]
+    [InlineData("typescript", "export default async (value) => {\n  return value;\n};", 1, 3)]
+    public void Extract_JavaScriptTypeScript_DetectsExportDefaultArrowFunctionSymbols(
+        string language,
+        string content,
+        int? expectedBodyStartLine,
+        int? expectedBodyEndLine)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(1, function.StartLine);
+        Assert.Equal(expectedBodyStartLine, function.BodyStartLine);
+        Assert.Equal(expectedBodyEndLine, function.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportDefaultGenericArrowFunctionSymbol()
+    {
+        var content = """
+            export default <T>(
+              value: T
+            ) => value;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(1, function.StartLine);
+    }
+
+    [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
     public void Extract_JavaScriptTypeScript_DetectsMultilineDynamicImportSymbols(string language)

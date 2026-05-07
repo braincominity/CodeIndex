@@ -147,6 +147,7 @@ public static partial class SymbolExtractor
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
+        ExtractJavaScriptTypeScriptDefaultExportArrowFunctionSymbols(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptDestructuredNamedExports(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptCommonJsDefaultFunctionAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
@@ -2465,6 +2466,110 @@ public static partial class SymbolExtractor
         return rawName.Length == 0 ? null : rawName;
     }
 
+    private static void ExtractJavaScriptTypeScriptDefaultExportArrowFunctionSymbols(
+        long fileId,
+        string lang,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        for (int i = 0; i < sanitizedLines.Length; i++)
+        {
+            var sanitizedLine = sanitizedLines[i];
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (statementStart >= 0)
+            {
+                var statementSlice = sanitizedLine[statementStart..];
+                var match = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(statementSlice);
+                if (!match.Success)
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var absoluteMatchIndex = statementStart + match.Index;
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteMatchIndex, sanitizedLine, includeBlockScope: false)
+                    || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteMatchIndex, sanitizedLine))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                if (!TryCollectJavaScriptTypeScriptAssignedRhs(
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        absoluteMatchIndex,
+                        absoluteMatchIndex + match.Length,
+                        lang,
+                        out var rhs,
+                        out var rhsStartLineIndex,
+                        out var rhsStartColumn,
+                        out var rhsEndLineIndex,
+                        out var rhsEndColumn,
+                        out var signature))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var classificationRhs = StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(rhs)
+                    ? CollectJavaScriptTypeScriptAssignedRhsHeader(sanitizedLines, rhsStartLineIndex, rhsStartColumn)
+                    : rhs;
+
+                if (!StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(classificationRhs))
+                {
+                    if (rhsEndLineIndex > i)
+                        i = rhsEndLineIndex;
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], rhsEndColumn + 1);
+                    sanitizedLine = sanitizedLines[i];
+                    continue;
+                }
+
+                int? bodyStartLine = null;
+                int? bodyEndLine = null;
+                if (TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
+                        rawLines,
+                        rhsStartLineIndex,
+                        rhsStartColumn,
+                        lang,
+                        out var openBraceLineIndex,
+                        out var openBraceColumn))
+                {
+                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
+                    bodyStartLine = resolvedBodyStartLine;
+                    bodyEndLine = resolvedBodyEndLine;
+                }
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "default",
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = absoluteMatchIndex,
+                        EndLine = Math.Max(i + 1, bodyEndLine ?? (rhsEndLineIndex + 1)),
+                        BodyStartLine = bodyStartLine,
+                        BodyEndLine = bodyEndLine,
+                        Signature = signature,
+                        Visibility = "export",
+                    },
+                    rawLines[i]);
+
+                if (rhsEndLineIndex > i)
+                    i = rhsEndLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], rhsEndColumn + 1);
+                sanitizedLine = sanitizedLines[i];
+            }
+        }
+    }
+
     private static void ExtractJavaScriptTypeScriptCommonJsDefaultFunctionAssignments(
         long fileId,
         string lang,
@@ -2896,6 +3001,26 @@ public static partial class SymbolExtractor
             if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function")
                 || StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(rhs)
                 || StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
+                || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
+            {
+                return true;
+            }
+
+            if (rhs[0] != '(')
+                return false;
+
+            rhs = rhs[1..].TrimStart();
+        }
+
+        return false;
+    }
+
+    private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs)
+    {
+        rhs = rhs.TrimStart();
+        while (rhs.Length > 0)
+        {
+            if (StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
                 || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
             {
                 return true;
