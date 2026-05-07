@@ -1568,6 +1568,28 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "kotlin" && c == '`')
+            {
+                var closeIndex = expression.IndexOf('`', i + 1);
+                if (closeIndex < 0)
+                    continue;
+
+                var backtickSegment = expression.Substring(i + 1, closeIndex - i - 1);
+                AddTypeReferenceSegment(
+                    references,
+                    seen,
+                    fileId,
+                    backtickSegment,
+                    expressionStartInLine + i,
+                    context,
+                    lineNumber,
+                    container,
+                    language,
+                    ignoredSegments: ignoredSegments);
+                i = closeIndex;
+                continue;
+            }
+
             if (!IsTypeExpressionIdentifierStart(language, c))
                 continue;
 

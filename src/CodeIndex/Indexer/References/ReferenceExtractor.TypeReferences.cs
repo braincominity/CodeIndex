@@ -1849,7 +1849,12 @@ public static partial class ReferenceExtractor
             ? MaskPythonSingleLineFStrings(line)
             : line;
         if (lang != "cobol")
-            result = StringLiteralRegex.Replace(result, "\"\"");
+        {
+            var stringLiteralRegex = lang == "kotlin"
+                ? NonBacktickStringLiteralRegex
+                : StringLiteralRegex;
+            result = stringLiteralRegex.Replace(result, "\"\"");
+        }
         result = InlineBlockCommentRegex.Replace(result, " ");
 
         if (UsesHashComments(lang))

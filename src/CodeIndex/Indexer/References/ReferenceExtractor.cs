@@ -350,6 +350,9 @@ public static partial class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex NonBacktickStringLiteralRegex = new(
+        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+        RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";

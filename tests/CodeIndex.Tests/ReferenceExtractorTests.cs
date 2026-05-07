@@ -12806,6 +12806,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickTypeReferences_NormalizesNames()
+    {
+        // Kotlin declaration names already strip source-only backticks; type-position
+        // references need the same canonical name so dependency search joins them.
+        // Kotlin の宣言名は source-only な backtick を外しているため、型位置参照も同じ
+        // canonical 名で発行し、依存検索で宣言と結合できるようにする。
+        const string content = """
+            class `Display Name`
+            class Holder<T>
+
+            class Demo {
+                val first: `Display Name` = TODO()
+                val second: Holder<`Display Name`> = TODO()
+                val third: `Display Name`? = null
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        var displayNameTypeReferenceCount = references.Count(r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.True(
+            displayNameTypeReferenceCount >= 3,
+            $"Expected at least 3 Display Name type references, got {displayNameTypeReferenceCount}.");
+        Assert.Contains(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
