@@ -1469,7 +1469,12 @@ public static partial class SymbolExtractor
                         rawLines[i]);
                 }
 
-                foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(namedMatch.Groups["specifiers"].Value))
+                var sanitizedReExportSpecifiers = namedMatch.Groups["specifiers"].Value;
+                var reExportSpecifiers = ContainsJavaScriptTypeScriptStringLiteralSpecifierName(sanitizedReExportSpecifiers)
+                    && TryExtractJavaScriptTypeScriptExportSpecifierListFromSignature(signatureText, out var rawReExportSpecifiers)
+                    ? StripJavaScriptTypeScriptSpecifierComments(rawReExportSpecifiers)
+                    : sanitizedReExportSpecifiers;
+                foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(reExportSpecifiers))
                 {
                     AddSymbolRecord(
                         symbols,
@@ -1524,7 +1529,11 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(specifiers))
+                var localSpecifiers = ContainsJavaScriptTypeScriptStringLiteralSpecifierName(specifiers)
+                    && TryExtractJavaScriptTypeScriptExportSpecifierListFromSignature(signature, out var rawLocalSpecifiers)
+                    ? StripJavaScriptTypeScriptSpecifierComments(rawLocalSpecifiers)
+                    : specifiers;
+                foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(localSpecifiers))
                 {
                     AddSymbolRecord(
                         symbols,
@@ -4067,7 +4076,7 @@ public static partial class SymbolExtractor
 
     private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
     {
-        foreach (var rawSpecifier in specifierList.Split(','))
+        foreach (var rawSpecifier in SplitJavaScriptTypeScriptExportSpecifiers(specifierList))
         {
             var specifier = rawSpecifier.Trim();
             if (specifier.Length == 0)
@@ -4080,11 +4089,203 @@ public static partial class SymbolExtractor
             var exportedName = asIndex >= 0
                 ? specifier[(asIndex + " as ".Length)..].Trim()
                 : specifier;
+            exportedName = NormalizeJavaScriptTypeScriptExportedSpecifierName(exportedName);
             if (exportedName.Length == 0)
                 continue;
 
             yield return exportedName;
         }
+    }
+
+    private static IEnumerable<string> SplitJavaScriptTypeScriptExportSpecifiers(string specifierList)
+    {
+        var start = 0;
+        var quote = '\0';
+        var escapeNext = false;
+
+        for (var index = 0; index < specifierList.Length; index++)
+        {
+            var ch = specifierList[index];
+            if (quote != '\0')
+            {
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == ',')
+            {
+                yield return specifierList[start..index];
+                start = index + 1;
+            }
+        }
+
+        yield return specifierList[start..];
+    }
+
+    private static string StripJavaScriptTypeScriptSpecifierComments(string specifiers)
+    {
+        var builder = new StringBuilder(specifiers.Length);
+        var quote = '\0';
+        var escapeNext = false;
+
+        for (var index = 0; index < specifiers.Length; index++)
+        {
+            var ch = specifiers[index];
+            var next = index + 1 < specifiers.Length ? specifiers[index + 1] : '\0';
+
+            if (quote != '\0')
+            {
+                builder.Append(ch);
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                index += 2;
+                while (index < specifiers.Length && specifiers[index] != '\n')
+                    index++;
+                if (index < specifiers.Length)
+                    builder.Append('\n');
+                continue;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                index += 2;
+                while (index + 1 < specifiers.Length && (specifiers[index] != '*' || specifiers[index + 1] != '/'))
+                    index++;
+                if (index + 1 < specifiers.Length)
+                    index++;
+                builder.Append(' ');
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryExtractJavaScriptTypeScriptExportSpecifierListFromSignature(string signature, out string specifiers)
+    {
+        specifiers = string.Empty;
+
+        var openBraceIndex = signature.IndexOf('{', StringComparison.Ordinal);
+        if (openBraceIndex < 0)
+            return false;
+
+        var quote = '\0';
+        var escapeNext = false;
+        for (var index = openBraceIndex + 1; index < signature.Length; index++)
+        {
+            var ch = signature[index];
+            if (quote != '\0')
+            {
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                specifiers = signature[(openBraceIndex + 1)..index];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsJavaScriptTypeScriptStringLiteralSpecifierName(string specifiers)
+        => specifiers.IndexOf('"', StringComparison.Ordinal) >= 0
+            || specifiers.IndexOf('\'', StringComparison.Ordinal) >= 0;
+
+    private static string NormalizeJavaScriptTypeScriptExportedSpecifierName(string exportedName)
+    {
+        exportedName = exportedName.Trim();
+        if (exportedName.Length < 2 || exportedName[0] is not ('\'' or '"'))
+            return exportedName;
+
+        var quote = exportedName[0];
+        if (exportedName[^1] != quote)
+            return exportedName;
+
+        var builder = new StringBuilder();
+        for (var index = 1; index < exportedName.Length - 1; index++)
+        {
+            var ch = exportedName[index];
+            if (ch == '\\' && index + 1 < exportedName.Length - 1)
+            {
+                builder.Append(exportedName[index + 1]);
+                index++;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     // Scans forward from (`startLineIndex`, `startColumn`) through the lex-sanitized source for

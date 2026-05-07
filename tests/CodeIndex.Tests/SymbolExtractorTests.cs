@@ -1859,6 +1859,27 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "RootAdmin" && s.Visibility == "export");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsStringLiteralExportNames(string language)
+    {
+        var content = """
+            const handler = () => {};
+            const other = 1;
+            export { handler as "x-api", other as otherName /* keep */ };
+            export { remote as "remote-key", another as anotherName } from "./remote";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x-api" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "otherName" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "remote-key" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "anotherName" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "\"x-api\"");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./remote");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
     {
