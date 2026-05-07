@@ -3573,6 +3573,11 @@ public class SymbolExtractorTests
             const loader = () => import(
                 "./feature"
             );
+            const method = client.import(
+                "./method"
+            );
+            const optional = client?.import("./optional");
+            class Loader { #import(path) {} load() { return this.#import("./private"); } }
             const text = "import('./string')";
             // import('./comment')
             """;
@@ -3583,6 +3588,9 @@ public class SymbolExtractorTests
         Assert.Contains("const loader", importSymbol.Signature);
         Assert.Contains("import(", importSymbol.Signature);
         Assert.Contains("./feature", importSymbol.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./optional");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./private");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
     }

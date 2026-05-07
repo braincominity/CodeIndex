@@ -175,6 +175,9 @@ public static partial class SymbolExtractor
             if (searchStart < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[searchStart]))
                 continue;
 
+            if (IsJavaScriptTypeScriptPropertyAccessImportPrefix(sanitizedLine, importIndex))
+                continue;
+
             var prefixEnd = importIndex;
             while (prefixEnd > 0 && char.IsWhiteSpace(sanitizedLine[prefixEnd - 1]))
                 prefixEnd--;
@@ -222,6 +225,29 @@ public static partial class SymbolExtractor
                 },
                 rawLine);
         }
+    }
+
+    private static bool IsJavaScriptTypeScriptPropertyAccessImportPrefix(string sanitizedLine, int importIndex)
+    {
+        var prefixEnd = importIndex;
+        while (prefixEnd > 0 && char.IsWhiteSpace(sanitizedLine[prefixEnd - 1]))
+            prefixEnd--;
+
+        if (prefixEnd <= 0)
+            return false;
+
+        if (sanitizedLine[prefixEnd - 1] == '#')
+            return true;
+
+        if (sanitizedLine[prefixEnd - 1] != '.')
+            return false;
+
+        var dotRunStart = prefixEnd - 1;
+        while (dotRunStart > 0 && sanitizedLine[dotRunStart - 1] == '.')
+            dotRunStart--;
+
+        var dotRunLength = prefixEnd - dotRunStart;
+        return dotRunLength < 3;
     }
 
     private static bool TryReadJavaScriptTypeScriptDynamicImportModule(
