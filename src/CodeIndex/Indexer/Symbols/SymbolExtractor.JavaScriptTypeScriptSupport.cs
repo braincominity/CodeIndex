@@ -227,6 +227,57 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void ExtractJavaScriptTypeScriptStaticImportModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        var sanitizedLine = sanitizedLines[lineIndex];
+        var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+        while (statementStart >= 0)
+        {
+            if (!TryReadJavaScriptTypeScriptStaticImportModule(
+                    rawLines,
+                    sanitizedLines,
+                    lineIndex,
+                    statementStart,
+                    out var moduleName,
+                    out var moduleLineIndex,
+                    out var moduleStartColumn,
+                    out var endLineIndex,
+                    out var endColumn,
+                    out var signature))
+            {
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                continue;
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                moduleLineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = moduleName,
+                    Line = moduleLineIndex + 1,
+                    StartLine = moduleLineIndex + 1,
+                    StartColumn = moduleStartColumn,
+                    EndLine = endLineIndex + 1,
+                    Signature = signature,
+                },
+                rawLines[lineIndex]);
+
+            if (endLineIndex > lineIndex)
+                break;
+
+            statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, endColumn + 1);
+        }
+    }
+
     private static bool IsJavaScriptTypeScriptPropertyAccessImportPrefix(string sanitizedLine, int importIndex)
     {
         var prefixEnd = importIndex;
@@ -248,6 +299,321 @@ public static partial class SymbolExtractor
 
         var dotRunLength = prefixEnd - dotRunStart;
         return dotRunLength < 3;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptStaticImportModule(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int startColumn,
+        out string moduleName,
+        out int moduleLineIndex,
+        out int moduleStartColumn,
+        out int endLineIndex,
+        out int endColumn,
+        out string signature)
+    {
+        moduleName = string.Empty;
+        moduleLineIndex = -1;
+        moduleStartColumn = -1;
+        endLineIndex = -1;
+        endColumn = -1;
+        signature = string.Empty;
+
+        var startLine = sanitizedLines[startLineIndex];
+        var importColumn = SkipWhitespace(startLine, startColumn);
+        if (!IsJavaScriptTypeScriptKeywordAt(startLine, importColumn, "import"))
+            return false;
+
+        var afterImportColumn = importColumn + "import".Length;
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                startLineIndex,
+                afterImportColumn,
+                Math.Min(sanitizedLines.Length, startLineIndex + 16),
+                out var nextLineIndex,
+                out var nextColumn))
+        {
+            return false;
+        }
+
+        var nextChar = sanitizedLines[nextLineIndex][nextColumn];
+        if (nextChar is '(' or '.')
+            return false;
+
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 16);
+        var quoteLineIndex = -1;
+        var quoteColumn = -1;
+
+        if (nextChar is '\'' or '"')
+        {
+            quoteLineIndex = nextLineIndex;
+            quoteColumn = nextColumn;
+        }
+        else
+        {
+            if (!TryFindJavaScriptTypeScriptStaticImportFromKeyword(
+                    sanitizedLines,
+                    startLineIndex,
+                    afterImportColumn,
+                    scanEndExclusive,
+                    out var fromLineIndex,
+                    out var fromColumn)
+                || !TryFindNextJavaScriptTypeScriptNonWhitespace(
+                    sanitizedLines,
+                    fromLineIndex,
+                    fromColumn + "from".Length,
+                    scanEndExclusive,
+                    out quoteLineIndex,
+                    out quoteColumn))
+            {
+                return false;
+            }
+        }
+
+        var sanitizedQuote = sanitizedLines[quoteLineIndex][quoteColumn];
+        if (sanitizedQuote is not '\'' and not '"')
+            return false;
+
+        if (!TryReadJavaScriptTypeScriptQuotedModuleName(
+                rawLines,
+                quoteLineIndex,
+                quoteColumn,
+                sanitizedQuote,
+                out moduleName,
+                out moduleStartColumn,
+                out var moduleEndColumn))
+        {
+            return false;
+        }
+
+        if (!TryFindJavaScriptTypeScriptStaticImportEnd(
+                rawLines,
+                sanitizedLines,
+                startLineIndex,
+                importColumn,
+                quoteLineIndex,
+                moduleEndColumn + 1,
+                scanEndExclusive,
+                out endLineIndex,
+                out endColumn))
+        {
+            return false;
+        }
+
+        moduleLineIndex = quoteLineIndex;
+        signature = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, importColumn, endLineIndex, endColumn);
+        return moduleName.Length > 0;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptStaticImportFromKeyword(
+        string[] sanitizedLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineExclusive,
+        out int fromLineIndex,
+        out int fromColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (var lineIndex = startLineIndex; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            while (column < line.Length)
+            {
+                var ch = line[column];
+                if (parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth == 0
+                    && IsJavaScriptTypeScriptKeywordAt(line, column, "from"))
+                {
+                    fromLineIndex = lineIndex;
+                    fromColumn = column;
+                    return true;
+                }
+
+                if (ch == ';' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    break;
+
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                }
+
+                column++;
+            }
+        }
+
+        fromLineIndex = -1;
+        fromColumn = -1;
+        return false;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptQuotedModuleName(
+        string[] rawLines,
+        int quoteLineIndex,
+        int quoteColumn,
+        char quoteChar,
+        out string moduleName,
+        out int moduleStartColumn,
+        out int moduleEndColumn)
+    {
+        moduleName = string.Empty;
+        moduleStartColumn = -1;
+        moduleEndColumn = -1;
+
+        var rawModuleLine = rawLines[quoteLineIndex];
+        if (quoteColumn >= rawModuleLine.Length || rawModuleLine[quoteColumn] != quoteChar)
+            return false;
+
+        moduleStartColumn = quoteColumn + 1;
+        moduleEndColumn = moduleStartColumn;
+        while (moduleEndColumn < rawModuleLine.Length)
+        {
+            if (rawModuleLine[moduleEndColumn] == '\\' && moduleEndColumn + 1 < rawModuleLine.Length)
+            {
+                moduleEndColumn += 2;
+                continue;
+            }
+
+            if (rawModuleLine[moduleEndColumn] == quoteChar)
+                break;
+
+            moduleEndColumn++;
+        }
+
+        if (moduleEndColumn <= moduleStartColumn
+            || moduleEndColumn >= rawModuleLine.Length
+            || rawModuleLine[moduleEndColumn] != quoteChar)
+        {
+            return false;
+        }
+
+        moduleName = rawModuleLine.Substring(moduleStartColumn, moduleEndColumn - moduleStartColumn);
+        return true;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptStaticImportEnd(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int importColumn,
+        int startScanLineIndex,
+        int startScanColumn,
+        int endLineExclusive,
+        out int endLineIndex,
+        out int endColumn)
+    {
+        endLineIndex = startScanLineIndex;
+        endColumn = Math.Max(0, startScanColumn - 1);
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var sawAttributeKeyword = false;
+        var sawAttributeBrace = false;
+
+        for (var lineIndex = startScanLineIndex; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = sanitizedLines[lineIndex];
+            var column = lineIndex == startScanLineIndex ? Math.Max(0, startScanColumn) : 0;
+            var lastNonWhitespaceColumn = -1;
+
+            while (column < line.Length)
+            {
+                var ch = line[column];
+                if (!char.IsWhiteSpace(ch))
+                    lastNonWhitespaceColumn = column;
+
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                {
+                    if (ch == ';')
+                    {
+                        endLineIndex = lineIndex;
+                        endColumn = column;
+                        return true;
+                    }
+
+                    if (IsJavaScriptTypeScriptKeywordAt(line, column, "with")
+                        || IsJavaScriptTypeScriptKeywordAt(line, column, "assert"))
+                    {
+                        sawAttributeKeyword = true;
+                    }
+                }
+
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        if (sawAttributeKeyword)
+                            sawAttributeBrace = true;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        if (sawAttributeKeyword && sawAttributeBrace && braceDepth == 0)
+                        {
+                            endLineIndex = lineIndex;
+                            endColumn = column;
+                        }
+                        break;
+                }
+
+                column++;
+            }
+
+            if (lastNonWhitespaceColumn >= 0)
+            {
+                endLineIndex = lineIndex;
+                endColumn = lastNonWhitespaceColumn;
+            }
+
+            var signatureSoFar = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, importColumn, endLineIndex, endColumn);
+            if (!HasPendingJavaScriptTypeScriptImportAttributes(signatureSoFar)
+                && (!sawAttributeKeyword || (sawAttributeBrace && braceDepth == 0)))
+            {
+                return true;
+            }
+        }
+
+        return endLineIndex >= startScanLineIndex && endColumn >= 0;
     }
 
     private static bool TryReadJavaScriptTypeScriptDynamicImportModule(
@@ -293,29 +659,14 @@ public static partial class SymbolExtractor
         if (sanitizedQuote is not '\'' and not '"')
             return false;
 
-        var rawModuleLine = rawLines[moduleLineIndex];
-        if (moduleQuoteColumn >= rawModuleLine.Length || rawModuleLine[moduleQuoteColumn] != sanitizedQuote)
-            return false;
-
-        moduleStartColumn = moduleQuoteColumn + 1;
-        var moduleEndColumn = moduleStartColumn;
-        while (moduleEndColumn < rawModuleLine.Length)
-        {
-            if (rawModuleLine[moduleEndColumn] == '\\' && moduleEndColumn + 1 < rawModuleLine.Length)
-            {
-                moduleEndColumn += 2;
-                continue;
-            }
-
-            if (rawModuleLine[moduleEndColumn] == sanitizedQuote)
-                break;
-
-            moduleEndColumn++;
-        }
-
-        if (moduleEndColumn <= moduleStartColumn
-            || moduleEndColumn >= rawModuleLine.Length
-            || rawModuleLine[moduleEndColumn] != sanitizedQuote)
+        if (!TryReadJavaScriptTypeScriptQuotedModuleName(
+                rawLines,
+                moduleLineIndex,
+                moduleQuoteColumn,
+                sanitizedQuote,
+                out moduleName,
+                out moduleStartColumn,
+                out var moduleEndColumn))
         {
             return false;
         }
@@ -359,13 +710,42 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        moduleName = rawModuleLine.Substring(moduleStartColumn, moduleEndColumn - moduleStartColumn);
         signature = BuildJavaScriptTypeScriptDynamicImportSignature(
             rawLines,
             startLineIndex,
             closeParenLineIndex,
             closeParenColumn);
         return true;
+    }
+
+    private static string BuildJavaScriptTypeScriptStatementSignature(
+        string[] rawLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endColumn)
+    {
+        if (startLineIndex == endLineIndex)
+        {
+            var line = rawLines[startLineIndex];
+            var start = Math.Min(Math.Max(0, startColumn), line.Length);
+            var endExclusive = Math.Min(Math.Max(start, endColumn + 1), line.Length);
+            return line[start..endExclusive].Trim();
+        }
+
+        var builder = new StringBuilder();
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            if (lineIndex > startLineIndex)
+                builder.Append('\n');
+
+            var line = rawLines[lineIndex];
+            var sliceStart = lineIndex == startLineIndex ? Math.Min(Math.Max(0, startColumn), line.Length) : 0;
+            var sliceEnd = lineIndex == endLineIndex ? Math.Min(Math.Max(sliceStart, endColumn + 1), line.Length) : line.Length;
+            builder.Append(line[sliceStart..sliceEnd]);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static bool TryFindJavaScriptTypeScriptDynamicImportCloseParen(

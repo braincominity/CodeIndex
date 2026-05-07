@@ -3622,6 +3622,37 @@ public class SymbolExtractorTests
         Assert.Contains("./legacy.json", legacyImport.Signature);
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsStaticImportModuleSymbols(string language)
+    {
+        var content = """
+            import React from "react";
+            import {
+                computed,
+                ref,
+            } from
+                "vue";
+            import "./setup";
+            import data from "./data.json" with { type: "json" };
+            import legacy from "./legacy.json" assert {
+                type: "json"
+            };
+            const meta = import.meta.url;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "react");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "vue");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./setup");
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Contains("with", dataImport.Signature);
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Contains("assert", legacyImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "meta");
+    }
+
     [Fact]
     public void Extract_TypeScript_MultilineImportTypeQuery_DoesNotEmitRuntimeImportSymbol()
     {

@@ -2046,7 +2046,10 @@ public static partial class SymbolExtractor
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
             if (lang is "javascript" or "typescript")
+            {
                 ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+            }
 
             if (lang is "javascript" or "typescript"
                 && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, line, i + 1, symbols))

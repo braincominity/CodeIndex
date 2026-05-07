@@ -694,6 +694,8 @@ Default-export functions such as `export default function Page() {}` are indexed
 
 Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`, and when the call includes import options such as `import("./data.json", { with: { type: "json" } })`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
 
+Static JavaScript/TypeScript imports also surface their source module specifier as an `import` symbol, including side-effect imports such as `import "./setup"`, multiline `import { ... } from "./module"` declarations, and import-attributes suffixes.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1684,6 +1686,8 @@ JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as 
 `export default function Page() {}` のような default export 関数は宣言名の `function` シンボルとして索引され、`export default function () {}` のような無名形式はモジュールの `default` 関数面として索引されます。
 
 runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合や、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
+
+静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 
