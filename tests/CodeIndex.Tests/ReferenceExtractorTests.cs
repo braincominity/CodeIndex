@@ -10791,18 +10791,22 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpTypeof_HandlesGenericAndArrayArguments()
     {
-        // typeof(List<int>) should capture `List`; the lexer skips `<int>` because `int` is a
-        // built-in C# alias that must never appear as a type_reference row.
-        // typeof(List<int>) は `List` を拾い、`<int>` 内の C# built-in alias はスキップする。
+        // typeof(List<Payload>) should capture both `List` and the nested generic argument.
+        // C# built-in aliases inside generic arguments still must never appear as rows.
+        // typeof(List<Payload>) は `List` と nested generic argument の両方を拾う。
+        // generic 引数内の C# built-in alias は引き続きスキップする。
         const string content = """
             using System.Collections.Generic;
+
+            public class Payload {}
 
             public class Caller
             {
                 public void Work()
                 {
-                    var t1 = typeof(List<int>);
-                    var t2 = typeof(System.Collections.Generic.Dictionary<string, int>);
+                    var t1 = typeof(List<Payload>);
+                    var t2 = typeof(System.Collections.Generic.Dictionary<string, Payload[]>);
+                    var t3 = typeof(Dictionary<string, List<Payload>>);
                 }
             }
             """;
@@ -10811,6 +10815,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
         // For dotted args, each segment gets its own row — preserves rename safety.
         // ドット付き引数は segment ごとに行を出す — rename 追跡のため。
         Assert.Contains(references, r => r.SymbolName == "System" && r.ReferenceKind == "type_reference");

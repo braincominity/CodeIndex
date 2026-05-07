@@ -2454,6 +2454,7 @@ public static partial class ReferenceExtractor
     {
         int i = startIndex;
         int parenDepth = 0;
+        int angleDepth = 0;
         bool expectSegment = true;
         while (i < line.Length)
         {
@@ -2470,10 +2471,12 @@ public static partial class ReferenceExtractor
 
             if (c == ',')
             {
-                if (parenDepth == 0)
+                if (parenDepth == 0 && angleDepth == 0)
                     return;
-                // Tuple element separator inside `typeof((Foo, Bar))` — keep scanning.
-                // `typeof((Foo, Bar))` のタプル要素区切りは続けて走査する。
+                // Tuple or generic argument separator inside `typeof((Foo, Bar))` /
+                // `typeof(List<Foo, Bar>)` — keep scanning.
+                // `typeof((Foo, Bar))` のタプル要素区切りや `typeof(List<Foo, Bar>)`
+                // の generic 引数区切りは続けて走査する。
                 i++;
                 expectSegment = true;
                 continue;
@@ -2521,7 +2524,19 @@ public static partial class ReferenceExtractor
 
             if (c == '<')
             {
-                i = SkipBalanced(line, i, '<', '>');
+                angleDepth++;
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (c == '>')
+            {
+                if (angleDepth == 0)
+                    return;
+                angleDepth--;
+                i++;
+                expectSegment = false;
                 continue;
             }
 
