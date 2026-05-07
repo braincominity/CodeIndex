@@ -26,7 +26,7 @@ internal static class JavaReferenceExtractor
     // Java type test (`instanceof Foo`).
     // Java の型テスト (`instanceof Foo`)。
     private static readonly Regex InstanceofRegex = new(
-        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
+        @"(?<![\w$])instanceof\s+(?:(?:final|@[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*\([^)]*\))?)\s+)*(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
         RegexOptions.Compiled);
 
     // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`.

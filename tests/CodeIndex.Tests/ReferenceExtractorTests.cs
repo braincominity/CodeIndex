@@ -12708,6 +12708,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaAnnotatedFinalInstanceof_CapturesTypeReference()
+    {
+        // Java pattern instanceof can put modifiers and type-use annotations before the tested
+        // type; those prefixes should not hide the real dependency or become type references.
+        // Java の pattern instanceof では型の前に modifier / type-use annotation が置けるため、
+        // prefix で実型の依存を落としたり注釈名を型参照化したりしてはならない。
+        const string content = """
+            @interface NonNull {}
+            class Payload {}
+
+            class Demo {
+                boolean run(Object value) {
+                    return value instanceof final @NonNull Payload payload;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "NonNull" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NonNull" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "final" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinTypeUseAnnotations_DoNotBecomeTypeReferences()
     {
         // Kotlin type-use annotations should mirror Java type expressions: the annotation
