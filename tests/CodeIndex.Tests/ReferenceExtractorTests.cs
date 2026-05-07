@@ -12911,6 +12911,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickConstructorCalls_NormalizesInstantiateNames()
+    {
+        // Backticked Kotlin class names should behave like ordinary constructor calls: the
+        // instantiate edge uses the canonical class symbol name.
+        // backtick 付き Kotlin class 名の constructor call も通常の constructor call と同様に、
+        // canonical class symbol 名で instantiate edge を発行する。
+        const string content = """
+            class `Display Name`
+
+            class Demo {
+                val value = `Display Name`()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

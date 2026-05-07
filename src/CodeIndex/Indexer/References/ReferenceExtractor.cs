@@ -1389,6 +1389,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                KotlinReferenceExtractor.EmitBacktickConstructorReferences(
+                    preparedLine,
+                    kotlinConstructorTypeNames,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             // Type-position references without an introducing keyword-call: base lists,

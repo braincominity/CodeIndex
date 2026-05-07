@@ -16,6 +16,9 @@ internal static class KotlinReferenceExtractor
     private static readonly Regex ClassLiteralRegex = new(
         @"(?<![\w$])(?<type>(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)\.)*(?:[_\p{Lu}][\w$]*|`[^`\r\n]+`))\s*::\s*class\b",
         RegexOptions.Compiled);
+    private static readonly Regex BacktickConstructorCallRegex = new(
+        @"(?<![\w$])(?<name>`[^`\r\n]+`)(?:\s*<[^()\r\n]+>)?\s*\(",
+        RegexOptions.Compiled);
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
@@ -72,6 +75,31 @@ internal static class KotlinReferenceExtractor
         return tokens[index] is not ("object" or "companion");
     }
 
+    private static bool IsBacktickConstructorDeclarationSite(string line, int nameIndex)
+    {
+        var cursor = nameIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+            cursor--;
+        if (cursor < 0)
+            return false;
+
+        var end = cursor + 1;
+        while (cursor >= 0 && ReferenceExtractor.IsJavaIdentifierPart(line[cursor]))
+            cursor--;
+        var start = cursor + 1;
+        if (start >= end)
+            return false;
+
+        return line.Substring(start, end - start) is "class" or "interface" or "object" or "fun" or "constructor";
+    }
+
+    private static string StripBacktickIdentifier(string name)
+    {
+        if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+            return name[1..^1];
+        return name;
+    }
+
     public static void EmitTrailingLambdaReferences(
         string preparedLine,
         Action<string, int> addCallLikeReference)
@@ -117,6 +145,42 @@ internal static class KotlinReferenceExtractor
                 lineNumber,
                 container,
                 "kotlin");
+        }
+    }
+
+    public static void EmitBacktickConstructorReferences(
+        string preparedLine,
+        IReadOnlySet<string> constructorTypeNames,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (constructorTypeNames.Count == 0)
+            return;
+
+        foreach (Match match in BacktickConstructorCallRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (IsBacktickConstructorDeclarationSite(preparedLine, nameGroup.Index))
+                continue;
+
+            var name = StripBacktickIdentifier(nameGroup.Value);
+            if (!constructorTypeNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index,
+                "instantiate",
+                context,
+                lineNumber,
+                resolveContainerForColumn(nameGroup.Index));
         }
     }
 
