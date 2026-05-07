@@ -2808,6 +2808,37 @@ public class SymbolExtractorTests
         Assert.Equal(8, bar.BodyEndLine);
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefaultFunctionAssignments(string language)
+    {
+        var content = """
+            module.exports =
+              (
+                function createServer(req) {
+                  return req;
+                }
+              );
+            module.exports = async (value) => {
+              return value;
+            };
+            module.exports = class Service { run() {} };
+            module.exports = { named() {} };
+            module.exports = 42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var defaults = symbols
+            .Where(s => s.Kind == "function" && s.Name == "default" && s.Visibility == "export")
+            .ToList();
+        Assert.Equal(2, defaults.Count);
+        Assert.Contains(defaults, s => s.StartLine == 1 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(defaults, s => s.StartLine == 7 && s.BodyStartLine == 7 && s.BodyEndLine == 9);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "named" && s.ContainerName == "module.exports");
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
     {

@@ -659,6 +659,10 @@ public static partial class SymbolExtractor
         $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
+    private static readonly Regex JavaScriptTypeScriptCommonJsDefaultExportAssignmentRegex = new(
+        @"^\s*module\.exports(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
+        RegexOptions.Compiled);
+
     private static readonly Regex JavaScriptTypeScriptQualifiedAssignmentRegex = new(
         $@"^\s*(?<name>[A-Z][\w$]*(?:\.[\w$]+)+)\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
