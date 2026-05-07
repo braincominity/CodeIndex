@@ -9,7 +9,7 @@ internal static class JvmMethodReferenceExtractor
     private const string JvmMethodReferenceIdentifierPattern = @"(?:@?[_\p{L}\$][\w$]*|`[^`\r\n]+`)";
 
     private static readonly Regex MethodReferenceRegex = new(
-        $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceIdentifierPattern}(?:\.{JvmMethodReferenceIdentifierPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)\b(?=\s*(?:[;,)\]]|$))",
+        $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceIdentifierPattern}(?:\.{JvmMethodReferenceIdentifierPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)(?=\s*(?:[;,)\]]|$))",
         RegexOptions.Compiled);
 
     public static void EmitMethodReferenceReferences(
@@ -52,7 +52,7 @@ internal static class JvmMethodReferenceExtractor
             }
 
             EmitOwnerTypeReference(language, ownerGroup, references, seen, fileId, context, lineNumber, container);
-            AddChainReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, context, lineNumber, container);
+            AddChainReference(references, seen, fileId, language, nameGroup.Value, nameGroup.Index, context, lineNumber, container);
         }
     }
 
@@ -133,12 +133,14 @@ internal static class JvmMethodReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
+        string language,
         string name,
         int column,
         string context,
         int lineNumber,
         SymbolRecord? container)
     {
+        name = NormalizeMethodReferenceName(language, name);
         var dedupeKey = $"{lineNumber}:{column}:call:{name}";
         if (!seen.Add(dedupeKey))
             return;
@@ -155,4 +157,7 @@ internal static class JvmMethodReferenceExtractor
             ContainerName = container?.Name,
         });
     }
+
+    private static string NormalizeMethodReferenceName(string language, string name)
+        => language == "kotlin" ? StripBacktickIdentifier(name) : name;
 }

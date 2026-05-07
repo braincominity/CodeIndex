@@ -12885,6 +12885,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickMethodReferenceNames_NormalizesCallNames()
+    {
+        // Backticked Kotlin callable names are source syntax; method-reference call edges should
+        // use the same canonical name as the callable declaration.
+        // Kotlin callable 名の backtick は source syntax なので、method reference の call edge も
+        // 宣言側と同じ canonical 名で発行する。
+        const string content = """
+            class User {
+                fun `render name`() {}
+            }
+
+            class Demo {
+                val handler = User::`render name`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "render name" && s.Kind == "function");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "render name" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`render name`" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
