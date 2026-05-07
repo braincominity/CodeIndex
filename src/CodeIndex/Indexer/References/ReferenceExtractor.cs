@@ -1731,7 +1731,10 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
             }
 
-            void AddCallLikeReference(string name, int callIndex)
+            void AddCallLikeReference(string name, int callIndex) =>
+                _ = TryAddCallLikeReference(name, callIndex);
+
+            bool TryAddCallLikeReference(string name, int callIndex)
             {
                 var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
@@ -1740,7 +1743,7 @@ public static partial class ReferenceExtractor
                         : NormalizeAtPrefixedIdentifier(name);
 
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
-                    return;
+                    return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -1752,7 +1755,7 @@ public static partial class ReferenceExtractor
                     && callIndex == javaSameLineCtor.Value.NameIndex
                     && string.Equals(normalizedName, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
                 {
-                    return;
+                    return false;
                 }
 
                   // C# positional patterns such as `case Point(var x, var y):` are type-pattern
@@ -1764,21 +1767,21 @@ public static partial class ReferenceExtractor
                   var isCSharpPatternHeadCallSite = language == "csharp"
                       && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
                   if (isCSharpPatternHeadCallSite)
-                      return;
+                      return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
-                    return;
+                    return true;
                 }
                 if (IsIgnoredCallName(language, name))
                 {
                     if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
-                        return;
+                        return false;
                 }
                 if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
-                    return;
+                    return false;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
@@ -1790,16 +1793,17 @@ public static partial class ReferenceExtractor
                 if (metadataKind != null)
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
-                    return;
+                    return true;
                 }
 
                 if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
-                    return;
+                    return true;
                 }
 
                 AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                return true;
             }
 
             if (language is "batch")
@@ -1874,7 +1878,19 @@ public static partial class ReferenceExtractor
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
-                    AddCallLikeReference(name, callIndex);
+                    if (TryAddCallLikeReference(name, callIndex))
+                    {
+                        EmitGenericInvocationTypeArgumentReferences(
+                            language,
+                            preparedLine,
+                            callIndex,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall(callIndex));
+                    }
                     if (language == "ruby")
                         RubyReferenceExtractor.EmitCommandTargetReferences(
                             name,
@@ -1970,7 +1986,21 @@ public static partial class ReferenceExtractor
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
-                    AddCallLikeReference(candidate.Name, candidate.NameIndex);
+                {
+                    if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                    {
+                        EmitGenericInvocationTypeArgumentReferences(
+                            language,
+                            preparedLine,
+                            candidate.NameIndex,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall(candidate.NameIndex));
+                    }
+                }
             }
 
             if (language == "rust")

@@ -2389,7 +2389,149 @@ public static partial class ReferenceExtractor
             : string.Equals(token, "new", StringComparison.Ordinal);
     }
 
+    private static readonly HashSet<string> KotlinGenericInvocationTypeArgumentIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "in", "out",
+    };
+
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
+
+    private static void EmitGenericInvocationTypeArgumentReferences(
+        string language,
+        string preparedLine,
+        int nameIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (language is not ("csharp" or "java" or "kotlin"))
+            return;
+
+        if (!TryGetPostNameGenericInvocationTypeArgumentSpan(preparedLine, nameIndex, out var argumentsStart, out var argumentsLength)
+            && (language != "java"
+                || !TryGetJavaExplicitGenericInvocationTypeArgumentSpan(preparedLine, nameIndex, out argumentsStart, out argumentsLength)))
+        {
+            return;
+        }
+
+        if (argumentsLength <= 0)
+            return;
+
+        var ignoredSegments = language == "kotlin"
+            ? KotlinGenericInvocationTypeArgumentIgnoredSegments
+            : null;
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsStart,
+            context,
+            lineNumber,
+            container,
+            language,
+            ignoredSegments);
+    }
+
+    private static bool TryGetPostNameGenericInvocationTypeArgumentSpan(
+        string preparedLine,
+        int nameIndex,
+        out int argumentsStart,
+        out int argumentsLength)
+    {
+        argumentsStart = -1;
+        argumentsLength = 0;
+
+        if (nameIndex < 0 || nameIndex >= preparedLine.Length || !IsAtAwareAsciiIdentifierStart(preparedLine, nameIndex))
+            return false;
+
+        var scan = ConsumeAtAwareAsciiIdentifier(preparedLine, nameIndex);
+        if (scan + 1 < preparedLine.Length
+            && preparedLine[scan] == '?'
+            && preparedLine[scan + 1] == '.')
+        {
+            scan += 2;
+        }
+
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var closeAngle = FindMatchingChar(preparedLine, scan, '<', '>');
+        if (closeAngle <= scan)
+            return false;
+
+        var after = closeAngle + 1;
+        while (after < preparedLine.Length && char.IsWhiteSpace(preparedLine[after]))
+            after++;
+
+        if (after >= preparedLine.Length || preparedLine[after] != '(')
+            return false;
+
+        argumentsStart = scan + 1;
+        argumentsLength = closeAngle - scan - 1;
+        return true;
+    }
+
+    private static bool TryGetJavaExplicitGenericInvocationTypeArgumentSpan(
+        string preparedLine,
+        int nameIndex,
+        out int argumentsStart,
+        out int argumentsLength)
+    {
+        argumentsStart = -1;
+        argumentsLength = 0;
+
+        var closeAngle = nameIndex - 1;
+        while (closeAngle >= 0 && char.IsWhiteSpace(preparedLine[closeAngle]))
+            closeAngle--;
+
+        if (closeAngle < 0 || preparedLine[closeAngle] != '>')
+            return false;
+
+        var openAngle = FindMatchingOpenChar(preparedLine, closeAngle, '<', '>');
+        if (openAngle < 0)
+            return false;
+
+        var beforeOpen = openAngle - 1;
+        while (beforeOpen >= 0 && char.IsWhiteSpace(preparedLine[beforeOpen]))
+            beforeOpen--;
+
+        if (beforeOpen < 0 || preparedLine[beforeOpen] != '.')
+            return false;
+
+        argumentsStart = openAngle + 1;
+        argumentsLength = closeAngle - openAngle - 1;
+        return true;
+    }
+
+    private static int FindMatchingOpenChar(string text, int closeIndex, char openChar, char closeChar)
+    {
+        if (closeIndex < 0 || closeIndex >= text.Length || text[closeIndex] != closeChar)
+            return -1;
+
+        var depth = 0;
+        for (var i = closeIndex; i >= 0; i--)
+        {
+            if (text[i] == closeChar)
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != openChar)
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
 
     private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericCallCandidates(
         string preparedLine,

@@ -6522,6 +6522,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public sealed class Payload { }
+            public sealed class Result { }
+
+            public static class Helper
+            {
+                public static void DoWork<T>() { }
+            }
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new List<Payload>();
+                    Helper.DoWork<List<Result>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 17);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.Line == 18);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 18);
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 10);
+    }
+
+    [Fact]
     public void Extract_JavaNestedGenericConstructors_AreInstantiate()
     {
         // Regression (issue #263): Java constructor calls with nested generic type args
@@ -6548,6 +6583,37 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "instantiate" && r.Line == 8);
         Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            import java.util.Collections;
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Payload {}
+            class Result {}
+
+            class Worker {
+                <T> T read() { return null; }
+
+                void run() {
+                    var a = new HashMap<String, List<Payload>>();
+                    var b = Collections.<Result>emptyList();
+                    var c = this.<Payload>read();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 13);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 14);
     }
 
     [Fact]
@@ -6590,6 +6656,32 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Build" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation" && r.Line == 7);
         Assert.DoesNotContain(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_KotlinGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            class Payload
+            class Result
+            class Box<T>
+
+            fun <T> read(): T = TODO()
+
+            class Worker {
+                fun run() {
+                    val box = Box<Payload>()
+                    val result = read<Result>()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 10);
     }
 
     [Fact]
