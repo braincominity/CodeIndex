@@ -3564,6 +3564,46 @@ public class SymbolExtractorTests
         Assert.Equal(content, function.Signature);
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsMultilineDynamicImportSymbols(string language)
+    {
+        var content = """
+            const loader = () => import(
+                "./feature"
+            );
+            const text = "import('./string')";
+            // import('./comment')
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var importSymbol = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature"));
+        Assert.Equal(2, importSymbol.Line);
+        Assert.Contains("const loader", importSymbol.Signature);
+        Assert.Contains("import(", importSymbol.Signature);
+        Assert.Contains("./feature", importSymbol.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_MultilineImportTypeQuery_DoesNotEmitRuntimeImportSymbol()
+    {
+        var content = """
+            type Module = typeof import(
+                "./types"
+            );
+            const runtime = import(
+                "./runtime"
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./runtime");
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsMultilineAnonymousDefaultExportClassMembers()
     {

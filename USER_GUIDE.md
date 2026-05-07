@@ -692,6 +692,8 @@ JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as 
 
 Default-export functions such as `export default function Page() {}` are indexed as `function` symbols by their declared name; anonymous forms such as `export default function () {}` are indexed as the module `default` function surface.
 
+Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1680,6 +1682,8 @@ Java の参照抽出は sealed 型の `permits` リストを `type_reference` ed
 JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` / `export type * from` / `export type * as ns from` を、comment 付き、複数行の named re-export clause、複数行の `export *` / `export * as ns`、`with { type: 'json' }` / `assert { type: 'json' }` のような import attributes suffix、さらに `export*from` / `export{foo as bar}from` のような minified でも有効な構文を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export を、同一行 / 複数行の括弧付き右辺に加え `module.exports.fn = <T>(x: T) => x`、`module.exports.foo = <T>(\n  value: T\n) => value`、constraint / async 付き TypeScript generic arrow 右辺も含めて表面化しつつ、`functionCall()` や `classyThing` のような識別子接頭辞は通常の property 値として扱います。`module.exports = { foo: inner }` / `module.exports = { foo, bar }` のような exported object-literal の alias / shorthand property も表面化します。
 
 `export default function Page() {}` のような default export 関数は宣言名の `function` シンボルとして索引され、`export default function () {}` のような無名形式はモジュールの `default` 関数面として索引されます。
+
+runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれていても `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

@@ -153,95 +153,214 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptDynamicImportSymbols(
         long fileId,
-        string rawLine,
-        string structuralLine,
-        int lineNumber,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
         List<SymbolRecord> symbols)
     {
+        var rawLine = rawLines[lineIndex];
+        var sanitizedLine = sanitizedLines[lineIndex];
         var searchStart = 0;
-        while (searchStart < rawLine.Length)
+        while (searchStart < sanitizedLine.Length)
         {
-            var importIndex = rawLine.IndexOf("import", searchStart, StringComparison.Ordinal);
+            var importIndex = sanitizedLine.IndexOf("import", searchStart, StringComparison.Ordinal);
             if (importIndex < 0)
                 return;
 
             searchStart = importIndex + "import".Length;
 
-            if (importIndex > 0 && (char.IsLetterOrDigit(rawLine[importIndex - 1]) || rawLine[importIndex - 1] is '_' or '$'))
+            if (importIndex > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[importIndex - 1]))
+                continue;
+
+            if (searchStart < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[searchStart]))
                 continue;
 
             var prefixEnd = importIndex;
-            while (prefixEnd > 0 && char.IsWhiteSpace(rawLine[prefixEnd - 1]))
+            while (prefixEnd > 0 && char.IsWhiteSpace(sanitizedLine[prefixEnd - 1]))
                 prefixEnd--;
 
             var tokenStart = prefixEnd;
-            while (tokenStart > 0 && (char.IsLetterOrDigit(rawLine[tokenStart - 1]) || rawLine[tokenStart - 1] is '_' or '$'))
+            while (tokenStart > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenStart - 1]))
                 tokenStart--;
 
             // Skip type-query contexts like `typeof import("./mod")`; only real runtime
             // dynamic imports should create the module-name symbol target.
             if (tokenStart < prefixEnd)
             {
-                var precedingToken = rawLine[tokenStart..prefixEnd];
+                var precedingToken = sanitizedLine[tokenStart..prefixEnd];
                 if (precedingToken is "typeof" or "keyof")
                     continue;
             }
 
-            var cursor = SkipWhitespace(rawLine, importIndex + "import".Length);
-            if (cursor >= rawLine.Length || rawLine[cursor] != '(')
-                continue;
-
-            var moduleQuoteIndex = SkipWhitespace(rawLine, cursor + 1);
-            if (moduleQuoteIndex >= rawLine.Length || rawLine[moduleQuoteIndex] is not '\'' and not '"')
-                continue;
-
-            var moduleLiteralStart = moduleQuoteIndex + 1;
-            var moduleLiteralEnd = moduleLiteralStart;
-            while (moduleLiteralEnd < rawLine.Length)
+            if (!TryReadJavaScriptTypeScriptDynamicImportModule(
+                    rawLines,
+                    sanitizedLines,
+                    lineIndex,
+                    searchStart,
+                    out var moduleName,
+                    out var moduleLineIndex,
+                    out var moduleStartColumn,
+                    out var signature))
             {
-                if (rawLine[moduleLiteralEnd] == '\\' && moduleLiteralEnd + 1 < rawLine.Length)
-                {
-                    moduleLiteralEnd += 2;
-                    continue;
-                }
-
-                if (rawLine[moduleLiteralEnd] == rawLine[moduleQuoteIndex])
-                    break;
-
-                moduleLiteralEnd++;
+                continue;
             }
 
-            if (moduleLiteralEnd < moduleLiteralStart)
-                continue;
-
-            if (moduleLiteralEnd >= rawLine.Length || rawLine[moduleLiteralEnd] != rawLine[moduleQuoteIndex])
-                continue;
-
-            var closeIndex = moduleLiteralEnd + 1;
-            while (closeIndex < rawLine.Length && char.IsWhiteSpace(rawLine[closeIndex]))
-                closeIndex++;
-
-            if (closeIndex >= rawLine.Length || rawLine[closeIndex] != ')')
-                continue;
-
-            var moduleName = rawLine.Substring(moduleLiteralStart, moduleLiteralEnd - moduleLiteralStart);
             AddSymbolRecord(
                 symbols,
                 cssSeenSymbols: null,
-                lineNumber,
+                moduleLineIndex + 1,
                 new SymbolRecord
                 {
                     FileId = fileId,
                     Kind = "import",
                     Name = moduleName,
-                    Line = lineNumber,
-                    StartLine = lineNumber,
-                    StartColumn = moduleLiteralStart,
-                    EndLine = lineNumber,
-                    Signature = rawLine.Trim(),
+                    Line = moduleLineIndex + 1,
+                    StartLine = moduleLineIndex + 1,
+                    StartColumn = moduleStartColumn,
+                    EndLine = moduleLineIndex + 1,
+                    Signature = signature,
                 },
                 rawLine);
         }
+    }
+
+    private static bool TryReadJavaScriptTypeScriptDynamicImportModule(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int afterImportColumn,
+        out string moduleName,
+        out int moduleLineIndex,
+        out int moduleStartColumn,
+        out string signature)
+    {
+        moduleName = string.Empty;
+        moduleLineIndex = -1;
+        moduleStartColumn = -1;
+        signature = string.Empty;
+
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 8);
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                startLineIndex,
+                afterImportColumn,
+                scanEndExclusive,
+                out var openParenLineIndex,
+                out var openParenColumn)
+            || sanitizedLines[openParenLineIndex][openParenColumn] != '(')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn + 1,
+                scanEndExclusive,
+                out moduleLineIndex,
+                out var moduleQuoteColumn))
+        {
+            return false;
+        }
+
+        var sanitizedQuote = sanitizedLines[moduleLineIndex][moduleQuoteColumn];
+        if (sanitizedQuote is not '\'' and not '"')
+            return false;
+
+        var rawModuleLine = rawLines[moduleLineIndex];
+        if (moduleQuoteColumn >= rawModuleLine.Length || rawModuleLine[moduleQuoteColumn] != sanitizedQuote)
+            return false;
+
+        moduleStartColumn = moduleQuoteColumn + 1;
+        var moduleEndColumn = moduleStartColumn;
+        while (moduleEndColumn < rawModuleLine.Length)
+        {
+            if (rawModuleLine[moduleEndColumn] == '\\' && moduleEndColumn + 1 < rawModuleLine.Length)
+            {
+                moduleEndColumn += 2;
+                continue;
+            }
+
+            if (rawModuleLine[moduleEndColumn] == sanitizedQuote)
+                break;
+
+            moduleEndColumn++;
+        }
+
+        if (moduleEndColumn <= moduleStartColumn
+            || moduleEndColumn >= rawModuleLine.Length
+            || rawModuleLine[moduleEndColumn] != sanitizedQuote)
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                moduleLineIndex,
+                moduleEndColumn + 1,
+                scanEndExclusive,
+                out var closeParenLineIndex,
+                out var closeParenColumn)
+            || sanitizedLines[closeParenLineIndex][closeParenColumn] != ')')
+        {
+            return false;
+        }
+
+        moduleName = rawModuleLine.Substring(moduleStartColumn, moduleEndColumn - moduleStartColumn);
+        signature = BuildJavaScriptTypeScriptDynamicImportSignature(
+            rawLines,
+            startLineIndex,
+            closeParenLineIndex,
+            closeParenColumn);
+        return true;
+    }
+
+    private static bool TryFindNextJavaScriptTypeScriptNonWhitespace(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int endLineExclusive,
+        out int lineIndex,
+        out int column)
+    {
+        for (lineIndex = startLineIndex; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            column = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            while (column < line.Length && char.IsWhiteSpace(line[column]))
+                column++;
+
+            if (column < line.Length)
+                return true;
+        }
+
+        lineIndex = -1;
+        column = -1;
+        return false;
+    }
+
+    private static string BuildJavaScriptTypeScriptDynamicImportSignature(
+        string[] rawLines,
+        int startLineIndex,
+        int endLineIndex,
+        int endColumn)
+    {
+        if (startLineIndex == endLineIndex)
+            return rawLines[startLineIndex].Trim();
+
+        var builder = new StringBuilder();
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            if (lineIndex > startLineIndex)
+                builder.Append('\n');
+
+            var line = rawLines[lineIndex];
+            var sliceEnd = lineIndex == endLineIndex ? Math.Min(endColumn + 1, line.Length) : line.Length;
+
+            builder.Append(line[..sliceEnd]);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static bool TryHandleJavaScriptTypeScriptImportEqualsLine(

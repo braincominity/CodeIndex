@@ -1956,6 +1956,9 @@ public static partial class SymbolExtractor
             return ExtractAssemblySymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var javaScriptTypeScriptSanitizedLines = lang is "javascript" or "typescript"
+            ? BuildJavaScriptTypeScriptSanitizedLines(lines)
+            : null;
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
@@ -2043,7 +2046,7 @@ public static partial class SymbolExtractor
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
             if (lang is "javascript" or "typescript")
-                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, line, structuralLine, i + 1, symbols);
+                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
 
             if (lang is "javascript" or "typescript"
                 && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, line, i + 1, symbols))
