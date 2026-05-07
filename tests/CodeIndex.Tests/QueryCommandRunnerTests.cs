@@ -9254,6 +9254,19 @@ jobs:
     }
 
     [Fact]
+    public void ExactSourceSearchNormalizer_DecodesCSharpUnicodeEscapesBeforeVerbatimCleanup()
+    {
+        const string text = "global::@\\u0063lass.\\U00000046oo";
+
+        var normalized = ExactSourceSearchNormalizer.Normalize(text, "csharp", out var rawIndexMap);
+
+        Assert.Equal("class.Foo", normalized);
+        Assert.Equal(normalized.Length, rawIndexMap.Length);
+        Assert.Equal(text.IndexOf('\\'), rawIndexMap[0]);
+        Assert.Equal(text.LastIndexOf('\\'), rawIndexMap[6]);
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringTreatsCSharpGlobalQualifiedNamesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_global");
@@ -9310,6 +9323,117 @@ jobs:
             Assert.Equal(string.Empty, qualifiedStderr);
             Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("count").GetInt32());
             Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringTreatsCSharpUnicodeEscapedIdentifiersAsCanonical()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_unicode_escape");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/escaped.cs",
+                "csharp",
+                "namespace Demo;\n\n"
+                + "public class EscapedIdentifiers\n"
+                + "{\n"
+                + "    public void Match()\n"
+                + "    {\n"
+                + "        var first = \\u0047lobalName;\n"
+                + "        var second = \\U00000047lobalName;\n"
+                + "        var keyword = @\\u0063lass.Member;\n"
+                + "    }\n"
+                + "}\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/plain.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class PlainIdentifiers
+                {
+                    public void Match()
+                    {
+                        var first = GlobalName;
+                    }
+                }
+                """);
+
+            var (plainQueryExitCode, plainQueryStdout, plainQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GlobalName", "--db", dbPath, "--path", "src/escaped.cs", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+            using var plainQueryDocument = ParseJsonOutput(plainQueryStdout);
+
+            var (escapedQueryExitCode, escapedQueryStdout, escapedQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["\\U00000047lobalName", "--db", dbPath, "--path", "src/plain.cs", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+            using var escapedQueryDocument = ParseJsonOutput(escapedQueryStdout);
+
+            var (verbatimExitCode, verbatimStdout, verbatimStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class.Member", "--db", dbPath, "--path", "src/escaped.cs", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+            using var verbatimDocument = ParseJsonOutput(verbatimStdout);
+
+            Assert.Equal(CommandExitCodes.Success, plainQueryExitCode);
+            Assert.Equal(string.Empty, plainQueryStderr);
+            Assert.Equal(1, plainQueryDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, plainQueryDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, escapedQueryExitCode);
+            Assert.Equal(string.Empty, escapedQueryStderr);
+            Assert.Equal(1, escapedQueryDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, escapedQueryDocument.RootElement.GetProperty("files").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, verbatimExitCode);
+            Assert.Equal(string.Empty, verbatimStderr);
+            Assert.Equal(1, verbatimDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, verbatimDocument.RootElement.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_LiteralSafeSearchKeepsCSharpUnicodeEscapeQueriesRawForFts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_csharp_unicode_escape_fts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/escaped.cs",
+                "csharp",
+                "namespace Demo;\n\n"
+                + "public class EscapedIdentifiers\n"
+                + "{\n"
+                + "    public void Match()\n"
+                + "    {\n"
+                + "        var first = \\u0047lobalName;\n"
+                + "    }\n"
+                + "}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["\\u0047lobalName", "--db", dbPath, "--path", "src/escaped.cs", "--lang", "csharp", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
         }
         finally
         {
