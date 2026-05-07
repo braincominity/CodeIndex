@@ -692,7 +692,7 @@ JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as 
 
 Default-export functions such as `export default function Page() {}` are indexed as `function` symbols by their declared name; anonymous forms such as `export default function () {}` are indexed as the module `default` function surface.
 
-Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
+Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`, and when the call includes import options such as `import("./data.json", { with: { type: "json" } })`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
 
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
@@ -1683,7 +1683,7 @@ JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as 
 
 `export default function Page() {}` のような default export 関数は宣言名の `function` シンボルとして索引され、`export default function () {}` のような無名形式はモジュールの `default` 関数面として索引されます。
 
-runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれていても `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
+runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合や、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

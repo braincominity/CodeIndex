@@ -3587,6 +3587,33 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsDynamicImportSymbolsWithImportOptions(string language)
+    {
+        var content = """
+            const data = await import("./data.json", {
+                with: { type: "json" }
+            });
+            const legacy = await import(
+                "./legacy.json",
+                { assert: { type: "json" } }
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Equal(1, dataImport.Line);
+        Assert.Contains("with", dataImport.Signature);
+        Assert.Contains("type", dataImport.Signature);
+
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Equal(5, legacyImport.Line);
+        Assert.Contains("assert", legacyImport.Signature);
+        Assert.Contains("./legacy.json", legacyImport.Signature);
+    }
+
     [Fact]
     public void Extract_TypeScript_MultilineImportTypeQuery_DoesNotEmitRuntimeImportSymbol()
     {

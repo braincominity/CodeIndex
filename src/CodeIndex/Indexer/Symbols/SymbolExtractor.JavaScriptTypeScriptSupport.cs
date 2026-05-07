@@ -239,7 +239,7 @@ public static partial class SymbolExtractor
         moduleStartColumn = -1;
         signature = string.Empty;
 
-        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 8);
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 16);
         if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
                 sanitizedLines,
                 startLineIndex,
@@ -299,9 +299,36 @@ public static partial class SymbolExtractor
                 moduleLineIndex,
                 moduleEndColumn + 1,
                 scanEndExclusive,
-                out var closeParenLineIndex,
-                out var closeParenColumn)
-            || sanitizedLines[closeParenLineIndex][closeParenColumn] != ')')
+                out var afterSpecifierLineIndex,
+                out var afterSpecifierColumn))
+        {
+            return false;
+        }
+
+        int closeParenLineIndex;
+        int closeParenColumn;
+        var afterSpecifierChar = sanitizedLines[afterSpecifierLineIndex][afterSpecifierColumn];
+        if (afterSpecifierChar == ')')
+        {
+            closeParenLineIndex = afterSpecifierLineIndex;
+            closeParenColumn = afterSpecifierColumn;
+        }
+        else if (afterSpecifierChar == ',')
+        {
+            if (!TryFindJavaScriptTypeScriptDynamicImportCloseParen(
+                    sanitizedLines,
+                    openParenLineIndex,
+                    openParenColumn,
+                    scanEndExclusive,
+                    out closeParenLineIndex,
+                    out closeParenColumn)
+                || closeParenLineIndex < afterSpecifierLineIndex
+                || (closeParenLineIndex == afterSpecifierLineIndex && closeParenColumn < afterSpecifierColumn))
+            {
+                return false;
+            }
+        }
+        else
         {
             return false;
         }
@@ -313,6 +340,49 @@ public static partial class SymbolExtractor
             closeParenLineIndex,
             closeParenColumn);
         return true;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptDynamicImportCloseParen(
+        string[] sanitizedLines,
+        int openParenLineIndex,
+        int openParenColumn,
+        int endLineExclusive,
+        out int closeParenLineIndex,
+        out int closeParenColumn)
+    {
+        var parenDepth = 0;
+        for (var lineIndex = openParenLineIndex; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = sanitizedLines[lineIndex];
+            var column = lineIndex == openParenLineIndex ? openParenColumn : 0;
+            while (column < line.Length)
+            {
+                var ch = line[column];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')')
+                {
+                    if (parenDepth == 0)
+                        break;
+
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        closeParenLineIndex = lineIndex;
+                        closeParenColumn = column;
+                        return true;
+                    }
+                }
+
+                column++;
+            }
+        }
+
+        closeParenLineIndex = -1;
+        closeParenColumn = -1;
+        return false;
     }
 
     private static bool TryFindNextJavaScriptTypeScriptNonWhitespace(
