@@ -1819,6 +1819,46 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsLocalNamedExportSurfaceSymbols(string language)
+    {
+        var content = """
+            const foo = 1;
+            const local = 2;
+            export { foo, local as renamed };
+            export
+            {
+              foo as multilineFoo,
+              local as multilineLocal,
+            };
+            export { forwarded } from './other';
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "renamed" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineFoo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineLocal" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded" && s.Visibility == "export");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsLocalTypeOnlyNamedExportSurfaceSymbols()
+    {
+        var content = """
+            type User = { id: string };
+            type Admin = User & { role: string };
+            export type { User, Admin as RootAdmin };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "RootAdmin" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
     {
