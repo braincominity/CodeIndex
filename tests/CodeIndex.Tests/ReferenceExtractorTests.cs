@@ -12733,6 +12733,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinExtensionFunctionReceivers_CaptureTypeReferences()
+    {
+        // Kotlin extension receivers are type-position dependencies just like parameters and
+        // return types; `fun User.render()` should make `references User` find the extension.
+        // Kotlin の extension receiver は parameter / return type と同じ型位置の依存であり、
+        // `fun User.render()` でも `references User` から拡張関数へ辿れる必要がある。
+        const string content = """
+            class User
+            class Box<T>
+
+            fun User.render() {}
+            fun Box<User>.unwrap() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

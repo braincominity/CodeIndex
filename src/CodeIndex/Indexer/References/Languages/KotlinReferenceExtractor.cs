@@ -245,6 +245,17 @@ internal static class KotlinReferenceExtractor
         if (closeParen < 0)
             return;
 
+        EmitExtensionFunctionReceiverTypeReferences(
+            preparedLine,
+            funIndex,
+            openParen,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+
         TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(
             preparedLine,
             openParen + 1,
@@ -276,6 +287,99 @@ internal static class KotlinReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitExtensionFunctionReceiverTypeReferences(
+        string preparedLine,
+        int funIndex,
+        int openParen,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var headStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, funIndex + "fun".Length);
+        if (headStart >= openParen)
+            return;
+
+        if (preparedLine[headStart] == '<')
+        {
+            var genericClose = ReferenceExtractor.FindMatchingChar(preparedLine, headStart, '<', '>');
+            if (genericClose < 0 || genericClose >= openParen)
+                return;
+            headStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, genericClose + 1);
+            if (headStart >= openParen)
+                return;
+        }
+
+        var receiverDot = FindLastTopLevelChar(preparedLine, '.', headStart, openParen);
+        if (receiverDot <= headStart)
+            return;
+
+        var receiverEnd = receiverDot;
+        while (receiverEnd > headStart && char.IsWhiteSpace(preparedLine[receiverEnd - 1]))
+            receiverEnd--;
+        if (receiverEnd <= headStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(headStart, receiverEnd - headStart),
+            headStart,
+            "kotlin",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(headStart));
+    }
+
+    private static int FindLastTopLevelChar(string text, char target, int startIndex, int endIndex)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var braceDepth = 0;
+        var last = -1;
+        var end = Math.Min(text.Length, endIndex);
+        for (var i = Math.Max(0, startIndex); i < end; i++)
+        {
+            var ch = text[i];
+            if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0 && ch == target)
+                last = i;
+
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+        }
+
+        return last;
     }
 
     private static void EmitHeritageTypeReferences(
