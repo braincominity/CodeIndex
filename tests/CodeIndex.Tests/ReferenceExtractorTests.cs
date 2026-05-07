@@ -12708,6 +12708,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinTypeUseAnnotations_DoNotBecomeTypeReferences()
+    {
+        // Kotlin type-use annotations should mirror Java type expressions: the annotation
+        // itself is metadata, while the annotated type remains the dependency edge.
+        // Kotlin の type-use annotation も Java と同様に metadata として扱い、
+        // 注釈名を type_reference にせず、注釈された型だけを依存として残す。
+        const string content = """
+            annotation class Fancy
+            class Payload
+
+            class Demo {
+                val value: @Fancy Payload = Payload()
+                fun run(input: @Fancy Payload): @Fancy Payload = input
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.Contains(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
