@@ -19644,6 +19644,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinSecondaryConstructorDelegation_RewritesThisAndSuperCalls()
+    {
+        const string content = """
+            open class Parent(value: Int) {}
+
+            class Child
+                : Parent {
+                constructor() : this(0) {
+                }
+
+                constructor(value: Int) : super(value) {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Child"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains(": this(", StringComparison.Ordinal)
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Child");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains(": super(", StringComparison.Ordinal)
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Child");
+        Assert.DoesNotContain(references, r =>
+            r.ReferenceKind == "call"
+            && (r.SymbolName == "constructor" || r.SymbolName == "this" || r.SymbolName == "super"));
+    }
+
+    [Fact]
     public void Extract_KotlinImportAlias_DoesNotEmitTypeReference()
     {
         const string content = """

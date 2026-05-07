@@ -98,6 +98,14 @@ public static partial class ReferenceExtractor
         {
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
+        // Kotlin constructor delegation is rewritten by KotlinReferenceExtractor, so suppress the
+        // declaration/delegation keywords that generic CallRegex would otherwise index as calls.
+        // Kotlin の constructor 委譲は KotlinReferenceExtractor で書き換えるため、
+        // 汎用 CallRegex が拾う宣言・委譲 keyword 自体は call として残さない。
+        ["kotlin"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "constructor", "super", "this",
+        },
         // Rust macro declaration keywords / Rust マクロ宣言キーワード
         // `macro_rules!` declarations will be seen by the Rust macro-call regex below, but they are
         // declaration sites rather than call sites, so suppress the keyword itself.
@@ -1274,7 +1282,8 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)` and Java `this(...)` / `super(...)`
+            // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)`, Java `this(...)` / `super(...)`,
+            // and Kotlin `constructor(...) : this(...)` / `: super(...)`.
             // コンストラクタ連鎖呼び出しの書き換え
             if (language is "csharp")
             {
@@ -1285,6 +1294,12 @@ public static partial class ReferenceExtractor
             else if (language is "java")
             {
                 JavaReferenceExtractor.EmitCtorChainReferences(
+                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    references, seen, fileId, context, lineNumber, container);
+            }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitCtorDelegationReferences(
                     preparedLine, enclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
