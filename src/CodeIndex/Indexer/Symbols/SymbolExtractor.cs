@@ -258,6 +258,9 @@ public static partial class SymbolExtractor
     private static readonly Regex XamlBindingPathPropertyElementRegex = new(
         @"<\s*Binding\.Path\b[^>]*>(?<value>.*?)</\s*Binding\.Path\s*>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex XamlBindingElementNamePropertyElementRegex = new(
+        @"<\s*Binding\.ElementName\b[^>]*>(?<value>.*?)</\s*Binding\.ElementName\s*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly string[] XamlResourceReferenceMarkupPrefixes =
     [
         "{StaticResource",

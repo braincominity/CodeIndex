@@ -20333,6 +20333,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlCapturesBindingElementNameReferences()
+    {
+        var content = """
+            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:vm="clr-namespace:Sample.ViewModels">
+                <Grid>
+                    <TextBlock Text="{Binding Text, ElementName=SearchBox}" />
+                    <Slider Value="{Binding ElementName=VolumeSlider, Path=Value}" />
+                    <TextBlock Tag="{Binding Path=Title, ConverterParameter='prefix, ElementName=Ignored'}" />
+                    <Binding
+                        ElementName="RootPanel"
+                        Path="DataContext.CurrentUser.Name" />
+                    <Binding.ElementName>
+                        DetailsList
+                    </Binding.ElementName>
+                </Grid>
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
+
+        Assert.Contains("SearchBox", propertyNames);
+        Assert.Contains("VolumeSlider", propertyNames);
+        Assert.Contains("RootPanel", propertyNames);
+        Assert.Contains("DetailsList", propertyNames);
+        Assert.Contains("Name", propertyNames);
+        Assert.DoesNotContain("Ignored", propertyNames);
+    }
+
+    [Fact]
     public void Extract_Xml_XamlCapturesTemplateBindingProperties()
     {
         var content = """

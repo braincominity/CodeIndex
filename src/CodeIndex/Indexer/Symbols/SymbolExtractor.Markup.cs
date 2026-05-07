@@ -715,6 +715,7 @@ public static partial class SymbolExtractor
         AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
@@ -1016,6 +1017,101 @@ public static partial class SymbolExtractor
             EndLine = startLine,
             Signature = lines[signatureIndex].Trim(),
         });
+    }
+
+    private static void AddXamlBindingElementNameSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        {
+            if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = NormalizeXamlBindingElementNameValue(bindingMatch.Groups["content"].Value);
+            if (value.Length == 0)
+                continue;
+
+            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, bindingMatch.Index, "property", value);
+        }
+
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
+            if (tagIndex < 0)
+                break;
+
+            var nameEnd = tagIndex + "<Binding".Length;
+            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            {
+                cursor = nameEnd;
+                continue;
+            }
+
+            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+            if (tagEnd < 0)
+                break;
+
+            var elementNameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "ElementName", nameEnd, tagEnd);
+            if (elementNameAttributeIndex >= 0
+                && TryReadXamlAttributeValue(rawText, "ElementName", elementNameAttributeIndex, out var valueStart, out var valueEnd)
+                && valueEnd <= tagEnd)
+            {
+                AddXamlAttributeSymbol(
+                    fileId,
+                    lines,
+                    lineStarts,
+                    symbols,
+                    elementNameAttributeIndex,
+                    "property",
+                    NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
+            }
+
+            cursor = tagEnd + 1;
+        }
+
+        foreach (Match elementNameMatch in XamlBindingElementNamePropertyElementRegex.Matches(rawText))
+        {
+            var value = NormalizeXamlElementReferenceValue(elementNameMatch.Groups["value"].Value);
+            if (value.Length == 0)
+                continue;
+
+            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, elementNameMatch.Index, "property", value);
+        }
+    }
+
+    private static string NormalizeXamlBindingElementNameValue(string content)
+    {
+        content = content.Trim();
+        if (content.Length == 0)
+            return "";
+
+        foreach (var argument in SplitTopLevelMarkupArguments(content))
+        {
+            var equalsIndex = IndexOfTopLevelEquals(argument);
+            if (equalsIndex < 0)
+                continue;
+
+            var argumentName = argument[..equalsIndex].Trim();
+            if (!string.Equals(argumentName, "ElementName", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = NormalizeXamlElementReferenceValue(argument[(equalsIndex + 1)..]);
+            if (value.Length > 0)
+                return value;
+        }
+
+        return "";
+    }
+
+    private static string NormalizeXamlElementReferenceValue(string value)
+    {
+        value = NormalizeXamlMarkupValue(value);
+        return value.Trim();
     }
 
     private static void AddXamlBindingObjectElementSymbols(
@@ -1787,10 +1883,22 @@ public static partial class SymbolExtractor
     private static IEnumerable<string> SplitTopLevelMarkupArguments(string value)
     {
         var braceDepth = 0;
+        char? quote = null;
         var start = 0;
         for (var i = 0; i < value.Length; i++)
         {
             var ch = value[i];
+            if (quote is { } activeQuote)
+            {
+                if (ch == activeQuote)
+                    quote = null;
+                continue;
+            }
+            if (ch is '"' or '\'')
+            {
+                quote = ch;
+                continue;
+            }
             if (ch == '{')
             {
                 braceDepth++;
