@@ -698,6 +698,8 @@ Runtime dynamic imports are indexed as `import` symbols even when the module spe
 
 Static JavaScript/TypeScript imports also surface their source module specifier as an `import` symbol, including side-effect imports such as `import "./setup"`, multiline `import { ... } from "./module"` declarations, and import-attributes suffixes.
 
+CommonJS `require()` calls such as `const fs = require("node:fs")` and multiline `require(\n  "./helper"\n)` also surface their source module specifier as an `import` symbol.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1692,6 +1694,8 @@ JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as 
 runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合、`` import(`./view.js`) `` のような no-substitution template literal を使う場合、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
 
 静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
+
+`const fs = require("node:fs")` や複数行の `require(\n  "./helper"\n)` のような CommonJS `require()` 呼び出しでも、source module specifier を `import` シンボルとして表面化します。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

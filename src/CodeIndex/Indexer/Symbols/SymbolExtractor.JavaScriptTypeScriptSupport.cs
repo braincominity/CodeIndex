@@ -281,6 +281,82 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void ExtractJavaScriptTypeScriptRequireModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        var rawLine = rawLines[lineIndex];
+        var sanitizedLine = sanitizedLines[lineIndex];
+        var searchStart = 0;
+        while (searchStart < sanitizedLine.Length)
+        {
+            var requireIndex = sanitizedLine.IndexOf("require", searchStart, StringComparison.Ordinal);
+            if (requireIndex < 0)
+                return;
+
+            searchStart = requireIndex + "require".Length;
+
+            if (requireIndex > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[requireIndex - 1]))
+                continue;
+
+            if (searchStart < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[searchStart]))
+                continue;
+
+            if (IsJavaScriptTypeScriptPropertyAccessImportPrefix(sanitizedLine, requireIndex))
+                continue;
+
+            if (IsJavaScriptTypeScriptImportEqualsRequirePrefix(sanitizedLine, requireIndex))
+                continue;
+
+            if (!TryReadJavaScriptTypeScriptRequireModule(
+                    rawLines,
+                    sanitizedLines,
+                    lineIndex,
+                    searchStart,
+                    out var moduleName,
+                    out var moduleLineIndex,
+                    out var moduleStartColumn,
+                    out var endLineIndex,
+                    out var signature))
+            {
+                continue;
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                moduleLineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = moduleName,
+                    Line = moduleLineIndex + 1,
+                    StartLine = moduleLineIndex + 1,
+                    StartColumn = moduleStartColumn,
+                    EndLine = endLineIndex + 1,
+                    Signature = signature,
+                },
+                rawLine);
+        }
+    }
+
+    private static bool IsJavaScriptTypeScriptImportEqualsRequirePrefix(string sanitizedLine, int requireIndex)
+    {
+        if (requireIndex <= 0 || requireIndex > sanitizedLine.Length)
+            return false;
+
+        var prefix = sanitizedLine[..requireIndex].TrimEnd();
+        if (prefix.Length == 0 || prefix[^1] != '=')
+            return false;
+
+        var beforeEquals = prefix[..^1].TrimStart();
+        return IsJavaScriptTypeScriptKeywordAt(beforeEquals, 0, "import");
+    }
+
     private static bool IsJavaScriptTypeScriptPropertyAccessImportPrefix(string sanitizedLine, int importIndex)
     {
         var prefixEnd = importIndex;
@@ -403,6 +479,84 @@ public static partial class SymbolExtractor
 
         moduleLineIndex = quoteLineIndex;
         signature = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, importColumn, endLineIndex, endColumn);
+        return moduleName.Length > 0;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptRequireModule(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int afterRequireColumn,
+        out string moduleName,
+        out int moduleLineIndex,
+        out int moduleStartColumn,
+        out int endLineIndex,
+        out string signature)
+    {
+        moduleName = string.Empty;
+        moduleLineIndex = -1;
+        moduleStartColumn = -1;
+        endLineIndex = -1;
+        signature = string.Empty;
+
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 16);
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                startLineIndex,
+                afterRequireColumn,
+                scanEndExclusive,
+                out var openParenLineIndex,
+                out var openParenColumn)
+            || sanitizedLines[openParenLineIndex][openParenColumn] != '(')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn + 1,
+                scanEndExclusive,
+                out moduleLineIndex,
+                out var moduleQuoteColumn))
+        {
+            return false;
+        }
+
+        var sanitizedQuote = sanitizedLines[moduleLineIndex][moduleQuoteColumn];
+        if (sanitizedQuote is not '\'' and not '"' and not '`')
+            return false;
+
+        if (!TryReadJavaScriptTypeScriptQuotedModuleName(
+                rawLines,
+                moduleLineIndex,
+                moduleQuoteColumn,
+                sanitizedQuote,
+                out moduleName,
+                out moduleStartColumn,
+                out var moduleEndColumn))
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                moduleLineIndex,
+                moduleEndColumn + 1,
+                scanEndExclusive,
+                out var closeParenLineIndex,
+                out var closeParenColumn)
+            || sanitizedLines[closeParenLineIndex][closeParenColumn] != ')')
+        {
+            return false;
+        }
+
+        endLineIndex = closeParenLineIndex;
+        signature = BuildJavaScriptTypeScriptDynamicImportSignature(
+            rawLines,
+            startLineIndex,
+            closeParenLineIndex,
+            closeParenColumn);
         return moduleName.Length > 0;
     }
 

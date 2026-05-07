@@ -1908,8 +1908,34 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "node:fs");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./path-utils");
+        Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "node:fs"));
+        Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./path-utils"));
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsRequireModuleSymbols(string language)
+    {
+        var content = """
+            const fs = require("node:fs");
+            const helper = require(
+              "./helper"
+            );
+            const method = loader.require("./method");
+            const resolved = require.resolve("./resolved");
+            const text = "require('./string')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var fsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "node:fs"));
+        Assert.Equal(1, fsImport.Line);
+        var helperImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./helper"));
+        Assert.Equal(3, helperImport.Line);
+        Assert.Contains("require(", helperImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./resolved");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
     }
 
     [Fact]
