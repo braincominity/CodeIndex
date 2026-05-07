@@ -3007,6 +3007,42 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectAssignExports(string language)
+    {
+        var content = """
+            Object.assign(exports, {
+              foo,
+              alias: value,
+              "bar-baz": bar,
+              ["computed-key"]: computed,
+              [dynamicKey]: hidden,
+            });
+            Object.assign(
+              module.exports,
+              {
+                default: api,
+                500: serverError,
+              }
+            );
+            Object.assign(exports, { sameLine: sameLine });
+            Object.assign(local, { hidden });
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
     {
