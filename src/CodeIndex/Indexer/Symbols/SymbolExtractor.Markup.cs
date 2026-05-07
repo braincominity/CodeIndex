@@ -714,6 +714,7 @@ public static partial class SymbolExtractor
         AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
         AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
@@ -1334,6 +1335,96 @@ public static partial class SymbolExtractor
 
             cursor = closingBraceIndex + 1;
         }
+    }
+
+    private static void AddXamlResourceReferenceSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols)
+    {
+        foreach (var prefix in XamlResourceReferenceMarkupPrefixes)
+            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+    }
+
+    private static void AddXamlResourceReferenceSymbols(
+        long fileId,
+        string rawText,
+        string[] lines,
+        int[] lineStarts,
+        List<SymbolRecord> symbols,
+        string prefix)
+    {
+        var cursor = 0;
+        while (cursor < rawText.Length)
+        {
+            var braceIndex = rawText.IndexOf(prefix, cursor, StringComparison.Ordinal);
+            if (braceIndex < 0)
+                break;
+
+            var afterPrefix = braceIndex + prefix.Length;
+            if (afterPrefix < rawText.Length && IsXamlMarkupNameChar(rawText[afterPrefix]))
+            {
+                cursor = afterPrefix;
+                continue;
+            }
+
+            var closingBraceIndex = FindMatchingBrace(rawText, braceIndex);
+            if (closingBraceIndex < 0)
+            {
+                cursor = braceIndex + 1;
+                continue;
+            }
+
+            var value = NormalizeXamlResourceReferenceValue(rawText[braceIndex..(closingBraceIndex + 1)]);
+            if (value.Length > 0)
+            {
+                var startLine = FindHtmlLineNumber(lineStarts, braceIndex);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
+
+            cursor = closingBraceIndex + 1;
+        }
+    }
+
+    private static string NormalizeXamlResourceReferenceValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0 || value[0] != '{')
+            return value;
+
+        var closingBraceIndex = FindMatchingBrace(value, 0);
+        if (closingBraceIndex < 0)
+            return "";
+
+        var content = value[1..closingBraceIndex].Trim();
+        var payloadStart = FindTopLevelMarkupPayloadStart(content);
+        if (payloadStart < 0)
+            return "";
+
+        var payload = content[(payloadStart + 1)..].TrimStart();
+        if (payload.Length == 0)
+            return "";
+
+        foreach (var argument in SplitTopLevelMarkupArguments(payload))
+        {
+            var normalized = NormalizeXamlMarkupArgument(argument);
+            if (normalized.Length > 0)
+                return normalized;
+        }
+
+        return "";
     }
 
     private static bool IsXamlMarkupNameChar(char c)
