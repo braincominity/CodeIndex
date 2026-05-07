@@ -3547,6 +3547,23 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
+    [Theory]
+    [InlineData("javascript", "export default function load() { return 1; }", "load")]
+    [InlineData("javascript", "export default function* () { yield 1; }", "default")]
+    [InlineData("typescript", "export default function load<T>(value: T): T { return value; }", "load")]
+    [InlineData("typescript", "export default function <T>(value: T): T { return value; }", "default")]
+    public void Extract_JavaScriptTypeScript_DetectsExportDefaultFunctionSymbols(
+        string language,
+        string content,
+        string expectedName)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == expectedName));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(content, function.Signature);
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsMultilineAnonymousDefaultExportClassMembers()
     {
