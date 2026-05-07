@@ -255,6 +255,9 @@ public static partial class SymbolExtractor
     private static readonly Regex XamlBindingRegex = new(
         @"\{(?<kind>Binding|x:Bind|TemplateBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlBindingPathPropertyElementRegex = new(
+        @"<\s*Binding\.Path\b[^>]*>(?<value>.*?)</\s*Binding\.Path\s*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
