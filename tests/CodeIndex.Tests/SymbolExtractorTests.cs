@@ -2886,6 +2886,29 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "named" && s.ContainerName == "module.exports");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertyExports(string language)
+    {
+        var content = """
+            Object.defineProperty(exports, "__esModule", { value: true });
+            Object.defineProperty(exports, "foo", { enumerable: true, get: function () { return api.foo; } });
+            Object.defineProperty(
+              module.exports,
+              "bar-baz",
+              { value: bar }
+            );
+            Object.defineProperty(local, "hidden", { value: hidden });
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
     {
