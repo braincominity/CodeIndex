@@ -1139,6 +1139,264 @@ public static partial class ReferenceExtractor
             || (language == "java" && trimmed.StartsWith("enum ", StringComparison.Ordinal));
     }
 
+    internal static void EmitCatchTypeReferences(
+        string language,
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (language is not ("csharp" or "java" or "kotlin"))
+            return;
+
+        var catchIndex = FindTopLevelKeyword(line, "catch");
+        if (catchIndex < 0)
+            return;
+
+        var openParen = line.IndexOf('(', catchIndex + "catch".Length);
+        if (openParen < 0)
+            return;
+
+        var closeParen = FindMatchingChar(line, openParen, '(', ')');
+        if (closeParen < 0 || closeParen <= openParen + 1)
+            return;
+
+        var clauseStart = openParen + 1;
+        var clause = line.Substring(clauseStart, closeParen - clauseStart);
+        if (language == "kotlin")
+        {
+            EmitKotlinCatchTypeReference(
+                clause,
+                clauseStart,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+            return;
+        }
+
+        EmitCStyleCatchTypeReferences(
+            language,
+            clause,
+            clauseStart,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitKotlinCatchTypeReference(
+        string clause,
+        int clauseStartInLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(clause, ':');
+        if (colonIndex < 0)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(clause, colonIndex + 1);
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(clause, typeStart);
+        if (typeEnd <= typeStart)
+            return;
+
+        var absoluteStart = clauseStartInLine + typeStart;
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            clause.Substring(typeStart, typeEnd - typeStart),
+            absoluteStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(absoluteStart),
+            "kotlin");
+    }
+
+    private static void EmitCStyleCatchTypeReferences(
+        string language,
+        string clause,
+        int clauseStartInLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var start = SkipCatchParameterPrefix(language, clause, 0);
+        var end = clause.Length;
+        while (end > start && char.IsWhiteSpace(clause[end - 1]))
+            end--;
+        if (end <= start)
+            return;
+
+        var typeEnd = FindCatchTypeEndBeforeVariable(language, clause, start, end);
+        if (typeEnd <= start)
+            return;
+
+        var typeExpression = clause.Substring(start, typeEnd - start);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelPipeSpans(typeExpression))
+        {
+            var leading = CountLeadingWhitespace(typeExpression, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(typeExpression[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength <= 0)
+                continue;
+
+            var absoluteStart = clauseStartInLine + start + segmentStart + leading;
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeExpression.Substring(segmentStart + leading, trimmedLength),
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                language);
+        }
+    }
+
+    private static int SkipCatchParameterPrefix(string language, string clause, int start)
+    {
+        var i = start;
+        while (i < clause.Length)
+        {
+            while (i < clause.Length && char.IsWhiteSpace(clause[i]))
+                i++;
+
+            if (language == "java" && i < clause.Length && clause[i] == '@')
+            {
+                i = SkipJavaAnnotation(clause, i) + 1;
+                continue;
+            }
+
+            if (language == "java" && IsWordAt(clause, i, "final"))
+            {
+                i += "final".Length;
+                continue;
+            }
+
+            break;
+        }
+
+        return i;
+    }
+
+    private static int FindCatchTypeEndBeforeVariable(string language, string clause, int start, int end)
+    {
+        if (!TryFindLastIdentifier(clause, start, end, out var lastStart, out _))
+            return end;
+
+        var before = clause.Substring(start, lastStart - start).TrimEnd();
+        if (language == "csharp" && before.EndsWith("@", StringComparison.Ordinal))
+        {
+            var prefix = before.Substring(0, before.Length - 1).TrimEnd();
+            if (prefix.Length == 0
+                || prefix.EndsWith(".", StringComparison.Ordinal)
+                || prefix.EndsWith("::", StringComparison.Ordinal))
+            {
+                return end;
+            }
+
+            return lastStart - 1;
+        }
+
+        if (before.Length == 0
+            || before.EndsWith(".", StringComparison.Ordinal)
+            || before.EndsWith("::", StringComparison.Ordinal))
+        {
+            return end;
+        }
+
+        return lastStart;
+    }
+
+    private static bool TryFindLastIdentifier(string text, int start, int end, out int identifierStart, out int identifierEnd)
+    {
+        identifierStart = -1;
+        identifierEnd = -1;
+        var i = end - 1;
+        while (i >= start && char.IsWhiteSpace(text[i]))
+            i--;
+        if (i < start || !IsJavaIdentifierPart(text[i]))
+            return false;
+
+        identifierEnd = i + 1;
+        while (i >= start && IsJavaIdentifierPart(text[i]))
+            i--;
+        identifierStart = i + 1;
+        return identifierStart < identifierEnd;
+    }
+
+    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '|' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0:
+                    spans.Add((start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
+    }
+
+    private static bool IsWordAt(string text, int index, string word)
+    {
+        if (index + word.Length > text.Length)
+            return false;
+        if (string.CompareOrdinal(text, index, word, 0, word.Length) != 0)
+            return false;
+        if (index > 0 && IsJavaIdentifierPart(text[index - 1]))
+            return false;
+        var after = index + word.Length;
+        return after >= text.Length || !IsJavaIdentifierPart(text[after]);
+    }
+
     private static bool TryFindFirstTopLevelCSharpArrow(string text, out int arrowIndex)
     {
         arrowIndex = -1;

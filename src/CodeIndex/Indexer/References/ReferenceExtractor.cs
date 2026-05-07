@@ -1347,6 +1347,19 @@ public static partial class ReferenceExtractor
             // キーワード呼び出しの外にある型位置参照（継承リスト、宣言型、generic 制約、
             // throws、型テスト、XML doc cref）。`references` / `impact` では依存として扱うが、
             // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
+            if (language is "csharp" or "java" or "kotlin")
+            {
+                EmitCatchTypeReferences(
+                    language,
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+
             if (language == "csharp")
             {
                 CSharpReferenceExtractor.EmitTypePositionReferences(

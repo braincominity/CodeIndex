@@ -19718,6 +19718,88 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpJavaKotlinCatchClauses_CaptureExceptionTypeReferences()
+    {
+        const string csharp = """
+            class Service {
+                void Run() {
+                    try { Work(); }
+                    catch (System.IO.IOException ex) when (ex != null) { }
+                    catch (CustomException) { }
+                    catch (System.Exception @caught) { }
+                }
+            }
+            """;
+
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
+        var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
+
+        Assert.Contains(csharpReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "Run");
+        Assert.Contains(csharpReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "Run");
+        Assert.DoesNotContain(csharpReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(csharpReferences, r =>
+            r.SymbolName == "caught"
+            && r.ReferenceKind == "type_reference");
+
+        const string java = """
+            class Service {
+                void run() {
+                    try { work(); }
+                    catch (final java.io.IOException | CustomException ex) { }
+                }
+            }
+            """;
+
+        var javaSymbols = SymbolExtractor.Extract(1, "java", java);
+        var javaReferences = ReferenceExtractor.Extract(1, "java", java, javaSymbols);
+
+        Assert.Contains(javaReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.Contains(javaReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.DoesNotContain(javaReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
+
+        const string kotlin = """
+            class Service {
+                fun run() {
+                    try { work() }
+                    catch (ex: java.io.IOException) { }
+                    catch (_: CustomException) { }
+                }
+            }
+            """;
+
+        var kotlinSymbols = SymbolExtractor.Extract(1, "kotlin", kotlin);
+        var kotlinReferences = ReferenceExtractor.Extract(1, "kotlin", kotlin, kotlinSymbols);
+
+        Assert.Contains(kotlinReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.Contains(kotlinReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.DoesNotContain(kotlinReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinImportAlias_DoesNotEmitTypeReference()
     {
         const string content = """
