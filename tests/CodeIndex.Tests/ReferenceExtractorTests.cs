@@ -1069,6 +1069,10 @@ public class ReferenceExtractorTests
                 public Supplier<J> make() {
                     return J::new;
                 }
+
+                public Supplier<java.util.Iterator<Integer>> iterator(List<Integer> xs) {
+                    return xs::iterator;
+                }
             }
             """;
 
@@ -1080,13 +1084,72 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerName == "sum");
         Assert.Contains(references, r =>
+            r.SymbolName == "Integer"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Integer::intValue", StringComparison.Ordinal)
+            && r.ContainerName == "sum");
+        Assert.Contains(references, r =>
             r.SymbolName == "toUpperCase"
             && r.ReferenceKind == "call"
+            && r.ContainerName == "names");
+        Assert.Contains(references, r =>
+            r.SymbolName == "String"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("String::toUpperCase", StringComparison.Ordinal)
             && r.ContainerName == "names");
         Assert.Contains(references, r =>
             r.SymbolName == "J"
             && r.ReferenceKind == "instantiate"
             && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "iterator"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "iterator");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "xs"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("xs::iterator", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
+    {
+        const string content = """
+            class User {
+                fun name(): String = "u"
+            }
+
+            class Worker {
+                fun wire(users: List<User>) {
+                    val names = users.map(User::name)
+                    val user = User()
+                    val bound = user::name
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "name"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("User::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.Contains(references, r =>
+            r.SymbolName == "User"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("User::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.Contains(references, r =>
+            r.SymbolName == "name"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("user::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "user"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("user::name", StringComparison.Ordinal));
     }
 
     [Fact]

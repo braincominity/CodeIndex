@@ -989,6 +989,7 @@ internal static class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
         => JvmMethodReferenceExtractor.EmitMethodReferenceReferences(
+            "java",
             preparedLine,
             references,
             seen,

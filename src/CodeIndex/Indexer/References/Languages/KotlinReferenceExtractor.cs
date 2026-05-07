@@ -86,6 +86,7 @@ internal static class KotlinReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
         => JvmMethodReferenceExtractor.EmitMethodReferenceReferences(
+            "kotlin",
             preparedLine,
             references,
             seen,

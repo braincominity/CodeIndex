@@ -12,6 +12,7 @@ internal static class JvmMethodReferenceExtractor
         RegexOptions.Compiled);
 
     public static void EmitMethodReferenceReferences(
+        string language,
         string preparedLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -24,13 +25,13 @@ internal static class JvmMethodReferenceExtractor
         {
             var nameGroup = match.Groups["name"];
             var container = resolveContainerForColumn(nameGroup.Index);
+            var ownerGroup = match.Groups["owner"];
 
             if (string.Equals(nameGroup.Value, "class", StringComparison.Ordinal))
                 continue;
 
             if (string.Equals(nameGroup.Value, "new", StringComparison.Ordinal))
             {
-                var ownerGroup = match.Groups["owner"];
                 if (!ownerGroup.Success || ownerGroup.Value.Length == 0)
                     continue;
                 if (ownerGroup.Value is "this" or "super")
@@ -49,8 +50,55 @@ internal static class JvmMethodReferenceExtractor
                 continue;
             }
 
+            EmitOwnerTypeReference(language, ownerGroup, references, seen, fileId, context, lineNumber, container);
             AddChainReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, context, lineNumber, container);
         }
+    }
+
+    private static void EmitOwnerTypeReference(
+        string language,
+        Group ownerGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (language is not ("java" or "kotlin"))
+            return;
+        if (!ownerGroup.Success || ownerGroup.Value.Length == 0)
+            return;
+        if (ownerGroup.Value is "this" or "super")
+            return;
+
+        var leafStartInOwner = ownerGroup.Value.LastIndexOf('.') + 1;
+        if (leafStartInOwner >= ownerGroup.Value.Length)
+            return;
+
+        var leaf = ownerGroup.Value[leafStartInOwner..];
+        if (!IsLikelyJvmTypeName(leaf))
+            return;
+
+        ReferenceExtractor.AddTypeReferenceSegment(
+            references,
+            seen,
+            fileId,
+            leaf,
+            ownerGroup.Index + leafStartInOwner,
+            context,
+            lineNumber,
+            container,
+            language);
+    }
+
+    private static bool IsLikelyJvmTypeName(string name)
+    {
+        if (name.Length == 0)
+            return false;
+
+        var index = name[0] == '@' ? 1 : 0;
+        return index < name.Length && char.IsUpper(name[index]);
     }
 
     private static void AddChainReference(

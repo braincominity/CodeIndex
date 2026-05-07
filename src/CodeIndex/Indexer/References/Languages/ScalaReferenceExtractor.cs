@@ -41,6 +41,7 @@ internal static class ScalaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
         => JvmMethodReferenceExtractor.EmitMethodReferenceReferences(
+            "scala",
             preparedLine,
             references,
             seen,
