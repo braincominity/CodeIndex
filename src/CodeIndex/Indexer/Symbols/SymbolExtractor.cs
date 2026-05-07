@@ -111,6 +111,7 @@ public static partial class SymbolExtractor
         @"(?:<(?:(?>[^<>]+)|<(?<JavaMethodTypeParameterDepth>)|>(?<-JavaMethodTypeParameterDepth>))*(?(JavaMethodTypeParameterDepth)(?!))>\s+)?";
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
+    private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
     private static readonly Regex CobolProgramIdLineRegex = new(
         @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -1282,26 +1283,26 @@ public static partial class SymbolExtractor
         ["kotlin"] =
         [
             // Companion object / コンパニオンオブジェクト
-            new("class",    new Regex(@"^\s*companion\s+object(?:\s+(?<name>\w+))?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex($@"^\s*companion\s+object(?:\s+(?<name>{KotlinIdentifierPattern}))?", RegexOptions.Compiled), BodyStyle.Brace),
             // Interface / インターフェース
             // Kotlin fun interface / Kotlin の fun interface も interface として扱う。
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
-            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Secondary constructor / セカンダリコンストラクタ
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum entry / enum エントリ
-            new("property", new Regex(@"^\s{2,}(?<name>[A-Z][A-Z0-9_]*)\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
+            new("property", new Regex($@"^\s{{2,}}(?<name>(?:[A-Z][A-Z0-9_]*|`[^`\r\n]+`))\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
-            new("property", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>\w+)\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>{KotlinIdentifierPattern})\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>{KotlinIdentifierPattern})(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["ruby"] =

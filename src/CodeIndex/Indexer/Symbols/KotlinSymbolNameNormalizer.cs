@@ -6,15 +6,23 @@ internal static class KotlinSymbolNameNormalizer
 {
     internal static string Normalize(string name, string matchLine)
     {
+        var normalizedName = StripBacktickIdentifier(name);
         var trimmedLine = matchLine.TrimStart();
         if (!trimmedLine.StartsWith("companion object", StringComparison.Ordinal))
-            return name;
+            return normalizedName;
 
-        var trimmedName = name.Trim();
+        var trimmedName = normalizedName.Trim();
         return string.IsNullOrWhiteSpace(trimmedName)
             || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
             ? "Companion"
-            : name;
+            : normalizedName;
+    }
+
+    private static string StripBacktickIdentifier(string name)
+    {
+        if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+            return name[1..^1];
+        return name;
     }
 
     internal static void NormalizeSecondaryConstructorNames(List<SymbolRecord> symbols)

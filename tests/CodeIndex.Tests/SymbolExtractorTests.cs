@@ -12571,6 +12571,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_NormalizesBacktickedSymbolNames()
+    {
+        var content = """
+            class `when` {
+                fun `is`(): Int = 1
+                val `value-name`: Int = 2
+            }
+
+            typealias `Alias Name` = `when`
+
+            enum class `enum` {
+                `mixed-case`
+            }
+
+            class Holder {
+                companion object `Factory Name` {
+                    fun `top level`(): String = "ok"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "when");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "is" && s.ContainerName == "when");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value-name" && s.ContainerName == "when");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias Name");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "enum");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "mixed-case" && s.ContainerName == "enum");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Factory Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "top level" && s.ContainerName == "Factory Name");
+        Assert.DoesNotContain(symbols, s => s.Name.Contains('`'));
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsTypealiasDeclarations()
     {
         var content = """

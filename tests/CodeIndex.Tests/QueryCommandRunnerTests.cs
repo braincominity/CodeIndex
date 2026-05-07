@@ -9211,6 +9211,42 @@ jobs:
     }
 
     [Fact]
+    public void RunDefinition_ExactNameFindsKotlinBacktickedSymbolNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_kotlin_backticks");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.kt",
+                "kotlin",
+                """
+                class `when` {
+                    fun `is`(): Int = 1
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["is", "--db", dbPath, "--json", "--lang", "kotlin", "--kind", "function", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("is", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", rows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("when", rows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_ExactTreatsCSharpVerbatimQualifiedNamesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_csharp_verbatim");
