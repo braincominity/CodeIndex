@@ -102,6 +102,9 @@ public static partial class SymbolExtractor
         @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
     private const string CSharpMethodTypeParameterListPattern =
         @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
+    private static readonly Regex CSharpPartialFunctionDeclarationSignatureRegex = new(
+        $@"^(?:(?:{CSharpVisibilityPattern}|abstract|async|extern|new|override|sealed|static|unsafe|virtual)\s+)*partial\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const string JavaIdentifierPattern = @"[\p{L}_$][\p{L}\p{Nd}_$]*";
     private const string JavaQualifiedIdentifierPattern = JavaIdentifierPattern + @"(?:\s*\.\s*" + JavaIdentifierPattern + @")*";
     private const string JavaMethodTypeParameterPattern =
@@ -598,6 +601,10 @@ public static partial class SymbolExtractor
         @"^\s*export\s*(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s*from\s*(?<module>['""][^'""]+['""])(?:\s+(?:with|assert)\s+\{[^}]*\})?\s*;?\s*$",
         RegexOptions.Compiled);
 
+    private static readonly Regex JavaScriptTypeScriptDestructuredNamedExportRegex = new(
+        @"^\s*export\s+(?:const|let|var)\s*\{",
+        RegexOptions.Compiled);
+
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
         $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
@@ -961,9 +968,10 @@ public static partial class SymbolExtractor
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
             new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
-            // `unsafe` / `extern` can appear before or after visibility so declarations like
-            // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
-            // with visibility populated. Closes #355.
+            // `unsafe` / `extern` can appear before or after visibility, and C# 14 partial
+            // constructors place `partial` after visibility, so declarations like
+            // `unsafe public S(int* p) {}`, `extern public S(int x);`, and `public partial S();`
+            // are still captured with visibility populated. Closes #355.
             // The negative lookahead after the opening paren rejects lines where the matching
             // `)` is followed by an identifier + `{` / `(` / `;` / `=>` / `=` (with optional
             // tuple-type suffixes `?` / `[]` / `[,]` / `[,,]` and whitespaced variants like
@@ -987,9 +995,10 @@ public static partial class SymbolExtractor
             // keeps the ctor lookahead and the upstream property / method / plain-field rows in
             // sync on which formatting variants count as a tuple-suffix return type. Closes #349.
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須。
-            // `unsafe` / `extern` は visibility の前後どちらにも置けるため、
-            // `unsafe public S(int* p) {}` や `extern public S(int x);` でも visibility を
-            // 拾える。Closes #355.
+            // `unsafe` / `extern` は visibility の前後どちらにも置け、C# 14 の partial
+            // constructor は visibility の後ろに `partial` を置くため、
+            // `unsafe public S(int* p) {}`、`extern public S(int x);`、`public partial S();`
+            // でも visibility を拾える。Closes #355.
             // 開き括弧の直後に置いた否定先読みは、「対応する `)` のあとに識別子 + `{` / `(` / `;` /
             // `=>` / `=`（間に `?` / `[]` / `[,]` / `[,,]` の tuple サフィックス、および
             // CSharpTupleSuffixPattern によって `) []` / `) ?` のような空白を挟んだ整形バリエーションも
@@ -1009,7 +1018,7 @@ public static partial class SymbolExtractor
             // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern|partial)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Static constructor / 静的コンストラクタ
             // Keep this ahead of the property rows so same-line compact bodies such as
             // `class C { static C() { } public int P { get; set; } }` emit the static ctor
@@ -3617,8 +3626,12 @@ public static partial class SymbolExtractor
                 break;
 
             var signature = prior.Signature?.TrimStart();
-            if (signature != null && signature.StartsWith("declare ", StringComparison.Ordinal))
+            if (signature != null
+                && (signature.StartsWith("declare ", StringComparison.Ordinal)
+                    || CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature)))
+            {
                 break;
+            }
 
             symbols.RemoveAt(index);
         }

@@ -684,7 +684,13 @@ T-SQL `CREATE AGGREGATE` / `ALTER AGGREGATE` and `CREATE/ALTER ASSEMBLY` / `XML 
 
 `.h` files stay on the C path by default, but headers that clearly look like C++ source are promoted to `cpp` at index time when they contain unmistakable markers such as `namespace`, `template`, `using`, `class`, or `std::`.
 
+C# symbol extraction covers modern partial member forms, including partial methods, properties, indexers, events, and constructors, so declaration/implementation pairs remain visible to `symbols`, `definition`, and `outline`.
+
+Java reference extraction records sealed type `permits` lists as `type_reference` edges, so graph queries can see permitted subtype dependencies.
+
 JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, `export type { User } from`, `export type * from`, and `export type * as ns from`, including commented forms, multiline named re-export clauses, multiline `export *` / `export * as ns` layouts, import-attributes suffixes such as `with { type: 'json' }` / `assert { type: 'json' }`, and valid minified forms such as `export*from` / `export{foo as bar}from`. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, including same-line and multiline parenthesized wrappers plus TypeScript generic arrow RHS such as `module.exports.fn = <T>(x: T) => x`, `module.exports.foo = <T>(\n  value: T\n) => value`, and constrained/async variants, while keeping identifier prefixes like `functionCall()` / `classyThing` as ordinary property values. Exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }` are also surfaced.
+
+Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 
@@ -1665,7 +1671,13 @@ T-SQL の `CREATE AGGREGATE` / `ALTER AGGREGATE` と `CREATE/ALTER ASSEMBLY` / `
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
+C# のシンボル抽出は partial method、partial property、partial indexer、partial event、partial constructor などの近年の partial member 形式に対応しているため、宣言 / 実装ペアも `symbols`、`definition`、`outline` から見えます。
+
+Java の参照抽出は sealed 型の `permits` リストを `type_reference` edge として記録するため、graph query で許可サブタイプ依存も見えます。
+
 JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` / `export type * from` / `export type * as ns from` を、comment 付き、複数行の named re-export clause、複数行の `export *` / `export * as ns`、`with { type: 'json' }` / `assert { type: 'json' }` のような import attributes suffix、さらに `export*from` / `export{foo as bar}from` のような minified でも有効な構文を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export を、同一行 / 複数行の括弧付き右辺に加え `module.exports.fn = <T>(x: T) => x`、`module.exports.foo = <T>(\n  value: T\n) => value`、constraint / async 付き TypeScript generic arrow 右辺も含めて表面化しつつ、`functionCall()` や `classyThing` のような識別子接頭辞は通常の property 値として扱います。`module.exports = { foo: inner }` / `module.exports = { foo, bar }` のような exported object-literal の alias / shorthand property も表面化します。
+
+`export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 
 モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
 
