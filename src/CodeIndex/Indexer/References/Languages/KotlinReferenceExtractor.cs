@@ -9,6 +9,14 @@ internal static class KotlinReferenceExtractor
     // Kotlin セカンダリコンストラクタ委譲。
     private static readonly Regex CtorDelegationRegex = new(@":\s*(?<kind>this|super)\s*\(", RegexOptions.Compiled);
 
+    // Kotlin class literals: `User::class` / `User::class.java`. The final segment must look
+    // type-like so expression receivers such as `value::class` do not become type references.
+    // Kotlin class literal。末尾セグメントを型名らしい形に絞り、`value::class` のような
+    // 式レシーバーを type_reference 化しない。
+    private static readonly Regex ClassLiteralRegex = new(
+        @"(?<![\w$])(?<type>(?:[_\p{L}][\w$]*\.)*[_\p{Lu}][\w$]*)\s*::\s*class\b",
+        RegexOptions.Compiled);
+
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
 
@@ -33,6 +41,31 @@ internal static class KotlinReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+
+    public static void EmitClassLiteralReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ClassLiteralRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                container,
+                "kotlin");
+        }
+    }
 
     public static void EmitCtorDelegationReferences(
         string preparedLine,

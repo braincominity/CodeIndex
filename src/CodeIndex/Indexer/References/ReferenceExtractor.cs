@@ -1328,6 +1328,17 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container);
             }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitClassLiteralReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
 
             // Type-position references without an introducing keyword-call: base lists,
             // declaration types, generic constraints, throws clauses, type tests, and

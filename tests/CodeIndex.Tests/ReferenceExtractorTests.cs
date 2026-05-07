@@ -19680,6 +19680,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinClassLiterals_CaptureTypeReferences()
+    {
+        const string content = """
+            class User {}
+            class Profile {}
+
+            class Service {
+                fun inspect(value: Any) {
+                    val kClass = User::class
+                    val javaClass = Profile::class.java
+                    val runtimeClass = value::class
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "User"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("User::class", StringComparison.Ordinal)
+            && r.ContainerName == "inspect");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Profile"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Profile::class.java", StringComparison.Ordinal)
+            && r.ContainerName == "inspect");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "value"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("value::class", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "class"
+            && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_KotlinImportAlias_DoesNotEmitTypeReference()
     {
         const string content = """

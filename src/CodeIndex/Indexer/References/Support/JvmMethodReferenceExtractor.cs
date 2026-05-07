@@ -25,6 +25,9 @@ internal static class JvmMethodReferenceExtractor
             var nameGroup = match.Groups["name"];
             var container = resolveContainerForColumn(nameGroup.Index);
 
+            if (string.Equals(nameGroup.Value, "class", StringComparison.Ordinal))
+                continue;
+
             if (string.Equals(nameGroup.Value, "new", StringComparison.Ordinal))
             {
                 var ownerGroup = match.Groups["owner"];
