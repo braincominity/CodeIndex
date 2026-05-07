@@ -1845,6 +1845,49 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded" && s.Visibility == "export");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsExportedVariableSurfaceSymbols(string language)
+    {
+        var content = """
+            export const foo = 1, bar = compute({ value: "," });
+            export let baz;
+            export var qux = call(1, 2);
+            export const
+                multilineFoo = 1,
+                multilineBar = compute(["x", "y"]);
+            export const noSemi = 1
+            export const afterNoSemi = 2
+            export const fn = () => {};
+            export const [skipped] = values;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineFoo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineBar" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "noSemi" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "afterNoSemi" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fn" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fn" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "skipped" && s.Visibility == "export");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsDeclareExportedVariableSurfaceSymbols()
+    {
+        var content = """
+            export declare const externalThing: string;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "externalThing" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsLocalTypeOnlyNamedExportSurfaceSymbols()
     {

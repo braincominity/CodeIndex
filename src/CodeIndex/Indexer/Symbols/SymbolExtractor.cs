@@ -655,6 +655,10 @@ public static partial class SymbolExtractor
         @"^\s*export\s+(?:const|let|var)\s*\{",
         RegexOptions.Compiled);
 
+    private static readonly Regex JavaScriptTypeScriptExportedVariableDeclarationRegex = new(
+        @"^\s*export\s+(?:declare\s+)?(?:const|let|var)\b",
+        RegexOptions.Compiled);
+
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
         $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);

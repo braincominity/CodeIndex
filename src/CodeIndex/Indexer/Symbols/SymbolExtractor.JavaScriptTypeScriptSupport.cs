@@ -147,6 +147,7 @@ public static partial class SymbolExtractor
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
+        ExtractJavaScriptTypeScriptExportedVariableSymbols(fileId, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptDefaultExportArrowFunctionSymbols(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptDestructuredNamedExports(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
@@ -1936,6 +1937,216 @@ public static partial class SymbolExtractor
         startColumnText = -1;
         return false;
     }
+
+    private static void ExtractJavaScriptTypeScriptExportedVariableSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        for (int i = 0; i < sanitizedLines.Length; i++)
+        {
+            var sanitizedLine = sanitizedLines[i];
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (statementStart >= 0)
+            {
+                var statementSlice = sanitizedLine[statementStart..];
+                var match = JavaScriptTypeScriptExportedVariableDeclarationRegex.Match(statementSlice);
+                if (!match.Success)
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var absoluteMatchIndex = statementStart + match.Index;
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteMatchIndex, sanitizedLine, includeBlockScope: false))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var declaratorStartColumn = absoluteMatchIndex + match.Length;
+                if (!TryCollectJavaScriptTypeScriptExportedVariableNames(
+                        sanitizedLines,
+                        i,
+                        declaratorStartColumn,
+                        out var endLineIndex,
+                        out var endColumn,
+                        out var variableNames))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var signature = BuildJavaScriptTypeScriptStatementSignature(
+                    rawLines,
+                    i,
+                    absoluteMatchIndex,
+                    endLineIndex,
+                    endColumn);
+                foreach (var variableName in variableNames)
+                {
+                    if (symbols.Any(s => s.Visibility == "export" && s.Name == variableName.Name))
+                        continue;
+
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        variableName.LineIndex + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = variableName.Name,
+                            Line = variableName.LineIndex + 1,
+                            StartLine = i + 1,
+                            StartColumn = variableName.Column,
+                            EndLine = endLineIndex + 1,
+                            Signature = signature,
+                            Visibility = "export",
+                        },
+                        rawLines[variableName.LineIndex]);
+                }
+
+                if (endLineIndex > i)
+                    i = endLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], endColumn + 1);
+                sanitizedLine = sanitizedLines[i];
+            }
+        }
+    }
+
+    private static bool TryCollectJavaScriptTypeScriptExportedVariableNames(
+        string[] sanitizedLines,
+        int startLineIndex,
+        int startColumn,
+        out int endLineIndex,
+        out int endColumn,
+        out List<JavaScriptTypeScriptExportedVariableName> variableNames)
+    {
+        variableNames = [];
+        endLineIndex = startLineIndex;
+        endColumn = Math.Max(0, startColumn);
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var expectingName = true;
+        var sawTopLevelSemicolon = false;
+        var scanLimit = Math.Min(sanitizedLines.Length, startLineIndex + 32);
+
+        for (var lineIndex = startLineIndex; lineIndex < scanLimit; lineIndex++)
+        {
+            var line = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), line.Length)
+                : 0;
+
+            while (column < line.Length)
+            {
+                var ch = line[column];
+                if (expectingName)
+                {
+                    while (column < line.Length && char.IsWhiteSpace(line[column]))
+                        column++;
+
+                    if (column >= line.Length)
+                        break;
+
+                    ch = line[column];
+                    if (ch is '{' or '[')
+                        return false;
+
+                    if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                    {
+                        var nameStart = column;
+                        column++;
+                        while (column < line.Length && IsJavaScriptTypeScriptIdentifierPart(line[column]))
+                            column++;
+
+                        variableNames.Add(new JavaScriptTypeScriptExportedVariableName(line[nameStart..column], lineIndex, nameStart));
+                        expectingName = false;
+                        continue;
+                    }
+
+                    expectingName = false;
+                }
+
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case ',':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            expectingName = true;
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        {
+                            endLineIndex = lineIndex;
+                            endColumn = column;
+                            sawTopLevelSemicolon = true;
+                            column = line.Length;
+                        }
+
+                        break;
+                }
+
+                column++;
+            }
+
+            if (sawTopLevelSemicolon)
+                break;
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && variableNames.Count > 0
+                && !expectingName
+                && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line))
+            {
+                endLineIndex = lineIndex;
+                endColumn = Math.Max(0, line.TrimEnd().Length - 1);
+                break;
+            }
+
+            endLineIndex = lineIndex;
+            endColumn = Math.Max(0, line.Length - 1);
+        }
+
+        return variableNames.Count > 0;
+    }
+
+    private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(string sanitizedLine)
+    {
+        var trimmed = sanitizedLine.TrimEnd();
+        if (trimmed.Length == 0)
+            return false;
+
+        return trimmed[^1] is not (',' or '=' or '(' or '[' or '{' or '.' or '?' or ':' or '+' or '-' or '*' or '%' or '&' or '|' or '^' or '!' or '<' or '>');
+    }
+
+    private readonly record struct JavaScriptTypeScriptExportedVariableName(string Name, int LineIndex, int Column);
 
     private static void ExtractJavaScriptTypeScriptDestructuredNamedExports(
         long fileId,
