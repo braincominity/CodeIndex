@@ -19678,6 +19678,34 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsExportedObjectLiteralLiteralKeys(string language)
+    {
+        var content = """
+            const handler = () => 1;
+            const notFound = () => 2;
+            const dynamicKey = "runtime";
+            module.exports = {
+                "x-api": handler,
+                'content-type': handler,
+                404: notFound,
+                [dynamicKey]: handler,
+            };
+            export default {
+                "dash-key": handler,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x-api" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content-type" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "dash-key" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsMultiLineDestructuredNamedExports()
     {
