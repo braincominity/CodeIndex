@@ -9141,6 +9141,59 @@ jobs:
     }
 
     [Fact]
+    public void RunDefinition_ExactNameFindsUnicodeEscapedCSharpAndJavaSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_unicode_escapes");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Escaped.cs",
+                "csharp",
+                "namespace Demo.\\u004eames;\n\n"
+                + "public class \\u0046oo\n"
+                + "{\n"
+                + "    public void \\u0042ar() { }\n"
+                + "}\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                "package demo.\\u0061pp;\n\n"
+                + "public class \\u004aavaFoo {\n"
+                + "    public void \\u0062ar() { }\n"
+                + "}\n");
+
+            var (csharpExitCode, csharpStdout, csharpStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Bar", "--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--exact-name"],
+                _jsonOptions));
+            var csharpRows = ParseJsonLines(csharpStdout);
+
+            var (javaExitCode, javaStdout, javaStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["bar", "--db", dbPath, "--json", "--lang", "java", "--kind", "function", "--exact-name"],
+                _jsonOptions));
+            var javaRows = ParseJsonLines(javaStdout);
+
+            Assert.Equal(CommandExitCodes.Success, csharpExitCode);
+            Assert.Equal(string.Empty, csharpStderr);
+            Assert.Single(csharpRows);
+            Assert.Equal("Bar", csharpRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("Foo", csharpRows[0].RootElement.GetProperty("container_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, javaExitCode);
+            Assert.Equal(string.Empty, javaStderr);
+            Assert.Single(javaRows);
+            Assert.Equal("bar", javaRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("JavaFoo", javaRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_ExactTreatsJavaUnicodeEscapesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_java_unicode");

@@ -5209,6 +5209,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NormalizesUnicodeEscapedIdentifierNames()
+    {
+        const string content = "namespace Demo.\\u004eames;\n\n"
+            + "public class \\u0046oo\n"
+            + "{\n"
+            + "    public int @\\u0063lass { get; set; }\n"
+            + "    public void \\u0042ar() { }\n"
+            + "}\n\n"
+            + "public enum \\u0043olor\n"
+            + "{\n"
+            + "    \\u0052ed,\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo.Names");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "class" && s.ContainerName == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Bar" && s.ContainerName == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Red" && s.ContainerName == "Color");
+        Assert.DoesNotContain(symbols, s => s.Name.Contains('\\'));
+        Assert.DoesNotContain(symbols, s => s.Name.Contains('@'));
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesVerbatimQualifiedNamespaceAndImportNames()
     {
         var content = """
@@ -11735,6 +11761,25 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getUser");
+    }
+
+    [Fact]
+    public void Extract_Java_NormalizesUnicodeEscapedIdentifierNames()
+    {
+        const string content = "package demo.\\u0061pp;\n\n"
+            + "public class \\u0046oo {\n"
+            + "    public void \\u0062ar() { }\n"
+            + "}\n\n"
+            + "public interface \\uuuu0041pi {\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "demo.app");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerName == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Api");
+        Assert.DoesNotContain(symbols, s => s.Name.Contains('\\'));
     }
 
     [Fact]

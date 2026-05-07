@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Database;
 
 namespace CodeIndex.Indexer;
 
@@ -23,8 +24,8 @@ internal static class CSharpSymbolNameNormalizer
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
-        // The `@` escape is source syntax only; persisted names use the same canonical
-        // spelling as writer-side import and base-type resolution.
+        // Source-only identifier escapes are not part of the persisted symbol contract.
+        // Keep exact-name lookup on the canonical spelling used by import and base-type resolution.
         return NormalizeVerbatimIdentifiers(name);
     }
 
@@ -154,29 +155,15 @@ internal static class CSharpSymbolNameNormalizer
 
     private static string NormalizeVerbatimIdentifiers(string value)
     {
-        if (string.IsNullOrEmpty(value) || value.IndexOf('@', StringComparison.Ordinal) < 0)
-            return value;
-
-        StringBuilder? builder = null;
-        var segmentStart = 0;
-
-        for (var index = 0; index < value.Length; index++)
+        if (string.IsNullOrEmpty(value)
+            || (value.IndexOf('@', StringComparison.Ordinal) < 0
+                && value.IndexOf("global::", StringComparison.Ordinal) < 0
+                && value.IndexOf('\\', StringComparison.Ordinal) < 0))
         {
-            if (!IsVerbatimIdentifierPrefix(value, index))
-                continue;
-
-            builder ??= new StringBuilder(value.Length);
-            if (index > segmentStart)
-                builder.Append(value, segmentStart, index - segmentStart);
-            segmentStart = index + 1;
+            return value;
         }
 
-        if (builder is null)
-            return value;
-
-        if (segmentStart < value.Length)
-            builder.Append(value, segmentStart, value.Length - segmentStart);
-        return builder.ToString();
+        return ExactSourceSearchNormalizer.Normalize(value, "csharp");
     }
 
     internal static bool IsVerbatimIdentifierPrefix(string value, int index)

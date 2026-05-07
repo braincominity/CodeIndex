@@ -3544,7 +3544,7 @@ public static partial class SymbolExtractor
         {
             FileId = fileId,
             Kind = "enum",
-            Name = match.Groups["name"].Value.Trim(),
+            Name = CSharpSymbolNameNormalizer.Normalize(match.Groups["name"].Value.Trim(), match, maskedSnippet),
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
             EndLine = endExclusive.LineIndex + 1,
