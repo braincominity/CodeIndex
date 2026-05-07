@@ -388,10 +388,7 @@ public static partial class SymbolExtractor
         }
 
         if (!TryFindJavaScriptTypeScriptStaticImportEnd(
-                rawLines,
                 sanitizedLines,
-                startLineIndex,
-                importColumn,
                 quoteLineIndex,
                 moduleEndColumn + 1,
                 scanEndExclusive,
@@ -517,10 +514,7 @@ public static partial class SymbolExtractor
     }
 
     private static bool TryFindJavaScriptTypeScriptStaticImportEnd(
-        string[] rawLines,
         string[] sanitizedLines,
-        int startLineIndex,
-        int importColumn,
         int startScanLineIndex,
         int startScanColumn,
         int endLineExclusive,
@@ -605,12 +599,8 @@ public static partial class SymbolExtractor
                 endColumn = lastNonWhitespaceColumn;
             }
 
-            var signatureSoFar = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, importColumn, endLineIndex, endColumn);
-            if (!HasPendingJavaScriptTypeScriptImportAttributes(signatureSoFar)
-                && (!sawAttributeKeyword || (sawAttributeBrace && braceDepth == 0)))
-            {
+            if (!sawAttributeKeyword || (sawAttributeBrace && braceDepth == 0))
                 return true;
-            }
         }
 
         return endLineIndex >= startScanLineIndex && endColumn >= 0;

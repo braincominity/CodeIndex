@@ -3639,6 +3639,7 @@ public class SymbolExtractorTests
             import legacy from "./legacy.json" assert {
                 type: "json"
             };
+            import { with as withAlias, assert as assertAlias } from "./keywords"
             const meta = import.meta.url;
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
@@ -3650,6 +3651,8 @@ public class SymbolExtractorTests
         Assert.Contains("with", dataImport.Signature);
         var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
         Assert.Contains("assert", legacyImport.Signature);
+        var keywordsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./keywords"));
+        Assert.DoesNotContain("import.meta", keywordsImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "meta");
     }
 
