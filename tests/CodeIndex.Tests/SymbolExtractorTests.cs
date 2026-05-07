@@ -19821,10 +19821,13 @@ public class SymbolExtractorTests
                 "x-api": handler,
                 'content-type': handler,
                 404: notFound,
+                ["computed-api"]: handler,
+                [500]: notFound,
                 [dynamicKey]: handler,
             };
             export default {
                 "dash-key": handler,
+                ["computed-dash"]: handler,
             };
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
@@ -19832,7 +19835,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x-api" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content-type" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-api" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "dash-key" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-dash" && s.ContainerKind == "object" && s.ContainerName == "default");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 

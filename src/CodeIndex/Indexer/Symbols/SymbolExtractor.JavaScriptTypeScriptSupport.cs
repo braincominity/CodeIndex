@@ -3044,6 +3044,45 @@ public static partial class SymbolExtractor
                             continue;
                         }
 
+                        if (TryReadJavaScriptTypeScriptComputedLiteralObjectLiteralKeyName(
+                                sanitizedLine,
+                                rawLines[lineIndex],
+                                scanColumn,
+                                out var computedLiteralPropertyName,
+                                out var computedLiteralValueStartColumn))
+                        {
+                            var hasExistingContainerSymbol = symbols.Any(s =>
+                                s.Name == computedLiteralPropertyName
+                                && s.ContainerKind == "object"
+                                && s.ContainerName == target.ContainerName);
+                            if (!hasExistingContainerSymbol)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols: null,
+                                    lineIndex + 1,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = "property",
+                                        Name = computedLiteralPropertyName,
+                                        Line = lineIndex + 1,
+                                        StartLine = lineIndex + 1,
+                                        StartColumn = scanColumn,
+                                        EndLine = lineIndex + 1,
+                                        Signature = rawLines[lineIndex].Trim(),
+                                        ContainerKind = "object",
+                                        ContainerName = target.ContainerName,
+                                        Visibility = "export",
+                                    },
+                                    rawLines[lineIndex]);
+                            }
+
+                            scanColumn = computedLiteralValueStartColumn;
+                            skippingPropertyValue = true;
+                            continue;
+                        }
+
                         if (TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(sanitizedLine, ref scanColumn))
                         {
                             skippingPropertyValue = true;
@@ -3168,6 +3207,88 @@ public static partial class SymbolExtractor
         if (propertyName.Length == 0)
             return false;
 
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
+        {
+            propertyName = string.Empty;
+            return false;
+        }
+
+        valueStartColumn = probe + 1;
+        return true;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptComputedLiteralObjectLiteralKeyName(
+        string sanitizedLine,
+        string rawLine,
+        int startColumn,
+        out string propertyName,
+        out int valueStartColumn)
+    {
+        propertyName = string.Empty;
+        valueStartColumn = startColumn;
+
+        if (startColumn < 0
+            || startColumn >= sanitizedLine.Length
+            || startColumn >= rawLine.Length
+            || sanitizedLine[startColumn] != '[')
+        {
+            return false;
+        }
+
+        var probe = startColumn + 1;
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe >= sanitizedLine.Length || probe >= rawLine.Length)
+            return false;
+
+        if (sanitizedLine[probe] is '\'' or '"')
+        {
+            var keyStartColumn = probe;
+            if (!TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref probe, out _))
+                return false;
+
+            var rawEndColumn = Math.Min(probe, rawLine.Length);
+            var rawKey = rawLine[keyStartColumn..rawEndColumn].Trim();
+            if (rawKey.Length < 2
+                || rawKey[0] != rawKey[^1]
+                || rawKey[0] is not ('\'' or '"'))
+            {
+                return false;
+            }
+
+            propertyName = rawKey[1..^1];
+        }
+        else if (char.IsDigit(sanitizedLine[probe]))
+        {
+            var keyStartColumn = probe;
+            if (!TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref probe, out _))
+                return false;
+
+            var rawEndColumn = Math.Min(probe, rawLine.Length);
+            propertyName = rawLine[keyStartColumn..rawEndColumn].Trim();
+        }
+        else
+        {
+            return false;
+        }
+
+        if (propertyName.Length == 0)
+            return false;
+
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ']')
+        {
+            propertyName = string.Empty;
+            return false;
+        }
+
+        probe++;
         while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
             probe++;
 
