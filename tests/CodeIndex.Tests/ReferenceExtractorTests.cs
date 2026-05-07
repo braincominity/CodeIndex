@@ -6551,6 +6551,48 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinKnownClassConstructorCalls_AreInstantiate()
+    {
+        // Kotlin has no `new` keyword, so same-file class constructor calls such as
+        // `User(1)` should mirror C# / Java constructor search by emitting `instantiate`.
+        // PascalCase functions and annotations must remain `call` / `annotation`.
+        // Kotlin には `new` がないため、同一ファイル class の `User(1)` のような
+        // constructor 呼び出しを C# / Java と同じく `instantiate` として検索可能にする。
+        // PascalCase function と annotation は `call` / `annotation` のままにする。
+        const string content = """
+            class User(val id: Int)
+            data class Profile(val name: String)
+            annotation class Marker
+
+            fun Build(): User = User(1)
+
+            @Marker()
+            fun decorated() {}
+
+            class Service {
+                fun run() {
+                    val a = User(1)
+                    val b = Profile("p")
+                    Build()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Profile" && r.ReferenceKind == "instantiate" && r.Line == 13);
+        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 1);
+        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Build" && r.ReferenceKind == "call" && r.Line == 14);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Build" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation" && r.Line == 7);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_JavaInvalidNestedGenericParenlessInitializer_DoesNotEmitInstantiate()
     {
         // Java does not have collection/object initializer syntax, so the C#-only nested

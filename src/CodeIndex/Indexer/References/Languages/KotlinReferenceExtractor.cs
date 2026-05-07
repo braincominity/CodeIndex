@@ -20,6 +20,58 @@ internal static class KotlinReferenceExtractor
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
 
+    public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (language != "kotlin")
+            return names;
+
+        var callableNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "function" && !string.IsNullOrWhiteSpace(symbol.Name))
+                callableNames.Add(symbol.Name);
+        }
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "class" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+            if (!IsConstructableClassSymbol(symbol))
+                continue;
+            if (callableNames.Contains(symbol.Name))
+                continue;
+
+            names.Add(symbol.Name);
+        }
+
+        return names;
+    }
+
+    public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
+        => constructorTypeNames.Contains(name);
+
+    private static bool IsConstructableClassSymbol(SymbolRecord symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Signature))
+            return false;
+
+        var tokens = symbol.Signature.Split(
+            [' ', '\t', '\r', '\n', '('],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var index = 0;
+        while (index < tokens.Length && tokens[index] is "public" or "private" or "protected" or "internal" or "expect" or "actual" or "abstract" or "sealed" or "data" or "open" or "final" or "value" or "inner")
+            index++;
+
+        if (index >= tokens.Length)
+            return true;
+
+        if (tokens[index] == "annotation" && index + 1 < tokens.Length && tokens[index + 1] == "class")
+            return false;
+
+        return tokens[index] is not ("object" or "companion");
+    }
+
     public static void EmitTrailingLambdaReferences(
         string preparedLine,
         Action<string, int> addCallLikeReference)

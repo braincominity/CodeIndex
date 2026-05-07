@@ -982,6 +982,7 @@ public static partial class ReferenceExtractor
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
@@ -1786,7 +1787,19 @@ public static partial class ReferenceExtractor
                 var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
+                if (metadataKind != null)
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    return;
+                }
+
+                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return;
+                }
+
+                AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
             }
 
             if (language is "batch")
