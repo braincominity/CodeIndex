@@ -12755,6 +12755,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinExtensionPropertyReceivers_CaptureTypeReferences()
+    {
+        // Extension property receivers are declarations too, but the receiver appears before
+        // the property name rather than after a parameter colon.
+        // extension property の receiver も宣言上の依存だが、property 名より前に現れるため
+        // parameter colon 後の型抽出だけでは拾えない。
+        const string content = """
+            class User
+            class Box<T>
+
+            val User.displayName: String get() = ""
+            var Box<User>.selected: User
+                get() = TODO()
+                set(value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

@@ -199,6 +199,7 @@ internal static class KotlinReferenceExtractor
         EmitPrimaryConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitExtensionPropertyReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -334,6 +335,57 @@ internal static class KotlinReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(headStart));
+    }
+
+    private static void EmitExtensionPropertyReceiverTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var keyword in DeclarationKeywords)
+        {
+            foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
+            {
+                var declarationStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, keywordIndex + keyword.Length);
+                if (declarationStart >= preparedLine.Length)
+                    continue;
+
+                var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', declarationStart);
+                var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', declarationStart);
+                var declarationEnd = preparedLine.Length;
+                if (colonIndex >= 0)
+                    declarationEnd = Math.Min(declarationEnd, colonIndex);
+                if (assignmentIndex >= 0)
+                    declarationEnd = Math.Min(declarationEnd, assignmentIndex);
+                if (declarationEnd <= declarationStart)
+                    continue;
+
+                var receiverDot = FindLastTopLevelChar(preparedLine, '.', declarationStart, declarationEnd);
+                if (receiverDot <= declarationStart)
+                    continue;
+
+                var receiverEnd = receiverDot;
+                while (receiverEnd > declarationStart && char.IsWhiteSpace(preparedLine[receiverEnd - 1]))
+                    receiverEnd--;
+                if (receiverEnd <= declarationStart)
+                    continue;
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    preparedLine.Substring(declarationStart, receiverEnd - declarationStart),
+                    declarationStart,
+                    "kotlin",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(declarationStart));
+            }
+        }
     }
 
     private static int FindLastTopLevelChar(string text, char target, int startIndex, int endIndex)
