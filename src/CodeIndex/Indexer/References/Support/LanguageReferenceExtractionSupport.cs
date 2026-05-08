@@ -967,6 +967,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
@@ -1387,6 +1388,54 @@ internal static class LanguageReferenceExtractionSupport
                 var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
                 EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             }
+        }
+    }
+
+    private static void EmitGoMapCompositeLiteralTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var mapIndex = line.IndexOf("map", searchStart, StringComparison.Ordinal);
+            if (mapIndex < 0)
+                return;
+
+            searchStart = mapIndex + "map".Length;
+            if (!IsIdentifierAt(line, mapIndex, "map"))
+                continue;
+
+            var open = SkipWhitespace(line, searchStart);
+            if (open >= line.Length || line[open] != '[')
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+            if (close < 0)
+                continue;
+
+            var valueStart = SkipWhitespace(line, close + 1);
+            if (valueStart >= line.Length || !IsGoTypeExpressionStart(line, valueStart))
+                continue;
+
+            var valueEnd = FindGoInlineTypeExpressionEnd(line, valueStart);
+            var literalOpen = SkipWhitespace(line, valueEnd);
+            if (literalOpen >= line.Length || line[literalOpen] != '{')
+                continue;
+
+            var keyExpression = line[(open + 1)..close].Trim();
+            if (keyExpression.Length > 0)
+            {
+                var keyStart = line.IndexOf(keyExpression, open + 1, StringComparison.Ordinal);
+                EmitGoTypeExpression(keyExpression, keyStart >= 0 ? keyStart : open + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
+
+            EmitGoTypeExpression(line[valueStart..valueEnd], valueStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
     }
 

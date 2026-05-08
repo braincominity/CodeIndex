@@ -20,6 +20,7 @@ affected:
 - **Go function type declarations expose parameter and return types** — declarations such as `type Handler func(Request) Response` and `Callback func(Context) Result` now link their signature types.
 - **Go channel type declarations expose element types** — directional channel declarations such as `<-chan Event` and `chan<- Command` now link `Event` and `Command`.
 - **Go generic composite literals are indexed with their type arguments** — literals such as `Cache[Entry]{}` and `model.Set[Key, Value]{}` now link the instantiated type and concrete type arguments.
+- **Go map composite literals expose key and value types** — literals such as `map[Key]Value{}` and `map[model.Tenant]*Entry{}` now link both sides of the map type.
 
 ## 日本語
 
@@ -36,3 +37,4 @@ affected:
 - **Go function type 宣言の引数型と戻り値型を参照として出すようになりました** — `type Handler func(Request) Response` や `Callback func(Context) Result` のような宣言から signature 内の型を辿れるようになりました。
 - **Go channel type 宣言の要素型を参照として出すようになりました** — `<-chan Event` や `chan<- Command` のような方向付き channel 宣言から `Event` と `Command` を辿れるようになりました。
 - **Go generic composite literal を型引数付きで索引するようになりました** — `Cache[Entry]{}` や `model.Set[Key, Value]{}` のような literal から生成型と具体型引数を辿れるようになりました。
+- **Go map composite literal の key/value 型を参照として出すようになりました** — `map[Key]Value{}` や `map[model.Tenant]*Entry{}` のような literal から map 型の両側を辿れるようになりました。
