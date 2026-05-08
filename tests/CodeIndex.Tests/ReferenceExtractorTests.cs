@@ -17308,6 +17308,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftTypeExpressionAttributes_AreNotTypeReferences()
+    {
+        const string content = """
+            protocol Codable {}
+            struct Box {}
+
+            extension Box: @retroactive Codable {}
+
+            func register(handler: @escaping @Sendable (Box) -> Codable) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Codable"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Box"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "retroactive" or "escaping" or "Sendable"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

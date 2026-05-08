@@ -1666,7 +1666,7 @@ public static partial class ReferenceExtractor
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
-            if (language is "java" or "kotlin" && c == '@')
+            if (language is "java" or "kotlin" or "swift" && c == '@')
             {
                 i = SkipJavaAnnotation(expression, i);
                 continue;
