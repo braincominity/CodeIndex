@@ -2639,6 +2639,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRescueClause_IndexesExceptionTypes()
+    {
+        const string content = """
+            def load
+              fetch
+            rescue Network::TimeoutError, ParserError => error
+              nil
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Network::TimeoutError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ParserError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """

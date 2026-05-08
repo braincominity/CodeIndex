@@ -43,6 +43,14 @@ internal static class RubyReferenceExtractor
         @"^\s*class\s+[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\s*<\s*(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex RescueClauseRegex = new(
+        @"(?<![\w$@])rescue\s+(?<types>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:\s*,\s*[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex QualifiedConstantRegex = new(
+        @"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*",
+        RegexOptions.Compiled);
+
     public static void EmitAdditionalCallReferences(
         string preparedLine,
         string originalLine,
@@ -56,6 +64,15 @@ internal static class RubyReferenceExtractor
         Action<string, int> addCallLikeReference)
     {
         EmitInheritanceReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
+        EmitRescueTypeReferences(
             preparedLine,
             references,
             seen,
@@ -222,6 +239,37 @@ internal static class RubyReferenceExtractor
             context,
             lineNumber,
             targetContainer);
+    }
+
+    private static void EmitRescueTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        foreach (Match rescueMatch in RescueClauseRegex.Matches(preparedLine))
+        {
+            var typesGroup = rescueMatch.Groups["types"];
+            foreach (Match typeMatch in QualifiedConstantRegex.Matches(typesGroup.Value))
+            {
+                var name = typeMatch.Value;
+                var tokenIndex = typesGroup.Index + typeMatch.Index;
+                var targetContainer = resolveContainerForCall(tokenIndex);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    tokenIndex,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    targetContainer);
+            }
+        }
     }
 
     private static void EmitClassNameOptionReferences(
