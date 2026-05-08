@@ -7807,6 +7807,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppModuleImports_CaptureTypeReferences()
+    {
+        const string content = """
+            export import std;
+            import std.compat;
+            import :partition;
+            import <vector>;
+            import "detail/config.hpp";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "std.compat" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == ":partition" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "vector" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "detail/config.hpp" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
