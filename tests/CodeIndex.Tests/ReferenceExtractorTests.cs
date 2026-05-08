@@ -7849,6 +7849,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppSizeofAlignof_CaptureTypeOperandReferences()
+    {
+        const string content = """
+            void Run() {
+              auto bytes = sizeof(Widget);
+              auto alignment = alignof(ns::Packet);
+              auto count = sizeof(count);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Packet" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
