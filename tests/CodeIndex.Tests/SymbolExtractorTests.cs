@@ -14525,6 +14525,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsExternLinkageFunctions()
+    {
+        var content = """
+            extern "C" int plugin_entry() { return 0; }
+            extern "C++" Handler* create_handler() { return nullptr; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        var entry = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "plugin_entry");
+        Assert.Equal("int", entry.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create_handler");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceAliasesAndNamespaceDirectives()
     {
         // C++: namespace aliases and using namespace directives / C++: 名前空間エイリアスと using namespace
