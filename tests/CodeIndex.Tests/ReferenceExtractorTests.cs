@@ -7996,6 +7996,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTrailingReturnTypes_CaptureTypeReferences()
+    {
+        const string content = """
+            auto Make() -> Result { return {}; }
+            auto Build() -> ns::Builder* { return nullptr; }
+            auto Count() -> int { return 0; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Builder" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
