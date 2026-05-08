@@ -2536,7 +2536,7 @@ public static partial class ReferenceExtractor
             : string.Equals(token, "new", StringComparison.Ordinal);
     }
 
-    private static readonly HashSet<string> KotlinGenericInvocationTypeArgumentIgnoredSegments = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> KotlinTypeProjectionModifierNames = new(StringComparer.Ordinal)
     {
         "in", "out",
     };
@@ -2568,7 +2568,7 @@ public static partial class ReferenceExtractor
             return;
 
         var ignoredSegments = language == "kotlin"
-            ? KotlinGenericInvocationTypeArgumentIgnoredSegments
+            ? KotlinTypeProjectionModifierNames
             : null;
 
         AddTypeExpressionSegments(

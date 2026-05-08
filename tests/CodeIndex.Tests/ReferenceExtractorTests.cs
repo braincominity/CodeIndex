@@ -12986,6 +12986,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinVarianceTypeArguments_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            interface Producer<T>
+            interface Consumer<T>
+            class Payload
+
+            class Demo {
+                val produced: Producer<out Payload>? = null
+                val consumed: Consumer<in Payload>? = null
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Producer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Consumer" && r.ReferenceKind == "type_reference");
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.DoesNotContain(references, r => (r.SymbolName is "in" or "out") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

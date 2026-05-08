@@ -1605,6 +1605,12 @@ public static partial class ReferenceExtractor
             if (language == "csharp")
                 segment = NormalizeCSharpIdentifier(rawSegment);
 
+            if (language == "kotlin" && KotlinTypeProjectionModifierNames.Contains(segment))
+            {
+                i--;
+                continue;
+            }
+
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
                 i++;
