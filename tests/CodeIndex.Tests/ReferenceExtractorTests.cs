@@ -7601,6 +7601,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoBuiltinTypeArguments_CapturesAllocatedTypesWithoutBuiltinCalls()
+    {
+        const string content = """
+            package main
+
+            func allocate() {
+                users := make([]User, 0)
+                cache := make(map[string]CacheEntry)
+                events := make(chan Event)
+                client := new(Client)
+                _, _, _, _ = users, cache, events, client
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "CacheEntry" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "new" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "make" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

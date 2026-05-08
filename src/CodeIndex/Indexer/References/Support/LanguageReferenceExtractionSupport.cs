@@ -42,6 +42,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex GoCompositeLiteralRegex = new(
         @"(?<!\btype\s)(?<name>[A-Z]\w*)\s*\{",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoBuiltinTypeArgumentRegex = new(
+        @"\b(?:make|new)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DartCtorRegex = new(
         @"\b(?:new|const)\s+(?<name>[A-Z]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:<[^>]+>)?\s*\(",
@@ -952,6 +955,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
@@ -1126,6 +1130,41 @@ internal static class LanguageReferenceExtractionSupport
             ? line.IndexOf('*')
             : nameStart;
         EmitGoTypeExpression(line[typeStart..cursor], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoBuiltinTypeArgumentReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in GoBuiltinTypeArgumentRegex.Matches(line))
+        {
+            var open = line.IndexOf('(', match.Index);
+            if (open < 0)
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '(', ')');
+            if (close < 0)
+                continue;
+
+            var argumentList = line[(open + 1)..close];
+            var firstArgument = ReferenceExtractor.SplitTopLevelCommaSpans(argumentList).FirstOrDefault();
+            if (firstArgument.Length <= 0)
+                continue;
+
+            var rawType = argumentList.Substring(firstArgument.Start, firstArgument.Length);
+            var expression = rawType.Trim();
+            if (expression.Length == 0)
+                continue;
+
+            var trimStart = rawType.IndexOf(expression, StringComparison.Ordinal);
+            var absoluteStart = open + 1 + firstArgument.Start + Math.Max(0, trimStart);
+            EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
     }
 
     private static bool StartsWithKeyword(string line, int index, string keyword)

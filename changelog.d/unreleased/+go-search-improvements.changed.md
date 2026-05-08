@@ -13,6 +13,7 @@ affected:
 - **Go interface method signatures expose parameter and return types** — interface members such as `Handle(ctx Context) Response` now link `Context` and `Response`.
 - **Go multi-name value declarations expose their shared type** — declarations such as `var primary, secondary *Client` now link `Client`.
 - **Go embedded field types are indexed as type references** — embedded fields such as `*BaseStore` and `audit.Logger` now show up in reference search.
+- **Go builtin allocation type arguments are indexed as type references** — `make([]User, 0)` and `new(Client)` now link `User` and `Client` without turning `make` or `new` into calls.
 
 ## 日本語
 
@@ -22,3 +23,4 @@ affected:
 - **Go interface method signature の引数型と戻り値型を参照として出すようになりました** — `Handle(ctx Context) Response` のような interface member から `Context` と `Response` を辿れるようになりました。
 - **Go の複数名 value 宣言で共有される型を参照として出すようになりました** — `var primary, secondary *Client` のような宣言から `Client` を辿れるようになりました。
 - **Go の embedded field 型を型参照として索引するようになりました** — `*BaseStore` や `audit.Logger` のような embedded field が reference search に現れるようになりました。
+- **Go builtin allocation の型引数を型参照として索引するようになりました** — `make([]User, 0)` や `new(Client)` から `make` / `new` を call にせず `User` と `Client` を辿れるようになりました。
