@@ -12374,6 +12374,11 @@ public class SymbolExtractorTests
     public void Extract_Ruby_DetectsRSpecLetDefinitions()
     {
         var content = """
+            shared_examples "auditable" do
+              it "tracks changes" do
+              end
+            end
+
             RSpec.describe User do
               subject(:profile) do
                 build(:profile)
@@ -12391,9 +12396,11 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
 
+        var sharedExamples = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "auditable"));
         var profile = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "profile"));
         var user = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "user"));
         var account = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "account"));
+        Assert.NotNull(sharedExamples.BodyStartLine);
         Assert.NotNull(profile.BodyStartLine);
         Assert.NotNull(user.BodyStartLine);
         Assert.NotNull(account.BodyEndLine);
