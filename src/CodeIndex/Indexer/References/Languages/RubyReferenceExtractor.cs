@@ -10,7 +10,7 @@ internal static class RubyReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex BlockCallRegex = new(
-        @"(?<![\w$@])(?<name>[A-Za-z_]\w*[?!]?)(?:\s*\([^\)\r\n]*\))?\s*(?:\{|do\b)",
+        @"(?<![\w$@:])(?<name>[A-Za-z_]\w*[?!]?)(?:\s*\([^\)\r\n]*\))?\s*(?:\{|do\b)",
         RegexOptions.Compiled);
 
     private static readonly HashSet<string> CommandTargetReferenceNames = new(StringComparer.Ordinal)
@@ -18,13 +18,13 @@ internal static class RubyReferenceExtractor
         "include", "extend", "prepend", "using", "refine", "autoload", "require", "require_relative", "load", "gem", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
         "private_constant", "public_constant", "module_function",
         "alias", "alias_method",
-        "define_method", "describe", "resource", "resources", "before_action", "after_action", "around_action", "helper_method", "rescue_from",
+        "define_method", "describe", "resource", "resources", "create_table", "before_action", "after_action", "around_action", "helper_method", "rescue_from",
         "has_many", "has_one", "belongs_to", "scope", "delegate", "validates", "enum",
     };
 
     private static readonly HashSet<string> CommandTargetSingleTokenNames = new(StringComparer.Ordinal)
     {
-        "require", "require_relative", "load", "gem", "raise", "define_method",
+        "require", "require_relative", "load", "gem", "raise", "define_method", "create_table",
     };
 
     private static readonly HashSet<string> ClassNameOptionCommandNames = new(StringComparer.Ordinal)
@@ -185,6 +185,7 @@ internal static class RubyReferenceExtractor
                     && !string.Equals(name, "require_relative", StringComparison.Ordinal)
                     && !string.Equals(name, "load", StringComparison.Ordinal)
                     && !string.Equals(name, "gem", StringComparison.Ordinal)
+                    && !string.Equals(name, "create_table", StringComparison.Ordinal)
                     && !string.Equals(name, "define_method", StringComparison.Ordinal))
                 {
                     continue;

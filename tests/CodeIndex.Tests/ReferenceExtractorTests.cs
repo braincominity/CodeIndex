@@ -2890,6 +2890,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsCreateTable_IndexesTableName()
+    {
+        const string content = """
+            class CreateUsers < ActiveRecord::Migration[8.0]
+              def change
+                create_table :users, id: :uuid do |t|
+                end
+                create_table "audit_logs" do |t|
+                end
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "create_table");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "id");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "uuid");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
