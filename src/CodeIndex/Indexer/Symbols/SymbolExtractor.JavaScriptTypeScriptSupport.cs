@@ -830,6 +830,10 @@ public static partial class SymbolExtractor
     {
         ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "Worker");
         ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "SharedWorker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "window.Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "window.SharedWorker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.SharedWorker");
     }
 
     private static void ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(

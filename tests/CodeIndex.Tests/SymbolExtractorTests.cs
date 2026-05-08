@@ -2143,6 +2143,8 @@ public class SymbolExtractorTests
             );
             const templated = new Worker(`./template-worker.js`, { type: "module" });
             const computed = new Worker(`./${name}.js`);
+            const windowWorker = new window.Worker("./window-worker.js");
+            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
             const plain = Worker("./plain-worker.js");
             const service = new ServiceWorker("./service-worker.js");
             """;
@@ -2155,6 +2157,8 @@ public class SymbolExtractorTests
         Assert.Equal(3, sharedImport.Line);
         Assert.Contains("type", sharedImport.Signature);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./global-shared-worker.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain-worker.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./service-worker.js");
