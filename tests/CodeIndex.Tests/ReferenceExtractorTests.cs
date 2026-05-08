@@ -10582,6 +10582,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsTryFinallyApplicationCalls()
+    {
+        const string content = """
+            let run value =
+                try load value
+                finally cleanup value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "load" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "cleanup" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
