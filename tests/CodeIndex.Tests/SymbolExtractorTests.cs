@@ -11846,6 +11846,7 @@ public class SymbolExtractorTests
                 case server(code: Int, message: String)
                 case client(Int)
                 case unknown
+                case badRequest, unauthorized, serverError(Int)
             }
 
             indirect enum Tree<T> {
@@ -11877,6 +11878,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "server");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "client");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "unknown");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "badRequest");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "unauthorized");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "serverError");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "leaf");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "node");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "active");

@@ -1407,6 +1407,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("struct",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",      new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?)*)\s*)$", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("associatedtype", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
@@ -2880,6 +2881,11 @@ public static partial class SymbolExtractor
                             && pattern.BodyStyle == BodyStyle.None
                             ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, absoluteStartColumn, match, pattern.ReturnTypeGroup, name)
                             : null;
+                        var swiftEnumCaseEntries = lang == "swift"
+                            && pattern.Kind == "property"
+                            && pattern.BodyStyle == BodyStyle.None
+                            ? TryExpandSwiftEnumCaseDeclaratorList(patternMatchLine, absoluteStartColumn, match)
+                            : null;
 
                         if (pythonImportEntries != null)
                         {
@@ -2925,6 +2931,32 @@ public static partial class SymbolExtractor
                                         StartColumn = csharpSingleLineCollapsedMatch
                                             ? csharpSignatureRawStartColumn
                                             : absoluteStartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(entry.ReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else if (swiftEnumCaseEntries != null)
+                        {
+                            foreach (var entry in swiftEnumCaseEntries)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = entry.Name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = entry.StartColumn,
                                         EndLine = Math.Max(startLine, endLine),
                                         BodyStartLine = bodyStartLine,
                                         BodyEndLine = bodyEndLine,
@@ -4323,6 +4355,50 @@ public static partial class SymbolExtractor
                 return null;
 
             results.Add(name);
+        }
+
+        return results.Count > 1 ? results : null;
+    }
+
+    private static List<(string Name, int StartColumn, string? ReturnType)>? TryExpandSwiftEnumCaseDeclaratorList(
+        string patternMatchLine,
+        int absoluteStartColumn,
+        Match match)
+    {
+        if (!match.Groups["caseTail"].Success || !match.Groups["name"].Success)
+            return null;
+
+        var listStart = match.Groups["name"].Index;
+        var listEnd = absoluteStartColumn + match.Length;
+        if (listStart < 0 || listStart >= patternMatchLine.Length || listEnd <= listStart)
+            return null;
+        if (listEnd > patternMatchLine.Length)
+            listEnd = patternMatchLine.Length;
+
+        var list = patternMatchLine[listStart..listEnd];
+        var results = new List<(string Name, int StartColumn, string? ReturnType)>();
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var leading = 0;
+            while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                leading++;
+            if (leading >= segment.Length)
+                return null;
+
+            var nameStart = leading;
+            if (segment[nameStart] != '_' && !char.IsLetter(segment[nameStart]))
+                return null;
+
+            var index = nameStart + 1;
+            while (index < segment.Length && (segment[index] == '_' || char.IsLetterOrDigit(segment[index])))
+                index++;
+
+            var name = segment[nameStart..index];
+            if (name.Length == 0)
+                return null;
+
+            results.Add((name, listStart + segmentStart + nameStart, null));
         }
 
         return results.Count > 1 ? results : null;
