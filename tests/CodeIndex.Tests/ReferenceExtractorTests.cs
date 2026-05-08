@@ -7654,6 +7654,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoFunctionLiteralSignatures_CapturesParameterAndReturnTypes()
+    {
+        const string content = """
+            package main
+
+            func configure() {
+                handler := func(ctx Context, req *Request) (Response, error) {
+                    return Response{}, nil
+                }
+                wrapped := with(func(Event) Result {
+                    return Result{}
+                })
+                _, _ = handler, wrapped
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
