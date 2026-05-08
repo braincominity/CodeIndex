@@ -20792,6 +20792,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTypeAliases_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            type UserMap<K: Key> = std::collections::HashMap<K, User>;
+            pub type Callback = Handler<Request, Response>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
     {
         const string content = """
