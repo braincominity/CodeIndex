@@ -139,6 +139,7 @@ internal static class RustReferenceExtractor
         EmitExternCrateReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitModuleDeclarationReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitClosureSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitConstStaticTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypeAliasTargetReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -365,6 +366,81 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitClosureSignatureTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchIndex = 0;
+        while (searchIndex < preparedLine.Length)
+        {
+            var openPipe = preparedLine.IndexOf('|', searchIndex);
+            if (openPipe < 0)
+                return;
+
+            var closePipe = preparedLine.IndexOf('|', openPipe + 1);
+            if (closePipe < 0)
+                return;
+
+            searchIndex = closePipe + 1;
+            var parameterList = preparedLine.Substring(openPipe + 1, closePipe - openPipe - 1);
+            var hasParameterTypes = TypedLanguageReferenceExtractor.FindTopLevelChar(parameterList, ':') >= 0;
+            var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(preparedLine, "->", closePipe + 1);
+            var hasImmediateReturnType = arrowIndex >= 0 && HasOnlyWhitespace(preparedLine, closePipe + 1, arrowIndex);
+            if (!hasParameterTypes && !hasImmediateReturnType)
+                continue;
+
+            if (hasParameterTypes)
+            {
+                TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(
+                    preparedLine,
+                    openPipe + 1,
+                    closePipe,
+                    "rust",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn);
+            }
+
+            if (!hasImmediateReturnType)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, arrowIndex + 2);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, typeEnd - typeStart),
+                typeStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+        }
+    }
+
+    private static bool HasOnlyWhitespace(string text, int startIndex, int endIndex)
+    {
+        for (var index = Math.Max(0, startIndex); index < endIndex && index < text.Length; index++)
+        {
+            if (!char.IsWhiteSpace(text[index]))
+                return false;
+        }
+
+        return true;
     }
 
     private static void EmitLetTypeReferences(

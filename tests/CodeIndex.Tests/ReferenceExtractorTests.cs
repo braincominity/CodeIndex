@@ -21169,6 +21169,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustClosureSignatureTypes_CapturesParameterAndReturnTypes()
+    {
+        const string content = """
+            fn configure() {
+                let handler = |input: User, ctx: &Context| -> Result<Response, Error> {
+                    build(input, ctx)
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
