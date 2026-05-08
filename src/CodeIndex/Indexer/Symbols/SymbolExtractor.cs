@@ -1407,7 +1407,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("struct",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",      new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?(?:\s*=\s*(?<returnType>[^,\r\n]+))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?(?:\s*=\s*[^,\r\n]+)?)*\s*))$", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?(?:\s*=\s*(?<returnType>(?:""(?:\\.|[^""\\])*""|[^,\r\n])+))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?(?:\s*=\s*(?:""(?:\\.|[^""\\])*""|[^,\r\n])+)?)*)\s*)$", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("associatedtype", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
@@ -4377,7 +4377,7 @@ public static partial class SymbolExtractor
 
         var list = patternMatchLine[listStart..listEnd];
         var results = new List<(string Name, int StartColumn, string? ReturnType)>();
-        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        foreach (var (segmentStart, segmentLength) in SplitSwiftEnumCaseSegments(list))
         {
             var segment = list.Substring(segmentStart, segmentLength);
             var leading = 0;
@@ -4405,6 +4405,86 @@ public static partial class SymbolExtractor
         }
 
         return results.Count > 1 ? results : null;
+    }
+
+    private static List<(int Start, int Length)> SplitSwiftEnumCaseSegments(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var braceDepth = 0;
+        var start = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var index = 0; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                    inString = false;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    spans.Add((start, index - start));
+                    start = index + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
     }
 
     private static bool TryReadSwiftEnumCaseRawValue(string segment, int afterName, out string? rawValue)

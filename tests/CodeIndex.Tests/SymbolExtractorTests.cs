@@ -11887,6 +11887,10 @@ public class SymbolExtractorTests
                 case accepted = 202, gone = 410
             }
 
+            enum Phrase: String {
+                case greeting = "hello, world", farewell = "bye, now"
+            }
+
             func handle(_ error: NetworkError) {
                 switch error {
                 case .overheated:
@@ -11902,6 +11906,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "HTTPStatus");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Phrase");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "timeout");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "server");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "client");
@@ -11922,6 +11927,11 @@ public class SymbolExtractorTests
         Assert.Equal("202", accepted.ReturnType);
         var gone = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "gone"));
         Assert.Equal("410", gone.ReturnType);
+
+        var greeting = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "greeting"));
+        Assert.Equal("\"hello, world\"", greeting.ReturnType);
+        var farewell = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "farewell"));
+        Assert.Equal("\"bye, now\"", farewell.ReturnType);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "overheated");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "recoverable");
