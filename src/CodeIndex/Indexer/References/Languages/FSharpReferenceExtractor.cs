@@ -30,7 +30,7 @@ internal static class FSharpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex MatchApplicationCallRegex = new(
-        $@"^\s*match\s+(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b
+        $@"^\s*match!?\s+(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b
             (?=\s+(?!with\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 

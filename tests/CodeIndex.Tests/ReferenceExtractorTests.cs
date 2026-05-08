@@ -10630,12 +10630,20 @@ public class ReferenceExtractorTests
                 match status with
                 | Ready -> true
                 | _ -> false
+
+            let workflow value =
+                task {
+                    match! fetch value with
+                    | Some parsed -> return parsed
+                    | None -> return value
+                }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
         var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "parse" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fetch" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "status" && r.ReferenceKind == "call");
     }
 
