@@ -1217,6 +1217,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaGenericHeritage_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            interface Comparable<T> {}
+            class Base<T> {}
+            interface Handler<T> {}
+            class Box<T extends Comparable<T>> extends Base<T> implements Handler<T> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
     {
         const string content = """
