@@ -2933,6 +2933,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsSerialize_IndexesSerializedAttributeName()
+    {
+        const string content = """
+            class User < ApplicationRecord
+              serialize :settings, coder: JSON
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "serialize");
+        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "coder");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "JSON");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
