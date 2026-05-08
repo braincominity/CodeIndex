@@ -998,6 +998,12 @@ public static partial class ReferenceExtractor
                              (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        var rustEnumCandidates = language == "rust"
+            ? symbols
+                .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+                .ToList()
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -1532,6 +1538,9 @@ public static partial class ReferenceExtractor
             }
             else if (language == "rust")
             {
+                var rustEnumContainer = rustEnumCandidates != null
+                    ? FindInnermostContainer(rustEnumCandidates, lineNumber)
+                    : null;
                 RustReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     references,
@@ -1540,7 +1549,8 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    container);
+                    container,
+                    rustEnumContainer);
             }
             else if (language == "c")
                 CReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);

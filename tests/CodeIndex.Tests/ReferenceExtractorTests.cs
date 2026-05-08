@@ -20856,6 +20856,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustEnumVariantPayloads_CaptureTypeReferences()
+    {
+        const string content = """
+            enum Event {
+                Created(User),
+                Moved { from: Point, to: Point },
+                Failed(crate::errors::Error),
+                Empty,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

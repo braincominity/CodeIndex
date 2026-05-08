@@ -48,7 +48,8 @@ internal static class RustReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        SymbolRecord? enumContainer)
     {
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -57,6 +58,7 @@ internal static class RustReferenceExtractor
         EmitAssociatedTypeBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTupleStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
+        EmitEnumVariantTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
@@ -413,6 +415,135 @@ internal static class RustReferenceExtractor
 
     private static bool IsRustIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
+
+    private static void EmitEnumVariantTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? enumContainer)
+    {
+        if (enumContainer?.Kind != "enum")
+            return;
+
+        var variantStart = FirstNonWhitespaceIndex(preparedLine);
+        if (variantStart >= preparedLine.Length
+            || preparedLine[variantStart] is '}' or '#'
+            || !IsLikelyRustEnumVariantStart(preparedLine, variantStart))
+        {
+            return;
+        }
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(', variantStart);
+        var openBrace = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '{', variantStart);
+        if (openParen >= 0 && (openBrace < 0 || openParen < openBrace))
+        {
+            EmitEnumTupleVariantTypeReferences(preparedLine, openParen, references, seen, fileId, context, lineNumber, enumContainer);
+        }
+
+        if (openBrace >= 0)
+            EmitEnumStructVariantTypeReferences(preparedLine, openBrace, references, seen, fileId, context, lineNumber, enumContainer);
+    }
+
+    private static void EmitEnumTupleVariantTypeReferences(
+        string preparedLine,
+        int openParen,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord enumContainer)
+    {
+        var closeParen = ReferenceExtractor.FindMatchingChar(preparedLine, openParen, '(', ')');
+        if (closeParen <= openParen)
+            return;
+
+        var fieldList = preparedLine.Substring(openParen + 1, closeParen - openParen - 1);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(fieldList))
+        {
+            var fragment = fieldList.Substring(segmentStart, segmentLength);
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = openParen + 1 + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                enumContainer);
+        }
+    }
+
+    private static void EmitEnumStructVariantTypeReferences(
+        string preparedLine,
+        int openBrace,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord enumContainer)
+    {
+        var closeBrace = ReferenceExtractor.FindMatchingChar(preparedLine, openBrace, '{', '}');
+        if (closeBrace <= openBrace)
+            return;
+
+        var fieldList = preparedLine.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(fieldList))
+        {
+            var fragment = fieldList.Substring(segmentStart, segmentLength);
+            var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, ':');
+            if (colonIndex < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, colonIndex + 1);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = openBrace + 1 + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                enumContainer);
+        }
+    }
+
+    private static int FirstNonWhitespaceIndex(string text)
+    {
+        var index = 0;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index;
+    }
+
+    private static bool IsLikelyRustEnumVariantStart(string line, int startIndex)
+    {
+        if (startIndex < line.Length && char.IsUpper(line[startIndex]))
+            return true;
+
+        return startIndex + 2 < line.Length
+            && line[startIndex] == 'r'
+            && line[startIndex + 1] == '#'
+            && IsRustIdentifierPart(line[startIndex + 2]);
+    }
 
     private static void EmitImplAndTraitTypeReferences(
         string preparedLine,
