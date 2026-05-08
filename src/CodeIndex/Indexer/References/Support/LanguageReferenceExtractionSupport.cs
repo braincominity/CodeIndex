@@ -1615,6 +1615,7 @@ internal static class LanguageReferenceExtractionSupport
                 var nextParen = preparedLine.IndexOf('(', afterReceiver);
                 if (nextParen > afterReceiver)
                 {
+                    EmitGoParameterListTypes(preparedLine, firstParen + 1, receiverClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                     parameterOpen = nextParen;
                     functionHeaderStart = afterReceiver;
                 }

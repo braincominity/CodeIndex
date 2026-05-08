@@ -7513,6 +7513,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoMethodReceiverTypes_CapturesReceiverType()
+    {
+        const string content = """
+            package main
+
+            func (h *Handler) Serve(ctx Context) Result {
+                return Result{}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
