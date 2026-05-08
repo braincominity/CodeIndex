@@ -2576,6 +2576,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
+    {
+        const string content = """
+            class Article
+              has_many :comments, dependent: :destroy
+              validates :title, presence: true
+              before_action :load_article, only: :show
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "dependent");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "destroy");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "presence");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """

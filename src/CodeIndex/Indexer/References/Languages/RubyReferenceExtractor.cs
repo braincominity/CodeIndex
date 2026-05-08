@@ -114,6 +114,9 @@ internal static class RubyReferenceExtractor
                 break;
             }
 
+            if (IsHashOptionKey(tail, match, rawToken))
+                break;
+
             if (string.Equals(name, "raise", StringComparison.Ordinal))
             {
                 if (rawToken[0] == ':' || rawToken[0] == '\'' || rawToken[0] == '"')
@@ -159,6 +162,19 @@ internal static class RubyReferenceExtractor
     }
 
     private static bool IsIdentifierStart(char ch) => char.IsLetter(ch) || ch == '_';
+
+    private static bool IsHashOptionKey(string tail, Match match, string rawToken)
+    {
+        var tokenIndex = match.Groups["token"].Index;
+        var nextIndex = tokenIndex + rawToken.Length;
+        while (nextIndex < tail.Length && char.IsWhiteSpace(tail[nextIndex]))
+            nextIndex++;
+
+        if (rawToken[0] == ':')
+            return nextIndex + 1 < tail.Length && tail[nextIndex] == '=' && tail[nextIndex + 1] == '>';
+
+        return nextIndex < tail.Length && tail[nextIndex] == ':';
+    }
 
     private static string NormalizeCommandTargetToken(string token)
     {
