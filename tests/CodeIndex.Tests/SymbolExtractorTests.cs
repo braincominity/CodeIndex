@@ -11797,6 +11797,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_NormalizesGranularImportNames()
+    {
+        var content = """
+            import Foundation
+            import struct Foundation.URL
+            import enum Dispatch.DispatchQoS
+            import func Darwin.C.printf
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation.URL");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Dispatch.DispatchQoS");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Darwin.C.printf");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "import"
+            && (s.Name.StartsWith("struct ", StringComparison.Ordinal)
+                || s.Name.StartsWith("enum ", StringComparison.Ordinal)
+                || s.Name.StartsWith("func ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsPrivateSetProperties()
     {
         var content = """

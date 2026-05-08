@@ -9,7 +9,7 @@ internal static class SwiftSymbolNameNormalizer
         if (string.IsNullOrWhiteSpace(name))
             return name;
 
-        var trimmed = name.Trim();
+        var trimmed = StripImportKindPrefix(name.Trim());
         if (trimmed.IndexOf('<') < 0
             && trimmed.IndexOf(':') < 0
             && trimmed.IndexOf("where", StringComparison.Ordinal) < 0
@@ -116,6 +116,38 @@ internal static class SwiftSymbolNameNormalizer
 
         return builder.ToString().Trim();
     }
+
+    private static string StripImportKindPrefix(string name)
+    {
+        foreach (var prefix in ImportKindPrefixes)
+        {
+            if (!StartsWithWord(name, 0, prefix))
+                continue;
+
+            var index = prefix.Length;
+            while (index < name.Length && char.IsWhiteSpace(name[index]))
+                index++;
+
+            return index >= name.Length
+                ? string.Empty
+                : name[index..].TrimStart();
+        }
+
+        return name;
+    }
+
+    private static readonly string[] ImportKindPrefixes =
+    [
+        "class",
+        "enum",
+        "func",
+        "let",
+        "operator",
+        "protocol",
+        "struct",
+        "typealias",
+        "var",
+    ];
 
     private static bool StartsWithWord(string text, int index, string word)
     {
