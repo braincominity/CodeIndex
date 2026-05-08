@@ -2592,6 +2592,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyConstantVisibilityDeclarations_IndexConstants()
+    {
+        const string content = """
+            class Config
+              SecretKey = "x"
+              Token = "t"
+              private_constant :SecretKey
+              public_constant :Token
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "private_constant");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "public_constant");
+        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
+        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
+    }
+
+    [Fact]
     public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
     {
         const string content = """

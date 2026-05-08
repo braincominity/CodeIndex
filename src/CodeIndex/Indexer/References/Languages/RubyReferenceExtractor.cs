@@ -16,6 +16,7 @@ internal static class RubyReferenceExtractor
     private static readonly HashSet<string> CommandTargetReferenceNames = new(StringComparer.Ordinal)
     {
         "include", "extend", "prepend", "using", "autoload", "require", "require_relative", "load", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
+        "private_constant", "public_constant",
         "alias", "alias_method",
         "define_method", "before_action", "after_action", "around_action", "helper_method",
         "has_many", "has_one", "belongs_to", "scope", "delegate", "validates",
