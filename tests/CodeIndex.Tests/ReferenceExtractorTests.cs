@@ -2951,6 +2951,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsComposedOf_IndexesAggregateAndClassName()
+    {
+        const string content = """
+            class Customer < ApplicationRecord
+              composed_of :address, class_name: "Address"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "composed_of");
+        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
+        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
