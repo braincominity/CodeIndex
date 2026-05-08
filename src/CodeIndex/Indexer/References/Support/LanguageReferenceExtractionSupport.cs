@@ -968,6 +968,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoInterfaceTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoStandaloneTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoMultiNameFieldDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoChannelElementTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1077,6 +1078,46 @@ internal static class LanguageReferenceExtractionSupport
 
         var expression = line[typeStart..typeEnd].TrimEnd();
         EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoMultiNameFieldDeclarationTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+            return;
+
+        var nameStart = cursor;
+        cursor++;
+        while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        if (IsGoStatementKeyword(line[nameStart..cursor]))
+            return;
+
+        cursor = nameStart;
+        if (!TryReadGoIdentifierList(line, ref cursor, requireComma: true))
+            return;
+
+        var typeStart = SkipWhitespace(line, cursor);
+        if (typeStart >= line.Length || line[typeStart] is ':' or '=' || !IsGoTypeExpressionStart(line, typeStart))
+            return;
+
+        var typeEnd = FindGoInlineTypeExpressionEnd(line, typeStart);
+        if (typeEnd <= typeStart)
+            return;
+
+        var afterType = SkipWhitespace(line, typeEnd);
+        if (afterType < line.Length && line[afterType] != '`')
+            return;
+
+        EmitGoTypeExpression(line[typeStart..typeEnd], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoInterfaceTypeSetTermReferences(

@@ -41,6 +41,7 @@ affected:
 - **Go generic method expressions expose receiver type arguments** — expressions such as `Repository[User].Find` and `(*Store[Entry]).Save` now link both receiver and type argument symbols.
 - **Go standalone type-set terms expose approximation types** — constraint terms such as `~[]Element` and `~map[Key]Value` now link their element, key, and value types.
 - **Go package declarations are indexed as namespace symbols** — `package demo` now appears in symbol search, outline, and definition-oriented workflows.
+- **Go multi-name struct fields expose their shared type** — fields such as `Primary, Secondary *Client` now link the shared field type without indexing field names.
 
 ## 日本語
 
@@ -74,3 +75,4 @@ affected:
 - **Go generic method expression の receiver 型引数を参照として出すようになりました** — `Repository[User].Find` や `(*Store[Entry]).Save` のような expression から receiver と型引数の両方を辿れるようになりました。
 - **Go standalone type-set term の approximation 型を参照として出すようになりました** — `~[]Element` や `~map[Key]Value` のような constraint term から element、key、value 型を辿れるようになりました。
 - **Go package 宣言を namespace symbol として索引するようになりました** — `package demo` が symbol search、outline、definition 系 workflow に現れるようになりました。
+- **Go の複数名 struct field で共有される型を参照として出すようになりました** — `Primary, Secondary *Client` のような field から field 名を索引せずに共有型を辿れるようになりました。

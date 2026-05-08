@@ -7601,6 +7601,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoMultiNameStructFields_CapturesSharedType()
+    {
+        const string content = """
+            package main
+
+            type Store struct {
+                Primary, Secondary *Client
+                Cache, Backup Repository[Entry]
+                active, stale bool
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Primary" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Secondary" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "active" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoBuiltinTypeArguments_CapturesAllocatedTypesWithoutBuiltinCalls()
     {
         const string content = """
