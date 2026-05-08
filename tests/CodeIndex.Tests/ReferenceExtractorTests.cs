@@ -7828,6 +7828,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppNamedCasts_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            void Run(Base* base, void* raw) {
+              auto derived = static_cast<Derived*>(base);
+              auto iface = dynamic_cast<ns::IFace&>(*base);
+              auto bytes = reinterpret_cast<std::byte*>(raw);
+              auto same = const_cast<const Service*>(service);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IFace" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "byte" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
