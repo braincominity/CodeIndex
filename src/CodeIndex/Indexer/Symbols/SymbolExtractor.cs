@@ -1407,7 +1407,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("struct",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",      new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?)*)\s*)$", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?(?:\s*=\s*(?<returnType>[^,\r\n]+))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?(?:\s*=\s*[^,\r\n]+)?)*\s*))$", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("associatedtype", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
@@ -4398,10 +4398,41 @@ public static partial class SymbolExtractor
             if (name.Length == 0)
                 return null;
 
-            results.Add((name, listStart + segmentStart + nameStart, null));
+            if (!TryReadSwiftEnumCaseRawValue(segment, index, out var rawValue))
+                return null;
+
+            results.Add((name, listStart + segmentStart + nameStart, rawValue));
         }
 
         return results.Count > 1 ? results : null;
+    }
+
+    private static bool TryReadSwiftEnumCaseRawValue(string segment, int afterName, out string? rawValue)
+    {
+        rawValue = null;
+
+        var index = SkipWhitespace(segment, afterName);
+        if (index < segment.Length && segment[index] == '(')
+        {
+            var closeParen = ReferenceExtractor.FindMatchingChar(segment, index, '(', ')');
+            if (closeParen < 0)
+                return false;
+            index = closeParen + 1;
+        }
+
+        index = SkipWhitespace(segment, index);
+        if (index >= segment.Length)
+            return true;
+        if (segment[index] != '=')
+            return false;
+
+        var valueStart = SkipWhitespace(segment, index + 1);
+        var valueEnd = segment.Length;
+        while (valueEnd > valueStart && char.IsWhiteSpace(segment[valueEnd - 1]))
+            valueEnd--;
+
+        rawValue = valueEnd > valueStart ? segment[valueStart..valueEnd] : null;
+        return true;
     }
 
     private static bool IsRubyIdentifier(string value)
