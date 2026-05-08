@@ -14675,6 +14675,8 @@ public class SymbolExtractorTests
 
             type Coordinates = struct end
 
+            type Handler = delegate of string -> unit
+
             let validate user =
                 user.Age > 0
             """;
@@ -14686,10 +14688,12 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Coordinates");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
         Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "ILogger");
         Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Coordinates");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
