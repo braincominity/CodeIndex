@@ -7829,6 +7829,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoMethodExpressions_CapturesReceiverTypes()
+    {
+        const string content = """
+            package main
+
+            func bind(handler Handler) {
+                serve := Handler.Serve
+                run := (*Worker).Run
+                stringify := model.User.String
+                method := handler.Serve
+                _, _, _, _ = serve, run, stringify, method
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Worker" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
