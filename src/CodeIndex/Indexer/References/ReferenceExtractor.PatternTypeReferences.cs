@@ -1691,7 +1691,7 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            if (language is "java" or "kotlin" && c == '@')
+            if (language is "java" or "kotlin" or "swift" && c == '@')
             {
                 i = SkipJavaAnnotation(expression, i);
                 continue;
@@ -1752,6 +1752,18 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "swift" && IsSwiftTupleElementLabelSegment(expression, segmentStart, i))
+            {
+                i--;
+                continue;
+            }
+
+            if (language == "swift" && IsSwiftMetatypeSuffixSegment(expression, segmentStart, segment))
+            {
+                i--;
+                continue;
+            }
+
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
                 i++;
@@ -1770,6 +1782,35 @@ public static partial class ReferenceExtractor
             index++;
 
         return index < expression.Length && expression[index] == '=';
+    }
+
+    private static bool IsSwiftTupleElementLabelSegment(string expression, int segmentStart, int segmentEnd)
+    {
+        var next = segmentEnd;
+        while (next < expression.Length && char.IsWhiteSpace(expression[next]))
+            next++;
+        if (next >= expression.Length || expression[next] != ':')
+            return false;
+        if (next + 1 < expression.Length && expression[next + 1] == ':')
+            return false;
+
+        var previous = segmentStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(expression[previous]))
+            previous--;
+
+        return previous >= 0 && expression[previous] is '(' or ',';
+    }
+
+    private static bool IsSwiftMetatypeSuffixSegment(string expression, int segmentStart, string segment)
+    {
+        if (segment is not ("Type" or "Protocol"))
+            return false;
+
+        var previous = segmentStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(expression[previous]))
+            previous--;
+
+        return previous >= 0 && expression[previous] == '.';
     }
 
     private static void AddTypeScriptTypeExpressionSegments(

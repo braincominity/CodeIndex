@@ -17044,6 +17044,738 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftTypedThrows_RecordsThrownErrorType()
+    {
+        const string content = """
+            struct NetworkError: Error {}
+
+            func load() throws(NetworkError) -> Data {
+                Data()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasRhs_RecordsReferencedTypes()
+    {
+        const string content = """
+            struct Request {}
+            struct Response {}
+            struct Failure {}
+
+            typealias Loader = (Request) -> Response
+            typealias LoadResult = Result<Response, Failure>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Response"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftAssociatedTypeConstraintsAndDefaults_RecordsReferencedTypes()
+    {
+        const string content = """
+            protocol Identifiable {}
+            struct MemoryCache<T> {}
+            struct NetworkLoader {}
+
+            protocol Store {
+                associatedtype Item: Identifiable
+                associatedtype Cache = MemoryCache<Item>
+                associatedtype Loader: AsyncSequence = NetworkLoader
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Identifiable"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MemoryCache"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkLoader"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftExtensionTargets_RecordsExtendedTypes()
+    {
+        const string content = """
+            struct Repository<Entity> {}
+            protocol Persistable {}
+            protocol ObservableObject {}
+            struct CacheStore {}
+
+            extension Repository where Entity: Persistable {
+                func save(_ value: Entity) {}
+            }
+
+            extension CacheStore: ObservableObject {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Repository"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CacheStore"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Persistable"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftFunctionTypeColonPositions_RecordsReturnTypes()
+    {
+        const string content = """
+            struct InputEvent {}
+            struct HandlerResult {}
+            struct SourceModel {}
+            struct MapperOutput {}
+
+            func register(handler: (InputEvent) -> HandlerResult) {}
+
+            func build() {
+                let mapper: (SourceModel) -> MapperOutput = makeMapper()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "HandlerResult"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MapperOutput"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftOpaqueAndExistentialTypeModifiers_AreNotTypeReferences()
+    {
+        const string content = """
+            protocol View {}
+            protocol Service {}
+
+            func makeView() -> some View {
+                fatalError()
+            }
+
+            func use(service: any Service) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "View"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Service"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "some" or "any"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftMetatypeSuffixes_AreNotTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            protocol Service {}
+
+            func inspect(userType: User.Type, serviceType: Service.Protocol) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Service"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "Type" or "Protocol"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftTupleTypeLabels_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Coordinate {}
+            struct SourceModel {}
+            struct DestinationModel {}
+
+            func move(point: (x: Coordinate, y: Coordinate), transform: (source: SourceModel) -> DestinationModel) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Coordinate"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SourceModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DestinationModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "x" or "y" or "source"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftClosureLiteralSignatures_RecordParameterAndReturnTypes()
+    {
+        const string content = """
+            struct ClosureInput {}
+            struct ClosureOutput {}
+
+            func configure() {
+                let transform = { (value: ClosureInput) -> ClosureOutput in
+                    ClosureOutput()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ClosureInput"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ClosureOutput"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+    }
+
+    [Fact]
+    public void Extract_SwiftWhereSameTypeConstraints_RecordRightHandTypes()
+    {
+        const string content = """
+            struct Repository<Entity> {}
+            struct User {}
+            struct Response {}
+
+            extension Repository where Entity == User {}
+
+            func decode<T>(_ value: T) where T.Output == Response {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+        var referenceKeys = references
+            .Select(reference => $"{reference.SymbolName}:{reference.ReferenceKind}:{reference.Column}")
+            .ToList();
+
+        Assert.Contains("User:type_reference:38", referenceKeys);
+        Assert.Contains("Response:type_reference:46", referenceKeys);
+        Assert.DoesNotContain("User:call:38", referenceKeys);
+        Assert.DoesNotContain("Response:call:46", referenceKeys);
+    }
+
+    [Fact]
+    public void Extract_SwiftTypeExpressionAttributes_AreNotTypeReferences()
+    {
+        const string content = """
+            protocol Codable {}
+            struct Box {}
+
+            extension Box: @retroactive Codable {}
+
+            func register(handler: @escaping @Sendable (Box) -> Codable) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Codable"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Box"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "retroactive" or "escaping" or "Sendable"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypeParameterModifiers_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Model {}
+            actor Worker {}
+
+            func update(value: inout Model, worker: isolated Worker) {}
+            func consume(value: consuming Model, send valueToSend: sending Model) {}
+            func borrow(value: borrowing Model) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Model"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Worker"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "inout" or "isolated" or "consuming" or "sending" or "borrowing"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftFunctionTypeEffects_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Input {}
+            struct Output {}
+            struct Failure: Error {}
+
+            typealias AsyncLoader = (Input) async throws(Failure) -> Output
+            typealias RetryingLoader = (Input) rethrows -> Output
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Input"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Output"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "async" or "throws" or "rethrows"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftKeyPathRoots_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Order {}
+
+            func configure() {
+                let userName = \User.name
+                let orderCustomer = \Order.customer.name
+                let implicit = \.title
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Order"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "name" or "customer" or "title"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftMacroGenericArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Order {}
+            struct Score {}
+
+            func configure() {
+                let predicate = #Predicate<User> { $0.isActive }
+                let expression = #Expression<Order, Score> { order in Score() }
+                if #available(iOS 17, *) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Order"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Score"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "available"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftGenericInvocationArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Failure {}
+            struct Result<Value, Error> {}
+            struct Data {}
+
+            func decode<T>(_ data: Data) -> T {}
+
+            func configure(data: Data) {
+                let user = decode<User>(data)
+                let result = decode<Result<User, Failure>>(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "decode"
+            && reference.Context == "func decode<T>(_ data: Data) -> T {}"
+            && reference.Column == 13);
+    }
+
+    [Fact]
+    public void Extract_SwiftGenericTrailingClosureArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Failure: Error {}
+            struct Task<Success, Failure> {}
+
+            func configure() {
+                let task = Task<User, Failure> {
+                    User()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+    }
+
+    [Fact]
+    public void Extract_SwiftGenericStaticMemberExpressions_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Failure {}
+            enum Result<Value, Error> {
+                case success(Value)
+            }
+
+            func configure() {
+                let value = Result<User, Failure>.success(User())
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "success"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftCatchPatternRoots_AreTypeReferences()
+    {
+        const string content = """
+            enum NetworkError: Error {
+                case timeout
+            }
+
+            enum DatabaseError: Error {
+                case connectionLost
+            }
+
+            func load() throws {}
+
+            func run() {
+                do {
+                    try load()
+                } catch NetworkError.timeout {
+                } catch DatabaseError.connectionLost {
+                } catch is DatabaseError {
+                } catch {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DatabaseError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "timeout" or "connectionLost" or "is"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftCollectionShorthandConstructors_RecordElementTypes()
+    {
+        const string content = """
+            struct User {}
+            struct Handler {}
+
+            func configure(items: [Int: () -> Void], index: Int) {
+                let users = [User]()
+                let handlers = [String: Handler]()
+                items[index]()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Handler"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "index"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftVariadicGenericRepeatModifier_IsNotTypeReference()
+    {
+        const string content = """
+            struct Element {}
+            struct TuplePack<each T> {}
+
+            typealias Pack = TuplePack<repeat each Element>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Element"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "repeat" or "each"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftSelfMetatypeExpressions_RecordRootTypes()
+    {
+        const string content = """
+            struct User {}
+            protocol Service {}
+
+            func configure(user: User) {
+                let userType = User.self
+                let serviceType = Service.self
+                let collectionType = [User].self
+                let instanceSelf = user.self
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Service"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "user"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftSelectorDirectiveRoots_AreTypeReferences()
+    {
+        const string content = """
+            class ViewController {
+                @objc func handleTap(_ sender: Any) {}
+                @objc var titleText: String = ""
+            }
+
+            func configure() {
+                let action = #selector(ViewController.handleTap(_:))
+                let getter = #selector(getter: ViewController.titleText)
+                let unqualified = #selector(handleTap(_:))
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ViewController"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "handleTap" or "titleText"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftKeyPathDirectiveRoots_AreTypeReferences()
+    {
+        const string content = """
+            class Person {
+                @objc var name: String = ""
+                @objc var address: Address = Address()
+            }
+
+            class Address {
+                @objc var street: String = ""
+            }
+
+            func configure() {
+                let name = #keyPath(Person.name)
+                let street = #keyPath(Person.address.street)
+                let unqualified = #keyPath(name)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Person"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "name" or "address" or "street"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftAttributeGenericArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct UserViewModel {}
+            struct Failure {}
+            struct Loader<Value, Error> {}
+
+            @propertyWrapper
+            struct Relationship<Value> {
+                var wrappedValue: Value
+            }
+
+            struct Screen {
+                @Relationship<UserViewModel> var viewModel
+                @Relationship<Loader<UserViewModel, Failure>> var loader
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "UserViewModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Loader"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Relationship"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
