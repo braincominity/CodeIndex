@@ -1715,6 +1715,12 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "swift" && IsSwiftTupleElementLabelSegment(expression, segmentStart, i))
+            {
+                i--;
+                continue;
+            }
+
             if (language == "swift" && IsSwiftMetatypeSuffixSegment(expression, segmentStart, segment))
             {
                 i--;
@@ -1730,6 +1736,23 @@ public static partial class ReferenceExtractor
             AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments);
             i--;
         }
+    }
+
+    private static bool IsSwiftTupleElementLabelSegment(string expression, int segmentStart, int segmentEnd)
+    {
+        var next = segmentEnd;
+        while (next < expression.Length && char.IsWhiteSpace(expression[next]))
+            next++;
+        if (next >= expression.Length || expression[next] != ':')
+            return false;
+        if (next + 1 < expression.Length && expression[next + 1] == ':')
+            return false;
+
+        var previous = segmentStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(expression[previous]))
+            previous--;
+
+        return previous >= 0 && expression[previous] is '(' or ',';
     }
 
     private static bool IsSwiftMetatypeSuffixSegment(string expression, int segmentStart, string segment)

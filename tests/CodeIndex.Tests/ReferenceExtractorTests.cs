@@ -17228,6 +17228,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftTupleTypeLabels_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Coordinate {}
+            struct SourceModel {}
+            struct DestinationModel {}
+
+            func move(point: (x: Coordinate, y: Coordinate), transform: (source: SourceModel) -> DestinationModel) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Coordinate"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SourceModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DestinationModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "x" or "y" or "source"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
