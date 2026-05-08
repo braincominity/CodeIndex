@@ -34,6 +34,7 @@ internal static class SwiftReferenceExtractor
         EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCompilerDirectiveRootTypeReferences("selector", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -91,6 +92,76 @@ internal static class SwiftReferenceExtractor
             slashIndex = rootEnd;
         }
     }
+
+    private static void EmitCompilerDirectiveRootTypeReferences(
+        string directiveName,
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var marker = "#" + directiveName;
+        for (var markerIndex = 0; markerIndex < preparedLine.Length; markerIndex++)
+        {
+            if (!preparedLine.AsSpan(markerIndex).StartsWith(marker, StringComparison.Ordinal))
+                continue;
+
+            var openParen = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, markerIndex + marker.Length);
+            if (openParen >= preparedLine.Length || preparedLine[openParen] != '(')
+                continue;
+
+            var closeParen = ReferenceExtractor.FindMatchingChar(preparedLine, openParen, '(', ')');
+            if (closeParen < 0)
+                continue;
+
+            var rootStart = SkipSwiftDirectiveArgumentLabel(preparedLine, openParen + 1, closeParen);
+            if (rootStart >= closeParen || !LooksLikeSwiftTypeExpressionStart(preparedLine[rootStart]))
+            {
+                markerIndex = closeParen;
+                continue;
+            }
+
+            var rootEnd = Math.Min(FindSwiftKeyPathRootEnd(preparedLine, rootStart), closeParen);
+            if (rootEnd <= rootStart)
+            {
+                markerIndex = closeParen;
+                continue;
+            }
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(rootStart, rootEnd - rootStart),
+                rootStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(rootStart));
+            markerIndex = closeParen;
+        }
+    }
+
+    private static int SkipSwiftDirectiveArgumentLabel(string preparedLine, int argumentStart, int argumentEnd)
+    {
+        var rootStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, argumentStart);
+        foreach (var label in SwiftDirectiveArgumentLabels)
+        {
+            if (!StartsWithSwiftWord(preparedLine, rootStart, label))
+                continue;
+
+            var colonIndex = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, rootStart + label.Length);
+            if (colonIndex < argumentEnd && preparedLine[colonIndex] == ':')
+                return TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+        }
+
+        return rootStart;
+    }
+
+    private static readonly string[] SwiftDirectiveArgumentLabels = ["getter", "setter"];
 
     private static void EmitSelfMetatypeExpressionReferences(
         string preparedLine,

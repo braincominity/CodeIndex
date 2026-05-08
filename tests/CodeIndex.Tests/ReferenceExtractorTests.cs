@@ -17617,6 +17617,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftSelectorDirectiveRoots_AreTypeReferences()
+    {
+        const string content = """
+            class ViewController {
+                @objc func handleTap(_ sender: Any) {}
+                @objc var titleText: String = ""
+            }
+
+            func configure() {
+                let action = #selector(ViewController.handleTap(_:))
+                let getter = #selector(getter: ViewController.titleText)
+                let unqualified = #selector(handleTap(_:))
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ViewController"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "handleTap" or "titleText"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
