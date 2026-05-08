@@ -2080,6 +2080,7 @@ public class SymbolExtractorTests
               { scope: "./" }
             );
             window.navigator.serviceWorker.register("./window-sw.js");
+            globalThis.navigator.serviceWorker.register("./global-sw.js");
             navigator.serviceWorker.register(dynamicPath);
             const text = "navigator.serviceWorker.register('./string-sw.js')";
             """;
@@ -2091,7 +2092,8 @@ public class SymbolExtractorTests
         var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped-sw.js"));
         Assert.Equal(3, scopedImport.Line);
         Assert.Contains("scope", scopedImport.Signature);
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./global-sw.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-sw.js");
     }

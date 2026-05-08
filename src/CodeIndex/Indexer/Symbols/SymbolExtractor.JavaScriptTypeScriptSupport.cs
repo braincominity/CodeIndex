@@ -797,6 +797,13 @@ public static partial class SymbolExtractor
             lineIndex,
             symbols,
             "navigator.serviceWorker.register");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(
+            fileId,
+            rawLines,
+            sanitizedLines,
+            lineIndex,
+            symbols,
+            "window.navigator.serviceWorker.register");
     }
 
     private static void ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(

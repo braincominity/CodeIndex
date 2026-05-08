@@ -704,7 +704,7 @@ ES module asset references written as `new URL("./worker.js", import.meta.url)` 
 
 Worker script dependencies written as `importScripts("./worker-a.js", "/worker-b.js")` also add one `import` symbol per static string or no-substitution template specifier.
 
-Service Worker registrations written as `navigator.serviceWorker.register("./sw.js")` also add `import` symbols for static script specifiers, including calls with registration options.
+Service Worker registrations written as `navigator.serviceWorker.register("./sw.js")` or `window.navigator.serviceWorker.register("./sw.js")` also add `import` symbols for static script specifiers, including calls with registration options.
 
 Worklet module loads written as `audioWorklet.addModule("./processor.js")` or `CSS.paintWorklet.addModule("./paint.js")` also add `import` symbols for static module specifiers.
 
@@ -1711,7 +1711,7 @@ runtime の dynamic import は、`import(\n  "./feature"\n)` のように module
 
 `importScripts("./worker-a.js", "/worker-b.js")` のような worker script dependency も、静的な string / no-substitution template specifier ごとに `import` シンボルを追加します。
 
-`navigator.serviceWorker.register("./sw.js")` のような Service Worker registration も、registration options 付きの call を含め、静的な script specifier を `import` シンボルとして追加します。
+`navigator.serviceWorker.register("./sw.js")` や `window.navigator.serviceWorker.register("./sw.js")` のような Service Worker registration も、registration options 付きの call を含め、静的な script specifier を `import` シンボルとして追加します。
 
 `audioWorklet.addModule("./processor.js")` や `CSS.paintWorklet.addModule("./paint.js")` のような Worklet module load も、静的な module specifier を `import` シンボルとして追加します。
 
