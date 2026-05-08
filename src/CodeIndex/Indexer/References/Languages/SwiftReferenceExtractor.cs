@@ -29,6 +29,7 @@ internal static class SwiftReferenceExtractor
         EmitTypealiasRhsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitKeyPathRootTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitMacroGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -86,6 +87,57 @@ internal static class SwiftReferenceExtractor
             slashIndex = rootEnd;
         }
     }
+
+    private static void EmitMacroGenericArgumentReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (int hashIndex = 0; hashIndex < preparedLine.Length; hashIndex++)
+        {
+            if (preparedLine[hashIndex] != '#')
+                continue;
+
+            var nameStart = hashIndex + 1;
+            if (nameStart >= preparedLine.Length || !IsSwiftIdentifierStart(preparedLine[nameStart]))
+                continue;
+
+            var nameEnd = nameStart + 1;
+            while (nameEnd < preparedLine.Length && IsSwiftIdentifierPart(preparedLine[nameEnd]))
+                nameEnd++;
+
+            var openAngle = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, nameEnd);
+            if (openAngle >= preparedLine.Length || preparedLine[openAngle] != '<')
+                continue;
+
+            var closeAngle = ReferenceExtractor.FindMatchingChar(preparedLine, openAngle, '<', '>');
+            if (closeAngle < 0)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitCommaSeparatedTypeListReferences(
+                preparedLine,
+                openAngle + 1,
+                closeAngle,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+            hashIndex = closeAngle;
+        }
+    }
+
+    private static bool IsSwiftIdentifierStart(char ch)
+        => ch == '_' || char.IsLetter(ch);
+
+    private static bool IsSwiftIdentifierPart(char ch)
+        => ch == '_' || char.IsLetterOrDigit(ch);
 
     private static int FindSwiftKeyPathRootEnd(string preparedLine, int rootStart)
     {
