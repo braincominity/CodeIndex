@@ -7916,6 +7916,7 @@ public class ReferenceExtractorTests
 
             func convert(callback func(any) any, raw any) {
                 var _ Interface = (*Concrete)(nil)
+                var _ = (**Node)(nil)
                 id := (model.ID)(raw)
                 value := (callback)(raw)
                 _, _ = id, value
@@ -7927,6 +7928,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Interface" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Concrete" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Node" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
     }

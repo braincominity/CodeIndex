@@ -2003,7 +2003,7 @@ internal static class LanguageReferenceExtractionSupport
         while (cursor < expression.Length && char.IsWhiteSpace(expression[cursor]))
             cursor++;
         var isPointerConversion = cursor < expression.Length && expression[cursor] == '*';
-        if (cursor < expression.Length && expression[cursor] == '*')
+        while (cursor < expression.Length && expression[cursor] == '*')
             cursor = SkipWhitespace(expression, cursor + 1);
 
         if (cursor >= expression.Length || !IsIdentifierStart(expression[cursor]))
