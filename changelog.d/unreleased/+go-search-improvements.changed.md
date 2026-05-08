@@ -33,6 +33,7 @@ affected:
 - **Go branch statements link to label symbols** — `goto Retry`, `break Retry`, and `continue Retry` now emit label references for graph workflows.
 - **Go type switch cases expose pointer and composite case types** — `case *Admin`, `case []Guest`, and `case map[Key]Value` now link their type case entries without indexing value-switch constants.
 - **Go slice and array composite literals expose element types** — literals such as `[]User{}`, `[3]*Widget{}`, and `[...]model.Event{}` now link their element types.
+- **Go composite type conversions are indexed as type references** — conversions such as `[]User(raw)`, `map[Key]Value(raw)`, and `chan Event(raw)` now link their target types.
 
 ## 日本語
 
@@ -58,3 +59,4 @@ affected:
 - **Go branch statement から label symbol へ参照を張るようになりました** — `goto Retry`、`break Retry`、`continue Retry` が graph workflow 用の label reference を出すようになりました。
 - **Go type switch case の pointer / composite 型を参照として出すようになりました** — `case *Admin`、`case []Guest`、`case map[Key]Value` が value switch の定数 case を索引せずに型 case entry を辿れるようになりました。
 - **Go slice / array composite literal の要素型を参照として出すようになりました** — `[]User{}`、`[3]*Widget{}`、`[...]model.Event{}` のような literal から要素型を辿れるようになりました。
+- **Go composite type conversion を型参照として索引するようになりました** — `[]User(raw)`、`map[Key]Value(raw)`、`chan Event(raw)` のような conversion から変換対象型を辿れるようになりました。

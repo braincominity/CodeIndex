@@ -7832,6 +7832,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoCompositeTypeConversions_CapturesConvertedTypes()
+    {
+        const string content = """
+            package main
+
+            func convert(raw any, rawMap any, rawChan any) {
+                users := []User(raw)
+                lookup := map[Key]Value(rawMap)
+                stream := chan Event(rawChan)
+                returned := func() []Result {
+                    return []Result(raw)
+                }
+                _, _, _, _ = users, lookup, stream, returned
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "raw" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoParenthesizedTypeConversions_CapturesConvertedTypes()
     {
         const string content = """

@@ -977,6 +977,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoArraySliceCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoCompositeTypeConversionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoParenthesizedTypeConversionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMethodExpressionReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericInstantiationTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1665,6 +1666,99 @@ internal static class LanguageReferenceExtractionSupport
             var trimStart = rawExpression.IndexOf(expression, StringComparison.Ordinal);
             EmitGoTypeExpression(expression, open + 1 + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+    }
+
+    private static void EmitGoCompositeTypeConversionReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var typeStart = NextGoCompositeConversionTypeStart(line, searchStart);
+            if (typeStart < 0)
+                return;
+
+            searchStart = typeStart + 1;
+            if (!IsGoTypeExpressionValueContext(line, typeStart))
+                continue;
+
+            var typeEnd = FindGoConversionTypeExpressionEnd(line, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var open = SkipWhitespace(line, typeEnd);
+            if (open >= line.Length || line[open] != '(')
+                continue;
+            if (ReferenceExtractor.FindMatchingChar(line, open, '(', ')') < 0)
+                continue;
+
+            EmitGoTypeExpression(line[typeStart..typeEnd], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static int NextGoCompositeConversionTypeStart(string line, int searchStart)
+    {
+        for (var cursor = searchStart; cursor < line.Length; cursor++)
+        {
+            if (line[cursor] == '[')
+                return cursor;
+            if (IsIdentifierAt(line, cursor, "map") || IsIdentifierAt(line, cursor, "chan"))
+                return cursor;
+        }
+
+        return -1;
+    }
+
+    private static int FindGoConversionTypeExpressionEnd(string line, int start)
+    {
+        var squareDepth = 0;
+        for (var cursor = start; cursor < line.Length; cursor++)
+        {
+            switch (line[cursor])
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '(':
+                case ',':
+                case '{':
+                case '`':
+                case '=':
+                case ';':
+                    if (squareDepth == 0)
+                        return cursor;
+                    break;
+            }
+        }
+
+        return line.Length;
+    }
+
+    private static bool IsGoTypeExpressionValueContext(string line, int start)
+    {
+        var previous = start - 1;
+        while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+            previous--;
+        if (previous < 0)
+            return true;
+        if (line[previous] is '=' or ':' or '(' or '[' or '{' or ',' or '!' or '&' or '*')
+            return true;
+
+        var tokenEnd = previous + 1;
+        while (previous >= 0 && IsSimpleIdentifierPart(line[previous]))
+            previous--;
+        var token = line[(previous + 1)..tokenEnd];
+        return string.Equals(token, "return", StringComparison.Ordinal);
     }
 
     private static bool IsLikelyGoParenthesizedConversionType(string expression)
