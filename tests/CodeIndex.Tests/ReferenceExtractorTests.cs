@@ -1194,6 +1194,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaGenericCallableSignatures_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            interface Comparable<T> {}
+            class Payload {}
+
+            class Demo {
+                public <T extends Comparable<T>> T pick(T input, Comparable<T> fallback) {
+                    return input;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
     {
         const string content = """

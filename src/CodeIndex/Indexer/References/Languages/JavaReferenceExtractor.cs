@@ -693,7 +693,16 @@ internal static class JavaReferenceExtractor
         EmitKeywordTypeListReferences(preparedLine, "permits", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        ReferenceExtractor.EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        ReferenceExtractor.EmitDeclarationTypeReferences(
+            "java",
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            CollectGenericParameterNamesForDeclaration(preparedLine));
 
         foreach (Match match in InstanceofRegex.Matches(preparedLine))
         {
@@ -763,6 +772,49 @@ internal static class JavaReferenceExtractor
     {
         EmitCallableGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static HashSet<string> CollectGenericParameterNamesForDeclaration(string line)
+    {
+        if (ReferenceExtractor.TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
+        {
+            var headerEnd = callableNameStart;
+            if (ReferenceExtractor.TryGetCallableReturnTypeSpan(line, callableNameStart, "java", out var typeStart, out _))
+                headerEnd = typeStart;
+
+            if (headerEnd > 0)
+                return CollectGenericParameterNamesFromHeader(line.Substring(0, headerEnd));
+        }
+
+        var tokens = ReferenceExtractor.GetTopLevelTokenSpans(line);
+        if (tokens.Count < 2)
+            return [];
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = line.Substring(tokens[i].Start, tokens[i].Length);
+            if (token is not ("class" or "interface" or "enum" or "record"))
+                continue;
+            var nameIndex = i + 1;
+            if (nameIndex >= tokens.Count)
+                return [];
+            return CollectGenericParameterNamesFromHeader(line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length));
+        }
+
+        return [];
+    }
+
+    private static HashSet<string> CollectGenericParameterNamesFromHeader(string header)
+    {
+        int openAngle = header.IndexOf('<');
+        if (openAngle < 0)
+            return [];
+
+        int closeAngle = ReferenceExtractor.FindMatchingChar(header, openAngle, '<', '>');
+        if (closeAngle < 0)
+            return [];
+
+        return CollectGenericParameterNames(header.Substring(openAngle + 1, closeAngle - openAngle - 1));
     }
 
     private static void EmitCallableGenericBoundReferences(

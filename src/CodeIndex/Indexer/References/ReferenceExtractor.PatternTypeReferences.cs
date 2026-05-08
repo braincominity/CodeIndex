@@ -507,7 +507,8 @@ public static partial class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (TryFindCallableParameterList(line, language, out var callableNameStart, out var paramStart, out var paramEnd))
         {
@@ -522,7 +523,8 @@ public static partial class ReferenceExtractor
                     typeStart,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(typeStart));
+                    resolveContainerForColumn(typeStart),
+                    ignoredSegments);
             }
 
             EmitParameterTypeReferences(
@@ -535,7 +537,8 @@ public static partial class ReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn);
+                resolveContainerForColumn,
+                ignoredSegments);
         }
 
         if (TryGetSimpleDeclarationTypeSpan(line, language, out var declarationTypeStart, out var declarationTypeLength))
@@ -549,7 +552,8 @@ public static partial class ReferenceExtractor
                 declarationTypeStart,
                 context,
                 lineNumber,
-                resolveContainerForColumn(declarationTypeStart));
+                resolveContainerForColumn(declarationTypeStart),
+                ignoredSegments);
         }
     }
 
@@ -795,7 +799,8 @@ public static partial class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (paramEnd <= paramStart)
             return;
@@ -817,7 +822,8 @@ public static partial class ReferenceExtractor
                 absoluteStart,
                 context,
                 lineNumber,
-                resolveContainerForColumn(absoluteStart));
+                resolveContainerForColumn(absoluteStart),
+                ignoredSegments);
         }
     }
 
@@ -830,7 +836,8 @@ public static partial class ReferenceExtractor
         int expressionStartInLine,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (language == "typescript")
         {
@@ -855,7 +862,8 @@ public static partial class ReferenceExtractor
             context,
             lineNumber,
             container,
-            language);
+            language,
+            ignoredSegments: ignoredSegments);
     }
 
     private static void AddTypeScriptTypeExpressionSegments(
