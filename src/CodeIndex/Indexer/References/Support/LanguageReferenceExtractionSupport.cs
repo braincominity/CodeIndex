@@ -966,6 +966,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoTypeAssertionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
@@ -1337,17 +1338,77 @@ internal static class LanguageReferenceExtractionSupport
         }
     }
 
-    private static bool HasGoIdentifierBeforeBracket(string line, int openBracket)
+    private static void EmitGoGenericCompositeLiteralReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var open = line.IndexOf('[', searchStart);
+            if (open < 0)
+                return;
+
+            searchStart = open + 1;
+            if (!TryGetGoIdentifierBeforeBracket(line, open, out var nameStart, out var nameLength))
+                continue;
+
+            var typeName = line.Substring(nameStart, nameLength);
+            if (typeName.Length == 0 || !char.IsUpper(typeName[0]))
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+            if (close < 0)
+                continue;
+
+            var afterClose = SkipWhitespace(line, close + 1);
+            if (afterClose >= line.Length || line[afterClose] != '{')
+                continue;
+
+            if (!IsGoCompositeLiteralContext(line, nameStart, nameLength))
+                continue;
+
+            ReferenceExtractor.AddReference(references, seen, fileId, typeName, nameStart, "instantiate", context, lineNumber, resolveContainerForColumn(nameStart));
+
+            var typeArguments = line[(open + 1)..close];
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeArguments))
+            {
+                var rawArgument = typeArguments.Substring(segmentStart, segmentLength);
+                var expression = rawArgument.Trim();
+                if (expression.Length == 0 || !ContainsLikelyGoTypeArgument(expression))
+                    continue;
+
+                var trimStart = rawArgument.IndexOf(expression, StringComparison.Ordinal);
+                var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
+                EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
+        }
+    }
+
+    private static bool HasGoIdentifierBeforeBracket(string line, int openBracket)
+        => TryGetGoIdentifierBeforeBracket(line, openBracket, out _, out _);
+
+    private static bool TryGetGoIdentifierBeforeBracket(string line, int openBracket, out int start, out int length)
+    {
+        start = -1;
+        length = 0;
         var cursor = openBracket - 1;
         while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
             cursor--;
         if (cursor < 0 || !IsSimpleIdentifierPart(line[cursor]))
             return false;
 
+        var end = cursor + 1;
         while (cursor >= 0 && IsSimpleIdentifierPart(line[cursor]))
             cursor--;
 
+        start = cursor + 1;
+        length = end - start;
         return true;
     }
 

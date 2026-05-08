@@ -19,6 +19,7 @@ affected:
 - **Go generic call type arguments are indexed as type references** — call sites such as `Decode[User]()` and `Map[model.Event, Result]()` now link their concrete type arguments.
 - **Go function type declarations expose parameter and return types** — declarations such as `type Handler func(Request) Response` and `Callback func(Context) Result` now link their signature types.
 - **Go channel type declarations expose element types** — directional channel declarations such as `<-chan Event` and `chan<- Command` now link `Event` and `Command`.
+- **Go generic composite literals are indexed with their type arguments** — literals such as `Cache[Entry]{}` and `model.Set[Key, Value]{}` now link the instantiated type and concrete type arguments.
 
 ## 日本語
 
@@ -34,3 +35,4 @@ affected:
 - **Go generic call の型引数を型参照として索引するようになりました** — `Decode[User]()` や `Map[model.Event, Result]()` のような call site から具体型引数を辿れるようになりました。
 - **Go function type 宣言の引数型と戻り値型を参照として出すようになりました** — `type Handler func(Request) Response` や `Callback func(Context) Result` のような宣言から signature 内の型を辿れるようになりました。
 - **Go channel type 宣言の要素型を参照として出すようになりました** — `<-chan Event` や `chan<- Command` のような方向付き channel 宣言から `Event` と `Command` を辿れるようになりました。
+- **Go generic composite literal を型引数付きで索引するようになりました** — `Cache[Entry]{}` や `model.Set[Key, Value]{}` のような literal から生成型と具体型引数を辿れるようになりました。

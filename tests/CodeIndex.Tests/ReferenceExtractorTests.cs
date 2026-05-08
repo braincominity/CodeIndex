@@ -7757,6 +7757,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericCompositeLiterals_CapturesTypeAndArguments()
+    {
+        const string content = """
+            package main
+
+            func build(values []func()) {
+                cache := Cache[Entry]{}
+                set := model.Set[Key, Value]{}
+                values[i]()
+                _, _ = cache, set
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Set" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
