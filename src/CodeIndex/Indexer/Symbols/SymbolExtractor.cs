@@ -1394,6 +1394,7 @@ public static partial class SymbolExtractor
             new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("class",    new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?" + CppTemplatePrefixPattern + @"class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?" + CppTemplatePrefixPattern + @"struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("union",    new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?" + CppTemplatePrefixPattern + @"union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),

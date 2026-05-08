@@ -747,6 +747,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsUnionDeclarations()
+    {
+        var content = """
+            union Value { int number; float real; };
+            export template <typename T> union Tagged { T value; };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Tagged");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
