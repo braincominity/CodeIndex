@@ -3245,17 +3245,39 @@ public static partial class SymbolExtractor
             return false;
         }
 
+        int propertyEndColumn;
         var sanitizedQuote = sanitizedLines[propertyLineIndex][propertyQuoteColumn];
-        if (sanitizedQuote is not ('\'' or '"'))
-            return false;
+        if (sanitizedQuote is '\'' or '"')
+        {
+            if (!TryReadJavaScriptTypeScriptQuotedExportPropertyName(
+                    rawLines[propertyLineIndex],
+                    sanitizedLines[propertyLineIndex],
+                    propertyQuoteColumn,
+                    out propertyName,
+                    out propertyStartColumn,
+                    out var quotedPropertyEndColumn))
+            {
+                return false;
+            }
 
-        if (!TryReadJavaScriptTypeScriptQuotedExportPropertyName(
-                rawLines[propertyLineIndex],
-                sanitizedLines[propertyLineIndex],
-                propertyQuoteColumn,
-                out propertyName,
-                out propertyStartColumn,
-                out var propertyEndColumn))
+            propertyEndColumn = quotedPropertyEndColumn;
+        }
+        else if (char.IsDigit(sanitizedQuote))
+        {
+            if (!TryReadJavaScriptTypeScriptNumericExportPropertyName(
+                    rawLines[propertyLineIndex],
+                    sanitizedLines[propertyLineIndex],
+                    propertyQuoteColumn,
+                    out propertyName,
+                    out propertyStartColumn,
+                    out var numericPropertyEndColumn))
+            {
+                return false;
+            }
+
+            propertyEndColumn = numericPropertyEndColumn;
+        }
+        else
         {
             return false;
         }
@@ -3350,6 +3372,37 @@ public static partial class SymbolExtractor
 
         propertyName = NormalizeJavaScriptTypeScriptExportedSpecifierName(rawName);
         propertyStartColumn = quoteColumn + 1;
+        propertyEndColumn = probe - 1;
+        return propertyName.Length > 0;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptNumericExportPropertyName(
+        string rawLine,
+        string sanitizedLine,
+        int numberColumn,
+        out string propertyName,
+        out int propertyStartColumn,
+        out int propertyEndColumn)
+    {
+        propertyName = string.Empty;
+        propertyStartColumn = -1;
+        propertyEndColumn = -1;
+
+        if (numberColumn < 0
+            || numberColumn >= sanitizedLine.Length
+            || numberColumn >= rawLine.Length
+            || !char.IsDigit(sanitizedLine[numberColumn]))
+        {
+            return false;
+        }
+
+        var probe = numberColumn;
+        if (!TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref probe, out _))
+            return false;
+
+        var rawEndColumn = Math.Min(probe, rawLine.Length);
+        propertyName = rawLine[numberColumn..rawEndColumn].Trim();
+        propertyStartColumn = numberColumn;
         propertyEndColumn = probe - 1;
         return propertyName.Length > 0;
     }
