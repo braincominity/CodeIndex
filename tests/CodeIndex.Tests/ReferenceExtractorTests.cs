@@ -21037,6 +21037,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustUseStatements_CaptureImportTargetReferences()
+    {
+        const string content = """
+            use crate::models::User;
+            use crate::services::{Repository, Store as StoreAlias};
+            use crate::prelude::{self, Widget};
+            pub use r#async::Handler;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "prelude" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "StoreAlias" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

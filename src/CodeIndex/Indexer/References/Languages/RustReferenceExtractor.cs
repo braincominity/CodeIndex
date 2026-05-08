@@ -22,6 +22,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex ModuleDeclarationRegex = new(
         $@"^\s*(?:pub(?:\s*\([^\)]*\))?\s+)?mod\s+(?<name>{RustIdentifierPattern})\s*;",
         RegexOptions.Compiled);
+    private static readonly Regex UseStatementRegex = new(
+        @"^\s*(?:pub(?:\s*\([^\)]*\))?\s+)?use\s+(?<body>.+);",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -126,6 +129,7 @@ internal static class RustReferenceExtractor
         SymbolRecord? container,
         SymbolRecord? enumContainer)
     {
+        EmitUseReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitExternCrateReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitModuleDeclarationReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -139,6 +143,114 @@ internal static class RustReferenceExtractor
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitUseReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = UseStatementRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var bodyGroup = match.Groups["body"];
+        EmitUseBodyReferences(bodyGroup.Value, bodyGroup.Index, references, seen, fileId, context, lineNumber, container, prefix: null);
+    }
+
+    private static void EmitUseBodyReferences(
+        string body,
+        int bodyStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string? prefix)
+    {
+        var text = body.Trim();
+        if (text.Length == 0)
+            return;
+
+        var textStart = bodyStart + body.IndexOf(text, StringComparison.Ordinal);
+        var openBrace = text.IndexOf('{');
+        if (openBrace >= 0)
+        {
+            var closeBrace = text.LastIndexOf('}');
+            if (closeBrace > openBrace)
+            {
+                var groupedPrefix = CombineUsePath(prefix, text[..openBrace].Trim());
+                var inner = text.Substring(openBrace + 1, closeBrace - openBrace - 1);
+                foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(inner))
+                {
+                    EmitUseBodyReferences(
+                        inner.Substring(segmentStart, segmentLength),
+                        textStart + openBrace + 1 + segmentStart,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        container,
+                        groupedPrefix);
+                }
+
+                return;
+            }
+        }
+
+        var aliasIndex = FindTopLevelUseAliasIndex(text);
+        var target = aliasIndex >= 0 ? text[..aliasIndex].Trim() : text;
+        if (target.Length == 0 || target is "crate" or "super" or "*")
+            return;
+
+        if (target == "self" && !string.IsNullOrWhiteSpace(prefix))
+            target = prefix;
+        else if (target == "self")
+            return;
+        else if (!string.IsNullOrWhiteSpace(prefix))
+            target = CombineUsePath(prefix, target);
+
+        var leafStart = target.LastIndexOf("::", StringComparison.Ordinal);
+        var leaf = leafStart >= 0 ? target[(leafStart + 2)..].Trim() : target.Trim();
+        if (leaf.Length == 0 || leaf is "crate" or "self" or "super" or "*")
+            return;
+
+        var leafIndex = text.IndexOf(leaf, StringComparison.Ordinal);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            NormalizeIdentifier(leaf),
+            textStart + Math.Max(0, leafIndex),
+            "reference",
+            context,
+            lineNumber,
+            container);
+    }
+
+    private static int FindTopLevelUseAliasIndex(string text)
+    {
+        foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(text, "as"))
+            return asIndex;
+
+        return -1;
+    }
+
+    private static string CombineUsePath(string? prefix, string name)
+    {
+        var cleanedPrefix = prefix?.Trim().TrimEnd(':');
+        var cleanedName = name.Trim().TrimEnd(':');
+        if (string.IsNullOrWhiteSpace(cleanedPrefix))
+            return cleanedName;
+        if (string.IsNullOrWhiteSpace(cleanedName))
+            return cleanedPrefix;
+        return $"{cleanedPrefix}::{cleanedName}";
     }
 
     private static void EmitExternCrateReferences(
