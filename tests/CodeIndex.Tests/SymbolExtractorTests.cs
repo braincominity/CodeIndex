@@ -14629,6 +14629,8 @@ public class SymbolExtractorTests
             type Names = string list
             type Result<'T> = Choice<'T, string>
             type Pair<'T, 'U> = 'T * 'U
+            type rec Tree<'T> = Leaf | Node of 'T * Tree<'T>
+            type rec Workflow = Started | Finished
             """;
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
@@ -14637,8 +14639,12 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Names");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Result");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Pair");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Workflow");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Result");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Pair");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Tree");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Workflow");
     }
 
     [Fact]
