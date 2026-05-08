@@ -550,6 +550,12 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (line.Length == trimmed.Length && trimmed.StartsWith("var", StringComparison.Ordinal))
+            {
+                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["var".Length..].TrimStart());
+                continue;
+            }
+
             if (trimmed.StartsWith("type", StringComparison.Ordinal))
             {
                 TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
