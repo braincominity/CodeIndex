@@ -720,7 +720,7 @@ internal static class JavaReferenceExtractor
             resolveContainerForColumn,
             genericParameterNames);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
         ReferenceExtractor.EmitDeclarationTypeReferences(
             "java",
             preparedLine,
@@ -1030,7 +1030,8 @@ internal static class JavaReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         int keywordIndex = ReferenceExtractor.FindTopLevelKeyword(line, "throws");
         if (keywordIndex < 0)
@@ -1058,7 +1059,8 @@ internal static class JavaReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(absoluteStart),
-                "java");
+                "java",
+                ignoredSegments);
         }
     }
 

@@ -1238,6 +1238,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaGenericThrows_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            class Failure extends Exception {}
+            class Demo {
+                public <E extends Failure> void run() throws E {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "E" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
     {
         const string content = """
