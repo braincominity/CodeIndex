@@ -530,7 +530,7 @@ public static partial class SymbolExtractor
                 cursor++;
 
             var afterReceiverName = SkipGoSymbolWhitespace(receiver, cursor);
-            if (afterReceiverName < receiver.Length)
+            if (afterReceiverName > cursor && afterReceiverName < receiver.Length)
                 typeText = receiver[afterReceiverName..];
         }
 

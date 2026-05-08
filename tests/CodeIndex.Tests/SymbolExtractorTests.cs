@@ -10723,10 +10723,10 @@ public class SymbolExtractorTests
     {
         // Should detect both regular and method functions
         // 通常関数とメソッド関数の両方を検出する
-        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}";
+        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}\nfunc (Store[T, U]) Snapshot() {\n}";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Equal(4, symbols.Count(s => s.Kind == "function"));
+        Assert.Equal(5, symbols.Count(s => s.Kind == "function"));
         Assert.Contains(symbols, s => s.Name == "NewHandler");
         var regularFunction = Assert.Single(symbols, s => s.Name == "Load");
         Assert.Null(regularFunction.ContainerName);
@@ -10736,6 +10736,9 @@ public class SymbolExtractorTests
         var genericMethod = Assert.Single(symbols, s => s.Name == "Save");
         Assert.Equal("struct", genericMethod.ContainerKind);
         Assert.Equal("Store", genericMethod.ContainerName);
+        var unnamedGenericMethod = Assert.Single(symbols, s => s.Name == "Snapshot");
+        Assert.Equal("struct", unnamedGenericMethod.ContainerKind);
+        Assert.Equal("Store", unnamedGenericMethod.ContainerName);
     }
 
     [Fact]
