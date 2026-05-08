@@ -1728,6 +1728,12 @@ public static partial class ReferenceExtractor
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
+            if (language == "rust" && segmentStart > 0 && expression[segmentStart - 1] == '\'')
+            {
+                i--;
+                continue;
+            }
+
             var rawSegment = expression.Substring(segmentStart, i - segmentStart);
             var isEscapedCSharpIdentifier = language == "csharp" && rawSegment.Length > 0 && rawSegment[0] == '@';
             var segment = rawSegment;

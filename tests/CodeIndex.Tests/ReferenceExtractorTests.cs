@@ -20944,6 +20944,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustLifetimes_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            struct Holder<'a> {
+                value: &'a User,
+                fallback: &'static User,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "a" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "static" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
