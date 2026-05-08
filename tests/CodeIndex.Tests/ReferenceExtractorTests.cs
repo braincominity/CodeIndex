@@ -17334,6 +17334,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftTypeParameterModifiers_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Model {}
+            actor Worker {}
+
+            func update(value: inout Model, worker: isolated Worker) {}
+            func consume(value: consuming Model, send valueToSend: sending Model) {}
+            func borrow(value: borrowing Model) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Model"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Worker"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "inout" or "isolated" or "consuming" or "sending" or "borrowing"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
