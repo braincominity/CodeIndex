@@ -10562,6 +10562,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsComputationExpressionBangCalls()
+    {
+        const string content = """
+            let workflow value =
+                task {
+                    do! run value
+                    return! finish value
+                    yield! produce value
+                }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "produce" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """

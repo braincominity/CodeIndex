@@ -20,7 +20,7 @@ internal static class FSharpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex SpaceApplicationCallRegex = new(
-        $@"(?:\b(?:then|do|else|in)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
+        $@"(?:\b(?:then|do!?|else|in|return!?|yield!?)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
             (?<name>{IdentifierPattern})\b
             (?=\s+(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
