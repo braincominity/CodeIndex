@@ -10598,6 +10598,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsConditionApplicationCalls()
+    {
+        const string content = """
+            let run user cursor =
+                if validate user then printfn "valid"
+                elif shouldRetry user then printfn "retry"
+                while hasNext cursor do printfn "next"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "shouldRetry" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "hasNext" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
