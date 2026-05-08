@@ -10,6 +10,10 @@ internal static class FSharpReferenceExtractor
         $@"(?<![\w$])(?:\|{{1,3}}>)\s*(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b",
         RegexOptions.Compiled);
 
+    private static readonly Regex BackwardPipelineCallRegex = new(
+        $@"(?<![\w$])(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\s*<\|{{1,3}}",
+        RegexOptions.Compiled);
+
     private static readonly Regex SpaceApplicationCallRegex = new(
         $@"(?:\b(?:then|do|else|in)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
@@ -36,6 +40,13 @@ internal static class FSharpReferenceExtractor
         Action<string, int> addCallLikeReference)
     {
         foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            var callIndex = match.Groups["name"].Index;
+            addCallLikeReference(name, callIndex);
+        }
+
+        foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;

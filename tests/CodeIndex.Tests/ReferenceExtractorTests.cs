@@ -10544,6 +10544,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsBackwardPipelineCallee()
+    {
+        const string content = """
+            let run user =
+                printfn <| user.Name
+                log <|| ("user", user.Id)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "log" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
