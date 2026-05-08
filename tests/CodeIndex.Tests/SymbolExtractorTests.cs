@@ -12244,6 +12244,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_DetectsStructNewBlockAssignments()
+    {
+        var content = """
+            Result = Struct.new(:ok, :value) do
+              def success?
+                ok
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "success?"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Result");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsOperatorMethodDefinitions()
     {
         var content = """

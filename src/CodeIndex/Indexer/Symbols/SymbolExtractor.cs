@@ -1329,6 +1329,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*task\s+(?::(?<name>\w+)|(?<name>\w+)\s*:)", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Class\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Struct\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("property", new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\[\]=?|\*\*|<<|>>|<=>|===|==|!=|!~|=~|<=|>=|[+\-*/%&|^~<>]=?|[+\-]@|!)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
