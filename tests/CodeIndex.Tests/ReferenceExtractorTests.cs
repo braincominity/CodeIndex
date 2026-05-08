@@ -10549,6 +10549,7 @@ public class ReferenceExtractorTests
         const string content = """
             let run user =
                 printfn <| user.Name
+                printfn <| render user
                 log <|| ("user", user.Id)
             """;
 
@@ -10556,6 +10557,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "log" && r.ReferenceKind == "call");
     }
 
