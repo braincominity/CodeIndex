@@ -12123,6 +12123,7 @@ public class SymbolExtractorTests
               attr_accessor :name, :age, :email
               attr_reader :id, :created_at
               attr_writer :internal_flag, :debug_count
+              store_accessor :settings, :theme, :locale
               attr_accessor :nickname
 
               def greet(greeting = "Hello")
@@ -12146,6 +12147,8 @@ public class SymbolExtractorTests
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "created_at"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "internal_flag"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "debug_count"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "theme"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "locale"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "nickname"));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "full_name"));
