@@ -7705,6 +7705,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoFunctionTypeDeclarations_CapturesParameterAndReturnTypes()
+    {
+        const string content = """
+            package main
+
+            type Handler func(Request) Response
+
+            type Server struct {
+                Callback func(Context, *Payload) Result
+            }
+
+            var factory func(Config) *Client
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Config" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

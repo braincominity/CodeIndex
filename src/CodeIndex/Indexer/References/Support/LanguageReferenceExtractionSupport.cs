@@ -964,6 +964,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoTypeAssertionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
@@ -1264,6 +1265,39 @@ internal static class LanguageReferenceExtractionSupport
                 var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
                 EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             }
+        }
+    }
+
+    private static void EmitGoFunctionTypeSignatureTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var funcIndex = line.IndexOf("func", searchStart, StringComparison.Ordinal);
+            if (funcIndex < 0)
+                return;
+
+            searchStart = funcIndex + "func".Length;
+            if (!IsIdentifierAt(line, funcIndex, "func"))
+                continue;
+
+            var open = SkipWhitespace(line, searchStart);
+            if (open >= line.Length || line[open] != '(')
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '(', ')');
+            if (close < 0)
+                continue;
+
+            EmitGoParameterListTypes(line, open + 1, close, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            EmitGoSignatureReturnTypes(line, close + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
     }
 
