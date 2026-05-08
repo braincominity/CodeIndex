@@ -33,6 +33,7 @@ internal static class SwiftReferenceExtractor
         EmitGenericInvocationArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -90,6 +91,104 @@ internal static class SwiftReferenceExtractor
             slashIndex = rootEnd;
         }
     }
+
+    private static void EmitSelfMetatypeExpressionReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var dotIndex = 0; dotIndex + ".self".Length <= preparedLine.Length; dotIndex++)
+        {
+            if (preparedLine[dotIndex] != '.'
+                || !StartsWithSwiftWord(preparedLine, dotIndex + 1, "self"))
+            {
+                continue;
+            }
+
+            var rootStart = FindSwiftMetatypeRootStart(preparedLine, dotIndex);
+            while (rootStart >= 0 && rootStart < dotIndex && char.IsWhiteSpace(preparedLine[rootStart]))
+                rootStart++;
+            if (rootStart < 0 || !LooksLikeSwiftTypeExpressionStart(preparedLine[rootStart]))
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(rootStart, dotIndex - rootStart),
+                rootStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(rootStart));
+            dotIndex += ".self".Length - 1;
+        }
+    }
+
+    private static int FindSwiftMetatypeRootStart(string preparedLine, int rootEnd)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+
+        for (var index = rootEnd - 1; index >= 0; index--)
+        {
+            var ch = preparedLine[index];
+            switch (ch)
+            {
+                case '>':
+                    angleDepth++;
+                    continue;
+                case '<':
+                    if (angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
+
+                    break;
+                case ')':
+                    parenDepth++;
+                    continue;
+                case '(':
+                    if (parenDepth > 0)
+                    {
+                        parenDepth--;
+                        continue;
+                    }
+
+                    break;
+                case ']':
+                    squareDepth++;
+                    continue;
+                case '[':
+                    if (squareDepth > 0)
+                    {
+                        squareDepth--;
+                        continue;
+                    }
+
+                    break;
+            }
+
+            if (angleDepth > 0 || parenDepth > 0 || squareDepth > 0)
+                continue;
+
+            if (IsSwiftIdentifierPart(ch) || ch == '.' || char.IsWhiteSpace(ch))
+                continue;
+
+            return index + 1;
+        }
+
+        return 0;
+    }
+
+    private static bool LooksLikeSwiftTypeExpressionStart(char ch)
+        => char.IsUpper(ch) || ch == '[' || ch == '(';
 
     private static void EmitCollectionShorthandConstructorTypeReferences(
         string preparedLine,
