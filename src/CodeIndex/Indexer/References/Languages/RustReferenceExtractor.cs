@@ -1329,6 +1329,20 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(boundsStart));
+
+        var fullBoundsEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, boundsStart, stopAtArrow: false);
+        if (fullBoundsEnd > boundsStart)
+        {
+            EmitFunctionTraitReturnTypeFromExpression(
+                preparedLine.Substring(boundsStart, fullBoundsEnd - boundsStart),
+                boundsStart,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
     }
 
     private static void EmitGenericBoundReferences(
@@ -1484,6 +1498,38 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(absoluteStart));
         }
+    }
+
+    private static void EmitFunctionTraitReturnTypeFromExpression(
+        string expression,
+        int expressionStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(expression, "->");
+        if (arrowIndex < 0)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(expression, arrowIndex + 2);
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(expression, typeStart, stopAtArrow: false);
+        if (typeEnd <= typeStart)
+            return;
+
+        var absoluteStart = expressionStart + typeStart;
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            expression.Substring(typeStart, typeEnd - typeStart),
+            absoluteStart,
+            "rust",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(absoluteStart));
     }
 
     private static void EmitGenericDefaultTypeReferences(
