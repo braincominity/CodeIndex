@@ -7906,6 +7906,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppBraceConstruction_CapturesInstantiationReferences()
+    {
+        const string content = """
+            ns::Result Build() {
+              auto user = User{};
+              auto holder = Box<Item>{};
+              return ns::Result{};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Item" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """

@@ -26,6 +26,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CppFactoryTemplateArgumentRegex = new(
         @"\b(?:std\s*::\s*)?(?:make_unique|make_shared|make_optional)\s*<(?<type>[^;{}<>]+(?:<[^;{}<>]+>)?[^;{}<>]*)>\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppBraceConstructionRegex = new(
+        @"(?:=\s*|return\s+)(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Z_]\w*(?:\s*<[^;{}]+>)?)\s*\{",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppDeclarationTypeRegex = new(
         @"(?<![\w:])(?<type>(?:(?:const|volatile|static|inline|constexpr|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}]+>)?(?:\s*[*&])*)\s+(?<name>[A-Za-z_]\w*)\s*(?=[,;)=])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -953,6 +956,15 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+        }
+
+        foreach (Match match in CppBraceConstructionRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            var typeName = LastCppQualifiedSegment(group.Value);
+            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
         }
 
