@@ -7926,6 +7926,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppUsingAliases_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            using ServicePtr = std::unique_ptr<Service>;
+            using HandlerMap = std::map<std::string, Handler>;
+            template <typename T> using RepoBox = Box<Repository>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
