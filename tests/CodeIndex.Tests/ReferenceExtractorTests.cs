@@ -7904,6 +7904,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoBranchLabels_CapturesLabelReferences()
+    {
+        const string content = """
+            package main
+
+            func run(done bool) {
+            Retry:
+                for {
+                    if done {
+                        break Retry
+                    }
+                    continue Retry
+                }
+                goto Retry
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("break Retry", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("continue Retry", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("goto Retry", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

@@ -31,7 +31,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\b(?:var|const)\s+[A-Za-z_]\w*\s+(?<type>[\*\[\]\w.]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoFieldTypeRegex = new(
-        @"^\s*(?!(?:package|import|func|type|var|const|return|defer|go|if|for|switch|select|case|default|else)\b)[A-Za-z_]\w*\s+(?<type>[\*\[\]\w.]+)(?:\s|`|$)",
+        @"^\s*(?!(?:package|import|func|type|var|const|return|defer|go|break|continue|goto|if|for|switch|select|case|default|else)\b)[A-Za-z_]\w*\s+(?<type>[\*\[\]\w.]+)(?:\s|`|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoTypeAliasRegex = new(
         @"^\s*type\s+[A-Za-z_]\w*(?:\[[^\]]+\])?\s+=?\s*(?<type>[\*\[\]\w.]+)",
@@ -50,6 +50,9 @@ internal static class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoFunctionLiteralRegex = new(
         @"\bfunc\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoBranchLabelRegex = new(
+        @"\b(?:goto|break|continue)\s+(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DartCtorRegex = new(
@@ -2229,6 +2232,12 @@ internal static class LanguageReferenceExtractionSupport
 
     private static bool IsSimpleIdentifierPart(char ch) =>
         ch == '_' || char.IsLetterOrDigit(ch);
+
+    internal static void EmitGoBranchLabelReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    {
+        foreach (Match match in GoBranchLabelRegex.Matches(preparedLine))
+            addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
+    }
 
     private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
