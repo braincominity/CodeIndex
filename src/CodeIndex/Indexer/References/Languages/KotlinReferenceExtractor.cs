@@ -287,7 +287,8 @@ internal static class KotlinReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn);
+                resolveContainerForColumn,
+                genericParameterNames);
         }
     }
 

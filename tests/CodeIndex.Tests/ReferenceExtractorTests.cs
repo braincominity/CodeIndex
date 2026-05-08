@@ -13175,6 +13175,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinGenericTypeOperators_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User
+
+            inline fun <reified T> accepts(value: Any): Boolean = value is T
+            fun parse(value: Any): User = value as User
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpWhereConstraintKeywords_DoNotBecomeTypeReferences()
     {
         const string content = """

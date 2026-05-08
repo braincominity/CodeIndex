@@ -318,7 +318,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         foreach (var keyword in keywords)
         {
@@ -341,7 +342,8 @@ internal static class TypedLanguageReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(typeStart));
+                    resolveContainerForColumn(typeStart),
+                    ignoredSegments);
             }
         }
     }
