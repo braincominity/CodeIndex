@@ -17090,6 +17090,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftAssociatedTypeConstraintsAndDefaults_RecordsReferencedTypes()
+    {
+        const string content = """
+            protocol Identifiable {}
+            struct MemoryCache<T> {}
+            struct NetworkLoader {}
+
+            protocol Store {
+                associatedtype Item: Identifiable
+                associatedtype Cache = MemoryCache<Item>
+                associatedtype Loader: AsyncSequence = NetworkLoader
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Identifiable"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MemoryCache"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkLoader"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

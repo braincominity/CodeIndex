@@ -25,6 +25,7 @@ internal static class SwiftReferenceExtractor
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypealiasRhsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitAssociatedTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -151,7 +152,7 @@ internal static class SwiftReferenceExtractor
         if (typealiasIndex < 0)
             return;
 
-        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', typealiasIndex + "typealias".Length);
+        var equalsIndex = FindTopLevelAssignmentEquals(preparedLine, typealiasIndex + "typealias".Length);
         if (equalsIndex < 0)
             return;
 
@@ -170,6 +171,84 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitAssociatedTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var associatedTypeIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "associatedtype");
+        if (associatedTypeIndex < 0)
+            return;
+
+        var declarationStart = associatedTypeIndex + "associatedtype".Length;
+        var equalsIndex = FindTopLevelAssignmentEquals(preparedLine, declarationStart);
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', declarationStart);
+
+        if (colonIndex >= 0 && (equalsIndex < 0 || colonIndex < equalsIndex))
+        {
+            var constraintStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+            var constraintEnd = equalsIndex >= 0
+                ? equalsIndex
+                : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, constraintStart, stopAtComma: false);
+            if (constraintEnd > constraintStart)
+            {
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    preparedLine.Substring(constraintStart, constraintEnd - constraintStart),
+                    constraintStart,
+                    "swift",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(constraintStart));
+            }
+        }
+
+        if (equalsIndex < 0)
+            return;
+
+        var defaultStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, equalsIndex + 1);
+        var defaultEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, defaultStart, stopAtComma: false, stopAtArrow: false);
+        if (defaultEnd <= defaultStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(defaultStart, defaultEnd - defaultStart),
+            defaultStart,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(defaultStart));
+    }
+
+    private static int FindTopLevelAssignmentEquals(string preparedLine, int startIndex)
+    {
+        var searchStart = startIndex;
+        while (searchStart < preparedLine.Length)
+        {
+            var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', searchStart);
+            if (equalsIndex < 0)
+                return -1;
+
+            var previous = equalsIndex > 0 ? preparedLine[equalsIndex - 1] : '\0';
+            var next = equalsIndex + 1 < preparedLine.Length ? preparedLine[equalsIndex + 1] : '\0';
+            if (previous is not ('=' or '!' or '<' or '>') && next != '=')
+                return equalsIndex;
+
+            searchStart = equalsIndex + 1;
+        }
+
+        return -1;
     }
 
     private static void EmitTypedThrowsReferences(
