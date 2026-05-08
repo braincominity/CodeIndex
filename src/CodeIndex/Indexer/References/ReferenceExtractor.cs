@@ -2650,7 +2650,8 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         resolveContainerForColumn(logicalTypeIndex),
-                        "csharp")))
+                        "csharp",
+                        csharpGenericParameterNames)))
             {
                 continue;
             }
@@ -2686,7 +2687,8 @@ public static partial class ReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(typeGroup.Index),
-                "csharp");
+                "csharp",
+                csharpGenericParameterNames);
         }
 
         EmitCSharpCaseTypePatternReferences(
