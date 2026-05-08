@@ -12934,6 +12934,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinBacktickAnnotations_NormalizesNames()
+    {
+        // Kotlin annotations can be backticked declarations; metadata references should keep
+        // the canonical annotation symbol name for both no-arg and argument forms.
+        // Kotlin annotation も backtick 付き宣言にできるため、引数なし・引数ありの metadata
+        // reference でも canonical annotation symbol 名を使う。
+        const string content = """
+            annotation class `Fancy Name`(val value: String = "")
+
+            @`Fancy Name`
+            class Demo {
+                @`Fancy Name`("x")
+                fun run(input: @`Fancy Name` Payload) {}
+            }
+
+            class Payload
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Fancy Name" && s.Kind == "class");
+        Assert.True(references.Count(r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "annotation") >= 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Fancy Name`" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

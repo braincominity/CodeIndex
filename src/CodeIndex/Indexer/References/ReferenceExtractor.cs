@@ -703,6 +703,9 @@ public static partial class ReferenceExtractor
     private static readonly Regex NoArgAnnotationRegex = new(
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
+    private static readonly Regex KotlinBacktickAnnotationRegex = new(
+        @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?<name>`[^`\r\n]+`)(?:\s*\([^)\r\n]*\))?",
+        RegexOptions.Compiled);
 
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
@@ -795,6 +798,13 @@ public static partial class ReferenceExtractor
     private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
     {
         return false;
+    }
+
+    private static string NormalizeKotlinBacktickIdentifier(string name)
+    {
+        if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+            return name[1..^1];
+        return name;
     }
 
     /// <summary>
@@ -2214,6 +2224,20 @@ public static partial class ReferenceExtractor
             }
             else if (AnnotationLanguages.Contains(language))
             {
+                if (language == "kotlin")
+                {
+                    foreach (Match match in KotlinBacktickAnnotationRegex.Matches(preparedLine))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        var name = NormalizeKotlinBacktickIdentifier(nameGroup.Value);
+                        if (IsIgnoredCallName(language, name))
+                            continue;
+                        if (definitionNames != null && definitionNames.Contains(name))
+                            continue;
+                        AddReference(references, seen, fileId, name, nameGroup.Index, "annotation", context, lineNumber, container);
+                    }
+                }
+
                 foreach (Match match in NoArgAnnotationRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;

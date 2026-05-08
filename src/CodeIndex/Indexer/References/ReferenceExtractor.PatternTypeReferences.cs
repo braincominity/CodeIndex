@@ -1849,8 +1849,19 @@ public static partial class ReferenceExtractor
     internal static int SkipJavaAnnotation(string text, int start)
     {
         int i = start + 1;
-        while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
-            i++;
+        if (i < text.Length && text[i] == '`')
+        {
+            var closeIndex = text.IndexOf('`', i + 1);
+            if (closeIndex < 0)
+                return start;
+            i = closeIndex + 1;
+        }
+        else
+        {
+            while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
+                i++;
+        }
+
         if (i < text.Length && text[i] == '(')
         {
             int close = FindMatchingChar(text, i, '(', ')');
