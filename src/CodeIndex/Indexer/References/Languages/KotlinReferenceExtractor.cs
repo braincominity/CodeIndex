@@ -637,11 +637,34 @@ internal static class KotlinReferenceExtractor
 
     private static HashSet<string> CollectGenericParameterNames(string preparedLine)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
-        if (genericOpenIndex < 0)
-            return names;
+        foreach (var funIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "fun"))
+        {
+            var genericOpenIndex = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, funIndex + "fun".Length);
+            if (genericOpenIndex < preparedLine.Length && preparedLine[genericOpenIndex] == '<')
+                return CollectGenericParameterNamesFromClause(preparedLine, genericOpenIndex);
+        }
 
+        foreach (var keyword in new[] { "class", "interface", "typealias" })
+        {
+            foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
+            {
+                var nameStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, keywordIndex + keyword.Length);
+                var nameEnd = ConsumeKotlinDeclarationName(preparedLine, nameStart);
+                if (nameEnd <= nameStart)
+                    continue;
+
+                var genericOpenIndex = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, nameEnd);
+                if (genericOpenIndex < preparedLine.Length && preparedLine[genericOpenIndex] == '<')
+                    return CollectGenericParameterNamesFromClause(preparedLine, genericOpenIndex);
+            }
+        }
+
+        return [];
+    }
+
+    private static HashSet<string> CollectGenericParameterNamesFromClause(string preparedLine, int genericOpenIndex)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
         var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
         if (genericCloseIndex <= genericOpenIndex)
             return names;
@@ -655,6 +678,24 @@ internal static class KotlinReferenceExtractor
         }
 
         return names;
+    }
+
+    private static int ConsumeKotlinDeclarationName(string preparedLine, int startIndex)
+    {
+        if (startIndex >= preparedLine.Length)
+            return startIndex;
+
+        if (preparedLine[startIndex] == '`')
+        {
+            var close = preparedLine.IndexOf('`', startIndex + 1);
+            return close < 0 ? startIndex : close + 1;
+        }
+
+        var index = startIndex;
+        while (index < preparedLine.Length && ReferenceExtractor.IsJavaIdentifierPart(preparedLine[index]))
+            index++;
+
+        return index;
     }
 
     private static bool TryReadGenericParameterName(string fragment, out string name)
