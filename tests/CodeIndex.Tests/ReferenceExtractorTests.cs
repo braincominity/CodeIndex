@@ -2620,6 +2620,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyClassInheritance_IndexesSuperclass()
+    {
+        const string content = """
+            class ApplicationJob
+            end
+
+            class CleanupJob < ApplicationJob
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ApplicationJob"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """

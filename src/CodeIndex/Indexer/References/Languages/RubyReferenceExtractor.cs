@@ -39,6 +39,10 @@ internal static class RubyReferenceExtractor
         @"(?<![\w$@]):?class_name\s*(?::|=>)\s*(?<quote>['""])(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\k<quote>",
         RegexOptions.Compiled);
 
+    private static readonly Regex ClassInheritanceRegex = new(
+        @"^\s*class\s+[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\s*<\s*(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled);
+
     public static void EmitAdditionalCallReferences(
         string preparedLine,
         string originalLine,
@@ -51,6 +55,15 @@ internal static class RubyReferenceExtractor
         HashSet<int> matchedCallIndices,
         Action<string, int> addCallLikeReference)
     {
+        EmitInheritanceReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
         foreach (Match match in CommandCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -182,6 +195,34 @@ internal static class RubyReferenceExtractor
     }
 
     private static bool IsIdentifierStart(char ch) => char.IsLetter(ch) || ch == '_';
+
+    private static void EmitInheritanceReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = ClassInheritanceRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var name = match.Groups["name"].Value;
+        var tokenIndex = match.Groups["name"].Index;
+        var targetContainer = resolveContainerForCall(tokenIndex);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            name,
+            tokenIndex,
+            "type_reference",
+            context,
+            lineNumber,
+            targetContainer);
+    }
 
     private static void EmitClassNameOptionReferences(
         string commandName,
