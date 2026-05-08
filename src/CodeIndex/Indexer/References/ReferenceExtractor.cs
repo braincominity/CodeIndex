@@ -2621,9 +2621,10 @@ public static partial class ReferenceExtractor
         SymbolRecord? container,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
-        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
+        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
         {

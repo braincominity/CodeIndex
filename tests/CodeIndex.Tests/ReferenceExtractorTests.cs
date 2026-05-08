@@ -13176,6 +13176,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericSignatures_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            interface IContract<T> {}
+            class Base<T> {}
+
+            class Demo<TValue> : Base<TValue>, IContract<TValue>
+            {
+                public TItem Pick<TItem>(TItem value, IContract<TItem> fallback) => value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "TValue" or "TItem") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

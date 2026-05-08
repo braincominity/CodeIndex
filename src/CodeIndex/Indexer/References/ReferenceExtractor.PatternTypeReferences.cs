@@ -405,7 +405,8 @@ public static partial class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         var trimmed = line.TrimStart();
         if (!(trimmed.Contains(" class ", StringComparison.Ordinal)
@@ -444,8 +445,102 @@ public static partial class ReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(absoluteStart),
-                "csharp");
+                "csharp",
+                ignoredSegments: ignoredSegments);
         }
+    }
+
+    private static HashSet<string> CollectCSharpGenericParameterNamesForDeclaration(string line)
+    {
+        if (TryFindCallableParameterList(line, "csharp", out var callableNameStart, out var paramStart, out _))
+        {
+            var nameEnd = callableNameStart;
+            while (nameEnd < line.Length && IsTypeExpressionIdentifierPart("csharp", line[nameEnd]))
+                nameEnd++;
+
+            var genericOpen = SkipWhitespace(line, nameEnd);
+            if (genericOpen < paramStart && genericOpen < line.Length && line[genericOpen] == '<')
+                return CollectCSharpGenericParameterNamesFromClause(line, genericOpen);
+        }
+
+        var tokens = GetTopLevelTokenSpans(line);
+        if (tokens.Count < 2)
+            return [];
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = line.Substring(tokens[i].Start, tokens[i].Length);
+            if (token is not ("class" or "struct" or "interface" or "record" or "delegate"))
+                continue;
+            var nameIndex = i + 1;
+            if (nameIndex >= tokens.Count)
+                return [];
+            var nameToken = line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length);
+            var genericOpen = nameToken.IndexOf('<');
+            if (genericOpen < 0)
+                return [];
+            return CollectCSharpGenericParameterNamesFromClause(line, tokens[nameIndex].Start + genericOpen);
+        }
+
+        return [];
+    }
+
+    private static HashSet<string> CollectCSharpGenericParameterNamesFromClause(string line, int genericOpen)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var genericClose = FindMatchingChar(line, genericOpen, '<', '>');
+        if (genericClose <= genericOpen)
+            return names;
+
+        var clause = line.Substring(genericOpen + 1, genericClose - genericOpen - 1);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(clause))
+        {
+            var fragment = clause.Substring(segmentStart, segmentLength);
+            if (TryReadCSharpGenericParameterName(fragment, out var name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static bool TryReadCSharpGenericParameterName(string fragment, out string name)
+    {
+        name = string.Empty;
+        var index = 0;
+        while (index < fragment.Length)
+        {
+            while (index < fragment.Length && char.IsWhiteSpace(fragment[index]))
+                index++;
+
+            if (index >= fragment.Length)
+                return false;
+
+            if (fragment[index] == '[')
+            {
+                var close = FindMatchingChar(fragment, index, '[', ']');
+                if (close < 0)
+                    return false;
+                index = close + 1;
+                continue;
+            }
+
+            var tokenStart = index;
+            if (!IsTypeExpressionIdentifierStart("csharp", fragment[index]))
+                return false;
+
+            index++;
+            while (index < fragment.Length && IsTypeExpressionIdentifierPart("csharp", fragment[index]))
+                index++;
+
+            var token = NormalizeCSharpIdentifier(fragment.Substring(tokenStart, index - tokenStart));
+            if (token is "in" or "out")
+                continue;
+
+            name = token;
+            return true;
+        }
+
+        return false;
     }
 
     private static void EmitCSharpWhereConstraintReferences(
