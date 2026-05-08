@@ -708,6 +708,8 @@ Service Worker registrations written as `navigator.serviceWorker.register("./sw.
 
 Worklet module loads written as `audioWorklet.addModule("./processor.js")` or `CSS.paintWorklet.addModule("./paint.js")` also add `import` symbols for static module specifiers.
 
+Worker constructors written as `new Worker("./worker.js")` or `new SharedWorker("./shared-worker.js", { type: "module" })` also add `import` symbols for static script specifiers.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1712,6 +1714,8 @@ runtime の dynamic import は、`import(\n  "./feature"\n)` のように module
 `navigator.serviceWorker.register("./sw.js")` のような Service Worker registration も、registration options 付きの call を含め、静的な script specifier を `import` シンボルとして追加します。
 
 `audioWorklet.addModule("./processor.js")` や `CSS.paintWorklet.addModule("./paint.js")` のような Worklet module load も、静的な module specifier を `import` シンボルとして追加します。
+
+`new Worker("./worker.js")` や `new SharedWorker("./shared-worker.js", { type: "module" })` のような Worker constructor も、静的な script specifier を `import` シンボルとして追加します。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

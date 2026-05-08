@@ -2062,6 +2062,7 @@ public static partial class SymbolExtractor
                 ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
                 ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
                 ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
             }
 
             if (lang is "javascript" or "typescript"

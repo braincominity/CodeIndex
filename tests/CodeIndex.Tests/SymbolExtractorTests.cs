@@ -2128,6 +2128,36 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-audio.js");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsWorkerConstructorModuleSymbols(string language)
+    {
+        var content = """
+            const worker = new Worker("./worker.js");
+            const shared = new SharedWorker(
+              "./shared-worker.js",
+              { type: "module" }
+            );
+            const templated = new Worker(`./template-worker.js`, { type: "module" });
+            const computed = new Worker(`./${name}.js`);
+            const plain = Worker("./plain-worker.js");
+            const service = new ServiceWorker("./service-worker.js");
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(1, workerImport.Line);
+        Assert.Contains("new Worker", workerImport.Signature);
+        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
+        Assert.Equal(3, sharedImport.Line);
+        Assert.Contains("type", sharedImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./service-worker.js");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {

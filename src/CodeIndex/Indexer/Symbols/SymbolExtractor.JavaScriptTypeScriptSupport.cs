@@ -814,6 +814,87 @@ public static partial class SymbolExtractor
         ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "CSS.layoutWorklet.addModule");
     }
 
+    private static void ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "SharedWorker");
+    }
+
+    private static void ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string constructorName)
+    {
+        var rawLine = rawLines[lineIndex];
+        var sanitizedLine = sanitizedLines[lineIndex];
+        var searchStart = 0;
+        while (searchStart < sanitizedLine.Length)
+        {
+            var constructorIndex = sanitizedLine.IndexOf(constructorName, searchStart, StringComparison.Ordinal);
+            if (constructorIndex < 0)
+                return;
+
+            searchStart = constructorIndex + constructorName.Length;
+
+            if (constructorIndex > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[constructorIndex - 1]))
+                continue;
+
+            if (searchStart < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[searchStart]))
+                continue;
+
+            var prefixEnd = constructorIndex;
+            while (prefixEnd > 0 && char.IsWhiteSpace(sanitizedLine[prefixEnd - 1]))
+                prefixEnd--;
+
+            var tokenStart = prefixEnd;
+            while (tokenStart > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenStart - 1]))
+                tokenStart--;
+
+            if (tokenStart >= prefixEnd || sanitizedLine[tokenStart..prefixEnd] != "new")
+                continue;
+
+            if (!TryReadJavaScriptTypeScriptRequireModule(
+                    rawLines,
+                    sanitizedLines,
+                    lineIndex,
+                    searchStart,
+                    out var moduleName,
+                    out var moduleLineIndex,
+                    out var moduleStartColumn,
+                    out var endLineIndex,
+                    out var signature,
+                    allowTrailingArguments: true))
+            {
+                continue;
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                moduleLineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = moduleName,
+                    Line = moduleLineIndex + 1,
+                    StartLine = moduleLineIndex + 1,
+                    StartColumn = moduleStartColumn,
+                    EndLine = endLineIndex + 1,
+                    Signature = signature,
+                },
+                rawLine);
+        }
+    }
+
     private static void ExtractJavaScriptTypeScriptExactModuleCallSymbols(
         long fileId,
         string[] rawLines,
