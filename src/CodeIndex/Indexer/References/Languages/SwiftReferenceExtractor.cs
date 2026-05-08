@@ -32,6 +32,7 @@ internal static class SwiftReferenceExtractor
         EmitMacroGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericInvocationArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -88,6 +89,55 @@ internal static class SwiftReferenceExtractor
                 resolveContainerForColumn(rootStart));
             slashIndex = rootEnd;
         }
+    }
+
+    private static void EmitCollectionShorthandConstructorTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var openBracket = 0; openBracket < preparedLine.Length; openBracket++)
+        {
+            if (preparedLine[openBracket] != '[' || IsSwiftSubscriptLikeOpenBracket(preparedLine, openBracket))
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, openBracket + 1);
+            if (typeStart >= preparedLine.Length || !IsSwiftIdentifierStart(preparedLine[typeStart]))
+                continue;
+
+            var closeBracket = ReferenceExtractor.FindMatchingChar(preparedLine, openBracket, '[', ']');
+            if (closeBracket < 0 || closeBracket <= typeStart)
+                continue;
+
+            var afterBracket = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, closeBracket + 1);
+            if (afterBracket >= preparedLine.Length || preparedLine[afterBracket] != '(')
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, closeBracket - typeStart),
+                typeStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+            openBracket = closeBracket;
+        }
+    }
+
+    private static bool IsSwiftSubscriptLikeOpenBracket(string preparedLine, int openBracket)
+    {
+        var previous = openBracket - 1;
+        while (previous >= 0 && char.IsWhiteSpace(preparedLine[previous]))
+            previous--;
+
+        return previous >= 0 && (IsSwiftIdentifierPart(preparedLine[previous]) || preparedLine[previous] == ']');
     }
 
     private static void EmitCatchPatternTypeReferences(
