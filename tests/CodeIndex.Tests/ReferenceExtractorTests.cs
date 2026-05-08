@@ -2850,6 +2850,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsRoutes_IndexesResourceNames()
+    {
+        const string content = """
+            Rails.application.routes.draw do
+              resources :articles, only: :show
+              resource :profile
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "resources");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "resource");
+        Assert.Contains(references, reference => reference.SymbolName == "articles");
+        Assert.Contains(references, reference => reference.SymbolName == "profile");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
