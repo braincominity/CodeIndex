@@ -12223,6 +12223,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_DetectsClassNewBlockAssignments()
+    {
+        var content = """
+            User = Class.new(ApplicationRecord) do
+              def active?
+                true
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "active?"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "User");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsOperatorMethodDefinitions()
     {
         var content = """
