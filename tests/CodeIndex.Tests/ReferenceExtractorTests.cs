@@ -2813,6 +2813,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRefine_IndexesRefinedClass()
+    {
+        const string content = """
+            module StringFormatting
+              refine String do
+                def titleize
+                end
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "refine");
+        Assert.Contains(references, reference => reference.SymbolName == "String" && reference.ContainerName == "StringFormatting");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """

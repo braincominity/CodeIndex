@@ -173,7 +173,7 @@ public static partial class ReferenceExtractor
         // Ruby contextual keywords / Ruby の文脈キーワード
         ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "raise", "yield", "super", "include", "extend", "prepend", "alias", "alias_method",
+            "raise", "yield", "super", "include", "extend", "prepend", "refine", "alias", "alias_method",
             "private_constant", "public_constant", "module_function", "rescue_from", "gem",
             "unless", "case", "begin", "until", "module", "rescue", "ensure",
         },
