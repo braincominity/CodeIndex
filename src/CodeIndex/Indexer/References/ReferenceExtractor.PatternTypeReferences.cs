@@ -1666,6 +1666,31 @@ public static partial class ReferenceExtractor
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
+            if (language == "rust"
+                && c == 'r'
+                && i + 2 < expression.Length
+                && expression[i + 1] == '#'
+                && IsJavaIdentifierStart(expression[i + 2]))
+            {
+                var rustSegmentStart = i;
+                i += 2;
+                var rawNameStart = i;
+                i++;
+                while (i < expression.Length && IsJavaIdentifierPart(expression[i]))
+                    i++;
+
+                var rustSegment = expression.Substring(rawNameStart, i - rawNameStart);
+                if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
+                {
+                    i++;
+                    continue;
+                }
+
+                AddTypeReferenceSegment(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, context, lineNumber, container, language, ignoredSegments: ignoredSegments);
+                i--;
+                continue;
+            }
+
             if (language is "java" or "kotlin" && c == '@')
             {
                 i = SkipJavaAnnotation(expression, i);

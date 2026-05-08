@@ -20746,6 +20746,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustRawIdentifierTypeReferences_NormalizesNames()
+    {
+        const string content = """
+            struct r#type;
+            struct r#async;
+
+            struct Wrapper {
+                value: crate::r#type,
+                next: Option<r#async>,
+            }
+
+            fn build(input: r#type) -> r#async {
+                todo!()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "r" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
     {
         const string content = """
