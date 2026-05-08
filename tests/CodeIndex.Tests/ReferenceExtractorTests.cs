@@ -17256,6 +17256,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftClosureLiteralSignatures_RecordParameterAndReturnTypes()
+    {
+        const string content = """
+            struct ClosureInput {}
+            struct ClosureOutput {}
+
+            func configure() {
+                let transform = { (value: ClosureInput) -> ClosureOutput in
+                    ClosureOutput()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ClosureInput"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ClosureOutput"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

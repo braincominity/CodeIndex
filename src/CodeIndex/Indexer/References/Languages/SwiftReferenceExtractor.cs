@@ -22,6 +22,7 @@ internal static class SwiftReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitClosureSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitExtensionTargetReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -178,6 +179,71 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitClosureSignatureTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var braceIndex = preparedLine.IndexOf('{', StringComparison.Ordinal);
+        if (braceIndex < 0)
+            return;
+
+        var openParen = preparedLine.IndexOf('(', braceIndex + 1);
+        if (openParen < 0)
+            return;
+
+        var closeParen = ReferenceExtractor.FindMatchingChar(preparedLine, openParen, '(', ')');
+        if (closeParen < 0)
+            return;
+
+        var inIndex = FindSwiftClosureInKeyword(preparedLine, closeParen + 1);
+        if (inIndex < 0)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(
+            preparedLine,
+            openParen + 1,
+            closeParen,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+
+        var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(preparedLine, "->", closeParen + 1);
+        if (arrowIndex < 0 || arrowIndex >= inIndex)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, arrowIndex + 2);
+        if (typeStart >= inIndex)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(typeStart, inIndex - typeStart),
+            typeStart,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart));
+    }
+
+    private static int FindSwiftClosureInKeyword(string preparedLine, int startIndex)
+    {
+        foreach (var inIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "in", startIndex))
+            return inIndex;
+
+        return -1;
     }
 
     private static void EmitTypealiasRhsTypeReferences(
