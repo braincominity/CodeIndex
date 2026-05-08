@@ -7868,6 +7868,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTypeId_CapturesTypeOperandReferences()
+    {
+        const string content = """
+            void Run(void* service) {
+              auto serviceType = typeid(Service);
+              auto messageType = typeid(ns::Message);
+              auto runtimeType = typeid(*service);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Message" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "service" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
