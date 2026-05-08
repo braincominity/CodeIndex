@@ -13116,9 +13116,10 @@ public class ReferenceExtractorTests
     {
         const string content = """
             interface IContract {}
-            class Demo<TValue, TKey>
+            class Demo<TValue, TKey, TBuffer>
                 where TValue : unmanaged, IContract
                 where TKey : notnull
+                where TBuffer : IContract, allows ref struct
             {
             }
             """;
@@ -13127,7 +13128,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => (r.SymbolName is "unmanaged" or "notnull") && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "allows" or "ref" or "unmanaged" or "notnull") && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

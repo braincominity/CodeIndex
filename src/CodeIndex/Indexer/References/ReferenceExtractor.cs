@@ -594,7 +594,7 @@ public static partial class ReferenceExtractor
     };
     private static readonly HashSet<string> CSharpWhereConstraintIgnoredSegments = new(StringComparer.Ordinal)
     {
-        "notnull", "unmanaged",
+        "allows", "notnull", "ref", "unmanaged",
     };
     private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
     {
