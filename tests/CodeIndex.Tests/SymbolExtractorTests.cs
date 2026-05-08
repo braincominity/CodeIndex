@@ -11820,6 +11820,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsOperatorFunctionDeclarations()
+    {
+        var content = """
+            struct Vector {
+                static func + (lhs: Vector, rhs: Vector) -> Vector { lhs }
+                static func == (lhs: Vector, rhs: Vector) -> Bool { true }
+            }
+
+            prefix func ! (value: Vector) -> Vector { value }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "!");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsPrivateSetProperties()
     {
         var content = """
