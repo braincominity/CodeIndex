@@ -2536,6 +2536,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyLoad_IndexesLoadedPath()
+    {
+        const string content = """
+            def boot
+              load "config/routes.rb"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
+    }
+
+    [Fact]
     public void Extract_RubyAutoload_IndexesConstantTarget()
     {
         const string content = """

@@ -15,7 +15,7 @@ internal static class RubyReferenceExtractor
 
     private static readonly HashSet<string> CommandTargetReferenceNames = new(StringComparer.Ordinal)
     {
-        "include", "extend", "prepend", "using", "autoload", "require", "require_relative", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
+        "include", "extend", "prepend", "using", "autoload", "require", "require_relative", "load", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
         "alias", "alias_method",
         "define_method", "before_action", "after_action", "around_action", "helper_method",
         "has_many", "has_one", "belongs_to", "scope", "delegate", "validates",
@@ -23,7 +23,7 @@ internal static class RubyReferenceExtractor
 
     private static readonly HashSet<string> CommandTargetSingleTokenNames = new(StringComparer.Ordinal)
     {
-        "require", "require_relative", "raise", "define_method",
+        "require", "require_relative", "load", "raise", "define_method",
     };
 
     private static readonly HashSet<string> ClassNameOptionCommandNames = new(StringComparer.Ordinal)
@@ -182,6 +182,7 @@ internal static class RubyReferenceExtractor
             {
                 if (!string.Equals(name, "require", StringComparison.Ordinal)
                     && !string.Equals(name, "require_relative", StringComparison.Ordinal)
+                    && !string.Equals(name, "load", StringComparison.Ordinal)
                     && !string.Equals(name, "define_method", StringComparison.Ordinal))
                 {
                     continue;
