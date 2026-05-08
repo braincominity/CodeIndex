@@ -14671,6 +14671,8 @@ public class SymbolExtractorTests
             type IVisitor =
                 abstract member Visit : unit -> unit
 
+            type ILogger = interface end
+
             let validate user =
                 user.Age > 0
             """;
@@ -14680,8 +14682,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Text.Json");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "ILogger");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
