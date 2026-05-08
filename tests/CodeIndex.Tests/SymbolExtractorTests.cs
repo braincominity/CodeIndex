@@ -11804,6 +11804,8 @@ public class SymbolExtractorTests
             import struct Foundation.URL
             import enum Dispatch.DispatchQoS
             import func Darwin.C.printf
+            public import Logging
+            package import struct PackageKit.Token
             """;
 
         var symbols = SymbolExtractor.Extract(1, "swift", content);
@@ -11812,6 +11814,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation.URL");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Dispatch.DispatchQoS");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Darwin.C.printf");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Logging");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PackageKit.Token");
         Assert.DoesNotContain(symbols, s =>
             s.Kind == "import"
             && (s.Name.StartsWith("struct ", StringComparison.Ordinal)

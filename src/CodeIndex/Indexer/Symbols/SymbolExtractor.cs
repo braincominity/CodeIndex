@@ -1427,7 +1427,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"macro\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"precedencegroup\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:prefix|infix|postfix)\s+operator\s+(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*" + SwiftAttributePattern + @"import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*" + SwiftAttributePattern + @"(?:(?:public|private|internal|open|fileprivate|package)\s+)?import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["objc"] =
         [
