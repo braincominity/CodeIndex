@@ -17454,6 +17454,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftGenericInvocationArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Failure {}
+            struct Result<Value, Error> {}
+            struct Data {}
+
+            func decode<T>(_ data: Data) -> T {}
+
+            func configure(data: Data) {
+                let user = decode<User>(data)
+                let result = decode<Result<User, Failure>>(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "decode"
+            && reference.Context == "func decode<T>(_ data: Data) -> T {}"
+            && reference.Column == 13);
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

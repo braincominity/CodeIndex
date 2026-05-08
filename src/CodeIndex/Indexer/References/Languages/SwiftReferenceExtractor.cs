@@ -30,6 +30,7 @@ internal static class SwiftReferenceExtractor
         EmitAssociatedTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitKeyPathRootTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitMacroGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGenericInvocationArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -86,6 +87,82 @@ internal static class SwiftReferenceExtractor
                 resolveContainerForColumn(rootStart));
             slashIndex = rootEnd;
         }
+    }
+
+    private static void EmitGenericInvocationArgumentReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var index = 0; index < preparedLine.Length; index++)
+        {
+            if (!IsSwiftIdentifierStart(preparedLine[index]))
+                continue;
+
+            var nameStart = index;
+            index++;
+            while (index < preparedLine.Length && IsSwiftIdentifierPart(preparedLine[index]))
+                index++;
+
+            if (HasSwiftDeclarationKeywordBefore(preparedLine, nameStart)
+                || index >= preparedLine.Length
+                || preparedLine[index] != '<')
+            {
+                index--;
+                continue;
+            }
+
+            var closeAngle = ReferenceExtractor.FindMatchingChar(preparedLine, index, '<', '>');
+            if (closeAngle < 0)
+            {
+                index--;
+                continue;
+            }
+
+            var afterGeneric = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, closeAngle + 1);
+            if (afterGeneric >= preparedLine.Length || preparedLine[afterGeneric] != '(')
+            {
+                index = closeAngle;
+                continue;
+            }
+
+            TypedLanguageReferenceExtractor.EmitCommaSeparatedTypeListReferences(
+                preparedLine,
+                index + 1,
+                closeAngle,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+            index = closeAngle;
+        }
+    }
+
+    private static bool HasSwiftDeclarationKeywordBefore(string preparedLine, int nameStart)
+    {
+        var previous = nameStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(preparedLine[previous]))
+            previous--;
+        if (previous < 0)
+            return false;
+
+        var wordEnd = previous + 1;
+        while (previous >= 0 && IsSwiftIdentifierPart(preparedLine[previous]))
+            previous--;
+        var wordStart = previous + 1;
+        if (wordStart >= wordEnd)
+            return false;
+
+        var word = preparedLine[wordStart..wordEnd];
+        return word is "associatedtype" or "class" or "enum" or "extension" or "func" or "macro"
+            or "protocol" or "struct" or "typealias";
     }
 
     private static void EmitMacroGenericArgumentReferences(
