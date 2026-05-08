@@ -7732,6 +7732,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoInlineStructFields_CapturesFieldTypes()
+    {
+        const string content = """
+            package main
+
+            func build() {
+                payload := struct{ ID UserID; Owner *User; Details model.Detail; Values []Value }{}
+                _ = payload
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "UserID" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Detail" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Owner" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoChannelTypeDeclarations_CapturesElementTypes()
     {
         const string content = """

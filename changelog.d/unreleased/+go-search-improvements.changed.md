@@ -34,6 +34,7 @@ affected:
 - **Go type switch cases expose pointer and composite case types** — `case *Admin`, `case []Guest`, and `case map[Key]Value` now link their type case entries without indexing value-switch constants.
 - **Go slice and array composite literals expose element types** — literals such as `[]User{}`, `[3]*Widget{}`, and `[...]model.Event{}` now link their element types.
 - **Go composite type conversions are indexed as type references** — conversions such as `[]User(raw)`, `map[Key]Value(raw)`, and `chan Event(raw)` now link their target types.
+- **Go inline struct fields expose field types** — anonymous forms such as `struct{ ID UserID; Owner *User }{}` now link `UserID` and `User` without indexing field names.
 
 ## 日本語
 
@@ -60,3 +61,4 @@ affected:
 - **Go type switch case の pointer / composite 型を参照として出すようになりました** — `case *Admin`、`case []Guest`、`case map[Key]Value` が value switch の定数 case を索引せずに型 case entry を辿れるようになりました。
 - **Go slice / array composite literal の要素型を参照として出すようになりました** — `[]User{}`、`[3]*Widget{}`、`[...]model.Event{}` のような literal から要素型を辿れるようになりました。
 - **Go composite type conversion を型参照として索引するようになりました** — `[]User(raw)`、`map[Key]Value(raw)`、`chan Event(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go inline struct field の型を参照として出すようになりました** — `struct{ ID UserID; Owner *User }{}` のような anonymous form から field 名ではなく `UserID` と `User` を辿れるようになりました。

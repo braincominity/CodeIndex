@@ -974,6 +974,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoTypeSwitchCaseReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoInlineStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoArraySliceCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1546,6 +1547,107 @@ internal static class LanguageReferenceExtractionSupport
                 EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             }
         }
+    }
+
+    private static void EmitGoInlineStructFieldTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var structIndex = line.IndexOf("struct", searchStart, StringComparison.Ordinal);
+            if (structIndex < 0)
+                return;
+
+            searchStart = structIndex + "struct".Length;
+            if (!IsIdentifierAt(line, structIndex, "struct"))
+                continue;
+
+            var open = SkipWhitespace(line, searchStart);
+            if (open >= line.Length || line[open] != '{')
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '{', '}');
+            if (close <= open + 1)
+                continue;
+
+            var body = line[(open + 1)..close];
+            var bodyStart = open + 1;
+            foreach (var (fieldStart, fieldLength) in SplitGoInlineStructFieldSpans(body))
+                EmitGoInlineStructFieldType(body.Substring(fieldStart, fieldLength), bodyStart + fieldStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static List<(int Start, int Length)> SplitGoInlineStructFieldSpans(string body)
+    {
+        var spans = new List<(int Start, int Length)>();
+        var fieldStart = 0;
+        var squareDepth = 0;
+        var parenDepth = 0;
+        for (var cursor = 0; cursor < body.Length; cursor++)
+        {
+            switch (body[cursor])
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ';':
+                    if (squareDepth == 0 && parenDepth == 0)
+                    {
+                        spans.Add((fieldStart, cursor - fieldStart));
+                        fieldStart = cursor + 1;
+                    }
+                    break;
+            }
+        }
+
+        spans.Add((fieldStart, body.Length - fieldStart));
+        return spans;
+    }
+
+    private static void EmitGoInlineStructFieldType(
+        string rawField,
+        int rawFieldStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var tagStart = rawField.IndexOf('`');
+        if (tagStart >= 0)
+            rawField = rawField[..tagStart];
+
+        var field = rawField.Trim();
+        if (field.Length == 0)
+            return;
+
+        var fieldTrimStart = rawField.IndexOf(field, StringComparison.Ordinal);
+        var absoluteFieldStart = rawFieldStart + Math.Max(0, fieldTrimStart);
+        var typeStart = LastWhitespaceSeparatedTokenStart(field);
+        if (typeStart < 0)
+            return;
+
+        var expression = typeStart == 0 ? field : field[typeStart..];
+        EmitGoTypeExpression(expression, absoluteFieldStart + typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoMapCompositeLiteralTypeReferences(
