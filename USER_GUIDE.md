@@ -700,6 +700,8 @@ Static JavaScript/TypeScript imports also surface their source module specifier 
 
 CommonJS `require()` calls such as `const fs = require("node:fs")`, multiline `require(\n  "./helper"\n)`, `require.resolve("./resolved")`, and `require.resolve("./resolved", { paths: [...] })` also surface their source module specifier as an `import` symbol.
 
+ES module asset references written as `new URL("./worker.js", import.meta.url)` also add `import` symbols for static string and no-substitution template specifiers.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1696,6 +1698,8 @@ runtime の dynamic import は、`import(\n  "./feature"\n)` のように module
 静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
 
 `const fs = require("node:fs")`、複数行の `require(\n  "./helper"\n)`、`require.resolve("./resolved")`、`require.resolve("./resolved", { paths: [...] })` のような CommonJS `require()` 呼び出しでも、source module specifier を `import` シンボルとして表面化します。
+
+`new URL("./worker.js", import.meta.url)` のような ES module asset reference も、静的な string / no-substitution template specifier を `import` シンボルとして追加します。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

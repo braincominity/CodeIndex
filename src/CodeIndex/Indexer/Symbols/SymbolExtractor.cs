@@ -2058,6 +2058,7 @@ public static partial class SymbolExtractor
                 ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
                 ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
                 ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
             }
 
             if (lang is "javascript" or "typescript"

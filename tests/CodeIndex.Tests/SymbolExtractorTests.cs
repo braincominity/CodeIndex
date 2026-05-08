@@ -2008,6 +2008,38 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsNewUrlImportMetaModuleSymbols(string language)
+    {
+        var content = """
+            const workerUrl = new URL("./worker.js", import.meta.url);
+            const imageUrl = new URL(
+              "./image.png",
+              import.meta.url
+            );
+            const templated = new URL(`./view.js`, import.meta.url);
+            const computed = new URL(`./${name}.js`, import.meta.url);
+            const plain = URL("./plain.js", import.meta.url);
+            const otherBase = new URL("./other.js", baseUrl);
+            const hrefBase = new URL("./href.js", import.meta.url.href);
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(1, workerImport.Line);
+        Assert.Contains("new URL", workerImport.Signature);
+        var imageImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./image.png"));
+        Assert.Equal(3, imageImport.Line);
+        Assert.Contains("import.meta.url", imageImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./view.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./other.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./href.js");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {
