@@ -2720,6 +2720,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRescueFrom_IndexesExceptionClassTargets()
+    {
+        const string content = """
+            class ApplicationController
+              rescue_from Payment::Declined, AuthorizationError, with: :render_error
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue_from");
+        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
+        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "with");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "render_error");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """
