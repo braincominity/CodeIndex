@@ -12375,6 +12375,10 @@ public class SymbolExtractorTests
     {
         var content = """
             RSpec.describe User do
+              subject(:profile) do
+                build(:profile)
+              end
+
               let(:user) do
                 build(:user)
               end
@@ -12387,8 +12391,10 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
 
+        var profile = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "profile"));
         var user = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "user"));
         var account = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "account"));
+        Assert.NotNull(profile.BodyStartLine);
         Assert.NotNull(user.BodyStartLine);
         Assert.NotNull(account.BodyEndLine);
     }

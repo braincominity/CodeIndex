@@ -302,7 +302,7 @@ private static bool IsRubyHeredocTerminatorLine(string line, string terminator, 
     return trimmed == terminator;
 }
 
-    private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:(?:class|module|def|if|unless|case|begin|do|while|until|for)\b|(?:namespace|factory)\s+:\w+\b.*\bdo\b|let!?\s*\(\s*:\w+\s*\)\s*do\b|[A-Z][A-Za-z0-9_]*\s*=\s*(?:Class|Struct)\.new\b.*\bdo\b)", RegexOptions.Compiled);
+    private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:(?:class|module|def|if|unless|case|begin|do|while|until|for)\b|(?:namespace|factory)\s+:\w+\b.*\bdo\b|(?:subject|let!?)\s*\(\s*:\w+\s*\)\s*do\b|[A-Z][A-Za-z0-9_]*\s*=\s*(?:Class|Struct)\.new\b.*\bdo\b)", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
 private enum RubyScanMode
 {

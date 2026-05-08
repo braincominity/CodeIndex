@@ -1332,6 +1332,7 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*store_accessor\s+:\w+\s*,\s*:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(@"^\s*namespace\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("function", new Regex(@"^\s*factory\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*subject\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("property", new Regex(@"^\s*let!?\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("function", new Regex(@"^\s*task\s+(?::(?<name>\w+)|(?<name>\w+)\s*:)", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Class\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
