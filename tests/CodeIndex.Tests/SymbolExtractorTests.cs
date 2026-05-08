@@ -487,6 +487,7 @@ public class SymbolExtractorTests
         var imports = symbols.Where(s => s.Kind == "import").ToList();
 
         Assert.Equal(6, imports.Count);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "demo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
         Assert.Contains(imports, s => s.Name == "\"bytes\"");
         Assert.Contains(imports, s => s.Name == "alias \"fmt\"");

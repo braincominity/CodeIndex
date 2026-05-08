@@ -1212,6 +1212,7 @@ public static partial class SymbolExtractor
         ],
         ["go"] =
         [
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)(?:\[[^\]\r\n]+\])?\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),

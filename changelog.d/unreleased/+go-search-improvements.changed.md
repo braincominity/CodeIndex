@@ -40,6 +40,7 @@ affected:
 - **Go parenthesized composite conversions expose converted types** — conversions such as `([]User)(raw)` and `(map[Key]Value)(raw)` now link their target types.
 - **Go generic method expressions expose receiver type arguments** — expressions such as `Repository[User].Find` and `(*Store[Entry]).Save` now link both receiver and type argument symbols.
 - **Go standalone type-set terms expose approximation types** — constraint terms such as `~[]Element` and `~map[Key]Value` now link their element, key, and value types.
+- **Go package declarations are indexed as namespace symbols** — `package demo` now appears in symbol search, outline, and definition-oriented workflows.
 
 ## 日本語
 
@@ -72,3 +73,4 @@ affected:
 - **Go の parenthesized composite conversion で変換対象型を参照として出すようになりました** — `([]User)(raw)` や `(map[Key]Value)(raw)` のような conversion から変換対象型を辿れるようになりました。
 - **Go generic method expression の receiver 型引数を参照として出すようになりました** — `Repository[User].Find` や `(*Store[Entry]).Save` のような expression から receiver と型引数の両方を辿れるようになりました。
 - **Go standalone type-set term の approximation 型を参照として出すようになりました** — `~[]Element` や `~map[Key]Value` のような constraint term から element、key、value 型を辿れるようになりました。
+- **Go package 宣言を namespace symbol として索引するようになりました** — `package demo` が symbol search、outline、definition 系 workflow に現れるようになりました。
