@@ -1997,8 +1997,10 @@ public class SymbolExtractorTests
         var helperImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./helper"));
         Assert.Equal(3, helperImport.Line);
         Assert.Contains("require(", helperImport.Signature);
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./resolved"));
+        Assert.Equal(6, resolvedImport.Line);
+        Assert.Contains("require.resolve", resolvedImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./resolved");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
     }
 
