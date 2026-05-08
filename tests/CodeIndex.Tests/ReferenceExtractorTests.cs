@@ -7577,6 +7577,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoEmbeddedFieldTypes_CapturesEmbeddedStructFields()
+    {
+        const string content = """
+            package main
+
+            type Store struct {
+                *BaseStore
+                audit.Logger
+                Cache[Entry]
+                Name string
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "BaseStore" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Logger" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Name" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

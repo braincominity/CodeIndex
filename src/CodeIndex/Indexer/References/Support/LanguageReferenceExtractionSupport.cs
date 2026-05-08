@@ -951,6 +951,7 @@ internal static class LanguageReferenceExtractionSupport
 
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
@@ -1070,6 +1071,61 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         return requireComma ? count > 1 : count > 0;
+    }
+
+    private static void EmitGoEmbeddedFieldType(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length)
+            return;
+
+        if (line[cursor] == '*')
+            cursor = SkipWhitespace(line, cursor + 1);
+
+        if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+            return;
+
+        var nameStart = cursor;
+        cursor++;
+        while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        if (IsGoStatementKeyword(line[nameStart..cursor]))
+            return;
+
+        if (cursor < line.Length && line[cursor] == '.')
+        {
+            cursor++;
+            if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+                return;
+            cursor++;
+            while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+                cursor++;
+        }
+
+        if (cursor < line.Length && line[cursor] == '[')
+        {
+            var close = ReferenceExtractor.FindMatchingChar(line, cursor, '[', ']');
+            if (close < 0)
+                return;
+            cursor = close + 1;
+        }
+
+        var afterType = SkipWhitespace(line, cursor);
+        if (afterType < line.Length && line[afterType] != '`')
+            return;
+
+        var typeStart = line.IndexOf('*') >= 0 && line.IndexOf('*') < nameStart
+            ? line.IndexOf('*')
+            : nameStart;
+        EmitGoTypeExpression(line[typeStart..cursor], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static bool StartsWithKeyword(string line, int index, string keyword)
