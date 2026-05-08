@@ -7887,6 +7887,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppFactoryTemplates_CaptureTemplateTypeReferences()
+    {
+        const string content = """
+            void Run() {
+              auto user = std::make_unique<User>();
+              auto repo = make_shared<ns::Repository>();
+              auto maybe = std::make_optional<Result>();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
