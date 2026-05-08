@@ -17044,6 +17044,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftTypedThrows_RecordsThrownErrorType()
+    {
+        const string content = """
+            struct NetworkError: Error {}
+
+            func load() throws(NetworkError) -> Data {
+                Data()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

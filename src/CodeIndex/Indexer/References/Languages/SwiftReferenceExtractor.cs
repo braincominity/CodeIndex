@@ -114,6 +114,8 @@ internal static class SwiftReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
+        EmitTypedThrowsReferences(preparedLine, closeParen + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
         var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(preparedLine, "->", closeParen + 1);
         if (arrowIndex < 0)
             return;
@@ -133,6 +135,44 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitTypedThrowsReferences(
+        string preparedLine,
+        int searchStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var throwsIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "throws", searchStart))
+        {
+            var openParen = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, throwsIndex + "throws".Length);
+            if (openParen >= preparedLine.Length || preparedLine[openParen] != '(')
+                continue;
+
+            var closeParen = ReferenceExtractor.FindMatchingChar(preparedLine, openParen, '(', ')');
+            if (closeParen < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, openParen + 1);
+            if (typeStart >= closeParen)
+                return;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, closeParen - typeStart),
+                typeStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+            return;
+        }
     }
 
     private static void EmitHeritageTypeReferences(
