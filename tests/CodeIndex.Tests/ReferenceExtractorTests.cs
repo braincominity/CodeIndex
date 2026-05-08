@@ -7853,6 +7853,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericInstantiations_CapturesTypeArgumentsWithoutCalls()
+    {
+        const string content = """
+            package main
+
+            func bind(values []func()) {
+                decoder := Decode[User]
+                mapper := stream.Map[model.Event, Result]
+                index := values[i]
+                _, _, _ = decoder, mapper, index
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

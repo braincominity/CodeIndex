@@ -23,6 +23,7 @@ affected:
 - **Go map composite literals expose key and value types** — literals such as `map[Key]Value{}` and `map[model.Tenant]*Entry{}` now link both sides of the map type.
 - **Go parenthesized type conversions are indexed as type references** — idioms such as `(*Concrete)(nil)` and `(model.ID)(raw)` now link the converted type.
 - **Go method expressions expose receiver types** — expressions such as `Handler.Serve`, `(*Worker).Run`, and `model.User.String` now link the receiver type.
+- **Go generic instantiations without calls expose type arguments** — function values such as `Decode[User]` and `stream.Map[model.Event, Result]` now link their concrete type arguments.
 
 ## 日本語
 
@@ -42,3 +43,4 @@ affected:
 - **Go map composite literal の key/value 型を参照として出すようになりました** — `map[Key]Value{}` や `map[model.Tenant]*Entry{}` のような literal から map 型の両側を辿れるようになりました。
 - **Go の parenthesized type conversion を型参照として索引するようになりました** — `(*Concrete)(nil)` や `(model.ID)(raw)` のような idiom から変換対象型を辿れるようになりました。
 - **Go method expression の receiver 型を参照として出すようになりました** — `Handler.Serve`、`(*Worker).Run`、`model.User.String` のような expression から receiver 型を辿れるようになりました。
+- **Go の call しない generic instantiation でも型引数を参照として出すようになりました** — `Decode[User]` や `stream.Map[model.Event, Result]` のような関数値から具体型引数を辿れるようになりました。
