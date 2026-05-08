@@ -414,7 +414,8 @@ public static partial class SymbolExtractor
             out moduleLineIndex,
             out moduleStartColumn,
             out endLineIndex,
-            out signature);
+            out signature,
+            allowTrailingArguments: true);
     }
 
     private static bool IsJavaScriptTypeScriptPropertyAccessImportPrefix(string sanitizedLine, int importIndex)
@@ -551,7 +552,8 @@ public static partial class SymbolExtractor
         out int moduleLineIndex,
         out int moduleStartColumn,
         out int endLineIndex,
-        out string signature)
+        out string signature,
+        bool allowTrailingArguments = false)
     {
         moduleName = string.Empty;
         moduleLineIndex = -1;
@@ -604,9 +606,36 @@ public static partial class SymbolExtractor
                 moduleLineIndex,
                 moduleEndColumn + 1,
                 scanEndExclusive,
-                out var closeParenLineIndex,
-                out var closeParenColumn)
-            || sanitizedLines[closeParenLineIndex][closeParenColumn] != ')')
+                out var afterSpecifierLineIndex,
+                out var afterSpecifierColumn))
+        {
+            return false;
+        }
+
+        int closeParenLineIndex;
+        int closeParenColumn;
+        var afterSpecifierChar = sanitizedLines[afterSpecifierLineIndex][afterSpecifierColumn];
+        if (afterSpecifierChar == ')')
+        {
+            closeParenLineIndex = afterSpecifierLineIndex;
+            closeParenColumn = afterSpecifierColumn;
+        }
+        else if (allowTrailingArguments && afterSpecifierChar == ',')
+        {
+            if (!TryFindJavaScriptTypeScriptDynamicImportCloseParen(
+                    sanitizedLines,
+                    openParenLineIndex,
+                    openParenColumn,
+                    scanEndExclusive,
+                    out closeParenLineIndex,
+                    out closeParenColumn)
+                || closeParenLineIndex < afterSpecifierLineIndex
+                || (closeParenLineIndex == afterSpecifierLineIndex && closeParenColumn < afterSpecifierColumn))
+            {
+                return false;
+            }
+        }
+        else
         {
             return false;
         }

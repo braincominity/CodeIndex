@@ -1988,6 +1988,7 @@ public class SymbolExtractorTests
             );
             const method = loader.require("./method");
             const resolved = require.resolve("./resolved");
+            const resolvedWithPaths = require.resolve("./with-paths", { paths: [__dirname] });
             const text = "require('./string')";
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
@@ -2000,6 +2001,9 @@ public class SymbolExtractorTests
         var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./resolved"));
         Assert.Equal(6, resolvedImport.Line);
         Assert.Contains("require.resolve", resolvedImport.Signature);
+        var resolvedWithPathsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./with-paths"));
+        Assert.Equal(7, resolvedWithPathsImport.Line);
+        Assert.Contains("paths", resolvedWithPathsImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
     }
