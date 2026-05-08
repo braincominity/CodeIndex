@@ -21111,6 +21111,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTupleConstructors_CaptureInstantiationReferences()
+    {
+        const string content = """
+            fn build(value: Value) {
+                let user = User(value);
+                let maybe = Some(user);
+                let result = Ok(maybe);
+                helper(result);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Some" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Ok" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

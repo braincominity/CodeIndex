@@ -1125,6 +1125,33 @@ internal static class RustReferenceExtractor
         return index >= 0 && line[index] == '#';
     }
 
+    public static bool IsLikelyInstantiationCallName(string originalName, string normalizedName, string line, int callIndex)
+    {
+        var normalizedLeaf = LastPathSegment(normalizedName);
+        var originalLeaf = LastPathSegment(originalName);
+        if (!IsLikelyRustTypePathLeaf(originalLeaf) && !IsLikelyRustTypePathLeaf(normalizedLeaf))
+            return false;
+
+        var afterName = callIndex + originalName.Length;
+        while (afterName < line.Length && char.IsWhiteSpace(line[afterName]))
+            afterName++;
+
+        if (afterName >= line.Length)
+            return false;
+
+        if (line[afterName] == '!')
+            return false;
+
+        return line[afterName] is '(' or '<'
+               || (afterName + 1 < line.Length && line[afterName] == ':' && line[afterName + 1] == ':');
+    }
+
+    private static string LastPathSegment(string name)
+    {
+        var leafStart = name.LastIndexOf("::", StringComparison.Ordinal);
+        return leafStart >= 0 ? name[(leafStart + 2)..] : name;
+    }
+
     public static bool IsRawIdentifierPrefix(string line, int callIndex) =>
         callIndex >= 2
         && line[callIndex - 2] == 'r'

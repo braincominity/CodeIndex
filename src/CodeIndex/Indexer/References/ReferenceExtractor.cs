@@ -1861,6 +1861,12 @@ public static partial class ReferenceExtractor
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
                     return true;
                 }
+                if (language == "rust"
+                    && RustReferenceExtractor.IsLikelyInstantiationCallName(name, normalizedName, preparedLine, callIndex))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return true;
+                }
                 if (IsIgnoredCallName(language, name))
                 {
                     if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
