@@ -507,6 +507,7 @@ public class SymbolExtractorTests
 
             const MaxRetries = 3
             const Timeout int = 30
+            const PrimaryStatus, SecondaryStatus = 1, 2
             const (
                 StatusActive = "active"
             )
@@ -517,6 +518,7 @@ public class SymbolExtractorTests
 
             func build() {
                 var local, cached *Config
+                const localStatus, cachedStatus = 1, 2
                 user := User{Name: "alice"}
                 _ = user
             }
@@ -526,6 +528,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Timeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryStatus");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SecondaryStatus");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusActive");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ErrNotFound");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultConfig");
@@ -533,6 +537,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cached");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedStatus");
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
     }
 

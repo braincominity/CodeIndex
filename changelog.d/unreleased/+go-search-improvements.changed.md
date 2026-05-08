@@ -46,6 +46,7 @@ affected:
 - **Go var/const declarations with spaced generic types expose all type segments** — declarations such as `var repo Repository[Key, Value]` now link the explicit generic type.
 - **Go type specs with spaced generic targets expose all type segments** — declarations such as `type Repo Repository[Key, Value]` now link the target type and arguments.
 - **Go top-level multi-name var declarations index every property symbol** — `var Primary, Secondary *Config` now exposes both names to symbol search and definition workflows.
+- **Go top-level multi-name const declarations index every property symbol** — `const PrimaryStatus, SecondaryStatus = 1, 2` now exposes both names to symbol search and definition workflows.
 
 ## 日本語
 
@@ -84,3 +85,4 @@ affected:
 - **Go var/const 宣言のスペース入り generic 型を参照として出すようになりました** — `var repo Repository[Key, Value]` のような宣言から明示された generic 型を辿れるようになりました。
 - **Go type spec のスペース入り generic target を参照として出すようになりました** — `type Repo Repository[Key, Value]` のような宣言から target 型と型引数を辿れるようになりました。
 - **Go top-level の複数名 var 宣言で全 property symbol を索引するようになりました** — `var Primary, Secondary *Config` から両方の名前を symbol search と definition workflow で辿れるようになりました。
+- **Go top-level の複数名 const 宣言で全 property symbol を索引するようになりました** — `const PrimaryStatus, SecondaryStatus = 1, 2` から両方の名前を symbol search と definition workflow で辿れるようになりました。
