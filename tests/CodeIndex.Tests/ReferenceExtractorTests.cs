@@ -7975,6 +7975,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppQualifiedMemberReceivers_CaptureTypeReferences()
+    {
+        const string content = """
+            void Run() {
+              auto user = UserFactory::Create();
+              auto repo = ns::RepositoryFactory::Build();
+              auto member = &Widget::Run;
+              auto moved = std::move(user);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "UserFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
