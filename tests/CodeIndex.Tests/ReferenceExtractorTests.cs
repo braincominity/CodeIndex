@@ -7943,6 +7943,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTypedefAliases_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            typedef ns::Handler* HandlerPtr;
+            typedef std::vector<Service> ServiceList;
+            typedef int (*Callback)(Service*);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Callback" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """

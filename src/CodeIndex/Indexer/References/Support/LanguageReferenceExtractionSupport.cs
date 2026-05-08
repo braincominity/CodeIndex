@@ -32,6 +32,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CppUsingAliasTargetRegex = new(
         @"\b(?:template\s*<[^>]*>\s*)?using\s+[A-Za-z_]\w*\s*=\s*(?<type>[^;]+);",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppTypedefAliasTargetRegex = new(
+        @"\btypedef\s+(?![^;]*\()(?<type>.+?)\s+[A-Za-z_]\w*\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppDeclarationTypeRegex = new(
         @"(?<![\w:])(?<type>(?:(?:const|volatile|static|inline|constexpr|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}]+>)?(?:\s*[*&])*)\s+(?<name>[A-Za-z_]\w*)\s*(?=[,;)=])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -972,6 +975,12 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in CppUsingAliasTargetRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+        }
+
+        foreach (Match match in CppTypedefAliasTargetRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
