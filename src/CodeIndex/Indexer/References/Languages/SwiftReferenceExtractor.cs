@@ -28,6 +28,7 @@ internal static class SwiftReferenceExtractor
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypealiasRhsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitKeyPathRootTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -48,6 +49,101 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitKeyPathRootTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (int slashIndex = 0; slashIndex < preparedLine.Length; slashIndex++)
+        {
+            if (preparedLine[slashIndex] != '\\')
+                continue;
+
+            var rootStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, slashIndex + 1);
+            if (rootStart >= preparedLine.Length || preparedLine[rootStart] == '.')
+                continue;
+
+            var rootEnd = FindSwiftKeyPathRootEnd(preparedLine, rootStart);
+            if (rootEnd <= rootStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(rootStart, rootEnd - rootStart),
+                rootStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(rootStart));
+            slashIndex = rootEnd;
+        }
+    }
+
+    private static int FindSwiftKeyPathRootEnd(string preparedLine, int rootStart)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (int index = rootStart; index < preparedLine.Length; index++)
+        {
+            var ch = preparedLine[index];
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    else
+                        return index;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    else
+                        return index;
+                    break;
+                case '.':
+                    if (angleDepth == 0
+                        && parenDepth == 0
+                        && squareDepth == 0
+                        && index + 1 < preparedLine.Length
+                        && (char.IsLower(preparedLine[index + 1]) || preparedLine[index + 1] == '_'))
+                    {
+                        return index;
+                    }
+
+                    break;
+                case ',':
+                case ';':
+                case '{':
+                case '}':
+                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                        return index;
+                    break;
+            }
+        }
+
+        return preparedLine.Length;
     }
 
     private static void EmitExtensionTargetReference(

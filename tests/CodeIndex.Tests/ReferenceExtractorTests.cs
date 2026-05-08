@@ -17389,6 +17389,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftKeyPathRoots_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Order {}
+
+            func configure() {
+                let userName = \User.name
+                let orderCustomer = \Order.customer.name
+                let implicit = \.title
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Order"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "name" or "customer" or "title"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
