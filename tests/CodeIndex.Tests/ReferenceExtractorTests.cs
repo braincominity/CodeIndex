@@ -8013,6 +8013,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppRequiresConcepts_CaptureConceptTypeReferences()
+    {
+        const string content = """
+            template <typename T>
+            requires Serializable<T>
+            void Save(T value) {}
+
+            template <typename T>
+            concept Persistable = Serializable<T> && ns::EntityLike<T>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "EntityLike" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
