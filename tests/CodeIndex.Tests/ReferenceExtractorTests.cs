@@ -7983,6 +7983,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericMethodExpressions_CapturesReceiverTypesAndArguments()
+    {
+        const string content = """
+            package main
+
+            func bind(repositories []Repository[User]) {
+                find := Repository[User].Find
+                save := (*Store[model.Entry]).Save
+                method := repositories[i].Find
+                _, _, _ = find, save, method
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "repositories" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoGenericInstantiations_CapturesTypeArgumentsWithoutCalls()
     {
         const string content = """

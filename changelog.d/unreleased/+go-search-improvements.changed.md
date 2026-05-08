@@ -38,6 +38,7 @@ affected:
 - **Go inline interface members expose signature types** — anonymous forms such as `interface{ Handle(Context) Result; io.Reader }` now link method parameter, return, and embedded interface types.
 - **Go multi-pointer parenthesized conversions expose converted types** — conversions such as `(**Node)(nil)` now link the underlying pointed-to type.
 - **Go parenthesized composite conversions expose converted types** — conversions such as `([]User)(raw)` and `(map[Key]Value)(raw)` now link their target types.
+- **Go generic method expressions expose receiver type arguments** — expressions such as `Repository[User].Find` and `(*Store[Entry]).Save` now link both receiver and type argument symbols.
 
 ## 日本語
 
@@ -68,3 +69,4 @@ affected:
 - **Go inline interface member の signature 型を参照として出すようになりました** — `interface{ Handle(Context) Result; io.Reader }` のような anonymous form から method 引数、戻り値、embedded interface 型を辿れるようになりました。
 - **Go の multi-pointer parenthesized conversion で変換対象型を参照として出すようになりました** — `(**Node)(nil)` のような conversion から pointer の先の型を辿れるようになりました。
 - **Go の parenthesized composite conversion で変換対象型を参照として出すようになりました** — `([]User)(raw)` や `(map[Key]Value)(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go generic method expression の receiver 型引数を参照として出すようになりました** — `Repository[User].Find` や `(*Store[Entry]).Save` のような expression から receiver と型引数の両方を辿れるようになりました。

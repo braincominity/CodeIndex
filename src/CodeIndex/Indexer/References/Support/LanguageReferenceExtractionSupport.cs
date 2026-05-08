@@ -2050,6 +2050,7 @@ internal static class LanguageReferenceExtractionSupport
     {
         EmitGoParenthesizedMethodExpressionReceiverTypes(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBareMethodExpressionReceiverTypes(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoGenericMethodExpressionReceiverTypes(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoParenthesizedMethodExpressionReceiverTypes(
@@ -2134,6 +2135,9 @@ internal static class LanguageReferenceExtractionSupport
         if (cursor >= expression.Length || !IsIdentifierStart(expression[cursor]))
             return false;
 
+        if (IsLikelyGoGenericReceiverTypeExpression(expression, cursor))
+            return true;
+
         var lastSegmentStart = cursor;
         while (cursor < expression.Length)
         {
@@ -2154,6 +2158,64 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         return expression.Contains('.') || char.IsUpper(expression[lastSegmentStart]);
+    }
+
+    private static void EmitGoGenericMethodExpressionReceiverTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var open = line.IndexOf('[', searchStart);
+            if (open < 0)
+                return;
+
+            searchStart = open + 1;
+            if (!TryGetGoIdentifierBeforeBracket(line, open, out var nameStart, out var nameLength))
+                continue;
+            if (nameLength == 0 || !char.IsUpper(line[nameStart]))
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+            if (close < 0)
+                continue;
+
+            var dot = SkipWhitespace(line, close + 1);
+            if (dot >= line.Length || line[dot] != '.')
+                continue;
+
+            var methodStart = dot + 1;
+            if (methodStart >= line.Length || !IsIdentifierStart(line[methodStart]))
+                continue;
+
+            EmitGoTypeExpression(line[nameStart..(close + 1)], nameStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static bool IsLikelyGoGenericReceiverTypeExpression(string expression, int receiverStart)
+    {
+        var open = expression.IndexOf('[', receiverStart);
+        if (open < 0 || !ContainsLikelyGoTypeArgument(expression[open..]))
+            return false;
+
+        var firstSegmentStart = receiverStart;
+        var firstSegmentEnd = firstSegmentStart;
+        while (firstSegmentEnd < expression.Length && IsSimpleIdentifierPart(expression[firstSegmentEnd]))
+            firstSegmentEnd++;
+
+        if (firstSegmentEnd <= firstSegmentStart)
+            return false;
+        if (char.IsUpper(expression[firstSegmentStart]))
+            return true;
+
+        var afterFirst = SkipWhitespace(expression, firstSegmentEnd);
+        return afterFirst < expression.Length && expression[afterFirst] == '.';
     }
 
     private static void EmitGoGenericInstantiationTypeArgumentReferences(
