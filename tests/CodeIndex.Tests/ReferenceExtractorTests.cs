@@ -2694,6 +2694,7 @@ public class ReferenceExtractorTests
               include Shared
               extend ModName
               prepend AuditTrail
+              using CurrencyFormatting
               before_action :authenticate
               attr_accessor :name
 
@@ -2709,11 +2710,13 @@ public class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "prepend");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "using");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
         Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
