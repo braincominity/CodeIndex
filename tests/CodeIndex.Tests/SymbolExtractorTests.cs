@@ -12179,12 +12179,14 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
-        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
+        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n  enum :status\n  attribute :timezone, :string\n\n  def initialize(name)\n    @name = name\n  end\nend";
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "timezone");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "posts");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "company");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "active");
@@ -12199,6 +12201,7 @@ public class SymbolExtractorTests
               attr_accessor :name, :age, :email
               attr_reader :id, :created_at
               attr_writer :internal_flag, :debug_count
+              store_accessor :settings, :theme, :locale
               attr_accessor :nickname
 
               def greet(greeting = "Hello")
@@ -12222,6 +12225,8 @@ public class SymbolExtractorTests
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "created_at"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "internal_flag"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "debug_count"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "theme"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "locale"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "property" && s.Name == "nickname"));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "full_name"));
@@ -12229,6 +12234,254 @@ public class SymbolExtractorTests
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "greet_alias"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "shout!"));
         Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "display_name"));
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsQualifiedClassAndModuleNames()
+    {
+        var content = """
+            module Admin::Billing
+              class Admin::Billing::Invoice
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Admin::Billing");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Admin::Billing::Invoice");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Admin");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsReceiverQualifiedSingletonMethods()
+    {
+        var content = """
+            class Admin::User
+              def self.find
+              end
+
+              def Admin::User.export!
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "find");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "export!");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Admin");
+    }
+
+    [Fact]
+    public void Extract_Ruby_NormalizesRequireImportNames()
+    {
+        var content = """
+            require "active_support/core_ext/string"
+            require_relative 'models/user'
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "active_support/core_ext/string");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "models/user");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"active_support/core_ext/string\"");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "'models/user'");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsConstantAssignments()
+    {
+        var content = """
+            class Client
+              MAX_RETRIES = 3
+              DefaultTimeout = 30
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MAX_RETRIES");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsClassNewBlockAssignments()
+    {
+        var content = """
+            User = Class.new(ApplicationRecord) do
+              def active?
+                true
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "active?"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "User");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsStructNewBlockAssignments()
+    {
+        var content = """
+            Result = Struct.new(:ok, :value) do
+              def success?
+                ok
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "success?"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Result");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsOperatorMethodDefinitions()
+    {
+        var content = """
+            class Collection
+              def [](index)
+              end
+
+              def self.[]=(key, value)
+              end
+
+              def <=>(other)
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[]=");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "<=>");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsVisibilityModifiedMethodDefinitions()
+    {
+        var content = """
+            class Client
+              private def secret
+              end
+
+              protected def token?
+              end
+
+              public def self.build!
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "secret");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "token?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build!");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsRakeTaskDefinitions()
+    {
+        var content = """
+            task :build do
+            end
+
+            task test: :environment do
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsRakeNamespaces()
+    {
+        var content = """
+            namespace :db do
+              task :migrate do
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "db");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "migrate"
+            && s.ContainerKind == "namespace"
+            && s.ContainerName == "db");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsFactoryBotFactoryDefinitions()
+    {
+        var content = """
+            FactoryBot.define do
+              factory :user do
+                name { "Ada" }
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "user"));
+        Assert.NotNull(factory.BodyStartLine);
+        Assert.NotNull(factory.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsRSpecLetDefinitions()
+    {
+        var content = """
+            shared_examples "auditable" do
+              it "tracks changes" do
+              end
+            end
+
+            RSpec.describe User do
+              subject(:profile) do
+                build(:profile)
+              end
+
+              let(:user) do
+                build(:user)
+              end
+
+              let!(:account) do
+                create(:account)
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        var sharedExamples = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "auditable"));
+        var profile = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "profile"));
+        var user = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "user"));
+        var account = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "account"));
+        Assert.NotNull(sharedExamples.BodyStartLine);
+        Assert.NotNull(profile.BodyStartLine);
+        Assert.NotNull(user.BodyStartLine);
+        Assert.NotNull(account.BodyEndLine);
     }
 
     [Fact]

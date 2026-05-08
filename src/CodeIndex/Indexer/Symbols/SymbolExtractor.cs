@@ -1331,9 +1331,22 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+[?!=]?)\s+:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*def\s+(?:self\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*module\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*enum\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*attribute\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*store_accessor\s+:\w+\s*,\s*:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*namespace\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("function", new Regex(@"^\s*factory\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("function", new Regex(@"^\s*shared_examples(?:_for)?\s+(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*subject\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*let!?\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("function", new Regex(@"^\s*task\s+(?::(?<name>\w+)|(?<name>\w+)\s*:)", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Class\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Struct\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\[\]=?|\*\*|<<|>>|<=>|===|==|!=|!~|=~|<=|>=|[+\-*/%&|^~<>]=?|[+\-]@|!)", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("class",    new Regex(@"^\s*class\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("class",    new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("import",   new Regex(@"^\s*require(?:_relative)?\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["perl"] =
@@ -7726,12 +7739,29 @@ public static partial class SymbolExtractor
             "fsharp" => FSharpSymbolNameNormalizer.Normalize(name),
             "java" => JavaSymbolNameNormalizer.Normalize(name),
             "kotlin" => KotlinSymbolNameNormalizer.Normalize(name, matchLine),
+            "ruby" => NormalizeRubySymbolName(name, matchLine),
             "rust" => RustSymbolNameNormalizer.Normalize(name),
             "smalltalk" => NormalizeSmalltalkSelectorName(name),
             "swift" => SwiftSymbolNameNormalizer.Normalize(name),
             "sql" => SqlSymbolNameNormalizer.Normalize(name),
             _ => name,
         };
+    }
+
+    private static string NormalizeRubySymbolName(string name, string matchLine)
+    {
+        if (!matchLine.TrimStart().StartsWith("require", StringComparison.Ordinal))
+            return name;
+
+        var trimmed = name.Trim();
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '\'' && trimmed[^1] == '\'')
+                || (trimmed[0] == '"' && trimmed[^1] == '"')))
+        {
+            return trimmed[1..^1];
+        }
+
+        return trimmed;
     }
 
     private static string NormalizeSmalltalkSelectorName(string name)

@@ -2520,6 +2520,240 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRequireRelative_IndexesTargetPath()
+    {
+        const string content = """
+            def load_user
+              require_relative "models/user"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
+    }
+
+    [Fact]
+    public void Extract_RubyLoad_IndexesLoadedPath()
+    {
+        const string content = """
+            def boot
+              load "config/routes.rb"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
+    }
+
+    [Fact]
+    public void Extract_RubyGem_IndexesDependencyName()
+    {
+        const string content = """
+            gem "rails", "~> 8.0"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "gem");
+        Assert.Contains(references, reference => reference.SymbolName == "rails");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "~> 8.0");
+    }
+
+    [Fact]
+    public void Extract_RubyAutoload_IndexesConstantTarget()
+    {
+        const string content = """
+            module Registry
+              autoload :User, "models/user"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "autoload" && reference.ContainerName == "Registry");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Registry");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user");
+    }
+
+    [Fact]
+    public void Extract_RubyAliasDeclarations_IndexAliasEndpoints()
+    {
+        const string content = """
+            class Person
+              def name
+              end
+
+              alias_method :full_name, :name
+              alias display_name name
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias_method");
+        Assert.Contains(references, reference => reference.SymbolName == "full_name" && reference.ContainerName == "Person");
+        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ContainerName == "Person");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "name" && reference.ContainerName == "Person"));
+    }
+
+    [Fact]
+    public void Extract_RubyConstantVisibilityDeclarations_IndexConstants()
+    {
+        const string content = """
+            class Config
+              SecretKey = "x"
+              Token = "t"
+              private_constant :SecretKey
+              public_constant :Token
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "private_constant");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "public_constant");
+        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
+        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
+    }
+
+    [Fact]
+    public void Extract_RubyModuleFunction_IndexesExportedMethods()
+    {
+        const string content = """
+            module Formatting
+              def normalize
+              end
+
+              module_function :normalize
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "module_function");
+        Assert.Contains(references, reference => reference.SymbolName == "normalize" && reference.ContainerName == "Formatting");
+    }
+
+    [Fact]
+    public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
+    {
+        const string content = """
+            class Article
+              has_many :comments, dependent: :destroy
+              validates :title, presence: true
+              before_action :load_article, only: :show
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "dependent");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "destroy");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "presence");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
+    }
+
+    [Fact]
+    public void Extract_RubyAssociationClassNameOption_IndexesClassNameTarget()
+    {
+        const string content = """
+            class Post
+              belongs_to :author, class_name: "User"
+              has_many :line_items, :class_name => 'Orders::LineItem'
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "author" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "line_items" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "Orders::LineItem" && reference.ContainerName == "Post");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+    }
+
+    [Fact]
+    public void Extract_RubyClassInheritance_IndexesSuperclass()
+    {
+        const string content = """
+            class ApplicationJob
+            end
+
+            class CleanupJob < ApplicationJob
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ApplicationJob"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_RubyRescueClause_IndexesExceptionTypes()
+    {
+        const string content = """
+            def load
+              fetch
+            rescue Network::TimeoutError, ParserError => error
+              nil
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Network::TimeoutError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ParserError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue");
+    }
+
+    [Fact]
+    public void Extract_RubyRescueFrom_IndexesExceptionClassTargets()
+    {
+        const string content = """
+            class ApplicationController
+              rescue_from Payment::Declined, AuthorizationError, with: :render_error
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue_from");
+        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
+        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "with");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "render_error");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """
@@ -2549,6 +2783,8 @@ public class ReferenceExtractorTests
             class Worker
               include Shared
               extend ModName
+              prepend AuditTrail
+              using CurrencyFormatting
               before_action :authenticate
               attr_accessor :name
 
@@ -2563,13 +2799,192 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "prepend");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "using");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
         Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_RubyRefine_IndexesRefinedClass()
+    {
+        const string content = """
+            module StringFormatting
+              refine String do
+                def titleize
+                end
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "refine");
+        Assert.Contains(references, reference => reference.SymbolName == "String" && reference.ContainerName == "StringFormatting");
+    }
+
+    [Fact]
+    public void Extract_RubyRSpecDescribe_IndexesSubjectConstant()
+    {
+        const string content = """
+            RSpec.describe User do
+              describe Account do
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "describe");
+        Assert.Contains(references, reference => reference.SymbolName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "Account");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsRoutes_IndexesResourceNames()
+    {
+        const string content = """
+            Rails.application.routes.draw do
+              resources :articles, only: :show
+              resource :profile
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "resources");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "resource");
+        Assert.Contains(references, reference => reference.SymbolName == "articles");
+        Assert.Contains(references, reference => reference.SymbolName == "profile");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsEnum_IndexesAttributeName()
+    {
+        const string content = """
+            class Conversation
+              enum :status, { active: 0, archived: 1 }, prefix: true
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "enum");
+        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "active");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "archived");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "prefix");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsCreateTable_IndexesTableName()
+    {
+        const string content = """
+            class CreateUsers < ActiveRecord::Migration[8.0]
+              def change
+                create_table :users, id: :uuid do |t|
+                end
+                create_table "audit_logs" do |t|
+                end
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "create_table");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "id");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "uuid");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsAttribute_IndexesAttributeName()
+    {
+        const string content = """
+            class User < ApplicationRecord
+              attribute :timezone, :string, default: "UTC"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "attribute");
+        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "default");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "UTC");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsSerialize_IndexesSerializedAttributeName()
+    {
+        const string content = """
+            class User < ApplicationRecord
+              serialize :settings, coder: JSON
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "serialize");
+        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "coder");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "JSON");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsComposedOf_IndexesAggregateAndClassName()
+    {
+        const string content = """
+            class Customer < ApplicationRecord
+              composed_of :address, class_name: "Address"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "composed_of");
+        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
+        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+    }
+
+    [Fact]
+    public void Extract_RubyRailsNestedAttributes_IndexesAssociationNames()
+    {
+        const string content = """
+            class Post < ApplicationRecord
+              accepts_nested_attributes_for :comments, :tags, allow_destroy: true
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "accepts_nested_attributes_for");
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "tags" && reference.ContainerName == "Post");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "allow_destroy");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "true");
     }
 
     [Fact]
