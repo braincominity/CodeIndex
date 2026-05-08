@@ -704,6 +704,8 @@ ES module asset references written as `new URL("./worker.js", import.meta.url)` 
 
 Worker script dependencies written as `importScripts("./worker-a.js", "/worker-b.js")` also add one `import` symbol per static string or no-substitution template specifier.
 
+Service Worker registrations written as `navigator.serviceWorker.register("./sw.js")` also add `import` symbols for static script specifiers, including calls with registration options.
+
 Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
@@ -1704,6 +1706,8 @@ runtime の dynamic import は、`import(\n  "./feature"\n)` のように module
 `new URL("./worker.js", import.meta.url)` のような ES module asset reference も、静的な string / no-substitution template specifier を `import` シンボルとして追加します。
 
 `importScripts("./worker-a.js", "/worker-b.js")` のような worker script dependency も、静的な string / no-substitution template specifier ごとに `import` シンボルを追加します。
+
+`navigator.serviceWorker.register("./sw.js")` のような Service Worker registration も、registration options 付きの call を含め、静的な script specifier を `import` シンボルとして追加します。
 
 `export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
 

@@ -783,6 +783,69 @@ public static partial class SymbolExtractor
         return moduleSpecifiers.Count > 0;
     }
 
+    private static void ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        const string serviceWorkerRegisterCall = "navigator.serviceWorker.register";
+        var rawLine = rawLines[lineIndex];
+        var sanitizedLine = sanitizedLines[lineIndex];
+        var searchStart = 0;
+        while (searchStart < sanitizedLine.Length)
+        {
+            var callIndex = sanitizedLine.IndexOf(serviceWorkerRegisterCall, searchStart, StringComparison.Ordinal);
+            if (callIndex < 0)
+                return;
+
+            searchStart = callIndex + serviceWorkerRegisterCall.Length;
+
+            if (callIndex > 0
+                && (IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[callIndex - 1])
+                    || sanitizedLine[callIndex - 1] == '.'))
+            {
+                continue;
+            }
+
+            if (searchStart < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[searchStart]))
+                continue;
+
+            if (!TryReadJavaScriptTypeScriptRequireModule(
+                    rawLines,
+                    sanitizedLines,
+                    lineIndex,
+                    searchStart,
+                    out var moduleName,
+                    out var moduleLineIndex,
+                    out var moduleStartColumn,
+                    out var endLineIndex,
+                    out var signature,
+                    allowTrailingArguments: true))
+            {
+                continue;
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                moduleLineIndex + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = moduleName,
+                    Line = moduleLineIndex + 1,
+                    StartLine = moduleLineIndex + 1,
+                    StartColumn = moduleStartColumn,
+                    EndLine = endLineIndex + 1,
+                    Signature = signature,
+                },
+                rawLine);
+        }
+    }
+
     private static bool TryReadJavaScriptTypeScriptStaticImportModule(
         string[] rawLines,
         string[] sanitizedLines,

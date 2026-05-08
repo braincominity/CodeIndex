@@ -2068,6 +2068,34 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsServiceWorkerRegisterModuleSymbols(string language)
+    {
+        var content = """
+            navigator.serviceWorker.register("./sw.js");
+            navigator.serviceWorker.register(
+              "./scoped-sw.js",
+              { scope: "./" }
+            );
+            window.navigator.serviceWorker.register("./window-sw.js");
+            navigator.serviceWorker.register(dynamicPath);
+            const text = "navigator.serviceWorker.register('./string-sw.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var serviceWorkerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./sw.js"));
+        Assert.Equal(1, serviceWorkerImport.Line);
+        Assert.Contains("navigator.serviceWorker.register", serviceWorkerImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped-sw.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("scope", scopedImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-sw.js");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {
