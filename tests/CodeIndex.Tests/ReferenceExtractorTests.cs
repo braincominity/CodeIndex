@@ -10603,6 +10603,7 @@ public class ReferenceExtractorTests
         const string content = """
             let run user cursor =
                 if validate user then printfn "valid"
+                if isReady then printfn "ready"
                 elif shouldRetry user then printfn "retry"
                 while hasNext cursor do printfn "next"
             """;
@@ -10613,6 +10614,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "shouldRetry" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "hasNext" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "call");
     }
 
     [Fact]

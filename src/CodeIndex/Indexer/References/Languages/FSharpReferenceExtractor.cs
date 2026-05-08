@@ -26,7 +26,7 @@ internal static class FSharpReferenceExtractor
 
     private static readonly Regex ConditionApplicationCallRegex = new(
         $@"^\s*(?:if|elif|while)\s+(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b
-            (?=\s+(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
+            (?=\s+(?!(?:then|do)\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex SpaceApplicationCallRegex = new(
