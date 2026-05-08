@@ -12328,6 +12328,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_DetectsRakeNamespaces()
+    {
+        var content = """
+            namespace :db do
+              task :migrate do
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "db");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "migrate"
+            && s.ContainerKind == "namespace"
+            && s.ContainerName == "db");
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsExpandedFeatures()
     {
         var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\npub extern fn no_abi() { }\npub unsafe extern \"C-unwind\" fn ffi_entry() { }\ndefault async fn trait_default() { }\ntype Result<T> = std::result::Result<T, Error>;\ntrait Iter {\n    type Item;\n    fn next(&mut self) -> Option<Self::Item>;\n}\ntype Callback = fn(i32) -> i32;\npub union MyUnion { f: f32 }";
