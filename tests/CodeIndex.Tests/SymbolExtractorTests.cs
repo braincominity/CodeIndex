@@ -719,6 +719,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsTemplateTypeDeclarationsOnOneLine()
+    {
+        var content = """
+            template <typename T> class Box {};
+            template <class T> struct Slot {};
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Slot");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
