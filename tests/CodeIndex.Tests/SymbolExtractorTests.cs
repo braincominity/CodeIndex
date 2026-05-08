@@ -11797,6 +11797,52 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_NormalizesGranularImportNames()
+    {
+        var content = """
+            import Foundation
+            import struct Foundation.URL
+            import enum Dispatch.DispatchQoS
+            import func Darwin.C.printf
+            public import Logging
+            package import struct PackageKit.Token
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation.URL");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Dispatch.DispatchQoS");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Darwin.C.printf");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Logging");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PackageKit.Token");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "import"
+            && (s.Name.StartsWith("struct ", StringComparison.Ordinal)
+                || s.Name.StartsWith("enum ", StringComparison.Ordinal)
+                || s.Name.StartsWith("func ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsOperatorFunctionDeclarations()
+    {
+        var content = """
+            struct Vector {
+                static func + (lhs: Vector, rhs: Vector) -> Vector { lhs }
+                static func == (lhs: Vector, rhs: Vector) -> Bool { true }
+            }
+
+            prefix func ! (value: Vector) -> Vector { value }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "!");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsPrivateSetProperties()
     {
         var content = """
@@ -11823,6 +11869,7 @@ public class SymbolExtractorTests
                 case server(code: Int, message: String)
                 case client(Int)
                 case unknown
+                case badRequest, unauthorized, serverError(Int)
             }
 
             indirect enum Tree<T> {
@@ -11834,6 +11881,14 @@ public class SymbolExtractorTests
                 case active
                 case inactive = "off"
                 case pending
+            }
+
+            enum HTTPStatus: Int {
+                case accepted = 202, gone = 410
+            }
+
+            enum Phrase: String {
+                case greeting = "hello, world", farewell = "bye, now"
             }
 
             func handle(_ error: NetworkError) {
@@ -11850,10 +11905,15 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "NetworkError");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "HTTPStatus");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Phrase");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "timeout");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "server");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "client");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "unknown");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "badRequest");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "unauthorized");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "serverError");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "leaf");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "node");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "active");
@@ -11862,6 +11922,17 @@ public class SymbolExtractorTests
         Assert.Equal("\"off\"", inactive.ReturnType);
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "pending");
+
+        var accepted = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "accepted"));
+        Assert.Equal("202", accepted.ReturnType);
+        var gone = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "gone"));
+        Assert.Equal("410", gone.ReturnType);
+
+        var greeting = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "greeting"));
+        Assert.Equal("\"hello, world\"", greeting.ReturnType);
+        var farewell = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "farewell"));
+        Assert.Equal("\"bye, now\"", farewell.ReturnType);
+
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "overheated");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "recoverable");
     }
