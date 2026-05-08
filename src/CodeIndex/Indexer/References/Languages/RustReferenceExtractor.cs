@@ -28,6 +28,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex AssociatedCallReceiverRegex = new(
         $@"(?<![\w$])(?<receiver>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?::\s*{RustIdentifierPattern}(?:<[^>\n]+>)?\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex AssociatedValueReceiverRegex = new(
+        $@"(?<![\w$])(?<receiver>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?::\s*{RustIdentifierPattern}(?!\s*::\s*<)(?!\s*[\(<])",
+        RegexOptions.Compiled);
     private static readonly Regex StructLiteralRegex = new(
         $@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?\s*\{{",
         RegexOptions.Compiled);
@@ -151,6 +154,7 @@ internal static class RustReferenceExtractor
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitQualifiedAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitAssociatedValueReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitStructLiteralInstantiationReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -965,6 +969,54 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
         foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
+        {
+            var receiverGroup = match.Groups["receiver"];
+            var receiver = receiverGroup.Value;
+            var leafStart = receiver.LastIndexOf("::", StringComparison.Ordinal);
+            var leaf = leafStart >= 0 ? receiver[(leafStart + 2)..] : receiver;
+            var leafOffset = leafStart >= 0 ? leafStart + 2 : 0;
+            var normalizedLeaf = NormalizeIdentifier(leaf);
+            if (normalizedLeaf == "Self" || !IsLikelyRustTypePathLeaf(leaf))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                normalizedLeaf,
+                receiverGroup.Index + leafOffset,
+                "type_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(receiverGroup.Index));
+
+            var argsGroup = match.Groups["args"];
+            if (!argsGroup.Success)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                argsGroup.Value,
+                argsGroup.Index,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(argsGroup.Index));
+        }
+    }
+
+    private static void EmitAssociatedValueReceiverTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in AssociatedValueReceiverRegex.Matches(preparedLine))
         {
             var receiverGroup = match.Groups["receiver"];
             var receiver = receiverGroup.Value;
