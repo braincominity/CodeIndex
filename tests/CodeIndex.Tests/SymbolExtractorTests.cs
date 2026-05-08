@@ -14664,6 +14664,7 @@ public class SymbolExtractorTests
 
             type Person(name: string) =
                 member this.Name = name
+                member val DisplayName = name with get, set
                 member _.Age = 0
                 static member Create(name: string) = Person(name)
                 override this.ToString() = this.Name
@@ -14695,6 +14696,7 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Coordinates");
         Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DisplayName");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
