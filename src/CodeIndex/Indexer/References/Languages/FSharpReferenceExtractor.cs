@@ -29,6 +29,11 @@ internal static class FSharpReferenceExtractor
             (?=\s+(?!(?:then|do)\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
+    private static readonly Regex MatchApplicationCallRegex = new(
+        $@"^\s*match\s+(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b
+            (?=\s+(?!with\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
+        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
+
     private static readonly Regex SpaceApplicationCallRegex = new(
         $@"(?:\b(?:then|do!?|else|in|return!?|yield!?)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
@@ -83,6 +88,13 @@ internal static class FSharpReferenceExtractor
         }
 
         foreach (Match match in ConditionApplicationCallRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            var callIndex = match.Groups["name"].Index;
+            addCallLikeReference(name, callIndex);
+        }
+
+        foreach (Match match in MatchApplicationCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
