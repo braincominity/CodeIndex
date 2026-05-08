@@ -10723,16 +10723,19 @@ public class SymbolExtractorTests
     {
         // Should detect both regular and method functions
         // 通常関数とメソッド関数の両方を検出する
-        var content = "type Handler struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}";
+        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Equal(3, symbols.Count(s => s.Kind == "function"));
+        Assert.Equal(4, symbols.Count(s => s.Kind == "function"));
         Assert.Contains(symbols, s => s.Name == "NewHandler");
         var regularFunction = Assert.Single(symbols, s => s.Name == "Load");
         Assert.Null(regularFunction.ContainerName);
         var method = Assert.Single(symbols, s => s.Name == "ServeHTTP");
         Assert.Equal("struct", method.ContainerKind);
         Assert.Equal("Handler", method.ContainerName);
+        var genericMethod = Assert.Single(symbols, s => s.Name == "Save");
+        Assert.Equal("struct", genericMethod.ContainerKind);
+        Assert.Equal("Store", genericMethod.ContainerName);
     }
 
     [Fact]

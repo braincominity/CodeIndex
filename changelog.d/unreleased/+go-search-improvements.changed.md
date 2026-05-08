@@ -48,6 +48,7 @@ affected:
 - **Go top-level multi-name var declarations index every property symbol** — `var Primary, Secondary *Config` now exposes both names to symbol search and definition workflows.
 - **Go top-level multi-name const declarations index every property symbol** — `const PrimaryStatus, SecondaryStatus = 1, 2` now exposes both names to symbol search and definition workflows.
 - **Go method symbols are attributed to receiver type containers** — `func (h *Handler) ServeHTTP(...)` now appears under `Handler` in symbol-oriented workflows.
+- **Go generic receiver method containers tolerate spaced type parameters** — `func (s *Store[T, U]) Save(...)` now stays attributed to `Store`.
 
 ## 日本語
 
@@ -88,3 +89,4 @@ affected:
 - **Go top-level の複数名 var 宣言で全 property symbol を索引するようになりました** — `var Primary, Secondary *Config` から両方の名前を symbol search と definition workflow で辿れるようになりました。
 - **Go top-level の複数名 const 宣言で全 property symbol を索引するようになりました** — `const PrimaryStatus, SecondaryStatus = 1, 2` から両方の名前を symbol search と definition workflow で辿れるようになりました。
 - **Go method symbol を receiver 型 container に帰属させるようになりました** — `func (h *Handler) ServeHTTP(...)` が symbol 系 workflow で `Handler` 配下に現れるようになりました。
+- **Go generic receiver method の container がスペース入り型パラメータに対応しました** — `func (s *Store[T, U]) Save(...)` が `Store` 配下に帰属し続けるようになりました。

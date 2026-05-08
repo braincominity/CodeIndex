@@ -522,8 +522,19 @@ public static partial class SymbolExtractor
         if (receiver.Length == 0)
             return false;
 
-        var typeStart = receiver.LastIndexOfAny([' ', '\t']);
-        var typeText = (typeStart >= 0 ? receiver[(typeStart + 1)..] : receiver).Trim();
+        var typeText = receiver;
+        if (IsGoSymbolIdentifierStart(receiver[0]))
+        {
+            var cursor = 1;
+            while (cursor < receiver.Length && IsGoSymbolIdentifierPart(receiver[cursor]))
+                cursor++;
+
+            var afterReceiverName = SkipGoSymbolWhitespace(receiver, cursor);
+            if (afterReceiverName < receiver.Length)
+                typeText = receiver[afterReceiverName..];
+        }
+
+        typeText = typeText.Trim();
         while (typeText.StartsWith("*", StringComparison.Ordinal))
             typeText = typeText[1..].TrimStart();
 
@@ -538,6 +549,19 @@ public static partial class SymbolExtractor
         receiverTypeName = typeText.Trim();
         return receiverTypeName.Length > 0;
     }
+
+    private static int SkipGoSymbolWhitespace(string text, int start)
+    {
+        while (start < text.Length && char.IsWhiteSpace(text[start]))
+            start++;
+        return start;
+    }
+
+    private static bool IsGoSymbolIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsGoSymbolIdentifierPart(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
