@@ -20894,6 +20894,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustAttributes_CaptureAnnotationReferences()
+    {
+        const string content = """
+            #[tokio::test]
+            async fn verifies_user() {}
+
+            #[serde(rename = "id")]
+            struct User;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "tokio::test" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "serde" && r.ReferenceKind == "annotation");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

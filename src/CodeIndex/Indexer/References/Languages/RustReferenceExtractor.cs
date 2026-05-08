@@ -10,6 +10,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex DeriveAttributeRegex = new(
         @"#\s*!?\s*\[\s*derive\s*\((?<types>[^\)]*)\)",
         RegexOptions.Compiled);
+    private static readonly Regex AttributeHeadRegex = new(
+        $@"#\s*!?\s*\[\s*(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -74,6 +77,16 @@ internal static class RustReferenceExtractor
                     lineNumber,
                     container);
             }
+        }
+
+        foreach (Match match in AttributeHeadRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = NormalizeIdentifier(nameGroup.Value);
+            if (string.Equals(name, "derive", StringComparison.Ordinal))
+                continue;
+
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameGroup.Index, "annotation", context, lineNumber, container);
         }
     }
 
