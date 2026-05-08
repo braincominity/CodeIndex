@@ -1061,6 +1061,15 @@ internal static class RustReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn);
+            EmitGenericDefaultTypeReferences(
+                preparedLine,
+                genericOpenIndex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
         }
 
         TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
@@ -1072,6 +1081,47 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitGenericDefaultTypeReferences(
+        string preparedLine,
+        int genericOpenIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
+        if (genericCloseIndex <= genericOpenIndex)
+            return;
+
+        var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+        {
+            var fragment = clause.Substring(segmentStart, segmentLength);
+            var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=');
+            if (assignmentIndex < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, assignmentIndex + 1);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = genericOpenIndex + 1 + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart));
+        }
     }
 
     public static string NormalizeIdentifier(string identifier)

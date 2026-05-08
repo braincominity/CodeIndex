@@ -21133,6 +21133,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustGenericDefaults_CaptureDefaultTypeReferences()
+    {
+        const string content = """
+            struct Cache<T = User, E: Error = IoError> {
+                value: T,
+                error: E,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
