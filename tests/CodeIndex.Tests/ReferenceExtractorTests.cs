@@ -2613,6 +2613,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyModuleFunction_IndexesExportedMethods()
+    {
+        const string content = """
+            module Formatting
+              def normalize
+              end
+
+              module_function :normalize
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "module_function");
+        Assert.Contains(references, reference => reference.SymbolName == "normalize" && reference.ContainerName == "Formatting");
+    }
+
+    [Fact]
     public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
     {
         const string content = """
