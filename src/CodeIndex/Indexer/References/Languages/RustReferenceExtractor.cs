@@ -7,6 +7,9 @@ internal static class RustReferenceExtractor
 {
     private const string RustIdentifierPattern = @"(?:r#)?[_\p{L}][\w$]*";
     private static readonly string[] ConstStaticKeywords = ["const", "static"];
+    private static readonly Regex DeriveAttributeRegex = new(
+        @"#\s*!?\s*\[\s*derive\s*\((?<types>[^\)]*)\)",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -37,6 +40,40 @@ internal static class RustReferenceExtractor
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             addCallLikeReference(name, callIndex);
+        }
+    }
+
+    public static void EmitAttributeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in DeriveAttributeRegex.Matches(preparedLine))
+        {
+            var typesGroup = match.Groups["types"];
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typesGroup.Value))
+            {
+                var fragment = typesGroup.Value.Substring(segmentStart, segmentLength);
+                var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
+                var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+                if (typeEnd <= typeStart)
+                    continue;
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    fragment.Substring(typeStart, typeEnd - typeStart),
+                    typesGroup.Index + segmentStart + typeStart,
+                    "rust",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
@@ -680,6 +717,32 @@ internal static class RustReferenceExtractor
 
         var prefix = line[..callIndex].TrimEnd();
         return prefix.EndsWith("fn", StringComparison.Ordinal);
+    }
+
+    public static bool IsDeriveAttributeCallSite(string line, string name, int callIndex)
+    {
+        if (!string.Equals(name, "derive", StringComparison.Ordinal) || callIndex <= 0)
+            return false;
+
+        var index = callIndex - 1;
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+
+        if (index < 0 || line[index] != '[')
+            return false;
+
+        index--;
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+
+        if (index >= 0 && line[index] == '!')
+        {
+            index--;
+            while (index >= 0 && char.IsWhiteSpace(line[index]))
+                index--;
+        }
+
+        return index >= 0 && line[index] == '#';
     }
 
     public static bool IsRawIdentifierPrefix(string line, int callIndex) =>

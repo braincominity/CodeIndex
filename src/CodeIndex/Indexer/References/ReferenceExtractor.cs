@@ -1828,6 +1828,8 @@ public static partial class ReferenceExtractor
 
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
+                if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
+                    return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -2090,6 +2092,7 @@ public static partial class ReferenceExtractor
             if (language == "rust")
             {
                 RustReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
+                RustReferenceExtractor.EmitAttributeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
             }
 
             if (language == "csharp")
