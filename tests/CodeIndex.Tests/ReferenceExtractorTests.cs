@@ -7931,6 +7931,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoTypeSwitchCases_CapturesPointerAndCompositeCaseTypes()
+    {
+        const string content = """
+            package main
+
+            func classify(value any, status Status) {
+                switch value.(type) {
+                case *Admin, *model.Member:
+                    return
+                case []Guest, map[Key]Value:
+                    return
+                case nil:
+                    return
+                }
+
+                switch status {
+                case status.Ready:
+                    return
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Guest" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

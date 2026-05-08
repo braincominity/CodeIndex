@@ -48,6 +48,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex GoTypeAssertionRegex = new(
         @"\.\s*\(\s*(?<type>[^()\r\n]+?)\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoTypeSwitchCaseRegex = new(
+        @"^\s*case\s+(?<types>.+?)\s*:",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoFunctionLiteralRegex = new(
         @"\bfunc\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -968,6 +971,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoChannelElementTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoTypeAssertionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeSwitchCaseReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1290,6 +1294,66 @@ internal static class LanguageReferenceExtractionSupport
             var trimStart = group.Value.IndexOf(expression, StringComparison.Ordinal);
             EmitGoTypeExpression(expression, group.Index + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+    }
+
+    private static void EmitGoTypeSwitchCaseReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var match = GoTypeSwitchCaseRegex.Match(line);
+        if (!match.Success)
+            return;
+
+        var group = match.Groups["types"];
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(group.Value))
+        {
+            var rawType = group.Value.Substring(segmentStart, segmentLength);
+            var expression = rawType.Trim();
+            if (expression.Length == 0
+                || expression is "nil" or "default"
+                || !IsLikelyGoTypeSwitchCaseType(expression))
+            {
+                continue;
+            }
+
+            var trimStart = rawType.IndexOf(expression, StringComparison.Ordinal);
+            EmitGoTypeExpression(expression, group.Index + segmentStart + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static bool IsLikelyGoTypeSwitchCaseType(string expression)
+    {
+        var cursor = 0;
+        var hasPointerPrefix = false;
+        while (cursor < expression.Length)
+        {
+            cursor = SkipWhitespace(expression, cursor);
+            if (cursor >= expression.Length || expression[cursor] != '*')
+                break;
+
+            hasPointerPrefix = true;
+            cursor++;
+        }
+
+        if (cursor >= expression.Length)
+            return false;
+        if (expression[cursor] == '[')
+            return true;
+        if (hasPointerPrefix && char.IsUpper(expression[cursor]))
+            return true;
+        if (hasPointerPrefix && expression.IndexOf('.', cursor) >= 0)
+            return true;
+
+        return StartsWithKeyword(expression, cursor, "map")
+            || StartsWithKeyword(expression, cursor, "chan")
+            || StartsWithKeyword(expression, cursor, "func")
+            || StartsWithKeyword(expression, cursor, "interface")
+            || StartsWithKeyword(expression, cursor, "struct");
     }
 
     private static void EmitGoChannelElementTypeReferences(
