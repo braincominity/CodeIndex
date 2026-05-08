@@ -705,6 +705,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsModulePartitionDeclarations()
+    {
+        var content = """
+            export module app.core:api;
+            module app.impl:detail;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app.core:api");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app.impl:detail");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
