@@ -1382,6 +1382,7 @@ public static partial class SymbolExtractor
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Type alias / 型エイリアス
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),

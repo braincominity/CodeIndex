@@ -671,6 +671,7 @@ public class SymbolExtractorTests
         var content = """
             using StringList = std::vector<std::string>;
             template <typename T> using Ptr = std::unique_ptr<T>;
+            using enum colors::Mode;
 
             namespace demo {
                 using namespace std; // comment to ignore
@@ -681,6 +682,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "StringList");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ptr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "colors::Mode");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
     }
 
