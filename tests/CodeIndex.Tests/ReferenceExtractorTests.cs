@@ -7492,6 +7492,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericTypeConstraints_CapturesConstraintTypes()
+    {
+        const string content = """
+            package main
+
+            type Cache[T EntityConstraint] struct {
+                value T
+            }
+
+            type Mapper[K KeyConstraint, V ValueConstraint] map[K]V
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "EntityConstraint" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "ValueConstraint" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

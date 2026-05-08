@@ -949,6 +949,8 @@ internal static class LanguageReferenceExtractionSupport
             }
         }
 
+        EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
             foreach (Match match in regex.Matches(preparedLine))
@@ -969,6 +971,72 @@ internal static class LanguageReferenceExtractionSupport
 
             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
         }
+    }
+
+    private static void EmitGoTypeDeclarationParameterConstraints(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (StartsWithKeyword(line, cursor, "type"))
+            cursor = SkipWhitespace(line, cursor + "type".Length);
+
+        if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+            return;
+
+        cursor++;
+        while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        cursor = SkipWhitespace(line, cursor);
+        if (cursor >= line.Length || line[cursor] != '[')
+            return;
+
+        var close = ReferenceExtractor.FindMatchingChar(line, cursor, '[', ']');
+        if (close < 0)
+            return;
+
+        var afterClose = SkipWhitespace(line, close + 1);
+        if (afterClose >= line.Length)
+            return;
+        if (line[afterClose] == '=')
+            afterClose = SkipWhitespace(line, afterClose + 1);
+        if (afterClose >= line.Length || !IsGoTypeDeclarationBodyStart(line, afterClose))
+            return;
+
+        EmitGoTypeParameterConstraints(line, cursor, close + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static bool StartsWithKeyword(string line, int index, string keyword)
+    {
+        if (index < 0 || index + keyword.Length > line.Length)
+            return false;
+        if (!line.AsSpan(index, keyword.Length).SequenceEqual(keyword))
+            return false;
+
+        var beforeOk = index == 0 || !IsSimpleIdentifierPart(line[index - 1]);
+        var after = index + keyword.Length;
+        var afterOk = after >= line.Length || !IsSimpleIdentifierPart(line[after]);
+        return beforeOk && afterOk;
+    }
+
+    private static bool IsGoTypeDeclarationBodyStart(string line, int index)
+    {
+        if (StartsWithKeyword(line, index, "struct")
+            || StartsWithKeyword(line, index, "interface")
+            || StartsWithKeyword(line, index, "func")
+            || StartsWithKeyword(line, index, "map")
+            || StartsWithKeyword(line, index, "chan"))
+        {
+            return true;
+        }
+
+        return line[index] is '*' or '[' or '~' || IsIdentifierStart(line[index]);
     }
 
     private static bool IsGoCompositeLiteralContext(string line, int nameIndex, int nameLength)
