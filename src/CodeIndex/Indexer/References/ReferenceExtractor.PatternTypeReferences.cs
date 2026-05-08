@@ -1746,6 +1746,12 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "rust" && IsRustAssociatedTypeBindingKey(expression, i))
+            {
+                i--;
+                continue;
+            }
+
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
                 i++;
@@ -1755,6 +1761,15 @@ public static partial class ReferenceExtractor
             AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments);
             i--;
         }
+    }
+
+    private static bool IsRustAssociatedTypeBindingKey(string expression, int segmentEnd)
+    {
+        var index = segmentEnd;
+        while (index < expression.Length && char.IsWhiteSpace(expression[index]))
+            index++;
+
+        return index < expression.Length && expression[index] == '=';
     }
 
     private static void AddTypeScriptTypeExpressionSegments(
