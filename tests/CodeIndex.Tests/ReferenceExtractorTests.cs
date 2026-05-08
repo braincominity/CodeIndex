@@ -13009,6 +13009,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpWhereConstraintKeywords_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            interface IContract {}
+            class Demo<TValue, TKey>
+                where TValue : unmanaged, IContract
+                where TKey : notnull
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "unmanaged" or "notnull") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be

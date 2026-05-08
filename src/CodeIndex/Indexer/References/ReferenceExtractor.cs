@@ -592,6 +592,10 @@ public static partial class ReferenceExtractor
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
     };
+    private static readonly HashSet<string> CSharpWhereConstraintIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "notnull", "unmanaged",
+    };
     private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
     {
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)

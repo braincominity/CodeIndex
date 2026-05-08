@@ -464,6 +464,7 @@ public static partial class ReferenceExtractor
             if (nameGroup.Success && nameGroup.Value.Length > 0)
                 genericParameterNames.Add(nameGroup.Value);
         }
+        genericParameterNames.UnionWith(CSharpWhereConstraintIgnoredSegments);
 
         foreach (Match match in CSharpWhereClauseRegex.Matches(line))
         {
