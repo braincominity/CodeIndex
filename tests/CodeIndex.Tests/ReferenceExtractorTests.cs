@@ -17149,6 +17149,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftFunctionTypeColonPositions_RecordsReturnTypes()
+    {
+        const string content = """
+            struct InputEvent {}
+            struct HandlerResult {}
+            struct SourceModel {}
+            struct MapperOutput {}
+
+            func register(handler: (InputEvent) -> HandlerResult) {}
+
+            func build() {
+                let mapper: (SourceModel) -> MapperOutput = makeMapper()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "HandlerResult"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MapperOutput"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
