@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -7,7 +8,8 @@ internal static class JvmMethodReferenceExtractor
 {
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
     private const string JvmMethodReferenceIdentifierPattern = @"(?:@?[_\p{L}\$][\w$]*|`[^`\r\n]+`)";
-    private const string JvmMethodReferenceOwnerSegmentPattern = JvmMethodReferenceIdentifierPattern + @"(?:\s*\[\s*\])*";
+    private const string JvmMethodReferenceTypeArgumentListPattern = @"(?:\s*<[^<>\r\n]*(?:<[^<>\r\n]*>[^<>\r\n]*)*>)?";
+    private const string JvmMethodReferenceOwnerSegmentPattern = JvmMethodReferenceIdentifierPattern + JvmMethodReferenceTypeArgumentListPattern + @"(?:\s*\[\s*\])*";
 
     private static readonly Regex MethodReferenceRegex = new(
         $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceOwnerSegmentPattern}(?:\.{JvmMethodReferenceOwnerSegmentPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)(?=\s*(?:[;,)\]]|$))",
@@ -39,7 +41,7 @@ internal static class JvmMethodReferenceExtractor
                 if (ownerGroup.Value is "this" or "super")
                     continue;
 
-                var ownerName = StripJvmArraySuffixes(ownerGroup.Value);
+                var ownerName = StripJvmOwnerTypeDecorations(ownerGroup.Value);
                 if (ownerName.Length == 0)
                     continue;
 
@@ -78,7 +80,7 @@ internal static class JvmMethodReferenceExtractor
         if (ownerGroup.Value is "this" or "super")
             return;
 
-        var ownerName = StripJvmArraySuffixes(ownerGroup.Value);
+        var ownerName = StripJvmOwnerTypeDecorations(ownerGroup.Value);
         var leafStartInOwner = FindLastUnquotedDot(ownerName) + 1;
         if (leafStartInOwner >= ownerName.Length)
             return;
@@ -97,6 +99,51 @@ internal static class JvmMethodReferenceExtractor
             lineNumber,
             container,
             language);
+    }
+
+    private static string StripJvmOwnerTypeDecorations(string name)
+    {
+        var withoutGenerics = StripJvmGenericArguments(name);
+        return StripJvmArraySuffixes(withoutGenerics);
+    }
+
+    private static string StripJvmGenericArguments(string name)
+    {
+        StringBuilder? builder = null;
+        var genericDepth = 0;
+        var inBacktickIdentifier = false;
+
+        foreach (var ch in name)
+        {
+            if (ch == '`')
+            {
+                if (genericDepth == 0)
+                    (builder ??= new StringBuilder(name.Length)).Append(ch);
+                inBacktickIdentifier = !inBacktickIdentifier;
+                continue;
+            }
+
+            if (!inBacktickIdentifier)
+            {
+                if (ch == '<')
+                {
+                    genericDepth++;
+                    builder ??= new StringBuilder(name.Length);
+                    continue;
+                }
+
+                if (ch == '>' && genericDepth > 0)
+                {
+                    genericDepth--;
+                    continue;
+                }
+            }
+
+            if (genericDepth == 0)
+                (builder ??= new StringBuilder(name.Length)).Append(ch);
+        }
+
+        return builder?.ToString() ?? name;
     }
 
     private static string StripJvmArraySuffixes(string name)

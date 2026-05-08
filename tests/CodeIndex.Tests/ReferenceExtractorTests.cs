@@ -1147,6 +1147,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaGenericOwnerMethodReferences_NormalizesOwnerType()
+    {
+        const string content = """
+            package demo;
+
+            import java.util.function.Function;
+            import java.util.function.Supplier;
+
+            public class Box<T> {
+                public String open() {
+                    return "";
+                }
+            }
+
+            public class Factory {
+                public Supplier<Box<String>> make() {
+                    return Box<String>::new;
+                }
+
+                public Function<Box<String>, String> opener() {
+                    return Box<String>::open;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("Box<String>::new", StringComparison.Ordinal)
+            && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "open"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("Box<String>::open", StringComparison.Ordinal)
+            && r.ContainerName == "opener");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Box<String>::open", StringComparison.Ordinal)
+            && r.ContainerName == "opener");
+        Assert.DoesNotContain(references, r => r.SymbolName.Contains("<", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
     {
         const string content = """
