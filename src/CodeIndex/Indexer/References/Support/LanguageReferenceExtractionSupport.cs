@@ -2007,7 +2007,15 @@ internal static class LanguageReferenceExtractionSupport
             cursor = SkipWhitespace(expression, cursor + 1);
 
         if (cursor >= expression.Length || !IsIdentifierStart(expression[cursor]))
-            return false;
+        {
+            return cursor < expression.Length && expression[cursor] == '[';
+        }
+
+        if (StartsWithKeyword(expression, cursor, "map")
+            || StartsWithKeyword(expression, cursor, "chan"))
+        {
+            return true;
+        }
 
         var lastSegmentStart = cursor;
         while (cursor < expression.Length)

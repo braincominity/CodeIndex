@@ -37,6 +37,7 @@ affected:
 - **Go inline struct fields expose field types** — anonymous forms such as `struct{ ID UserID; Owner *User }{}` now link `UserID` and `User` without indexing field names.
 - **Go inline interface members expose signature types** — anonymous forms such as `interface{ Handle(Context) Result; io.Reader }` now link method parameter, return, and embedded interface types.
 - **Go multi-pointer parenthesized conversions expose converted types** — conversions such as `(**Node)(nil)` now link the underlying pointed-to type.
+- **Go parenthesized composite conversions expose converted types** — conversions such as `([]User)(raw)` and `(map[Key]Value)(raw)` now link their target types.
 
 ## 日本語
 
@@ -66,3 +67,4 @@ affected:
 - **Go inline struct field の型を参照として出すようになりました** — `struct{ ID UserID; Owner *User }{}` のような anonymous form から field 名ではなく `UserID` と `User` を辿れるようになりました。
 - **Go inline interface member の signature 型を参照として出すようになりました** — `interface{ Handle(Context) Result; io.Reader }` のような anonymous form から method 引数、戻り値、embedded interface 型を辿れるようになりました。
 - **Go の multi-pointer parenthesized conversion で変換対象型を参照として出すようになりました** — `(**Node)(nil)` のような conversion から pointer の先の型を辿れるようになりました。
+- **Go の parenthesized composite conversion で変換対象型を参照として出すようになりました** — `([]User)(raw)` や `(map[Key]Value)(raw)` のような conversion から変換対象型を辿れるようになりました。

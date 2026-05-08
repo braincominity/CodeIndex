@@ -7934,6 +7934,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoParenthesizedCompositeTypeConversions_CapturesConvertedTypes()
+    {
+        const string content = """
+            package main
+
+            func convert(callback func(any) any, raw any) {
+                users := ([]User)(raw)
+                lookup := (map[Key]Value)(raw)
+                stream := (chan Event)(raw)
+                value := (callback)(raw)
+                _, _, _, _ = users, lookup, stream, value
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoMethodExpressions_CapturesReceiverTypes()
     {
         const string content = """
