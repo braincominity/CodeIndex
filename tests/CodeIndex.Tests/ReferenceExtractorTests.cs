@@ -21223,6 +21223,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustSelfAssociatedCalls_DoNotEmitSelfTypeReference()
+    {
+        const string content = """
+            struct User;
+
+            impl User {
+                fn make() -> Self {
+                    Self::new();
+                    User::new();
+                    Self {}
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

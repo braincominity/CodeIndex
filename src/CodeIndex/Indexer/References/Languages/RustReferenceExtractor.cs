@@ -959,14 +959,15 @@ internal static class RustReferenceExtractor
             var leafStart = receiver.LastIndexOf("::", StringComparison.Ordinal);
             var leaf = leafStart >= 0 ? receiver[(leafStart + 2)..] : receiver;
             var leafOffset = leafStart >= 0 ? leafStart + 2 : 0;
-            if (!IsLikelyRustTypePathLeaf(leaf))
+            var normalizedLeaf = NormalizeIdentifier(leaf);
+            if (normalizedLeaf == "Self" || !IsLikelyRustTypePathLeaf(leaf))
                 continue;
 
             ReferenceExtractor.AddReference(
                 references,
                 seen,
                 fileId,
-                NormalizeIdentifier(leaf),
+                normalizedLeaf,
                 receiverGroup.Index + leafOffset,
                 "type_reference",
                 context,
@@ -1018,14 +1019,15 @@ internal static class RustReferenceExtractor
             var leafStart = name.LastIndexOf("::", StringComparison.Ordinal);
             var leaf = leafStart >= 0 ? name[(leafStart + 2)..] : name;
             var leafOffset = leafStart >= 0 ? leafStart + 2 : 0;
-            if (!IsLikelyRustTypePathLeaf(leaf))
+            var normalizedLeaf = NormalizeIdentifier(leaf);
+            if (normalizedLeaf == "Self" || !IsLikelyRustTypePathLeaf(leaf))
                 continue;
 
             ReferenceExtractor.AddReference(
                 references,
                 seen,
                 fileId,
-                NormalizeIdentifier(leaf),
+                normalizedLeaf,
                 nameGroup.Index + leafOffset,
                 "instantiate",
                 context,
