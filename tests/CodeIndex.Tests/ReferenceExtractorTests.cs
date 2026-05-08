@@ -13192,6 +13192,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinGenericClassLiterals_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User
+
+            inline fun <reified T> genericKClass() = T::class
+            fun userKClass() = User::class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpWhereConstraintKeywords_DoNotBecomeTypeReferences()
     {
         const string content = """

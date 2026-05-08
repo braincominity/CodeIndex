@@ -132,6 +132,7 @@ internal static class KotlinReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        var genericParameterNames = CollectGenericParameterNames(preparedLine);
         foreach (Match match in ClassLiteralRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -144,7 +145,8 @@ internal static class KotlinReferenceExtractor
                 context,
                 lineNumber,
                 container,
-                "kotlin");
+                "kotlin",
+                genericParameterNames);
         }
     }
 
