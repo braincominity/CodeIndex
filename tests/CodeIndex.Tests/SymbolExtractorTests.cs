@@ -12101,13 +12101,14 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
-        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n  enum :status\n\n  def initialize(name)\n    @name = name\n  end\nend";
+        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n  enum :status\n  attribute :timezone, :string\n\n  def initialize(name)\n    @name = name\n  end\nend";
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "timezone");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "posts");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "company");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "active");
