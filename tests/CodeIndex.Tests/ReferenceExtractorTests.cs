@@ -2552,6 +2552,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyGem_IndexesDependencyName()
+    {
+        const string content = """
+            gem "rails", "~> 8.0"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "gem");
+        Assert.Contains(references, reference => reference.SymbolName == "rails");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "~> 8.0");
+    }
+
+    [Fact]
     public void Extract_RubyAutoload_IndexesConstantTarget()
     {
         const string content = """
