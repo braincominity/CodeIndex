@@ -959,6 +959,7 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoInterfaceTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1064,6 +1065,90 @@ internal static class LanguageReferenceExtractionSupport
 
         var expression = line[typeStart..typeEnd].TrimEnd();
         EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoInterfaceTypeSetTermReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (!line.Contains('|'))
+            return;
+
+        var first = SkipWhitespace(line, 0);
+        if (first >= line.Length || line.Contains(":=", StringComparison.Ordinal) || line.Contains('='))
+            return;
+        if (IsIdentifierStart(line[first]))
+        {
+            var nameEnd = first + 1;
+            while (nameEnd < line.Length && IsSimpleIdentifierPart(line[nameEnd]))
+                nameEnd++;
+            if (IsGoStatementKeyword(line[first..nameEnd]))
+                return;
+        }
+
+        foreach (var (termStart, termLength) in SplitGoTypeSetTermSpans(line))
+        {
+            var rawTerm = line.Substring(termStart, termLength);
+            var term = rawTerm.Trim();
+            if (term.Length == 0)
+                continue;
+
+            var tildeOffset = term[0] == '~' ? 1 : 0;
+            while (tildeOffset < term.Length && char.IsWhiteSpace(term[tildeOffset]))
+                tildeOffset++;
+            if (tildeOffset >= term.Length || !IsGoTypeExpressionStart(term, tildeOffset))
+                continue;
+
+            var expression = term[tildeOffset..];
+            if (!ContainsLikelyGoTypeArgument(expression))
+                continue;
+
+            var termTrimStart = rawTerm.IndexOf(term, StringComparison.Ordinal);
+            EmitGoTypeExpression(expression, termStart + Math.Max(0, termTrimStart) + tildeOffset, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static List<(int Start, int Length)> SplitGoTypeSetTermSpans(string line)
+    {
+        var spans = new List<(int Start, int Length)>();
+        var termStart = 0;
+        var squareDepth = 0;
+        var parenDepth = 0;
+        for (var cursor = 0; cursor < line.Length; cursor++)
+        {
+            switch (line[cursor])
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '|':
+                    if (squareDepth == 0 && parenDepth == 0)
+                    {
+                        spans.Add((termStart, cursor - termStart));
+                        termStart = cursor + 1;
+                    }
+                    break;
+            }
+        }
+
+        spans.Add((termStart, line.Length - termStart));
+        return spans;
     }
 
     private static bool TryReadGoIdentifierList(string line, ref int cursor, bool requireComma)

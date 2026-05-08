@@ -7876,6 +7876,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoInterfaceTypeSetTerms_CapturesUnionTypes()
+    {
+        const string content = """
+            package main
+
+            type Identifier interface {
+                ~CustomID | External
+                model.Token | ~Alias
+            }
+
+            func flags() {
+                mask := FlagA | FlagB
+                _ = mask
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomID" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "External" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Token" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Alias" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagA" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagB" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
