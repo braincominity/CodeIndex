@@ -32,6 +32,7 @@ affected:
 - **Go labels are indexed as navigation symbols** — labels such as `Retry:` now appear in symbol search and definition-oriented workflows.
 - **Go branch statements link to label symbols** — `goto Retry`, `break Retry`, and `continue Retry` now emit label references for graph workflows.
 - **Go type switch cases expose pointer and composite case types** — `case *Admin`, `case []Guest`, and `case map[Key]Value` now link their type case entries without indexing value-switch constants.
+- **Go slice and array composite literals expose element types** — literals such as `[]User{}`, `[3]*Widget{}`, and `[...]model.Event{}` now link their element types.
 
 ## 日本語
 
@@ -56,3 +57,4 @@ affected:
 - **Go label を navigation symbol として索引するようになりました** — `Retry:` のような label が symbol search や definition 系 workflow に現れるようになりました。
 - **Go branch statement から label symbol へ参照を張るようになりました** — `goto Retry`、`break Retry`、`continue Retry` が graph workflow 用の label reference を出すようになりました。
 - **Go type switch case の pointer / composite 型を参照として出すようになりました** — `case *Admin`、`case []Guest`、`case map[Key]Value` が value switch の定数 case を索引せずに型 case entry を辿れるようになりました。
+- **Go slice / array composite literal の要素型を参照として出すようになりました** — `[]User{}`、`[3]*Widget{}`、`[...]model.Event{}` のような literal から要素型を辿れるようになりました。

@@ -7782,6 +7782,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoArraySliceCompositeLiterals_CapturesElementTypes()
+    {
+        const string content = """
+            package main
+
+            func build(values []func()) {
+                users := []User{}
+                widgets := [3]*Widget{}
+                events := [...]model.Event{}
+                nested := [][]Entry{}
+                values[i]()
+                _, _, _, _ = users, widgets, events, nested
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoMapCompositeLiterals_CapturesKeyAndValueTypes()
     {
         const string content = """

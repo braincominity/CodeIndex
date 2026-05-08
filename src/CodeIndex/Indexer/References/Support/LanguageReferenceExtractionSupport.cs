@@ -975,6 +975,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoArraySliceCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoParenthesizedTypeConversionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMethodExpressionReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1591,6 +1592,43 @@ internal static class LanguageReferenceExtractionSupport
             }
 
             EmitGoTypeExpression(line[valueStart..valueEnd], valueStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitGoArraySliceCompositeLiteralTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var open = line.IndexOf('[', searchStart);
+            if (open < 0)
+                return;
+
+            searchStart = open + 1;
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+            if (close < 0)
+                continue;
+
+            var elementStart = SkipWhitespace(line, close + 1);
+            if (elementStart >= line.Length || !IsGoTypeExpressionStart(line, elementStart))
+                continue;
+
+            var elementEnd = FindGoInlineTypeExpressionEnd(line, elementStart);
+            var literalOpen = SkipWhitespace(line, elementEnd);
+            if (literalOpen >= line.Length || line[literalOpen] != '{')
+                continue;
+
+            if (!IsGoCompositeLiteralContext(line, open, elementEnd - open))
+                continue;
+
+            EmitGoTypeExpression(line[elementStart..elementEnd], elementStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
     }
 
