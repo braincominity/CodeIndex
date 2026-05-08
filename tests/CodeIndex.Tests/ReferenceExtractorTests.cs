@@ -7960,6 +7960,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppExportedBaseLists_CaptureBaseTypeReferences()
+    {
+        const string content = """
+            export class Child final : public virtual Base, protected ns::Iface {
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Iface" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """

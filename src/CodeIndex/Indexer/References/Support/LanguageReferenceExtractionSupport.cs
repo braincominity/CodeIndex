@@ -9,7 +9,7 @@ internal static class LanguageReferenceExtractionSupport
         @"^(?:\s*#\s*(?:include|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)"")|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppBaseListRegex = new(
-        @"^\s*(?:(?:template|requires)\b[^{;]*\s+)*(?:class|struct)\s+[A-Za-z_]\w*(?:\s*final)?\s*:\s*(?<bases>[^{;]+)",
+        @"^\s*(?:export\s+)?(?:(?:template|requires)\b[^{;]*\s+)*(?:class|struct)\s+[A-Za-z_]\w*(?:\s*final)?\s*:\s*(?<bases>[^{;]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppNewTypeRegex = new(
         @"\bnew\s+(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*(?:\s*<[^;{}]+>)?)",
