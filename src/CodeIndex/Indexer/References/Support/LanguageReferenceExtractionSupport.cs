@@ -1535,6 +1535,7 @@ internal static class LanguageReferenceExtractionSupport
             return;
 
         var parameterOpen = firstParen;
+        var functionHeaderStart = GoFuncRegex.Match(preparedLine).Length;
         var receiverClose = ReferenceExtractor.FindMatchingChar(preparedLine, firstParen, '(', ')');
         if (receiverClose >= 0)
         {
@@ -1545,7 +1546,10 @@ internal static class LanguageReferenceExtractionSupport
             {
                 var nextParen = preparedLine.IndexOf('(', afterReceiver);
                 if (nextParen > afterReceiver)
+                {
                     parameterOpen = nextParen;
+                    functionHeaderStart = afterReceiver;
+                }
             }
         }
 
@@ -1553,6 +1557,7 @@ internal static class LanguageReferenceExtractionSupport
         if (parameterClose < 0)
             return;
 
+        EmitGoTypeParameterConstraints(preparedLine, functionHeaderStart, parameterOpen, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoParameterListTypes(preparedLine, parameterOpen + 1, parameterClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         var returnStart = parameterClose + 1;
@@ -1573,6 +1578,65 @@ internal static class LanguageReferenceExtractionSupport
         while (returnEnd < preparedLine.Length && !char.IsWhiteSpace(preparedLine[returnEnd]) && preparedLine[returnEnd] != '{')
             returnEnd++;
         EmitGoTypeExpression(preparedLine[returnStart..returnEnd], returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoTypeParameterConstraints(
+        string line,
+        int searchStart,
+        int searchEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (searchStart < 0 || searchStart >= searchEnd || searchEnd > line.Length)
+            return;
+
+        var open = line.IndexOf('[', searchStart, searchEnd - searchStart);
+        if (open < 0)
+            return;
+
+        var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+        if (close < 0 || close > searchEnd)
+            return;
+
+        var list = line[(open + 1)..close];
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var rawSegment = list.Substring(segmentStart, segmentLength);
+            var fragment = rawSegment.Trim();
+            if (fragment.Length == 0)
+                continue;
+
+            var constraintStart = FirstGoTypeParameterConstraintStart(fragment);
+            if (constraintStart < 0)
+                continue;
+
+            var fragmentTrimStart = rawSegment.IndexOf(fragment, StringComparison.Ordinal);
+            var absoluteStart = open + 1 + segmentStart + Math.Max(0, fragmentTrimStart) + constraintStart;
+            EmitGoTypeExpression(fragment[constraintStart..], absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static int FirstGoTypeParameterConstraintStart(string fragment)
+    {
+        var cursor = 0;
+        while (cursor < fragment.Length && char.IsWhiteSpace(fragment[cursor]))
+            cursor++;
+        if (cursor >= fragment.Length || !IsIdentifierStart(fragment[cursor]))
+            return -1;
+
+        cursor++;
+        while (cursor < fragment.Length && IsSimpleIdentifierPart(fragment[cursor]))
+            cursor++;
+
+        var constraintStart = cursor;
+        while (constraintStart < fragment.Length && char.IsWhiteSpace(fragment[constraintStart]))
+            constraintStart++;
+
+        return constraintStart < fragment.Length ? constraintStart : -1;
     }
 
     private static void EmitGoParameterListTypes(

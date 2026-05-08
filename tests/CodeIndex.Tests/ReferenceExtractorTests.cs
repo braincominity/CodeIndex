@@ -7473,6 +7473,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericFunctionConstraints_CapturesConstraintTypes()
+    {
+        const string content = """
+            package main
+
+            func Decode[T WireMessage, K KeyConstraint](value T) Result {
+                return Result{}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "WireMessage" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
