@@ -259,11 +259,12 @@ internal static class KotlinReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitPrimaryConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitExtensionPropertyReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        var genericParameterNames = CollectGenericParameterNames(preparedLine);
+        EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
+        EmitPrimaryConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
+        EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
+        EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
+        EmitExtensionPropertyReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -273,7 +274,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            genericParameterNames);
         if (!preparedLine.TrimStart().StartsWith("import ", StringComparison.Ordinal))
         {
             TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
@@ -296,7 +298,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
     {
         var funIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "fun");
         if (funIndex < 0)
@@ -319,7 +322,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            ignoredSegments);
 
         TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(
             preparedLine,
@@ -331,7 +335,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            ignoredSegments);
 
         var returnColon = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, closeParen + 1);
         if (returnColon >= preparedLine.Length || preparedLine[returnColon] != ':')
@@ -351,7 +356,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn(typeStart));
+            resolveContainerForColumn(typeStart),
+            ignoredSegments);
     }
 
     private static void EmitExtensionFunctionReceiverTypeReferences(
@@ -363,7 +369,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
     {
         var headStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, funIndex + "fun".Length);
         if (headStart >= openParen)
@@ -398,7 +405,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn(headStart));
+            resolveContainerForColumn(headStart),
+            ignoredSegments);
     }
 
     private static void EmitExtensionPropertyReceiverTypeReferences(
@@ -408,7 +416,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
     {
         foreach (var keyword in DeclarationKeywords)
         {
@@ -447,7 +456,8 @@ internal static class KotlinReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(declarationStart));
+                    resolveContainerForColumn(declarationStart),
+                    ignoredSegments);
             }
         }
     }
@@ -505,7 +515,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
     {
         var trimmed = preparedLine.TrimStart();
         if (!(trimmed.StartsWith("class ", StringComparison.Ordinal)
@@ -538,7 +549,8 @@ internal static class KotlinReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn,
-            trimTopLevelCallArguments: true);
+            trimTopLevelCallArguments: true,
+            ignoredSegments: ignoredSegments);
     }
 
     private static void EmitPrimaryConstructorTypeReferences(
@@ -548,7 +560,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
     {
         var trimmed = preparedLine.TrimStart();
         if (!(trimmed.StartsWith("class ", StringComparison.Ordinal)
@@ -577,7 +590,8 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            ignoredSegments);
     }
 
     private static void EmitGenericBoundReferences(
@@ -587,7 +601,8 @@ internal static class KotlinReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? genericParameterNames)
     {
         var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
         if (genericOpenIndex >= 0)
@@ -601,7 +616,8 @@ internal static class KotlinReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn);
+                resolveContainerForColumn,
+                genericParameterNames);
         }
 
         TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
@@ -612,7 +628,67 @@ internal static class KotlinReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            genericParameterNames);
+    }
+
+    private static HashSet<string> CollectGenericParameterNames(string preparedLine)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
+        if (genericOpenIndex < 0)
+            return names;
+
+        var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
+        if (genericCloseIndex <= genericOpenIndex)
+            return names;
+
+        var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+        {
+            var fragment = clause.Substring(segmentStart, segmentLength);
+            if (TryReadGenericParameterName(fragment, out var name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static bool TryReadGenericParameterName(string fragment, out string name)
+    {
+        name = string.Empty;
+        var index = 0;
+        while (index < fragment.Length)
+        {
+            while (index < fragment.Length && char.IsWhiteSpace(fragment[index]))
+                index++;
+
+            if (index >= fragment.Length)
+                return false;
+
+            if (fragment[index] == '@')
+            {
+                index = ReferenceExtractor.SkipJavaAnnotation(fragment, index);
+                continue;
+            }
+
+            var tokenStart = index;
+            if (!ReferenceExtractor.IsJavaIdentifierPart(fragment[index]))
+                return false;
+
+            index++;
+            while (index < fragment.Length && ReferenceExtractor.IsJavaIdentifierPart(fragment[index]))
+                index++;
+
+            var token = fragment.Substring(tokenStart, index - tokenStart);
+            if (token is "reified" or "in" or "out")
+                continue;
+
+            name = token;
+            return true;
+        }
+
+        return false;
     }
 
     private static SymbolRecord? FindEnclosingKotlinConstructor(

@@ -13091,6 +13091,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinGenericBounds_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            interface Comparable<T>
+            interface Handler<T>
+            class Payload
+            class Box<out T : Comparable<T>>
+
+            fun <reified T> run(input: T): Handler<T> where T : Payload, T : Handler<T> = TODO()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpWhereConstraintKeywords_DoNotBecomeTypeReferences()
     {
         const string content = """
