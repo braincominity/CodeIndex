@@ -8059,6 +8059,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoStandaloneTypeSetTerms_CapturesApproximationTypes()
+    {
+        const string content = """
+            package main
+
+            type SliceLike interface {
+                ~[]Element
+                ~map[Key]Value
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Element" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "map" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoBranchLabels_CapturesLabelReferences()
     {
         const string content = """

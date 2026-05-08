@@ -966,6 +966,7 @@ internal static class LanguageReferenceExtractionSupport
 
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoInterfaceTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoStandaloneTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1160,6 +1161,33 @@ internal static class LanguageReferenceExtractionSupport
 
         spans.Add((termStart, line.Length - termStart));
         return spans;
+    }
+
+    private static void EmitGoStandaloneTypeSetTermReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (line.Contains('|'))
+            return;
+
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length || line[cursor] != '~')
+            return;
+
+        var typeStart = SkipWhitespace(line, cursor + 1);
+        if (typeStart >= line.Length || !IsGoTypeExpressionStart(line, typeStart))
+            return;
+
+        var expression = line[typeStart..].TrimEnd();
+        if (expression.Length == 0)
+            return;
+
+        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static bool TryReadGoIdentifierList(string line, ref int cursor, bool requireComma)
