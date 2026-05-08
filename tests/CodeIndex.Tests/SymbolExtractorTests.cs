@@ -14647,6 +14647,7 @@ public class SymbolExtractorTests
         // F#: namespace rec, module private, member forms / F#: namespace rec、module private、member形
         var content = """
             namespace rec MyApp.Domain
+            module Json = System.Text.Json
 
             type UserId = int
             type OrderId = string
@@ -14667,6 +14668,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Text.Json");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
