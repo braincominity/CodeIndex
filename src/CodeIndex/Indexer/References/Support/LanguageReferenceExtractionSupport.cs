@@ -962,6 +962,8 @@ internal static class LanguageReferenceExtractionSupport
 
         if (GoFuncRegex.IsMatch(preparedLine))
             EmitGoFunctionSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        else
+            EmitGoInterfaceMethodSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
         {
@@ -1644,9 +1646,90 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         var returnEnd = returnStart;
-        while (returnEnd < preparedLine.Length && !char.IsWhiteSpace(preparedLine[returnEnd]) && preparedLine[returnEnd] != '{')
+        while (returnEnd < preparedLine.Length && preparedLine[returnEnd] != '{')
             returnEnd++;
-        EmitGoTypeExpression(preparedLine[returnStart..returnEnd], returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
+        var expression = preparedLine[returnStart..returnEnd].TrimEnd();
+        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoInterfaceMethodSignatureTypes(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var nameStart = SkipWhitespace(preparedLine, 0);
+        if (nameStart >= preparedLine.Length || !IsIdentifierStart(preparedLine[nameStart]))
+            return;
+
+        var nameEnd = nameStart + 1;
+        while (nameEnd < preparedLine.Length && IsSimpleIdentifierPart(preparedLine[nameEnd]))
+            nameEnd++;
+
+        if (IsGoStatementKeyword(preparedLine[nameStart..nameEnd]))
+            return;
+
+        var open = SkipWhitespace(preparedLine, nameEnd);
+        if (open >= preparedLine.Length || preparedLine[open] != '(')
+            return;
+
+        var close = ReferenceExtractor.FindMatchingChar(preparedLine, open, '(', ')');
+        if (close < 0)
+            return;
+
+        var returnStart = SkipWhitespace(preparedLine, close + 1);
+        if (!IsGoSignatureReturnStart(preparedLine, returnStart))
+            return;
+
+        EmitGoParameterListTypes(preparedLine, open + 1, close, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoSignatureReturnTypes(preparedLine, close + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static bool IsGoStatementKeyword(string value)
+        => value is "case" or "const" or "default" or "defer" or "else" or "for" or "func"
+            or "go" or "if" or "import" or "package" or "return" or "select" or "switch"
+            or "type" or "var";
+
+    private static bool IsGoSignatureReturnStart(string line, int index)
+    {
+        if (index >= line.Length)
+            return false;
+
+        return line[index] is '(' or '*' or '[' or '<' || IsIdentifierStart(line[index]);
+    }
+
+    private static void EmitGoSignatureReturnTypes(
+        string preparedLine,
+        int start,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var returnStart = SkipWhitespace(preparedLine, start);
+        if (returnStart >= preparedLine.Length || preparedLine[returnStart] == '{')
+            return;
+
+        if (preparedLine[returnStart] == '(')
+        {
+            var returnClose = ReferenceExtractor.FindMatchingChar(preparedLine, returnStart, '(', ')');
+            if (returnClose > returnStart)
+                EmitGoParameterListTypes(preparedLine, returnStart + 1, returnClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            return;
+        }
+
+        var returnEnd = returnStart;
+        while (returnEnd < preparedLine.Length && preparedLine[returnEnd] != '{')
+            returnEnd++;
+
+        var expression = preparedLine[returnStart..returnEnd].TrimEnd();
+        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoTypeParameterConstraints(

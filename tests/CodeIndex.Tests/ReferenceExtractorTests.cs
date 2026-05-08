@@ -7532,6 +7532,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoInterfaceMethodSignatures_CapturesParameterAndReturnTypes()
+    {
+        const string content = """
+            package main
+
+            type Handler interface {
+                Handle(ctx Context, input Request) (Response, error)
+                Watch() <-chan Event
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
