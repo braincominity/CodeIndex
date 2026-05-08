@@ -478,7 +478,7 @@ internal static class SwiftReferenceExtractor
             }
 
             var afterGeneric = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, closeAngle + 1);
-            if (afterGeneric >= preparedLine.Length || preparedLine[afterGeneric] != '(')
+            if (afterGeneric >= preparedLine.Length || preparedLine[afterGeneric] is not ('(' or '{'))
             {
                 index = closeAngle;
                 continue;
