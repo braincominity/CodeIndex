@@ -21190,6 +21190,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTraitAliasTargetTypes_CapturesAliasedBounds()
+    {
+        const string content = """
+            trait Service = Send + Sync + Handler<User>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Send" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Sync" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
