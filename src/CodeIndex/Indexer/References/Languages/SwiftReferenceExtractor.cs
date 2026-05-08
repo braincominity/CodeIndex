@@ -35,6 +35,7 @@ internal static class SwiftReferenceExtractor
         EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCompilerDirectiveRootTypeReferences("selector", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCompilerDirectiveRootTypeReferences("keyPath", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
