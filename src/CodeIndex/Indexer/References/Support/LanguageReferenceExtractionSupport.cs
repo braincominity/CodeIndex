@@ -964,6 +964,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoTypeAssertionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
@@ -1218,6 +1219,85 @@ internal static class LanguageReferenceExtractionSupport
             EmitGoParameterListTypes(line, open + 1, close, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             EmitGoSignatureReturnTypes(line, close + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+    }
+
+    private static void EmitGoGenericCallTypeArgumentReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (GoFuncRegex.IsMatch(line))
+            return;
+
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var open = line.IndexOf('[', searchStart);
+            if (open < 0)
+                return;
+
+            searchStart = open + 1;
+            if (!HasGoIdentifierBeforeBracket(line, open))
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '[', ']');
+            if (close < 0)
+                continue;
+
+            var afterClose = SkipWhitespace(line, close + 1);
+            if (afterClose >= line.Length || line[afterClose] != '(')
+                continue;
+
+            var typeArguments = line[(open + 1)..close];
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeArguments))
+            {
+                var rawArgument = typeArguments.Substring(segmentStart, segmentLength);
+                var expression = rawArgument.Trim();
+                if (expression.Length == 0 || !ContainsLikelyGoTypeArgument(expression))
+                    continue;
+
+                var trimStart = rawArgument.IndexOf(expression, StringComparison.Ordinal);
+                var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
+                EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
+        }
+    }
+
+    private static bool HasGoIdentifierBeforeBracket(string line, int openBracket)
+    {
+        var cursor = openBracket - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+            cursor--;
+        if (cursor < 0 || !IsSimpleIdentifierPart(line[cursor]))
+            return false;
+
+        while (cursor >= 0 && IsSimpleIdentifierPart(line[cursor]))
+            cursor--;
+
+        return true;
+    }
+
+    private static bool ContainsLikelyGoTypeArgument(string expression)
+    {
+        for (var i = 0; i < expression.Length; i++)
+        {
+            if (!IsIdentifierStart(expression[i]))
+                continue;
+
+            var start = i;
+            i++;
+            while (i < expression.Length && IsSimpleIdentifierPart(expression[i]))
+                i++;
+
+            if (char.IsUpper(expression[start]))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool StartsWithKeyword(string line, int index, string keyword)
