@@ -14540,6 +14540,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsAttributePrefixedFunctions()
+    {
+        var content = """
+            [[nodiscard]] int compute_score() { return 1; }
+            [[gnu::always_inline]] inline int fast_path() { return 2; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute_score");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fast_path");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceAliasesAndNamespaceDirectives()
     {
         // C++: namespace aliases and using namespace directives / C++: 名前空間エイリアスと using namespace
