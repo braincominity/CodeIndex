@@ -7717,12 +7717,29 @@ public static partial class SymbolExtractor
             "fsharp" => FSharpSymbolNameNormalizer.Normalize(name),
             "java" => JavaSymbolNameNormalizer.Normalize(name),
             "kotlin" => KotlinSymbolNameNormalizer.Normalize(name, matchLine),
+            "ruby" => NormalizeRubySymbolName(name, matchLine),
             "rust" => RustSymbolNameNormalizer.Normalize(name),
             "smalltalk" => NormalizeSmalltalkSelectorName(name),
             "swift" => SwiftSymbolNameNormalizer.Normalize(name),
             "sql" => SqlSymbolNameNormalizer.Normalize(name),
             _ => name,
         };
+    }
+
+    private static string NormalizeRubySymbolName(string name, string matchLine)
+    {
+        if (!matchLine.TrimStart().StartsWith("require", StringComparison.Ordinal))
+            return name;
+
+        var trimmed = name.Trim();
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '\'' && trimmed[^1] == '\'')
+                || (trimmed[0] == '"' && trimmed[^1] == '"')))
+        {
+            return trimmed[1..^1];
+        }
+
+        return trimmed;
     }
 
     private static string NormalizeSmalltalkSelectorName(string name)
