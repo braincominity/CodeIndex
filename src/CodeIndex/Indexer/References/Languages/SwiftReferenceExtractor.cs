@@ -24,6 +24,7 @@ internal static class SwiftReferenceExtractor
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitTypealiasRhsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -122,6 +123,40 @@ internal static class SwiftReferenceExtractor
 
         var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, arrowIndex + 2);
         var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
+        if (typeEnd <= typeStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitTypealiasRhsTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var typealiasIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "typealias");
+        if (typealiasIndex < 0)
+            return;
+
+        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', typealiasIndex + "typealias".Length);
+        if (equalsIndex < 0)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, equalsIndex + 1);
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart, stopAtComma: false, stopAtArrow: false);
         if (typeEnd <= typeStart)
             return;
 
