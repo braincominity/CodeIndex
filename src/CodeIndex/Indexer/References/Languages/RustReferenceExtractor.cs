@@ -16,6 +16,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex AttributeHeadRegex = new(
         $@"#\s*!?\s*\[\s*(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
         RegexOptions.Compiled);
+    private static readonly Regex ExternCrateRegex = new(
+        $@"^\s*(?:pub\s+)?extern\s+crate\s+(?<name>{RustIdentifierPattern})(?:\s+as\s+{RustIdentifierPattern})?\s*;",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -120,6 +123,7 @@ internal static class RustReferenceExtractor
         SymbolRecord? container,
         SymbolRecord? enumContainer)
     {
+        EmitExternCrateReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitConstStaticTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -131,6 +135,32 @@ internal static class RustReferenceExtractor
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitExternCrateReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = ExternCrateRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var nameGroup = match.Groups["name"];
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            NormalizeIdentifier(nameGroup.Value),
+            nameGroup.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
     }
 
     private static void EmitFunctionSignatureTypeReferences(
@@ -627,7 +657,8 @@ internal static class RustReferenceExtractor
         var trimmed = preparedLine.TrimStart();
         if (trimmed.StartsWith("use ", StringComparison.Ordinal)
             || trimmed.StartsWith("pub use ", StringComparison.Ordinal)
-            || trimmed.StartsWith("extern crate ", StringComparison.Ordinal))
+            || trimmed.StartsWith("extern crate ", StringComparison.Ordinal)
+            || trimmed.StartsWith("pub extern crate ", StringComparison.Ordinal))
         {
             return;
         }
