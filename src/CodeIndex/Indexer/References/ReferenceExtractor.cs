@@ -612,7 +612,8 @@ public static partial class ReferenceExtractor
         {
             "Any", "Bool", "Character", "Double", "Float", "Int", "Int8", "Int16", "Int32", "Int64",
             "Never", "Self", "String", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Void",
-            "any", "borrowing", "consuming", "each", "inout", "isolated", "sending", "some",
+            "any", "async", "borrowing", "consuming", "each", "inout", "isolated", "rethrows",
+            "sending", "some", "throws",
         },
         ["rust"] = new HashSet<string>(StringComparer.Ordinal)
         {

@@ -17360,6 +17360,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftFunctionTypeEffects_AreNotTypeReferences()
+    {
+        const string content = """
+            struct Input {}
+            struct Output {}
+            struct Failure: Error {}
+
+            typealias AsyncLoader = (Input) async throws(Failure) -> Output
+            typealias RetryingLoader = (Input) rethrows -> Output
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Input"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Output"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "async" or "throws" or "rethrows"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
