@@ -21246,6 +21246,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustQualifiedAssociatedCalls_CapturesReceiverAndTraitTypes()
+    {
+        const string content = """
+            fn run() {
+                <User as Service>::handle();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

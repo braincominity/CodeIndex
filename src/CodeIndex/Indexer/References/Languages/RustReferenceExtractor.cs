@@ -149,6 +149,7 @@ internal static class RustReferenceExtractor
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitEnumVariantTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, enumContainer);
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitQualifiedAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitStructLiteralInstantiationReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -776,6 +777,17 @@ internal static class RustReferenceExtractor
     private static bool IsRustIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
 
+    private static bool IsRustIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index;
+    }
+
     private static void EmitEnumVariantTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -989,6 +1001,108 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(argsGroup.Index));
         }
+    }
+
+    private static void EmitQualifiedAssociatedCallReceiverTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchIndex = 0;
+        while (searchIndex < preparedLine.Length)
+        {
+            var openAngle = preparedLine.IndexOf('<', searchIndex);
+            if (openAngle < 0)
+                return;
+
+            searchIndex = openAngle + 1;
+            var closeAngle = ReferenceExtractor.FindMatchingChar(preparedLine, openAngle, '<', '>');
+            if (closeAngle <= openAngle)
+                continue;
+
+            var afterClose = SkipWhitespace(preparedLine, closeAngle + 1);
+            if (afterClose + 2 > preparedLine.Length
+                || preparedLine[afterClose] != ':'
+                || preparedLine[afterClose + 1] != ':')
+            {
+                continue;
+            }
+
+            var methodStart = SkipWhitespace(preparedLine, afterClose + 2);
+            if (methodStart >= preparedLine.Length || !IsRustIdentifierStart(preparedLine[methodStart]))
+                continue;
+
+            var methodEnd = methodStart + 1;
+            while (methodEnd < preparedLine.Length && IsRustIdentifierPart(preparedLine[methodEnd]))
+                methodEnd++;
+
+            var callOpen = SkipWhitespace(preparedLine, methodEnd);
+            if (callOpen >= preparedLine.Length || preparedLine[callOpen] != '(')
+                continue;
+
+            var qualified = preparedLine.Substring(openAngle + 1, closeAngle - openAngle - 1);
+            foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(qualified, "as"))
+            {
+                EmitQualifiedAssociatedCallTypePart(
+                    qualified,
+                    openAngle + 1,
+                    0,
+                    asIndex,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn);
+                EmitQualifiedAssociatedCallTypePart(
+                    qualified,
+                    openAngle + 1,
+                    asIndex + "as".Length,
+                    qualified.Length,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn);
+                break;
+            }
+        }
+    }
+
+    private static void EmitQualifiedAssociatedCallTypePart(
+        string qualified,
+        int qualifiedStart,
+        int partStart,
+        int partEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(qualified, partStart);
+        while (partEnd > typeStart && char.IsWhiteSpace(qualified[partEnd - 1]))
+            partEnd--;
+        if (partEnd <= typeStart)
+            return;
+
+        var absoluteStart = qualifiedStart + typeStart;
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            qualified.Substring(typeStart, partEnd - typeStart),
+            absoluteStart,
+            "rust",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(absoluteStart));
     }
 
     private static bool IsLikelyRustTypePathLeaf(string leaf)
