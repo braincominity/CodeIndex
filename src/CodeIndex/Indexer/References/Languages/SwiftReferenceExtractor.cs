@@ -23,6 +23,7 @@ internal static class SwiftReferenceExtractor
     {
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitExtensionTargetReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypealiasRhsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -46,6 +47,46 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitExtensionTargetReference(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var extensionIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "extension");
+        if (extensionIndex < 0)
+            return;
+
+        var targetStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, extensionIndex + "extension".Length);
+        var targetEnd = FindSwiftExtensionTargetEnd(preparedLine, targetStart);
+        if (targetEnd <= targetStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(targetStart, targetEnd - targetStart),
+            targetStart,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(targetStart));
+    }
+
+    private static int FindSwiftExtensionTargetEnd(string preparedLine, int targetStart)
+    {
+        var expressionEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, targetStart, stopAtComma: false);
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', targetStart);
+        if (colonIndex >= 0 && colonIndex < expressionEnd)
+            return colonIndex;
+
+        return expressionEnd;
     }
 
     private static void EmitGenericBoundReferences(
