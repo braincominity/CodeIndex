@@ -2969,6 +2969,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsNestedAttributes_IndexesAssociationNames()
+    {
+        const string content = """
+            class Post < ApplicationRecord
+              accepts_nested_attributes_for :comments, :tags, allow_destroy: true
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "accepts_nested_attributes_for");
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "tags" && reference.ContainerName == "Post");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "allow_destroy");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "true");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """

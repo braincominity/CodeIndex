@@ -19,7 +19,7 @@ internal static class RubyReferenceExtractor
         "private_constant", "public_constant", "module_function",
         "alias", "alias_method",
         "define_method", "describe", "resource", "resources", "create_table", "attribute", "serialize", "before_action", "after_action", "around_action", "helper_method", "rescue_from",
-        "has_many", "has_one", "belongs_to", "composed_of", "scope", "delegate", "validates", "enum",
+        "has_many", "has_one", "belongs_to", "composed_of", "accepts_nested_attributes_for", "scope", "delegate", "validates", "enum",
     };
 
     private static readonly HashSet<string> CommandTargetSingleTokenNames = new(StringComparer.Ordinal)

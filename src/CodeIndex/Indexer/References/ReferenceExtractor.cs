@@ -176,6 +176,7 @@ public static partial class ReferenceExtractor
             "raise", "yield", "super", "include", "extend", "prepend", "refine", "alias", "alias_method", "describe",
             "resource", "resources", "create_table", "attribute", "serialize",
             "private_constant", "public_constant", "module_function", "rescue_from", "gem", "composed_of",
+            "accepts_nested_attributes_for",
             "unless", "case", "begin", "until", "module", "rescue", "ensure",
         },
         ["perl"] = new HashSet<string>(StringComparer.Ordinal)
