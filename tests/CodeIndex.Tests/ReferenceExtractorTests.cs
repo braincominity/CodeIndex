@@ -2871,6 +2871,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsEnum_IndexesAttributeName()
+    {
+        const string content = """
+            class Conversation
+              enum :status, { active: 0, archived: 1 }, prefix: true
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "enum");
+        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "active");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "archived");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "prefix");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
