@@ -7755,6 +7755,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoInlineInterfaceMembers_CapturesSignatureTypes()
+    {
+        const string content = """
+            package main
+
+            func bind() {
+                handler := interface{ Handle(Context, *Request) (Response, error); io.Reader }
+                transformer := interface{ Transform(Event) Result }
+                _, _ = handler, transformer
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Reader" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Transform" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoChannelTypeDeclarations_CapturesElementTypes()
     {
         const string content = """

@@ -975,6 +975,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoInlineStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoInlineInterfaceMemberTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoArraySliceCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1648,6 +1649,136 @@ internal static class LanguageReferenceExtractionSupport
 
         var expression = typeStart == 0 ? field : field[typeStart..];
         EmitGoTypeExpression(expression, absoluteFieldStart + typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoInlineInterfaceMemberTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var interfaceIndex = line.IndexOf("interface", searchStart, StringComparison.Ordinal);
+            if (interfaceIndex < 0)
+                return;
+
+            searchStart = interfaceIndex + "interface".Length;
+            if (!IsIdentifierAt(line, interfaceIndex, "interface"))
+                continue;
+
+            var open = SkipWhitespace(line, searchStart);
+            if (open >= line.Length || line[open] != '{')
+                continue;
+
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '{', '}');
+            if (close <= open + 1)
+                continue;
+
+            var body = line[(open + 1)..close];
+            var bodyStart = open + 1;
+            foreach (var (memberStart, memberLength) in SplitGoInlineStructFieldSpans(body))
+                EmitGoInlineInterfaceMemberTypes(line, bodyStart + memberStart, bodyStart + memberStart + memberLength, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitGoInlineInterfaceMemberTypes(
+        string line,
+        int memberStart,
+        int memberEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, memberStart);
+        if (cursor >= memberEnd)
+            return;
+
+        if (!IsIdentifierStart(line[cursor]))
+        {
+            EmitGoInlineInterfaceEmbeddedType(line, cursor, memberEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            return;
+        }
+
+        var nameStart = cursor;
+        cursor++;
+        while (cursor < memberEnd && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        var name = line[nameStart..cursor];
+        if (IsGoStatementKeyword(name))
+            return;
+
+        var open = SkipWhitespace(line, cursor);
+        if (open < memberEnd && line[open] == '(')
+        {
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '(', ')');
+            if (close > open && close <= memberEnd)
+            {
+                EmitGoParameterListTypes(line, open + 1, close, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                EmitGoSignatureReturnTypesInRange(line, close + 1, memberEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
+
+            return;
+        }
+
+        EmitGoInlineInterfaceEmbeddedType(line, nameStart, memberEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoInlineInterfaceEmbeddedType(
+        string line,
+        int start,
+        int end,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var typeStart = SkipWhitespace(line, start);
+        if (typeStart >= end)
+            return;
+
+        var expression = line[typeStart..end].Trim();
+        if (expression.Length == 0)
+            return;
+
+        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoSignatureReturnTypesInRange(
+        string line,
+        int start,
+        int end,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var returnStart = SkipWhitespace(line, start);
+        if (returnStart >= end || line[returnStart] == '{')
+            return;
+
+        if (line[returnStart] == '(')
+        {
+            var returnClose = ReferenceExtractor.FindMatchingChar(line, returnStart, '(', ')');
+            if (returnClose > returnStart && returnClose <= end)
+                EmitGoParameterListTypes(line, returnStart + 1, returnClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            return;
+        }
+
+        var expression = line[returnStart..end].TrimEnd();
+        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoMapCompositeLiteralTypeReferences(
