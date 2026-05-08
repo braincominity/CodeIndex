@@ -2096,6 +2096,38 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-sw.js");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsWorkletAddModuleSymbols(string language)
+    {
+        var content = """
+            audioWorklet.addModule("./audio-processor.js");
+            CSS.paintWorklet.addModule(
+              "./paint-worklet.js",
+              { credentials: "same-origin" }
+            );
+            layoutWorklet.addModule(`./layout-worklet.js`);
+            this.audioWorklet.addModule("./method-audio.js");
+            worklet.addModule("./generic-worklet.js");
+            audioWorklet.addModule(dynamicPath);
+            const text = "audioWorklet.addModule('./string-audio.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var audioImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./audio-processor.js"));
+        Assert.Equal(1, audioImport.Line);
+        Assert.Contains("audioWorklet.addModule", audioImport.Signature);
+        var paintImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./paint-worklet.js"));
+        Assert.Equal(3, paintImport.Line);
+        Assert.Contains("credentials", paintImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./layout-worklet.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method-audio.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./generic-worklet.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-audio.js");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {

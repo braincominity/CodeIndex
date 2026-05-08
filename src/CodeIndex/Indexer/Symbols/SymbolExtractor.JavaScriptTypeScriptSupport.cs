@@ -790,17 +790,48 @@ public static partial class SymbolExtractor
         int lineIndex,
         List<SymbolRecord> symbols)
     {
-        const string serviceWorkerRegisterCall = "navigator.serviceWorker.register";
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(
+            fileId,
+            rawLines,
+            sanitizedLines,
+            lineIndex,
+            symbols,
+            "navigator.serviceWorker.register");
+    }
+
+    private static void ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "audioWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "paintWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "layoutWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "animationWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "CSS.paintWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "CSS.layoutWorklet.addModule");
+    }
+
+    private static void ExtractJavaScriptTypeScriptExactModuleCallSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string callText)
+    {
         var rawLine = rawLines[lineIndex];
         var sanitizedLine = sanitizedLines[lineIndex];
         var searchStart = 0;
         while (searchStart < sanitizedLine.Length)
         {
-            var callIndex = sanitizedLine.IndexOf(serviceWorkerRegisterCall, searchStart, StringComparison.Ordinal);
+            var callIndex = sanitizedLine.IndexOf(callText, searchStart, StringComparison.Ordinal);
             if (callIndex < 0)
                 return;
 
-            searchStart = callIndex + serviceWorkerRegisterCall.Length;
+            searchStart = callIndex + callText.Length;
 
             if (callIndex > 0
                 && (IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[callIndex - 1])
