@@ -14627,20 +14627,24 @@ public class SymbolExtractorTests
             type UserId = int
             type OrderId = string
             type Names = string list
+            type public PublicId = int
             type Result<'T> = Choice<'T, string>
             type Pair<'T, 'U> = 'T * 'U
             type rec Tree<'T> = Leaf | Node of 'T * Tree<'T>
             type rec Workflow = Started | Finished
+            type public Visibility = Public | Internal
             """;
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Names");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "PublicId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Result");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Pair");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Workflow");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Visibility");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Result");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Pair");
         Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Tree");
