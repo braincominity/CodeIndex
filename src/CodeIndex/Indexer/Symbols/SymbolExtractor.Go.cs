@@ -229,6 +229,114 @@ public static partial class SymbolExtractor
         return delta;
     }
 
+    private static int CountGoCodeBraceDelta(string text, ref bool inBlockComment, ref bool inRawString)
+    {
+        var delta = 0;
+        var inString = false;
+        var inRune = false;
+        var escaped = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (inRawString)
+            {
+                if (ch == '`')
+                    inRawString = false;
+
+                continue;
+            }
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                    inString = false;
+
+                continue;
+            }
+
+            if (inRune)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    inRune = false;
+
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+                break;
+
+            if (ch == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inRawString = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inRune = true;
+                continue;
+            }
+
+            if (ch == '{')
+                delta++;
+            else if (ch == '}')
+                delta--;
+        }
+
+        return delta;
+    }
+
     private static bool TryAddGoImportSymbol(
         long fileId,
         string rawLine,
@@ -569,6 +677,8 @@ public static partial class SymbolExtractor
         ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
         var goBlockDepth = 0;
+        var goBlockInBlockComment = false;
+        var goBlockInRawString = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -583,18 +693,18 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (goBlockDepth > 0)
+            {
+                goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
+                if (goBlockDepth < 0)
+                    goBlockDepth = 0;
+                continue;
+            }
+
             if (trimmed.Length == 0
                 || trimmed.StartsWith("//", StringComparison.Ordinal)
                 || trimmed.StartsWith("/*", StringComparison.Ordinal))
             {
-                continue;
-            }
-
-            if (goBlockDepth > 0)
-            {
-                goBlockDepth += CountGoBraceDelta(line);
-                if (goBlockDepth < 0)
-                    goBlockDepth = 0;
                 continue;
             }
 
@@ -660,7 +770,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            goBlockDepth += CountGoBraceDelta(line);
+            goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
             if (goBlockDepth < 0)
                 goBlockDepth = 0;
         }

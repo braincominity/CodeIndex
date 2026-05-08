@@ -530,6 +530,16 @@ public class SymbolExtractorTests
                 user := User{Name: "alice"}
                 _ = user
             }
+
+            func bracesInText() {
+                _ = "{"
+                _ = `{
+            }`
+                // {
+            }
+
+            const AfterText = 4
+            var AfterTextConfig *Config
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
@@ -543,6 +553,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultConfig");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Primary");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterText");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterTextConfig");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cached");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localStatus");
