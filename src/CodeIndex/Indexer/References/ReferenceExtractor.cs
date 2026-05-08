@@ -1374,12 +1374,13 @@ public static partial class ReferenceExtractor
             // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
             if (language is "csharp")
             {
+                var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
                 foreach (Match match in CSharpTypeKeywordIntroRegex.Matches(preparedLine))
                 {
                     int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
                     ExtractCSharpTypeKeywordSegments(
                         references, seen, fileId, preparedLine, parenIndex + 1,
-                        context, lineNumber, container, language);
+                        context, lineNumber, container, language, csharpGenericParameterNames);
                 }
             }
             else if (language is "java")
@@ -2490,7 +2491,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string language)
+        string language,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         int i = startIndex;
         int parenDepth = 0;
@@ -2547,6 +2549,12 @@ public static partial class ReferenceExtractor
                 {
                     i += 2;
                     expectSegment = true;
+                    continue;
+                }
+
+                if (ignoredSegments?.Contains(segment) == true)
+                {
+                    expectSegment = false;
                     continue;
                 }
 

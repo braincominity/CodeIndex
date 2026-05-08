@@ -13253,6 +13253,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericTypeKeywords_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User {}
+
+            class Demo {
+                public static object TypeOf<T>() => typeof(T);
+                public static string NameOf<T>() => nameof(T);
+                public static object UserType() => typeof(User);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
