@@ -1112,6 +1112,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaArrayConstructorMethodReferences_NormalizesOwnerType()
+    {
+        const string content = """
+            package demo;
+
+            public class Widget {}
+
+            public class Factory {
+                public Object make() {
+                    return Widget[]::new;
+                }
+
+                public Object makeNested() {
+                    return demo.Widget[][]::new;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Widget"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("Widget[]::new", StringComparison.Ordinal)
+            && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "demo.Widget"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("demo.Widget[][]::new", StringComparison.Ordinal)
+            && r.ContainerName == "makeNested");
+        Assert.DoesNotContain(references, r => r.SymbolName.Contains("[]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
     {
         const string content = """

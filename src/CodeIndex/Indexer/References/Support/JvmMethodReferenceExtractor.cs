@@ -7,9 +7,10 @@ internal static class JvmMethodReferenceExtractor
 {
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
     private const string JvmMethodReferenceIdentifierPattern = @"(?:@?[_\p{L}\$][\w$]*|`[^`\r\n]+`)";
+    private const string JvmMethodReferenceOwnerSegmentPattern = JvmMethodReferenceIdentifierPattern + @"(?:\s*\[\s*\])*";
 
     private static readonly Regex MethodReferenceRegex = new(
-        $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceIdentifierPattern}(?:\.{JvmMethodReferenceIdentifierPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)(?=\s*(?:[;,)\]]|$))",
+        $@"(?<![\w$])(?:(?<owner>(?:this|super|{JvmMethodReferenceOwnerSegmentPattern}(?:\.{JvmMethodReferenceOwnerSegmentPattern})*))\s*)?::\s*(?<name>{JvmMethodReferenceIdentifierPattern}|new)(?=\s*(?:[;,)\]]|$))",
         RegexOptions.Compiled);
 
     public static void EmitMethodReferenceReferences(
@@ -38,11 +39,15 @@ internal static class JvmMethodReferenceExtractor
                 if (ownerGroup.Value is "this" or "super")
                     continue;
 
+                var ownerName = StripJvmArraySuffixes(ownerGroup.Value);
+                if (ownerName.Length == 0)
+                    continue;
+
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    ownerGroup.Value,
+                    ownerName,
                     ownerGroup.Index,
                     "instantiate",
                     context,
@@ -73,11 +78,12 @@ internal static class JvmMethodReferenceExtractor
         if (ownerGroup.Value is "this" or "super")
             return;
 
-        var leafStartInOwner = FindLastUnquotedDot(ownerGroup.Value) + 1;
-        if (leafStartInOwner >= ownerGroup.Value.Length)
+        var ownerName = StripJvmArraySuffixes(ownerGroup.Value);
+        var leafStartInOwner = FindLastUnquotedDot(ownerName) + 1;
+        if (leafStartInOwner >= ownerName.Length)
             return;
 
-        var leaf = StripBacktickIdentifier(ownerGroup.Value[leafStartInOwner..]);
+        var leaf = StripBacktickIdentifier(ownerName[leafStartInOwner..]);
         if (!IsLikelyJvmTypeName(leaf))
             return;
 
@@ -91,6 +97,34 @@ internal static class JvmMethodReferenceExtractor
             lineNumber,
             container,
             language);
+    }
+
+    private static string StripJvmArraySuffixes(string name)
+    {
+        var end = name.Length;
+        while (true)
+        {
+            var closeIndex = SkipWhitespaceBackward(name, end - 1);
+            if (closeIndex < 0 || name[closeIndex] != ']')
+                break;
+
+            var openIndex = SkipWhitespaceBackward(name, closeIndex - 1);
+            if (openIndex < 0 || name[openIndex] != '[')
+                break;
+
+            end = openIndex;
+            while (end > 0 && char.IsWhiteSpace(name[end - 1]))
+                end--;
+        }
+
+        return end == name.Length ? name : name[..end];
+    }
+
+    private static int SkipWhitespaceBackward(string text, int index)
+    {
+        while (index >= 0 && char.IsWhiteSpace(text[index]))
+            index--;
+        return index;
     }
 
     private static int FindLastUnquotedDot(string text)
