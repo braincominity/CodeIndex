@@ -192,7 +192,7 @@ public static partial class ReferenceExtractor
             "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
             "module", "type", "of", "then", "elif", "done", "begin", "end",
             "let", "use", "if", "else", "do", "try", "finally", "in", "for", "while", "return", "yield",
-            "assert",
+            "assert", "to", "downto",
         },
         // PHP include/require constructs / PHP の include/require 構文
         ["php"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

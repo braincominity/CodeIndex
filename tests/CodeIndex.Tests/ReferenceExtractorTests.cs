@@ -10683,6 +10683,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsForRangeBoundaryApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                for i = 1 to endIndex user do
+                    printfn "%d" i
+                for i = startIndex user downto lowerBound user do
+                    printfn "%d" i
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "startIndex" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "endIndex" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "lowerBound" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "to" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "downto" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
