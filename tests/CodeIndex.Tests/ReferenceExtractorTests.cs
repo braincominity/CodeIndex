@@ -21018,6 +21018,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustModDeclarations_CaptureModuleReferences()
+    {
+        const string content = """
+            mod users;
+            pub(crate) mod r#async;
+            mod inline {
+                fn helper() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "inline" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
