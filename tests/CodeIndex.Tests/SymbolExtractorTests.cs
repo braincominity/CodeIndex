@@ -733,6 +733,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsExportedTypeDeclarations()
+    {
+        var content = """
+            export class Api {};
+            export template <typename T> struct ApiBox {};
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Api");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ApiBox");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
