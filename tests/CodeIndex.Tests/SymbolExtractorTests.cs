@@ -519,6 +519,14 @@ public class SymbolExtractorTests
             func build() {
                 var local, cached *Config
                 const localStatus, cachedStatus = 1, 2
+                var (
+                    localGrouped = 1
+                    cachedGrouped = 2
+                )
+                const (
+                    localGroupedStatus = 1
+                    cachedGroupedStatus = 2
+                )
                 user := User{Name: "alice"}
                 _ = user
             }
@@ -539,6 +547,10 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cached");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localStatus");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localGrouped");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedGrouped");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localGroupedStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedGroupedStatus");
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
     }
 

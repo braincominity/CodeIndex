@@ -568,6 +568,7 @@ public static partial class SymbolExtractor
         string? blockKind = null;
         ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
+        var goBlockDepth = 0;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -586,6 +587,14 @@ public static partial class SymbolExtractor
                 || trimmed.StartsWith("//", StringComparison.Ordinal)
                 || trimmed.StartsWith("/*", StringComparison.Ordinal))
             {
+                continue;
+            }
+
+            if (goBlockDepth > 0)
+            {
+                goBlockDepth += CountGoBraceDelta(line);
+                if (goBlockDepth < 0)
+                    goBlockDepth = 0;
                 continue;
             }
 
@@ -626,7 +635,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (line.Length == trimmed.Length && trimmed.StartsWith("const", StringComparison.Ordinal))
+            if (trimmed.StartsWith("const", StringComparison.Ordinal))
             {
                 TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["const".Length..].TrimStart());
                 continue;
@@ -639,7 +648,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (line.Length == trimmed.Length && trimmed.StartsWith("var", StringComparison.Ordinal))
+            if (trimmed.StartsWith("var", StringComparison.Ordinal))
             {
                 TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["var".Length..].TrimStart());
                 continue;
@@ -650,6 +659,10 @@ public static partial class SymbolExtractor
                 TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
                 continue;
             }
+
+            goBlockDepth += CountGoBraceDelta(line);
+            if (goBlockDepth < 0)
+                goBlockDepth = 0;
         }
     }
 

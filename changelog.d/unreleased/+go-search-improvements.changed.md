@@ -50,6 +50,7 @@ affected:
 - **Go method symbols are attributed to receiver type containers** — `func (h *Handler) ServeHTTP(...)` now appears under `Handler` in symbol-oriented workflows.
 - **Go generic receiver method containers tolerate spaced type parameters** — `func (s *Store[T, U]) Save(...)` now stays attributed to `Store`.
 - **Go unnamed generic receiver methods keep their type container** — `func (Store[T, U]) Snapshot()` now stays attributed to `Store`.
+- **Go local grouped value declarations no longer pollute package symbols** — function-local `var (...)` and `const (...)` blocks are not indexed as top-level properties.
 
 ## 日本語
 
@@ -92,3 +93,4 @@ affected:
 - **Go method symbol を receiver 型 container に帰属させるようになりました** — `func (h *Handler) ServeHTTP(...)` が symbol 系 workflow で `Handler` 配下に現れるようになりました。
 - **Go generic receiver method の container がスペース入り型パラメータに対応しました** — `func (s *Store[T, U]) Save(...)` が `Store` 配下に帰属し続けるようになりました。
 - **Go unnamed generic receiver method が型 container を維持するようになりました** — `func (Store[T, U]) Snapshot()` が `Store` 配下に帰属し続けるようになりました。
+- **Go local grouped value 宣言が package symbol を汚さないようになりました** — 関数内の `var (...)` / `const (...)` block を top-level property として索引しないようになりました。
