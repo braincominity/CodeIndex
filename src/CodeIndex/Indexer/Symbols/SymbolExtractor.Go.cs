@@ -168,6 +168,53 @@ public static partial class SymbolExtractor
         return true;
     }
 
+    private static bool TryAddGoLabelSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = rawLine.TrimStart();
+        if (trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal)
+            || trimmed.StartsWith("*", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var match = GoLabelRegex.Match(rawLine);
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value;
+        if (IsGoLabelKeyword(name) || HasGoSymbol(symbols, fileId, lineIndex + 1, "function", name))
+            return false;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = match.Groups["name"].Index,
+                EndLine = lineIndex + 1,
+                Signature = name,
+            },
+            rawLine);
+        return true;
+    }
+
+    private static bool IsGoLabelKeyword(string name)
+        => name is "break" or "case" or "chan" or "const" or "continue" or "default" or "defer"
+            or "else" or "fallthrough" or "for" or "func" or "go" or "goto" or "if" or "import"
+            or "interface" or "map" or "package" or "range" or "return" or "select" or "struct"
+            or "switch" or "type" or "var";
+
     private static int CountGoBraceDelta(string text)
     {
         var delta = 0;

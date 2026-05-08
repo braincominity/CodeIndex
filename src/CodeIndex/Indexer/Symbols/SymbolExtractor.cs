@@ -193,6 +193,9 @@ public static partial class SymbolExtractor
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoLabelRegex = new(
+        @"^(?<name>[A-Za-z_]\w*)\s*:\s*(?!=)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RustUseStartRegex = new(
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2017,6 +2020,9 @@ public static partial class SymbolExtractor
             {
                 continue;
             }
+            if (lang == "go")
+                TryAddGoLabelSymbol(fileId, line, i, symbols);
+
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
             var matchLine = structuralLine;

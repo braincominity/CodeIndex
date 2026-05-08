@@ -1,8 +1,11 @@
 ---
 category: changed
 affected:
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
   - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
   - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
 ---
 
 ## English
@@ -25,6 +28,7 @@ affected:
 - **Go method expressions expose receiver types** — expressions such as `Handler.Serve`, `(*Worker).Run`, and `model.User.String` now link the receiver type.
 - **Go generic instantiations without calls expose type arguments** — function values such as `Decode[User]` and `stream.Map[model.Event, Result]` now link their concrete type arguments.
 - **Go interface type sets expose union term types** — constraint terms such as `~CustomID | External` and `model.Token | ~Alias` now link custom type-set members.
+- **Go labels are indexed as navigation symbols** — labels such as `Retry:` now appear in symbol search and definition-oriented workflows.
 
 ## 日本語
 
@@ -46,3 +50,4 @@ affected:
 - **Go method expression の receiver 型を参照として出すようになりました** — `Handler.Serve`、`(*Worker).Run`、`model.User.String` のような expression から receiver 型を辿れるようになりました。
 - **Go の call しない generic instantiation でも型引数を参照として出すようになりました** — `Decode[User]` や `stream.Map[model.Event, Result]` のような関数値から具体型引数を辿れるようになりました。
 - **Go interface type set の union term 型を参照として出すようになりました** — `~CustomID | External` や `model.Token | ~Alias` のような constraint term から custom type-set member を辿れるようになりました。
+- **Go label を navigation symbol として索引するようになりました** — `Retry:` のような label が symbol search や definition 系 workflow に現れるようになりました。

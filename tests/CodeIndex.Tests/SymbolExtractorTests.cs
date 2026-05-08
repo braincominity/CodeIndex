@@ -10737,6 +10737,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsLabels()
+    {
+        var content = """
+            package demo
+
+            func run() {
+            Retry:
+                for {
+                    break Retry
+                }
+
+                item := User{
+                    Retry: true,
+                }
+                value := 1
+                _ = item
+                switch value {
+                case 1:
+                default:
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
+        Assert.Equal(4, label.Line);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
+    }
+
+    [Fact]
     public void Extract_Fortran_DetectsModulesProgramsSubroutinesAndFunctions()
     {
         var content = """
