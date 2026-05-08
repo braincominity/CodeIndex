@@ -14575,6 +14575,7 @@ public class SymbolExtractorTests
             module MyApp.Domain
 
             open System
+            open type System.Math
 
             type UserId = int
             type User = { Name: string; Age: int }
@@ -14600,6 +14601,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
