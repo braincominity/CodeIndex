@@ -17176,6 +17176,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftOpaqueAndExistentialTypeModifiers_AreNotTypeReferences()
+    {
+        const string content = """
+            protocol View {}
+            protocol Service {}
+
+            func makeView() -> some View {
+                fatalError()
+            }
+
+            func use(service: any Service) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "View"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Service"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "some" or "any"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
