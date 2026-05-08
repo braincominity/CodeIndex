@@ -21282,6 +21282,20 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustGlobImports_CaptureParentModuleReference()
+    {
+        const string content = """
+            use crate::prelude::*;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "prelude" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "*" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

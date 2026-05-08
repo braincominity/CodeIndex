@@ -221,8 +221,12 @@ internal static class RustReferenceExtractor
 
         var aliasIndex = FindTopLevelUseAliasIndex(text);
         var target = aliasIndex >= 0 ? text[..aliasIndex].Trim() : text;
-        if (target.Length == 0 || target is "crate" or "super" or "*")
+        if (target.Length == 0
+            || target is "crate" or "super"
+            || target == "*" && string.IsNullOrWhiteSpace(prefix))
+        {
             return;
+        }
 
         if (target == "self" && !string.IsNullOrWhiteSpace(prefix))
             target = prefix;
@@ -233,6 +237,16 @@ internal static class RustReferenceExtractor
 
         var leafStart = target.LastIndexOf("::", StringComparison.Ordinal);
         var leaf = leafStart >= 0 ? target[(leafStart + 2)..].Trim() : target.Trim();
+        if (leaf == "*")
+        {
+            if (leafStart < 0)
+                return;
+
+            var globParent = target[..leafStart].Trim();
+            var globParentLeafStart = globParent.LastIndexOf("::", StringComparison.Ordinal);
+            leaf = globParentLeafStart >= 0 ? globParent[(globParentLeafStart + 2)..].Trim() : globParent;
+        }
+
         if (leaf.Length == 0 || leaf is "crate" or "self" or "super" or "*")
             return;
 
