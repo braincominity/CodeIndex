@@ -67,9 +67,12 @@ public static partial class SymbolExtractor
     // 深さ 0 で見えた comma だけを tuple 判定に使う。
     private const string CSharpTupleGroupPattern =
         @"\((?>(?:[^(),]+|\((?<TupleDepth>)|\)(?<-TupleDepth>)|(?(TupleDepth),|(?<TupleComma>,))))*(?(TupleDepth)(?!))(?(TupleComma)|(?!))\)";
-    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpUnicodeEscapePattern = @"\\(?:u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})";
+    private const string CSharpIdentifierPattern =
+        @"@?(?:[_\p{L}]|" + CSharpUnicodeEscapePattern + @")(?:\w|" + CSharpUnicodeEscapePattern + @")*";
     private const string CSharpNamespacePattern = CSharpIdentifierPattern + @"(?:\." + CSharpIdentifierPattern + @")*";
     private const string CSharpTypeTokenCharsPattern = @"[\w@?.<>\[\],:*]";
+    private const string CSharpTypeTokenPattern = @"(?:" + CSharpUnicodeEscapePattern + @"|" + CSharpTypeTokenCharsPattern + @")";
     private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[(?:[^\]\r\n]|\]\])+\]|""[^""]+""|[\w$#]+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:" + SqlQualifiedIdentifierSegmentPattern + @")(?:\s*\.\s*(?:" + SqlQualifiedIdentifierSegmentPattern + @"))*";
@@ -97,7 +100,7 @@ public static partial class SymbolExtractor
     private const string CFunctionReturnTypePattern =
         @"(?<returnType>(?:(?:\w+[\s*]+)|" + CAttributeSpecifierTokenPattern + @")+)";
     private const string CSharpTypeSegmentPattern =
-        @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
+        @"(?:" + CSharpTypeTokenPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenPattern + @"*)";
     private const string CSharpTypePattern =
         @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
     private const string CSharpMethodTypeParameterListPattern =
@@ -105,12 +108,15 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpPartialFunctionDeclarationSignatureRegex = new(
         $@"^(?:(?:{CSharpVisibilityPattern}|abstract|async|extern|new|override|sealed|static|unsafe|virtual)\s+)*partial\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private const string JavaIdentifierPattern = @"[\p{L}_$][\p{L}\p{Nd}_$]*";
+    private const string JavaUnicodeEscapePattern = @"\\u+[0-9A-Fa-f]{4}";
+    private const string JavaIdentifierPattern =
+        @"(?:[\p{L}_$]|" + JavaUnicodeEscapePattern + @")(?:[\p{L}\p{Nd}_$]|" + JavaUnicodeEscapePattern + @")*";
     private const string JavaQualifiedIdentifierPattern = JavaIdentifierPattern + @"(?:\s*\.\s*" + JavaIdentifierPattern + @")*";
     private const string JavaMethodTypeParameterPattern =
         @"(?:<(?:(?>[^<>]+)|<(?<JavaMethodTypeParameterDepth>)|>(?<-JavaMethodTypeParameterDepth>))*(?(JavaMethodTypeParameterDepth)(?!))>\s+)?";
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
+    private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
     private static readonly Regex CobolProgramIdLineRegex = new(
         @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -515,8 +521,8 @@ public static partial class SymbolExtractor
     // enum 宣言 — visibility は任意で、修飾子の順序は自由。非 visibility 修飾子として `file`
     // （ファイルスコープ enum）と `new`（派生型でのネスト enum 隠蔽）を受け付ける。Closes #353.
     private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumMemberRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\s*(?:=\s*(?:-?\d|0x|{CSharpIdentifierPattern}(?:\s*\|\s*{CSharpIdentifierPattern})*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumMemberNameRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JavaCompactConstructorRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -850,14 +856,12 @@ public static partial class SymbolExtractor
         ],
         ["csharp"] =
         [
-            // Verbatim-identifier segments (`@Foo.@Bar`) are accepted per segment via
-            // `CSharpNamespacePattern` / `CSharpIdentifierPattern` (both built from `@?[_\p{L}]\w*`)
-            // and later canonicalized to `Foo.Bar` by `NormalizeCSharpSymbolName`. See the iter-6 /
-            // iter-7 notes around `StripCSharpVerbatimPrefixes` for the shared canonical-form policy.
-            // verbatim 識別子の各セグメント（`@Foo.@Bar`）を `CSharpNamespacePattern` /
-            // `CSharpIdentifierPattern`（どちらも `@?[_\p{L}]\w*`）経由で受け入れ、
-            // `NormalizeCSharpSymbolName` で `Foo.Bar` に canonical 化する。iter-6 / iter-7 の
-            // `StripCSharpVerbatimPrefixes` 周辺コメントを参照。
+            // Verbatim and Unicode-escaped identifier segments (`@Foo.@Bar`, `\u0046oo`) are
+            // accepted via `CSharpNamespacePattern` / `CSharpIdentifierPattern` and later
+            // canonicalized by `CSharpSymbolNameNormalizer`.
+            // verbatim / Unicode escape 識別子の各セグメントを `CSharpNamespacePattern` /
+            // `CSharpIdentifierPattern` 経由で受け入れ、`CSharpSymbolNameNormalizer` で
+            // canonical 化する。
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
@@ -1251,20 +1255,20 @@ public static partial class SymbolExtractor
         ["java"] =
         [
             // Package declaration / package 宣言
-            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*package\s+(?<name>{JavaQualifiedIdentifierPattern})\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
-            new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("namespace", new Regex($@"^\s*(?:open\s+)?module\s+(?<name>{JavaQualifiedIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // Annotation type (@interface) / アノテーション型
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Interface / インターフェース
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Enum / enum
-            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Static final field (Java equivalent of C# const) — order-flexible and annotation-friendly.
             // static final フィールド — 語順柔軟かつアノテーション併用にも対応。
             new("function", new Regex($@"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?=(?:(?:static|final|transient|volatile)\s+)*static\b)(?=(?:(?:static|final|transient|volatile)\s+)*final\b)(?:(?:static|final|transient|volatile)\s+)*(?<returnType>{JavaReturnTypePattern})\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
@@ -1282,26 +1286,26 @@ public static partial class SymbolExtractor
         ["kotlin"] =
         [
             // Companion object / コンパニオンオブジェクト
-            new("class",    new Regex(@"^\s*companion\s+object(?:\s+(?<name>\w+))?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex($@"^\s*companion\s+object(?:\s+(?<name>{KotlinIdentifierPattern}))?", RegexOptions.Compiled), BodyStyle.Brace),
             // Interface / インターフェース
             // Kotlin fun interface / Kotlin の fun interface も interface として扱う。
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
-            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Secondary constructor / セカンダリコンストラクタ
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum entry / enum エントリ
-            new("property", new Regex(@"^\s{2,}(?<name>[A-Z][A-Z0-9_]*)\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
+            new("property", new Regex($@"^\s{{2,}}(?<name>(?:[A-Z][A-Z0-9_]*|`[^`\r\n]+`))\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
-            new("property", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>\w+)\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>{KotlinIdentifierPattern})\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>{KotlinIdentifierPattern})(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["ruby"] =
@@ -7501,6 +7505,7 @@ public static partial class SymbolExtractor
             "csharp" => CSharpSymbolNameNormalizer.Normalize(name, match, matchLine),
             "cobol" => CobolSymbolNameNormalizer.Normalize(name),
             "fsharp" => FSharpSymbolNameNormalizer.Normalize(name),
+            "java" => JavaSymbolNameNormalizer.Normalize(name),
             "kotlin" => KotlinSymbolNameNormalizer.Normalize(name, matchLine),
             "rust" => RustSymbolNameNormalizer.Normalize(name),
             "smalltalk" => NormalizeSmalltalkSelectorName(name),

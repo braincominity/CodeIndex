@@ -26,7 +26,7 @@ internal static class JavaReferenceExtractor
     // Java type test (`instanceof Foo`).
     // Java の型テスト (`instanceof Foo`)。
     private static readonly Regex InstanceofRegex = new(
-        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
+        @"(?<![\w$])instanceof\s+(?:(?:final|@[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*\([^)]*\))?)\s+)*(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
         RegexOptions.Compiled);
 
     // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`.
@@ -688,12 +688,49 @@ internal static class JavaReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        EmitKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitKeywordTypeListReferences(preparedLine, "permits", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        var genericParameterNames = CollectGenericParameterNamesForDeclaration(preparedLine);
+        EmitKeywordTypeListReferences(
+            preparedLine,
+            "extends",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            genericParameterNames);
+        EmitKeywordTypeListReferences(
+            preparedLine,
+            "implements",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            genericParameterNames);
+        EmitKeywordTypeListReferences(
+            preparedLine,
+            "permits",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            genericParameterNames);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        ReferenceExtractor.EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
+        ReferenceExtractor.EmitDeclarationTypeReferences(
+            "java",
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            genericParameterNames);
 
         foreach (Match match in InstanceofRegex.Matches(preparedLine))
         {
@@ -719,7 +756,8 @@ internal static class JavaReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         int keywordIndex = ReferenceExtractor.FindTopLevelKeyword(line, keyword);
         if (keywordIndex < 0)
@@ -748,7 +786,8 @@ internal static class JavaReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(absoluteStart),
-                "java");
+                "java",
+                ignoredSegments: ignoredSegments);
         }
     }
 
@@ -763,6 +802,49 @@ internal static class JavaReferenceExtractor
     {
         EmitCallableGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static HashSet<string> CollectGenericParameterNamesForDeclaration(string line)
+    {
+        if (ReferenceExtractor.TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
+        {
+            var headerEnd = callableNameStart;
+            if (ReferenceExtractor.TryGetCallableReturnTypeSpan(line, callableNameStart, "java", out var typeStart, out _))
+                headerEnd = typeStart;
+
+            if (headerEnd > 0)
+                return CollectGenericParameterNamesFromHeader(line.Substring(0, headerEnd));
+        }
+
+        var tokens = ReferenceExtractor.GetTopLevelTokenSpans(line);
+        if (tokens.Count < 2)
+            return [];
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = line.Substring(tokens[i].Start, tokens[i].Length);
+            if (token is not ("class" or "interface" or "enum" or "record"))
+                continue;
+            var nameIndex = i + 1;
+            if (nameIndex >= tokens.Count)
+                return [];
+            return CollectGenericParameterNamesFromHeader(line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length));
+        }
+
+        return [];
+    }
+
+    private static HashSet<string> CollectGenericParameterNamesFromHeader(string header)
+    {
+        int openAngle = header.IndexOf('<');
+        if (openAngle < 0)
+            return [];
+
+        int closeAngle = ReferenceExtractor.FindMatchingChar(header, openAngle, '<', '>');
+        if (closeAngle < 0)
+            return [];
+
+        return CollectGenericParameterNames(header.Substring(openAngle + 1, closeAngle - openAngle - 1));
     }
 
     private static void EmitCallableGenericBoundReferences(
@@ -948,7 +1030,8 @@ internal static class JavaReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         int keywordIndex = ReferenceExtractor.FindTopLevelKeyword(line, "throws");
         if (keywordIndex < 0)
@@ -976,7 +1059,8 @@ internal static class JavaReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(absoluteStart),
-                "java");
+                "java",
+                ignoredSegments);
         }
     }
 
@@ -989,6 +1073,7 @@ internal static class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
         => JvmMethodReferenceExtractor.EmitMethodReferenceReferences(
+            "java",
             preparedLine,
             references,
             seen,

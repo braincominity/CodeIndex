@@ -175,7 +175,8 @@ internal static class TypedLanguageReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        bool trimTopLevelCallArguments = false)
+        bool trimTopLevelCallArguments = false,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (listStart < 0 || listEnd <= listStart || listStart >= line.Length)
             return;
@@ -207,7 +208,8 @@ internal static class TypedLanguageReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn(absoluteStart));
+                resolveContainerForColumn(absoluteStart),
+                ignoredSegments);
         }
     }
 
@@ -221,7 +223,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (paramStart < 0 || paramEnd <= paramStart || paramStart >= line.Length)
             return;
@@ -253,7 +256,8 @@ internal static class TypedLanguageReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn(absoluteStart));
+                resolveContainerForColumn(absoluteStart),
+                ignoredSegments);
         }
     }
 
@@ -266,7 +270,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         foreach (var keyword in declarationKeywords)
         {
@@ -298,7 +303,8 @@ internal static class TypedLanguageReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(typeStart));
+                    resolveContainerForColumn(typeStart),
+                    ignoredSegments);
             }
         }
     }
@@ -312,7 +318,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         foreach (var keyword in keywords)
         {
@@ -335,7 +342,8 @@ internal static class TypedLanguageReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(typeStart));
+                    resolveContainerForColumn(typeStart),
+                    ignoredSegments);
             }
         }
     }
@@ -348,7 +356,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         foreach (var whereIndex in EnumerateTopLevelKeywordIndices(line, "where"))
         {
@@ -383,7 +392,8 @@ internal static class TypedLanguageReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(absoluteStart));
+                    resolveContainerForColumn(absoluteStart),
+                    ignoredSegments);
             }
         }
     }
@@ -397,7 +407,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         if (genericOpenIndex < 0 || genericOpenIndex >= line.Length || line[genericOpenIndex] != '<')
             return;
@@ -432,7 +443,8 @@ internal static class TypedLanguageReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                resolveContainerForColumn(absoluteStart));
+                resolveContainerForColumn(absoluteStart),
+                ignoredSegments);
         }
     }
 

@@ -1069,6 +1069,10 @@ public class ReferenceExtractorTests
                 public Supplier<J> make() {
                     return J::new;
                 }
+
+                public Supplier<java.util.Iterator<Integer>> iterator(List<Integer> xs) {
+                    return xs::iterator;
+                }
             }
             """;
 
@@ -1080,13 +1084,217 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerName == "sum");
         Assert.Contains(references, r =>
+            r.SymbolName == "Integer"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Integer::intValue", StringComparison.Ordinal)
+            && r.ContainerName == "sum");
+        Assert.Contains(references, r =>
             r.SymbolName == "toUpperCase"
             && r.ReferenceKind == "call"
+            && r.ContainerName == "names");
+        Assert.Contains(references, r =>
+            r.SymbolName == "String"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("String::toUpperCase", StringComparison.Ordinal)
             && r.ContainerName == "names");
         Assert.Contains(references, r =>
             r.SymbolName == "J"
             && r.ReferenceKind == "instantiate"
             && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "iterator"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "iterator");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "xs"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("xs::iterator", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_JavaArrayConstructorMethodReferences_NormalizesOwnerType()
+    {
+        const string content = """
+            package demo;
+
+            public class Widget {}
+
+            public class Factory {
+                public Object make() {
+                    return Widget[]::new;
+                }
+
+                public Object makeNested() {
+                    return demo.Widget[][]::new;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Widget"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("Widget[]::new", StringComparison.Ordinal)
+            && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "demo.Widget"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("demo.Widget[][]::new", StringComparison.Ordinal)
+            && r.ContainerName == "makeNested");
+        Assert.DoesNotContain(references, r => r.SymbolName.Contains("[]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_JavaGenericOwnerMethodReferences_NormalizesOwnerType()
+    {
+        const string content = """
+            package demo;
+
+            import java.util.function.Function;
+            import java.util.function.Supplier;
+
+            public class Box<T> {
+                public String open() {
+                    return "";
+                }
+            }
+
+            public class Factory {
+                public Supplier<Box<String>> make() {
+                    return Box<String>::new;
+                }
+
+                public Function<Box<String>, String> opener() {
+                    return Box<String>::open;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box"
+            && r.ReferenceKind == "instantiate"
+            && r.Context.Contains("Box<String>::new", StringComparison.Ordinal)
+            && r.ContainerName == "make");
+        Assert.Contains(references, r =>
+            r.SymbolName == "open"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("Box<String>::open", StringComparison.Ordinal)
+            && r.ContainerName == "opener");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Box<String>::open", StringComparison.Ordinal)
+            && r.ContainerName == "opener");
+        Assert.DoesNotContain(references, r => r.SymbolName.Contains("<", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_JavaGenericCallableSignatures_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            interface Comparable<T> {}
+            class Payload {}
+
+            class Demo {
+                public <T extends Comparable<T>> T pick(T input, Comparable<T> fallback) {
+                    return input;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_JavaGenericHeritage_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            interface Comparable<T> {}
+            class Base<T> {}
+            interface Handler<T> {}
+            class Box<T extends Comparable<T>> extends Base<T> implements Handler<T> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_JavaGenericThrows_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            package demo;
+
+            class Failure extends Exception {}
+            class Demo {
+                public <E extends Failure> void run() throws E {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "E" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinCallableReferences_TrackOwnerTypeReferences()
+    {
+        const string content = """
+            class User {
+                fun name(): String = "u"
+            }
+
+            class Worker {
+                fun wire(users: List<User>) {
+                    val names = users.map(User::name)
+                    val user = User()
+                    val bound = user::name
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "name"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("User::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.Contains(references, r =>
+            r.SymbolName == "User"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("User::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.Contains(references, r =>
+            r.SymbolName == "name"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("user::name", StringComparison.Ordinal)
+            && r.ContainerName == "wire");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "user"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("user::name", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -6522,6 +6730,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public sealed class Payload { }
+            public sealed class Result { }
+
+            public static class Helper
+            {
+                public static void DoWork<T>() { }
+            }
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new List<Payload>();
+                    Helper.DoWork<List<Result>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 17);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.Line == 18);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 18);
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 10);
+    }
+
+    [Fact]
     public void Extract_JavaNestedGenericConstructors_AreInstantiate()
     {
         // Regression (issue #263): Java constructor calls with nested generic type args
@@ -6548,6 +6791,105 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "instantiate" && r.Line == 8);
         Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            import java.util.Collections;
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Payload {}
+            class Result {}
+
+            class Worker {
+                <T> T read() { return null; }
+
+                void run() {
+                    var a = new HashMap<String, List<Payload>>();
+                    var b = Collections.<Result>emptyList();
+                    var c = this.<Payload>read();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 13);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 14);
+    }
+
+    [Fact]
+    public void Extract_KotlinKnownClassConstructorCalls_AreInstantiate()
+    {
+        // Kotlin has no `new` keyword, so same-file class constructor calls such as
+        // `User(1)` should mirror C# / Java constructor search by emitting `instantiate`.
+        // PascalCase functions and annotations must remain `call` / `annotation`.
+        // Kotlin には `new` がないため、同一ファイル class の `User(1)` のような
+        // constructor 呼び出しを C# / Java と同じく `instantiate` として検索可能にする。
+        // PascalCase function と annotation は `call` / `annotation` のままにする。
+        const string content = """
+            class User(val id: Int)
+            data class Profile(val name: String)
+            annotation class Marker
+
+            fun Build(): User = User(1)
+
+            @Marker()
+            fun decorated() {}
+
+            class Service {
+                fun run() {
+                    val a = User(1)
+                    val b = Profile("p")
+                    Build()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Profile" && r.ReferenceKind == "instantiate" && r.Line == 13);
+        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate" && r.Line == 1);
+        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Build" && r.ReferenceKind == "call" && r.Line == 14);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Build" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation" && r.Line == 7);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_KotlinGenericInvocationTypeArguments_AreTypeReferences()
+    {
+        const string content = """
+            class Payload
+            class Result
+            class Box<T>
+
+            fun <T> read(): T = TODO()
+
+            class Worker {
+                fun run() {
+                    val box = Box<Payload>()
+                    val result = read<Result>()
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 10);
     }
 
     [Fact]
@@ -10594,18 +10936,22 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpTypeof_HandlesGenericAndArrayArguments()
     {
-        // typeof(List<int>) should capture `List`; the lexer skips `<int>` because `int` is a
-        // built-in C# alias that must never appear as a type_reference row.
-        // typeof(List<int>) は `List` を拾い、`<int>` 内の C# built-in alias はスキップする。
+        // typeof(List<Payload>) should capture both `List` and the nested generic argument.
+        // C# built-in aliases inside generic arguments still must never appear as rows.
+        // typeof(List<Payload>) は `List` と nested generic argument の両方を拾う。
+        // generic 引数内の C# built-in alias は引き続きスキップする。
         const string content = """
             using System.Collections.Generic;
+
+            public class Payload {}
 
             public class Caller
             {
                 public void Work()
                 {
-                    var t1 = typeof(List<int>);
-                    var t2 = typeof(System.Collections.Generic.Dictionary<string, int>);
+                    var t1 = typeof(List<Payload>);
+                    var t2 = typeof(System.Collections.Generic.Dictionary<string, Payload[]>);
+                    var t3 = typeof(Dictionary<string, List<Payload>>);
                 }
             }
             """;
@@ -10614,6 +10960,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
         // For dotted args, each segment gets its own row — preserves rename safety.
         // ドット付き引数は segment ごとに行を出す — rename 追跡のため。
         Assert.Contains(references, r => r.SymbolName == "System" && r.ReferenceKind == "type_reference");
@@ -10804,6 +11151,45 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "demo" && r.ReferenceKind == "type_reference");
         // Java primitive type must be skipped / Java プリミティブ型は除外。
         Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_JavaDocLinks_CaptureTypeReferences()
+    {
+        const string content = """
+            package demo;
+
+            class User {
+                void save() {}
+            }
+
+            class Helper {}
+            class Hidden {}
+
+            class Service {
+                /**
+                 * Uses {@link User#save()} and {@linkplain java.util.List<User>}.
+                 * @see Helper
+                 * @see <a href="https://example.invalid">external</a>
+                 */
+                void run() {}
+
+                void other() {
+                    /** {@link Hidden} */
+                    int local = 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "save" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.Contains(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "type_reference" && r.ContainerName == "run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "href" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Hidden" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -12464,6 +12850,443 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IOException" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation");
+    }
+
+    [Fact]
+    public void Extract_JavaAnnotatedFinalInstanceof_CapturesTypeReference()
+    {
+        // Java pattern instanceof can put modifiers and type-use annotations before the tested
+        // type; those prefixes should not hide the real dependency or become type references.
+        // Java の pattern instanceof では型の前に modifier / type-use annotation が置けるため、
+        // prefix で実型の依存を落としたり注釈名を型参照化したりしてはならない。
+        const string content = """
+            @interface NonNull {}
+            class Payload {}
+
+            class Demo {
+                boolean run(Object value) {
+                    return value instanceof final @NonNull Payload payload;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "NonNull" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NonNull" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "final" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinTypeUseAnnotations_DoNotBecomeTypeReferences()
+    {
+        // Kotlin type-use annotations should mirror Java type expressions: the annotation
+        // itself is metadata, while the annotated type remains the dependency edge.
+        // Kotlin の type-use annotation も Java と同様に metadata として扱い、
+        // 注釈名を type_reference にせず、注釈された型だけを依存として残す。
+        const string content = """
+            annotation class Fancy
+            class Payload
+
+            class Demo {
+                val value: @Fancy Payload = Payload()
+                fun run(input: @Fancy Payload): @Fancy Payload = input
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.Contains(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinExtensionFunctionReceivers_CaptureTypeReferences()
+    {
+        // Kotlin extension receivers are type-position dependencies just like parameters and
+        // return types; `fun User.render()` should make `references User` find the extension.
+        // Kotlin の extension receiver は parameter / return type と同じ型位置の依存であり、
+        // `fun User.render()` でも `references User` から拡張関数へ辿れる必要がある。
+        const string content = """
+            class User
+            class Box<T>
+
+            fun User.render() {}
+            fun Box<User>.unwrap() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinExtensionPropertyReceivers_CaptureTypeReferences()
+    {
+        // Extension property receivers are declarations too, but the receiver appears before
+        // the property name rather than after a parameter colon.
+        // extension property の receiver も宣言上の依存だが、property 名より前に現れるため
+        // parameter colon 後の型抽出だけでは拾えない。
+        const string content = """
+            class User
+            class Box<T>
+
+            val User.displayName: String get() = ""
+            var Box<User>.selected: User
+                get() = TODO()
+                set(value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "User" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickTypeReferences_NormalizesNames()
+    {
+        // Kotlin declaration names already strip source-only backticks; type-position
+        // references need the same canonical name so dependency search joins them.
+        // Kotlin の宣言名は source-only な backtick を外しているため、型位置参照も同じ
+        // canonical 名で発行し、依存検索で宣言と結合できるようにする。
+        const string content = """
+            class `Display Name`
+            class Holder<T>
+
+            class Demo {
+                val first: `Display Name` = TODO()
+                val second: Holder<`Display Name`> = TODO()
+                val third: `Display Name`? = null
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        var displayNameTypeReferenceCount = references.Count(r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.True(
+            displayNameTypeReferenceCount >= 3,
+            $"Expected at least 3 Display Name type references, got {displayNameTypeReferenceCount}.");
+        Assert.Contains(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickClassLiterals_NormalizesTypeReferenceNames()
+    {
+        // Kotlin class literals can target backticked type names too; keep them aligned with
+        // the declaration's canonical name instead of treating the backticks as a string.
+        // Kotlin の class literal でも backtick 付き型名を対象にできるため、backtick を
+        // 文字列扱いせず、宣言側と同じ canonical 名で参照を発行する。
+        const string content = """
+            class `Display Name`
+
+            class Demo {
+                val token = `Display Name`::class
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickMethodReferenceOwners_CaptureTypeReference()
+    {
+        // JVM method references already emit owner type edges for Java/Kotlin; Kotlin backtick
+        // owners need the same canonical name handling as declarations and type positions.
+        // JVM method reference の owner 型 edge は Java/Kotlin で発行しているため、
+        // Kotlin の backtick owner でも宣言・型位置と同じ canonical 名に揃える。
+        const string content = """
+            class `Display Name` {
+                fun render() {}
+            }
+
+            class Demo {
+                val handler = `Display Name`::render
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickMethodReferenceNames_NormalizesCallNames()
+    {
+        // Backticked Kotlin callable names are source syntax; method-reference call edges should
+        // use the same canonical name as the callable declaration.
+        // Kotlin callable 名の backtick は source syntax なので、method reference の call edge も
+        // 宣言側と同じ canonical 名で発行する。
+        const string content = """
+            class User {
+                fun `render name`() {}
+            }
+
+            class Demo {
+                val handler = User::`render name`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "render name" && s.Kind == "function");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "render name" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`render name`" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickConstructorCalls_NormalizesInstantiateNames()
+    {
+        // Backticked Kotlin class names should behave like ordinary constructor calls: the
+        // instantiate edge uses the canonical class symbol name.
+        // backtick 付き Kotlin class 名の constructor call も通常の constructor call と同様に、
+        // canonical class symbol 名で instantiate edge を発行する。
+        const string content = """
+            class `Display Name`
+
+            class Demo {
+                val value = `Display Name`()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
+        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_KotlinBacktickAnnotations_NormalizesNames()
+    {
+        // Kotlin annotations can be backticked declarations; metadata references should keep
+        // the canonical annotation symbol name for both no-arg and argument forms.
+        // Kotlin annotation も backtick 付き宣言にできるため、引数なし・引数ありの metadata
+        // reference でも canonical annotation symbol 名を使う。
+        const string content = """
+            annotation class `Fancy Name`(val value: String = "")
+
+            @`Fancy Name`
+            class Demo {
+                @`Fancy Name`("x")
+                fun run(input: @`Fancy Name` Payload) {}
+            }
+
+            class Payload
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(symbols, s => s.Name == "Fancy Name" && s.Kind == "class");
+        Assert.True(references.Count(r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "annotation") >= 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "`Fancy Name`" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinUseSiteTypeAnnotations_DoNotBecomeTypeReferences()
+    {
+        // Kotlin use-site targets are prefixes on annotations, not part of the annotated type.
+        // The annotation should stay metadata and the following type should remain the dependency.
+        const string content = """
+            annotation class Fancy
+            class Payload
+
+            class Demo {
+                val value: @field:Fancy Payload = Payload()
+                fun run(input: @receiver:Fancy Payload): @param:Fancy Payload = input
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "Fancy" && r.ReferenceKind == "annotation") >= 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "field" or "receiver" or "param") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinVarianceTypeArguments_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            interface Producer<T>
+            interface Consumer<T>
+            class Payload
+
+            class Demo {
+                val produced: Producer<out Payload>? = null
+                val consumed: Consumer<in Payload>? = null
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Producer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Consumer" && r.ReferenceKind == "type_reference");
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 2);
+        Assert.DoesNotContain(references, r => (r.SymbolName is "in" or "out") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinGenericBounds_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            interface Comparable<T>
+            interface Handler<T>
+            class Payload
+            class Box<out T : Comparable<T>>
+
+            fun <reified T> run(input: T): Handler<T> where T : Payload, T : Handler<T> = TODO()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinGenericTypeOperators_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User
+
+            inline fun <reified T> accepts(value: Any): Boolean = value is T
+            fun parse(value: Any): User = value as User
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinGenericClassLiterals_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User
+
+            inline fun <reified T> genericKClass() = T::class
+            fun userKClass() = User::class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpWhereConstraintKeywords_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            interface IContract {}
+            class Demo<TValue, TKey, TBuffer>
+                where TValue : unmanaged, IContract
+                where TKey : notnull
+                where TBuffer : IContract, allows ref struct
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "allows" or "ref" or "unmanaged" or "notnull") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericSignatures_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            interface IContract<T> {}
+            class Base<T> {}
+
+            class Demo<TValue> : Base<TValue>, IContract<TValue>
+            {
+                public TItem Pick<TItem>(TItem value, IContract<TItem> fallback) => value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "TValue" or "TItem") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericTypeOperators_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User {}
+
+            class Demo {
+                public static bool Is<T>(object value) => value is T;
+                public static bool IsEither<T>(object value) => value is T or User;
+                public static User Cast(object value) => value as User;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericTypeKeywords_DoNotEmitTypeParameterReferences()
+    {
+        const string content = """
+            class User {}
+
+            class Demo {
+                public static object TypeOf<T>() => typeof(T);
+                public static string NameOf<T>() => nameof(T);
+                public static object UserType() => typeof(User);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -19641,6 +20464,196 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Any" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "enabledFlag" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fallbackUser" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_KotlinSecondaryConstructorDelegation_RewritesThisAndSuperCalls()
+    {
+        const string content = """
+            open class Parent(value: Int) {}
+
+            class Child
+                : Parent {
+                constructor() : this(0) {
+                }
+
+                constructor(value: Int) : super(value) {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Child"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains(": this(", StringComparison.Ordinal)
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Child");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains(": super(", StringComparison.Ordinal)
+            && r.ContainerKind == "function"
+            && r.ContainerName == "Child");
+        Assert.DoesNotContain(references, r =>
+            r.ReferenceKind == "call"
+            && (r.SymbolName == "constructor" || r.SymbolName == "this" || r.SymbolName == "super"));
+    }
+
+    [Fact]
+    public void Extract_KotlinClassLiterals_CaptureTypeReferences()
+    {
+        const string content = """
+            class User {}
+            class Profile {}
+
+            class Service {
+                fun inspect(value: Any) {
+                    val kClass = User::class
+                    val javaClass = Profile::class.java
+                    val runtimeClass = value::class
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "User"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("User::class", StringComparison.Ordinal)
+            && r.ContainerName == "inspect");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Profile"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("Profile::class.java", StringComparison.Ordinal)
+            && r.ContainerName == "inspect");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "value"
+            && r.ReferenceKind == "type_reference"
+            && r.Context.Contains("value::class", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "class"
+            && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinKDocLinks_CaptureTypeReferences()
+    {
+        const string content = """
+            class User
+            class Helper
+            class Hidden
+
+            class Service {
+                /**
+                 * Loads [User] and [User.name].
+                 * See [docs](https://example.invalid) and [alias][User].
+                 * @see Helper
+                 */
+                fun load() {}
+
+                fun other() {
+                    /** [Hidden] */
+                    val local = 0
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.Contains(references, r => r.SymbolName == "name" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.Contains(references, r => r.SymbolName == "Helper" && r.ReferenceKind == "type_reference" && r.ContainerName == "load");
+        Assert.DoesNotContain(references, r => r.SymbolName == "docs" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "alias" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Hidden" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CSharpJavaKotlinCatchClauses_CaptureExceptionTypeReferences()
+    {
+        const string csharp = """
+            class Service {
+                void Run() {
+                    try { Work(); }
+                    catch (System.IO.IOException ex) when (ex != null) { }
+                    catch (CustomException) { }
+                    catch (System.Exception @caught) { }
+                }
+            }
+            """;
+
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
+        var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
+
+        Assert.Contains(csharpReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "Run");
+        Assert.Contains(csharpReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "Run");
+        Assert.DoesNotContain(csharpReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(csharpReferences, r =>
+            r.SymbolName == "caught"
+            && r.ReferenceKind == "type_reference");
+
+        const string java = """
+            class Service {
+                void run() {
+                    try { work(); }
+                    catch (final java.io.IOException | CustomException ex) { }
+                }
+            }
+            """;
+
+        var javaSymbols = SymbolExtractor.Extract(1, "java", java);
+        var javaReferences = ReferenceExtractor.Extract(1, "java", java, javaSymbols);
+
+        Assert.Contains(javaReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.Contains(javaReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.DoesNotContain(javaReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
+
+        const string kotlin = """
+            class Service {
+                fun run() {
+                    try { work() }
+                    catch (ex: java.io.IOException) { }
+                    catch (_: CustomException) { }
+                }
+            }
+            """;
+
+        var kotlinSymbols = SymbolExtractor.Extract(1, "kotlin", kotlin);
+        var kotlinReferences = ReferenceExtractor.Extract(1, "kotlin", kotlin, kotlinSymbols);
+
+        Assert.Contains(kotlinReferences, r =>
+            r.SymbolName == "IOException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.Contains(kotlinReferences, r =>
+            r.SymbolName == "CustomException"
+            && r.ReferenceKind == "type_reference"
+            && r.ContainerName == "run");
+        Assert.DoesNotContain(kotlinReferences, r =>
+            r.SymbolName == "ex"
+            && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

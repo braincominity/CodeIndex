@@ -98,6 +98,14 @@ public static partial class ReferenceExtractor
         {
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
+        // Kotlin constructor delegation is rewritten by KotlinReferenceExtractor, so suppress the
+        // declaration/delegation keywords that generic CallRegex would otherwise index as calls.
+        // Kotlin の constructor 委譲は KotlinReferenceExtractor で書き換えるため、
+        // 汎用 CallRegex が拾う宣言・委譲 keyword 自体は call として残さない。
+        ["kotlin"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "constructor", "super", "this",
+        },
         // Rust macro declaration keywords / Rust マクロ宣言キーワード
         // `macro_rules!` declarations will be seen by the Rust macro-call regex below, but they are
         // declaration sites rather than call sites, so suppress the keyword itself.
@@ -342,6 +350,9 @@ public static partial class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex NonBacktickStringLiteralRegex = new(
+        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+        RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     internal const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string FunctionalIdentifierPattern = @"@?[_\p{L}\$][\w$]*";
@@ -551,6 +562,17 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpDocCrefRegex = new(
         @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Javadoc / KDoc cross-reference links (`{@link Foo#bar}`, `@see Foo`, `[Foo.bar]`).
+    // Javadoc / KDoc の cross-reference link。
+    private static readonly Regex JvmDocInlineLinkRegex = new(
+        @"\{@(?:link|linkplain|value)\s+(?<target>[^\s}]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex JvmDocSeeReferenceRegex = new(
+        @"(?:^|\s)@(?:see|throws|exception)\s+(?<target>[^\s}]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex KDocBracketLinkRegex = new(
+        @"\[(?<target>#?(?:[_\p{L}][\w$]*|`[^`\r\n]+`)(?:(?:\.|#)(?:[_\p{L}][\w$]*|`[^`\r\n]+`))*)\](?!\s*(?:\(|\[))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
     // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
@@ -569,6 +591,10 @@ public static partial class ReferenceExtractor
         "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong",
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
+    };
+    private static readonly HashSet<string> CSharpWhereConstraintIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "allows", "notnull", "ref", "unmanaged",
     };
     private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
     {
@@ -681,6 +707,9 @@ public static partial class ReferenceExtractor
     private static readonly Regex NoArgAnnotationRegex = new(
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
+    private static readonly Regex KotlinBacktickAnnotationRegex = new(
+        @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?<name>`[^`\r\n]+`)(?:\s*\([^)\r\n]*\))?",
+        RegexOptions.Compiled);
 
 
     // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
@@ -773,6 +802,13 @@ public static partial class ReferenceExtractor
     private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
     {
         return false;
+    }
+
+    private static string NormalizeKotlinBacktickIdentifier(string name)
+    {
+        if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+            return name[1..^1];
+        return name;
     }
 
     /// <summary>
@@ -974,6 +1010,7 @@ public static partial class ReferenceExtractor
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
@@ -1018,6 +1055,7 @@ public static partial class ReferenceExtractor
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
+        var jvmInDelimitedDocComment = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1073,6 +1111,41 @@ public static partial class ReferenceExtractor
                     }
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
+            }
+            else if (language is "java" or "kotlin"
+                     && TryGetJvmDocCommentSpan(
+                         originalLine,
+                         jvmInDelimitedDocComment,
+                         out var jvmDocCommentStartIndex,
+                         out var jvmDocCommentEndExclusive,
+                         out var jvmSameLineDeclarationStartColumn,
+                         out var nextJvmDelimitedDocComment))
+            {
+                if (jvmDocCommentEndExclusive > jvmDocCommentStartIndex)
+                {
+                    var docContainer = FindJvmDocumentedContainer(
+                        containerCandidates,
+                        lines,
+                        structuralLines[i],
+                        lineNumber,
+                        jvmSameLineDeclarationStartColumn);
+                    if (docContainer != null)
+                    {
+                        var docText = originalLine[jvmDocCommentStartIndex..jvmDocCommentEndExclusive];
+                        EmitJvmDocLinkReferences(
+                            language,
+                            docText,
+                            references,
+                            seen,
+                            fileId,
+                            jvmDocCommentStartIndex,
+                            docText.Trim(),
+                            lineNumber,
+                            docContainer);
+                    }
+                }
+
+                jvmInDelimitedDocComment = nextJvmDelimitedDocComment;
             }
 
             if (string.IsNullOrWhiteSpace(preparedLine))
@@ -1274,7 +1347,8 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)` and Java `this(...)` / `super(...)`
+            // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)`, Java `this(...)` / `super(...)`,
+            // and Kotlin `constructor(...) : this(...)` / `: super(...)`.
             // コンストラクタ連鎖呼び出しの書き換え
             if (language is "csharp")
             {
@@ -1288,18 +1362,25 @@ public static partial class ReferenceExtractor
                     preparedLine, enclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitCtorDelegationReferences(
+                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    references, seen, fileId, context, lineNumber, container);
+            }
 
             // Compile-time type/member references that CallRegex cannot see because the
             // argument has no trailing `(` of its own. See issue #253.
             // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
             if (language is "csharp")
             {
+                var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
                 foreach (Match match in CSharpTypeKeywordIntroRegex.Matches(preparedLine))
                 {
                     int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
                     ExtractCSharpTypeKeywordSegments(
                         references, seen, fileId, preparedLine, parenIndex + 1,
-                        context, lineNumber, container, language);
+                        context, lineNumber, container, language, csharpGenericParameterNames);
                 }
             }
             else if (language is "java")
@@ -1313,6 +1394,26 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container);
             }
+            else if (language is "kotlin")
+            {
+                KotlinReferenceExtractor.EmitClassLiteralReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                KotlinReferenceExtractor.EmitBacktickConstructorReferences(
+                    preparedLine,
+                    kotlinConstructorTypeNames,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
 
             // Type-position references without an introducing keyword-call: base lists,
             // declaration types, generic constraints, throws clauses, type tests, and
@@ -1321,6 +1422,19 @@ public static partial class ReferenceExtractor
             // キーワード呼び出しの外にある型位置参照（継承リスト、宣言型、generic 制約、
             // throws、型テスト、XML doc cref）。`references` / `impact` では依存として扱うが、
             // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
+            if (language is "csharp" or "java" or "kotlin")
+            {
+                EmitCatchTypeReferences(
+                    language,
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+
             if (language == "csharp")
             {
                 CSharpReferenceExtractor.EmitTypePositionReferences(
@@ -1691,7 +1805,10 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
             }
 
-            void AddCallLikeReference(string name, int callIndex)
+            void AddCallLikeReference(string name, int callIndex) =>
+                _ = TryAddCallLikeReference(name, callIndex);
+
+            bool TryAddCallLikeReference(string name, int callIndex)
             {
                 var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
@@ -1700,7 +1817,7 @@ public static partial class ReferenceExtractor
                         : NormalizeAtPrefixedIdentifier(name);
 
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
-                    return;
+                    return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -1712,7 +1829,7 @@ public static partial class ReferenceExtractor
                     && callIndex == javaSameLineCtor.Value.NameIndex
                     && string.Equals(normalizedName, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
                 {
-                    return;
+                    return false;
                 }
 
                   // C# positional patterns such as `case Point(var x, var y):` are type-pattern
@@ -1724,21 +1841,21 @@ public static partial class ReferenceExtractor
                   var isCSharpPatternHeadCallSite = language == "csharp"
                       && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
                   if (isCSharpPatternHeadCallSite)
-                      return;
+                      return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
-                    return;
+                    return true;
                 }
                 if (IsIgnoredCallName(language, name))
                 {
                     if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
-                        return;
+                        return false;
                 }
                 if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
-                    return;
+                    return false;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
@@ -1747,7 +1864,20 @@ public static partial class ReferenceExtractor
                 var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
+                if (metadataKind != null)
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    return true;
+                }
+
+                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return true;
+                }
+
+                AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                return true;
             }
 
             if (language is "batch")
@@ -1822,7 +1952,19 @@ public static partial class ReferenceExtractor
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
                         continue;
                     matchedCallIndices.Add(callIndex);
-                    AddCallLikeReference(name, callIndex);
+                    if (TryAddCallLikeReference(name, callIndex))
+                    {
+                        EmitGenericInvocationTypeArgumentReferences(
+                            language,
+                            preparedLine,
+                            callIndex,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall(callIndex));
+                    }
                     if (language == "ruby")
                         RubyReferenceExtractor.EmitCommandTargetReferences(
                             name,
@@ -1918,7 +2060,21 @@ public static partial class ReferenceExtractor
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
-                    AddCallLikeReference(candidate.Name, candidate.NameIndex);
+                {
+                    if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                    {
+                        EmitGenericInvocationTypeArgumentReferences(
+                            language,
+                            preparedLine,
+                            candidate.NameIndex,
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            ResolveContainerForCall(candidate.NameIndex));
+                    }
+                }
             }
 
             if (language == "rust")
@@ -2073,6 +2229,20 @@ public static partial class ReferenceExtractor
             }
             else if (AnnotationLanguages.Contains(language))
             {
+                if (language == "kotlin")
+                {
+                    foreach (Match match in KotlinBacktickAnnotationRegex.Matches(preparedLine))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        var name = NormalizeKotlinBacktickIdentifier(nameGroup.Value);
+                        if (IsIgnoredCallName(language, name))
+                            continue;
+                        if (definitionNames != null && definitionNames.Contains(name))
+                            continue;
+                        AddReference(references, seen, fileId, name, nameGroup.Index, "annotation", context, lineNumber, container);
+                    }
+                }
+
                 foreach (Match match in NoArgAnnotationRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
@@ -2321,10 +2491,12 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string language)
+        string language,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         int i = startIndex;
         int parenDepth = 0;
+        int angleDepth = 0;
         bool expectSegment = true;
         while (i < line.Length)
         {
@@ -2341,10 +2513,12 @@ public static partial class ReferenceExtractor
 
             if (c == ',')
             {
-                if (parenDepth == 0)
+                if (parenDepth == 0 && angleDepth == 0)
                     return;
-                // Tuple element separator inside `typeof((Foo, Bar))` — keep scanning.
-                // `typeof((Foo, Bar))` のタプル要素区切りは続けて走査する。
+                // Tuple or generic argument separator inside `typeof((Foo, Bar))` /
+                // `typeof(List<Foo, Bar>)` — keep scanning.
+                // `typeof((Foo, Bar))` のタプル要素区切りや `typeof(List<Foo, Bar>)`
+                // の generic 引数区切りは続けて走査する。
                 i++;
                 expectSegment = true;
                 continue;
@@ -2378,6 +2552,12 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
+                if (ignoredSegments?.Contains(segment) == true)
+                {
+                    expectSegment = false;
+                    continue;
+                }
+
                 AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
                 expectSegment = false;
                 continue;
@@ -2392,7 +2572,19 @@ public static partial class ReferenceExtractor
 
             if (c == '<')
             {
-                i = SkipBalanced(line, i, '<', '>');
+                angleDepth++;
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (c == '>')
+            {
+                if (angleDepth == 0)
+                    return;
+                angleDepth--;
+                i++;
+                expectSegment = false;
                 continue;
             }
 
@@ -2437,9 +2629,10 @@ public static partial class ReferenceExtractor
         SymbolRecord? container,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
-        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
+        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
         {
@@ -2465,7 +2658,8 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         resolveContainerForColumn(logicalTypeIndex),
-                        "csharp")))
+                        "csharp",
+                        csharpGenericParameterNames)))
             {
                 continue;
             }
@@ -2501,7 +2695,8 @@ public static partial class ReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(typeGroup.Index),
-                "csharp");
+                "csharp",
+                csharpGenericParameterNames);
         }
 
         EmitCSharpCaseTypePatternReferences(

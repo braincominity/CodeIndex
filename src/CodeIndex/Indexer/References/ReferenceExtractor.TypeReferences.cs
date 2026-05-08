@@ -465,6 +465,148 @@ public static partial class ReferenceExtractor
         return true;
     }
 
+    private static bool TryGetJvmDocCommentSpan(
+        string originalLine,
+        bool inDelimitedDocComment,
+        out int commentStart,
+        out int commentEndExclusive,
+        out int sameLineDeclarationStartColumn,
+        out bool nextDelimitedDocComment)
+    {
+        commentStart = -1;
+        commentEndExclusive = -1;
+        sameLineDeclarationStartColumn = -1;
+        nextDelimitedDocComment = inDelimitedDocComment;
+
+        var lineStart = 0;
+        while (lineStart < originalLine.Length && char.IsWhiteSpace(originalLine[lineStart]))
+            lineStart++;
+
+        if (!inDelimitedDocComment)
+        {
+            if (lineStart + 3 > originalLine.Length
+                || originalLine[lineStart] != '/'
+                || originalLine[lineStart + 1] != '*'
+                || originalLine[lineStart + 2] != '*')
+            {
+                return false;
+            }
+
+            commentStart = lineStart + 3;
+        }
+        else
+        {
+            commentStart = lineStart;
+            if (commentStart < originalLine.Length && originalLine[commentStart] == '*')
+            {
+                if (commentStart + 1 < originalLine.Length && originalLine[commentStart + 1] == '/')
+                {
+                    commentEndExclusive = commentStart;
+                    nextDelimitedDocComment = false;
+                    sameLineDeclarationStartColumn = GetJvmSameLineDeclarationStartColumn(originalLine, commentStart);
+                    return true;
+                }
+
+                commentStart++;
+                if (commentStart < originalLine.Length && originalLine[commentStart] == ' ')
+                    commentStart++;
+            }
+        }
+
+        var closeIndex = originalLine.IndexOf("*/", commentStart, StringComparison.Ordinal);
+        if (closeIndex >= 0)
+        {
+            commentEndExclusive = closeIndex;
+            nextDelimitedDocComment = false;
+            sameLineDeclarationStartColumn = GetJvmSameLineDeclarationStartColumn(originalLine, closeIndex);
+        }
+        else
+        {
+            commentEndExclusive = originalLine.Length;
+            nextDelimitedDocComment = true;
+        }
+
+        return true;
+    }
+
+    private static int GetJvmSameLineDeclarationStartColumn(string originalLine, int commentEndExclusive)
+    {
+        if (commentEndExclusive + 1 >= originalLine.Length
+            || originalLine[commentEndExclusive] != '*'
+            || originalLine[commentEndExclusive + 1] != '/')
+        {
+            return -1;
+        }
+
+        var column = commentEndExclusive + 2;
+        while (column < originalLine.Length && char.IsWhiteSpace(originalLine[column]))
+            column++;
+
+        return column < originalLine.Length ? column : -1;
+    }
+
+    private static SymbolRecord? FindJvmDocumentedContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        IReadOnlyList<string> originalLines,
+        string structuralLine,
+        int lineNumber,
+        int sameLineDeclarationStartColumn)
+    {
+        var innermostContainer = FindInnermostContainer(candidates, lineNumber);
+        if (innermostContainer?.Kind is "function" or "property")
+            return null;
+
+        var sameLineCandidate = FindSameLineDocumentedContainer(
+            candidates,
+            structuralLine,
+            lineNumber,
+            sameLineDeclarationStartColumn);
+        if (sameLineCandidate != null)
+            return sameLineCandidate;
+
+        SymbolRecord? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine <= lineNumber)
+                continue;
+            if (!HasOnlyJvmDocTriviaBeforeDeclaration(originalLines, lineNumber, candidate.StartLine))
+                continue;
+
+            if (best == null
+                || candidate.StartLine < best.StartLine
+                || (candidate.StartLine == best.StartLine
+                    && ((candidate.BodyEndLine ?? candidate.EndLine) - (candidate.BodyStartLine ?? candidate.StartLine))
+                       < ((best.BodyEndLine ?? best.EndLine) - (best.BodyStartLine ?? best.StartLine))))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool HasOnlyJvmDocTriviaBeforeDeclaration(
+        IReadOnlyList<string> originalLines,
+        int docLineNumber,
+        int declarationLineNumber)
+    {
+        for (var lineIndex = docLineNumber; lineIndex < declarationLineNumber - 1 && lineIndex < originalLines.Count; lineIndex++)
+        {
+            var trimmed = originalLines[lineIndex].TrimStart();
+            if (trimmed.Length == 0
+                || trimmed.StartsWith("/**", StringComparison.Ordinal)
+                || trimmed.StartsWith("*", StringComparison.Ordinal)
+                || trimmed.StartsWith("@", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
     private static SymbolRecord? FindDocumentedContainer(
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
@@ -1707,7 +1849,12 @@ public static partial class ReferenceExtractor
             ? MaskPythonSingleLineFStrings(line)
             : line;
         if (lang != "cobol")
-            result = StringLiteralRegex.Replace(result, "\"\"");
+        {
+            var stringLiteralRegex = lang == "kotlin"
+                ? NonBacktickStringLiteralRegex
+                : StringLiteralRegex;
+            result = stringLiteralRegex.Replace(result, "\"\"");
+        }
         result = InlineBlockCommentRegex.Replace(result, " ");
 
         if (UsesHashComments(lang))
@@ -2389,7 +2536,149 @@ public static partial class ReferenceExtractor
             : string.Equals(token, "new", StringComparison.Ordinal);
     }
 
+    private static readonly HashSet<string> KotlinTypeProjectionModifierNames = new(StringComparer.Ordinal)
+    {
+        "in", "out",
+    };
+
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
+
+    private static void EmitGenericInvocationTypeArgumentReferences(
+        string language,
+        string preparedLine,
+        int nameIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (language is not ("csharp" or "java" or "kotlin"))
+            return;
+
+        if (!TryGetPostNameGenericInvocationTypeArgumentSpan(preparedLine, nameIndex, out var argumentsStart, out var argumentsLength)
+            && (language != "java"
+                || !TryGetJavaExplicitGenericInvocationTypeArgumentSpan(preparedLine, nameIndex, out argumentsStart, out argumentsLength)))
+        {
+            return;
+        }
+
+        if (argumentsLength <= 0)
+            return;
+
+        var ignoredSegments = language == "kotlin"
+            ? KotlinTypeProjectionModifierNames
+            : null;
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsStart,
+            context,
+            lineNumber,
+            container,
+            language,
+            ignoredSegments);
+    }
+
+    private static bool TryGetPostNameGenericInvocationTypeArgumentSpan(
+        string preparedLine,
+        int nameIndex,
+        out int argumentsStart,
+        out int argumentsLength)
+    {
+        argumentsStart = -1;
+        argumentsLength = 0;
+
+        if (nameIndex < 0 || nameIndex >= preparedLine.Length || !IsAtAwareAsciiIdentifierStart(preparedLine, nameIndex))
+            return false;
+
+        var scan = ConsumeAtAwareAsciiIdentifier(preparedLine, nameIndex);
+        if (scan + 1 < preparedLine.Length
+            && preparedLine[scan] == '?'
+            && preparedLine[scan + 1] == '.')
+        {
+            scan += 2;
+        }
+
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var closeAngle = FindMatchingChar(preparedLine, scan, '<', '>');
+        if (closeAngle <= scan)
+            return false;
+
+        var after = closeAngle + 1;
+        while (after < preparedLine.Length && char.IsWhiteSpace(preparedLine[after]))
+            after++;
+
+        if (after >= preparedLine.Length || preparedLine[after] != '(')
+            return false;
+
+        argumentsStart = scan + 1;
+        argumentsLength = closeAngle - scan - 1;
+        return true;
+    }
+
+    private static bool TryGetJavaExplicitGenericInvocationTypeArgumentSpan(
+        string preparedLine,
+        int nameIndex,
+        out int argumentsStart,
+        out int argumentsLength)
+    {
+        argumentsStart = -1;
+        argumentsLength = 0;
+
+        var closeAngle = nameIndex - 1;
+        while (closeAngle >= 0 && char.IsWhiteSpace(preparedLine[closeAngle]))
+            closeAngle--;
+
+        if (closeAngle < 0 || preparedLine[closeAngle] != '>')
+            return false;
+
+        var openAngle = FindMatchingOpenChar(preparedLine, closeAngle, '<', '>');
+        if (openAngle < 0)
+            return false;
+
+        var beforeOpen = openAngle - 1;
+        while (beforeOpen >= 0 && char.IsWhiteSpace(preparedLine[beforeOpen]))
+            beforeOpen--;
+
+        if (beforeOpen < 0 || preparedLine[beforeOpen] != '.')
+            return false;
+
+        argumentsStart = openAngle + 1;
+        argumentsLength = closeAngle - openAngle - 1;
+        return true;
+    }
+
+    private static int FindMatchingOpenChar(string text, int closeIndex, char openChar, char closeChar)
+    {
+        if (closeIndex < 0 || closeIndex >= text.Length || text[closeIndex] != closeChar)
+            return -1;
+
+        var depth = 0;
+        for (var i = closeIndex; i >= 0; i--)
+        {
+            if (text[i] == closeChar)
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != openChar)
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
 
     private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericCallCandidates(
         string preparedLine,

@@ -459,7 +459,7 @@ public partial class DbReader
 
     private static string NormalizeLiteralSearchQuery(string query, string? lang) =>
         string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
-            ? ExactSourceSearchNormalizer.Normalize(query, lang)
+            ? CSharpVerbatimNameNormalizer.Normalize(query)
             : query;
 
     private static bool IsFtsQuerySyntaxError(SqliteException ex)
