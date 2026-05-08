@@ -1362,6 +1362,15 @@ internal static class RustReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn);
+            EmitGenericFunctionTraitReturnTypeReferences(
+                preparedLine,
+                genericOpenIndex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
         }
 
         TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
@@ -1373,6 +1382,108 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+        EmitWhereClauseFunctionTraitReturnTypeReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitGenericFunctionTraitReturnTypeReferences(
+        string preparedLine,
+        int genericOpenIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
+        if (genericCloseIndex <= genericOpenIndex)
+            return;
+
+        var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        EmitFunctionTraitReturnTypesFromBoundClause(
+            clause,
+            genericOpenIndex + 1,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitWhereClauseFunctionTraitReturnTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var whereIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "where"))
+        {
+            var clauseStart = whereIndex + "where".Length;
+            var clauseEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, clauseStart, stopAtComma: false, stopAtArrow: false);
+            if (clauseEnd <= clauseStart)
+                clauseEnd = preparedLine.Length;
+
+            EmitFunctionTraitReturnTypesFromBoundClause(
+                preparedLine.Substring(clauseStart, clauseEnd - clauseStart),
+                clauseStart,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitFunctionTraitReturnTypesFromBoundClause(
+        string clause,
+        int clauseStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+        {
+            var fragment = clause.Substring(segmentStart, segmentLength);
+            var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, ':');
+            if (colonIndex < 0)
+                continue;
+
+            var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(fragment, "->", colonIndex + 1);
+            if (arrowIndex < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, arrowIndex + 2);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart, stopAtArrow: false);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = clauseStart + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart));
+        }
     }
 
     private static void EmitGenericDefaultTypeReferences(
@@ -1385,7 +1496,7 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
+        var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
         if (genericCloseIndex <= genericOpenIndex)
             return;
 
@@ -1414,6 +1525,34 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(absoluteStart));
         }
+    }
+
+    private static int FindRustGenericClose(string text, int openIndex)
+    {
+        var depth = 0;
+        for (var index = openIndex; index < text.Length; index++)
+        {
+            if (text[index] == '-' && index + 1 < text.Length && text[index + 1] == '>')
+            {
+                index++;
+                continue;
+            }
+
+            if (text[index] == '<')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[index] != '>')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return index;
+        }
+
+        return -1;
     }
 
     public static string NormalizeIdentifier(string identifier)

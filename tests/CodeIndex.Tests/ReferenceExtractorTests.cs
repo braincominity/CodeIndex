@@ -21296,6 +21296,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustFunctionTraitBounds_CapturesReturnTypes()
+    {
+        const string content = """
+            fn call<F: FnOnce() -> Result<User, Error>>(f: F) {}
+            fn where_call<F>(f: F) where F: FnOnce() -> Response {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "FnOnce" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """
