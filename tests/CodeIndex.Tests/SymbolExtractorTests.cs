@@ -12184,6 +12184,10 @@ public class SymbolExtractorTests
             impl Debug for Widget {}
             impl<T> Future for Task<T> {}
             unsafe impl<T> Send for Empty<T> {}
+            impl crate::models::Widget {}
+            impl<T> crate::tasks::Task<T> {}
+            impl Debug for crate::models::Widget {}
+            unsafe impl<T> Send for crate::tasks::Task<T> {}
             """;
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
@@ -12196,6 +12200,9 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Debug");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Future");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Send");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "crate");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "models");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "tasks");
     }
 
     [Fact]
