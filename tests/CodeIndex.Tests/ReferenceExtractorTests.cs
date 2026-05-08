@@ -17494,6 +17494,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftCatchPatternRoots_AreTypeReferences()
+    {
+        const string content = """
+            enum NetworkError: Error {
+                case timeout
+            }
+
+            enum DatabaseError: Error {
+                case connectionLost
+            }
+
+            func load() throws {}
+
+            func run() {
+                do {
+                    try load()
+                } catch NetworkError.timeout {
+                } catch DatabaseError.connectionLost {
+                } catch is DatabaseError {
+                } catch {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DatabaseError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "timeout" or "connectionLost" or "is"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

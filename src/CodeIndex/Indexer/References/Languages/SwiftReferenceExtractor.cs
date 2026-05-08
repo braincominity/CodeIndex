@@ -31,6 +31,7 @@ internal static class SwiftReferenceExtractor
         EmitKeyPathRootTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitMacroGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericInvocationArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -87,6 +88,68 @@ internal static class SwiftReferenceExtractor
                 resolveContainerForColumn(rootStart));
             slashIndex = rootEnd;
         }
+    }
+
+    private static void EmitCatchPatternTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var catchIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "catch"))
+        {
+            var patternStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, catchIndex + "catch".Length);
+            if (patternStart >= preparedLine.Length
+                || preparedLine[patternStart] == '{'
+                || StartsWithSwiftWord(preparedLine, patternStart, "let")
+                || StartsWithSwiftWord(preparedLine, patternStart, "var"))
+            {
+                continue;
+            }
+
+            if (StartsWithSwiftWord(preparedLine, patternStart, "is"))
+            {
+                patternStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, patternStart + "is".Length);
+                if (patternStart >= preparedLine.Length || preparedLine[patternStart] == '{')
+                    continue;
+            }
+
+            var typeEnd = FindSwiftCatchPatternTypeEnd(preparedLine, patternStart);
+            if (typeEnd <= patternStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(patternStart, typeEnd - patternStart),
+                patternStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(patternStart));
+        }
+    }
+
+    private static int FindSwiftCatchPatternTypeEnd(string preparedLine, int patternStart)
+    {
+        for (var index = patternStart; index < preparedLine.Length; index++)
+        {
+            var ch = preparedLine[index];
+            if (ch == '.'
+                || ch == '{'
+                || ch == ','
+                || ch == '('
+                || StartsWithSwiftWord(preparedLine, index, "where"))
+            {
+                return index;
+            }
+        }
+
+        return preparedLine.Length;
     }
 
     private static void EmitGenericInvocationArgumentReferences(
@@ -215,6 +278,19 @@ internal static class SwiftReferenceExtractor
 
     private static bool IsSwiftIdentifierPart(char ch)
         => ch == '_' || char.IsLetterOrDigit(ch);
+
+    private static bool StartsWithSwiftWord(string text, int index, string word)
+    {
+        if (index < 0 || index + word.Length > text.Length)
+            return false;
+        if (!string.Equals(text.Substring(index, word.Length), word, StringComparison.Ordinal))
+            return false;
+
+        var beforeOk = index == 0 || !IsSwiftIdentifierPart(text[index - 1]);
+        var after = index + word.Length;
+        var afterOk = after >= text.Length || !IsSwiftIdentifierPart(text[after]);
+        return beforeOk && afterOk;
+    }
 
     private static int FindSwiftKeyPathRootEnd(string preparedLine, int rootStart)
     {
