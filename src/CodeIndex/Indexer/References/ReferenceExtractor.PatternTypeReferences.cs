@@ -1686,7 +1686,7 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                AddTypeReferenceSegment(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, context, lineNumber, container, language, ignoredSegments: ignoredSegments);
+                AddReference(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, "type_reference", context, lineNumber, container);
                 i--;
                 continue;
             }

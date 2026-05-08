@@ -20755,6 +20755,7 @@ public class ReferenceExtractorTests
             struct Wrapper {
                 value: crate::r#type,
                 next: Option<r#async>,
+                keyword: r#struct,
             }
 
             fn build(input: r#type) -> r#async {
@@ -20767,6 +20768,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "r" && r.ReferenceKind == "type_reference");
     }
 
