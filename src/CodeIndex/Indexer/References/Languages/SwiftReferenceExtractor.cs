@@ -123,6 +123,7 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+        EmitWhereClauseSameTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitCallableSignatureTypeReferences(
@@ -244,6 +245,62 @@ internal static class SwiftReferenceExtractor
             return inIndex;
 
         return -1;
+    }
+
+    private static void EmitWhereClauseSameTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var whereIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "where"))
+        {
+            var clauseStart = whereIndex + "where".Length;
+            var clauseEnd = FindSwiftWhereClauseEnd(preparedLine, clauseStart);
+
+            var clause = preparedLine.Substring(clauseStart, clauseEnd - clauseStart);
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+            {
+                var fragment = clause.Substring(segmentStart, segmentLength);
+                var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(fragment, "==");
+                if (equalsIndex < 0)
+                    continue;
+
+                var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, equalsIndex + 2);
+                var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart, stopAtComma: false, stopAtArrow: false);
+                if (typeEnd <= typeStart)
+                    continue;
+
+                var absoluteStart = clauseStart + segmentStart + typeStart;
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    fragment.Substring(typeStart, typeEnd - typeStart),
+                    absoluteStart,
+                    "swift",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart));
+            }
+        }
+    }
+
+    private static int FindSwiftWhereClauseEnd(string preparedLine, int clauseStart)
+    {
+        var clauseEnd = preparedLine.Length;
+        var braceIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '{', clauseStart);
+        if (braceIndex >= 0)
+            clauseEnd = Math.Min(clauseEnd, braceIndex);
+
+        var semicolonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ';', clauseStart);
+        if (semicolonIndex >= 0)
+            clauseEnd = Math.Min(clauseEnd, semicolonIndex);
+
+        return Math.Max(clauseStart, clauseEnd);
     }
 
     private static void EmitTypealiasRhsTypeReferences(

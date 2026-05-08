@@ -17283,6 +17283,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftWhereSameTypeConstraints_RecordRightHandTypes()
+    {
+        const string content = """
+            struct Repository<Entity> {}
+            struct User {}
+            struct Response {}
+
+            extension Repository where Entity == User {}
+
+            func decode<T>(_ value: T) where T.Output == Response {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+        var referenceKeys = references
+            .Select(reference => $"{reference.SymbolName}:{reference.ReferenceKind}:{reference.Column}")
+            .ToList();
+
+        Assert.Contains("User:type_reference:38", referenceKeys);
+        Assert.Contains("Response:type_reference:46", referenceKeys);
+        Assert.DoesNotContain("User:call:38", referenceKeys);
+        Assert.DoesNotContain("Response:call:46", referenceKeys);
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,

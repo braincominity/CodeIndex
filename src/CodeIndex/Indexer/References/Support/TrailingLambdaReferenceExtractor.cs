@@ -22,6 +22,8 @@ internal static class TrailingLambdaReferenceExtractor
             var callIndex = match.Groups["name"].Index;
             if (IsInheritanceClause(preparedLine, callIndex))
                 continue;
+            if (IsRightHandSideOfEquality(preparedLine, callIndex))
+                continue;
 
             addCallLikeReference(match.Groups["name"].Value, callIndex);
         }
@@ -34,5 +36,21 @@ internal static class TrailingLambdaReferenceExtractor
             probe--;
 
         return probe >= 0 && preparedLine[probe] == ':';
+    }
+
+    private static bool IsRightHandSideOfEquality(string preparedLine, int nameIndex)
+    {
+        var probe = nameIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+            probe--;
+
+        if (probe < 1 || preparedLine[probe] != '=')
+            return false;
+
+        probe--;
+        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+            probe--;
+
+        return probe >= 0 && preparedLine[probe] == '=';
     }
 }
