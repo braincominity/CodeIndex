@@ -20894,6 +20894,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustCfgAttrDeriveAttributes_CaptureTraitTypeReferences()
+    {
+        const string content = """
+            #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+            struct User;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Serialize" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Deserialize" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "cfg_attr" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustAttributes_CaptureAnnotationReferences()
     {
         const string content = """

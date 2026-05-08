@@ -10,6 +10,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex DeriveAttributeRegex = new(
         @"#\s*!?\s*\[\s*derive\s*\((?<types>[^\)]*)\)",
         RegexOptions.Compiled);
+    private static readonly Regex CfgAttrDeriveAttributeRegex = new(
+        @"#\s*!?\s*\[\s*cfg_attr\s*\(.*?\bderive\s*\((?<types>[^\)]*)\)",
+        RegexOptions.Compiled);
     private static readonly Regex AttributeHeadRegex = new(
         $@"#\s*!?\s*\[\s*(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
         RegexOptions.Compiled);
@@ -57,26 +60,12 @@ internal static class RustReferenceExtractor
     {
         foreach (Match match in DeriveAttributeRegex.Matches(preparedLine))
         {
-            var typesGroup = match.Groups["types"];
-            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typesGroup.Value))
-            {
-                var fragment = typesGroup.Value.Substring(segmentStart, segmentLength);
-                var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
-                var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
-                if (typeEnd <= typeStart)
-                    continue;
+            EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
+        }
 
-                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                    fragment.Substring(typeStart, typeEnd - typeStart),
-                    typesGroup.Index + segmentStart + typeStart,
-                    "rust",
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-            }
+        foreach (Match match in CfgAttrDeriveAttributeRegex.Matches(preparedLine))
+        {
+            EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
         }
 
         foreach (Match match in AttributeHeadRegex.Matches(preparedLine))
@@ -87,6 +76,36 @@ internal static class RustReferenceExtractor
                 continue;
 
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameGroup.Index, "annotation", context, lineNumber, container);
+        }
+    }
+
+    private static void EmitDeriveTypeList(
+        Group typesGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typesGroup.Value))
+        {
+            var fragment = typesGroup.Value.Substring(segmentStart, segmentLength);
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                typesGroup.Index + segmentStart + typeStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
         }
     }
 
