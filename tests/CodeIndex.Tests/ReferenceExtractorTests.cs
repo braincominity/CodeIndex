@@ -10666,6 +10666,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsAssertApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                assert validate user
+                assert isReady
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "assert" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """

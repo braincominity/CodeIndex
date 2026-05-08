@@ -39,6 +39,11 @@ internal static class FSharpReferenceExtractor
             (?=\s+(?!->\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
+    private static readonly Regex AssertApplicationCallRegex = new(
+        $@"^\s*assert\s+(?:(?:{IdentifierPattern})\s*\.\s*)*(?<name>{IdentifierPattern})\b
+            (?=\s+(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
+        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
+
     private static readonly Regex SpaceApplicationCallRegex = new(
         $@"(?:\b(?:then|do!?|else|in|return!?|yield!?)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
@@ -107,6 +112,13 @@ internal static class FSharpReferenceExtractor
         }
 
         foreach (Match match in WhenGuardApplicationCallRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            var callIndex = match.Groups["name"].Index;
+            addCallLikeReference(name, callIndex);
+        }
+
+        foreach (Match match in AssertApplicationCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
