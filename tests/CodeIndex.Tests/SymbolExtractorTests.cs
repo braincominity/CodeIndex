@@ -2040,6 +2040,34 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./href.js");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsImportScriptsModuleSymbols(string language)
+    {
+        var content = """
+            importScripts("./worker-a.js", "/worker-b.js");
+            importScripts(
+              "./legacy.js",
+              `./template-worker.js`,
+              `./${name}.js`
+            );
+            loader.importScripts("./method.js");
+            const text = "importScripts('./string.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./worker-a.js" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/worker-b.js" && s.Line == 1);
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.js"));
+        Assert.Equal(3, legacyImport.Line);
+        Assert.Contains("importScripts", legacyImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
     {
