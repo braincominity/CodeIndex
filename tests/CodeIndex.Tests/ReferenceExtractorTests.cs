@@ -20811,6 +20811,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustAssociatedTypes_CaptureBoundTypeReferences()
+    {
+        const string content = """
+            trait Stream {
+                type Item: Display + Debug;
+                type Error: Into<AppError> = IoError;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Display" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Into" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "AppError" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
     {
         const string content = """

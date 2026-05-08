@@ -54,6 +54,7 @@ internal static class RustReferenceExtractor
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitConstStaticTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypeAliasTargetReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitAssociatedTypeBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTupleStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -244,6 +245,45 @@ internal static class RustReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(typeStart));
+        }
+    }
+
+    private static void EmitAssociatedTypeBoundReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var typeIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "type"))
+        {
+            var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', typeIndex + "type".Length);
+            if (colonIndex < 0)
+                continue;
+
+            var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', typeIndex + "type".Length);
+            if (assignmentIndex >= 0 && assignmentIndex < colonIndex)
+                continue;
+
+            var boundsStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+            var boundsEnd = assignmentIndex > colonIndex
+                ? assignmentIndex
+                : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, boundsStart);
+            if (boundsEnd <= boundsStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(boundsStart, boundsEnd - boundsStart),
+                boundsStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(boundsStart));
         }
     }
 
