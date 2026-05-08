@@ -968,6 +968,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCompositeLiteralReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMapCompositeLiteralTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoParenthesizedTypeConversionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
@@ -1437,6 +1438,78 @@ internal static class LanguageReferenceExtractionSupport
 
             EmitGoTypeExpression(line[valueStart..valueEnd], valueStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+    }
+
+    private static void EmitGoParenthesizedTypeConversionReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var open = line.IndexOf('(', searchStart);
+            if (open < 0)
+                return;
+
+            searchStart = open + 1;
+            var close = ReferenceExtractor.FindMatchingChar(line, open, '(', ')');
+            if (close <= open + 1)
+                continue;
+
+            var afterClose = SkipWhitespace(line, close + 1);
+            if (afterClose >= line.Length || line[afterClose] != '(')
+                continue;
+
+            var rawExpression = line[(open + 1)..close];
+            var expression = rawExpression.Trim();
+            if (!IsLikelyGoParenthesizedConversionType(expression))
+                continue;
+
+            var trimStart = rawExpression.IndexOf(expression, StringComparison.Ordinal);
+            EmitGoTypeExpression(expression, open + 1 + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static bool IsLikelyGoParenthesizedConversionType(string expression)
+    {
+        if (expression.Length == 0 || expression.Contains(','))
+            return false;
+
+        var cursor = 0;
+        while (cursor < expression.Length && char.IsWhiteSpace(expression[cursor]))
+            cursor++;
+        var isPointerConversion = cursor < expression.Length && expression[cursor] == '*';
+        if (cursor < expression.Length && expression[cursor] == '*')
+            cursor = SkipWhitespace(expression, cursor + 1);
+
+        if (cursor >= expression.Length || !IsIdentifierStart(expression[cursor]))
+            return false;
+
+        var lastSegmentStart = cursor;
+        while (cursor < expression.Length)
+        {
+            if (IsSimpleIdentifierPart(expression[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (expression[cursor] != '.')
+                return false;
+
+            cursor++;
+            if (cursor >= expression.Length || !IsIdentifierStart(expression[cursor]))
+                return false;
+            lastSegmentStart = cursor;
+            cursor++;
+        }
+
+        return isPointerConversion || expression.Contains('.');
     }
 
     private static bool HasGoIdentifierBeforeBracket(string line, int openBracket)

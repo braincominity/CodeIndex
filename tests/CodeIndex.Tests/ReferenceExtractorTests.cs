@@ -7806,6 +7806,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoParenthesizedTypeConversions_CapturesConvertedTypes()
+    {
+        const string content = """
+            package main
+
+            func convert(callback func(any) any, raw any) {
+                var _ Interface = (*Concrete)(nil)
+                id := (model.ID)(raw)
+                value := (callback)(raw)
+                _, _ = id, value
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Interface" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Concrete" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
