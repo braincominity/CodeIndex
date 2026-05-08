@@ -17565,6 +17565,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftVariadicGenericRepeatModifier_IsNotTypeReference()
+    {
+        const string content = """
+            struct Element {}
+            struct TuplePack<each T> {}
+
+            typealias Pack = TuplePack<repeat each Element>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Element"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "repeat" or "each"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
