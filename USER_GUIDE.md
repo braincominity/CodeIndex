@@ -700,6 +700,8 @@ Static JavaScript/TypeScript imports also surface their source module specifier 
 
 CommonJS `require()` calls such as `const fs = require("node:fs")`, multiline `require(\n  "./helper"\n)`, `require.resolve("./resolved")`, and `require.resolve("./resolved", { paths: [...] })` also surface their source module specifier as an `import` symbol.
 
+ES module resolution probes written as `import.meta.resolve("./feature.js")` also add `import` symbols for static module specifiers, including calls with a parent URL argument.
+
 ES module asset references written as `new URL("./worker.js", import.meta.url)` also add `import` symbols for static string and no-substitution template specifiers.
 
 Worker script dependencies written as `importScripts("./worker-a.js", "/worker-b.js")` also add one `import` symbol per static string or no-substitution template specifier.
@@ -1706,6 +1708,8 @@ runtime の dynamic import は、`import(\n  "./feature"\n)` のように module
 静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
 
 `const fs = require("node:fs")`、複数行の `require(\n  "./helper"\n)`、`require.resolve("./resolved")`、`require.resolve("./resolved", { paths: [...] })` のような CommonJS `require()` 呼び出しでも、source module specifier を `import` シンボルとして表面化します。
+
+`import.meta.resolve("./feature.js")` のような ES module resolution probe も、parent URL 引数付きの call を含め、静的な module specifier を `import` シンボルとして追加します。
 
 `new URL("./worker.js", import.meta.url)` のような ES module asset reference も、静的な string / no-substitution template specifier を `import` シンボルとして追加します。
 

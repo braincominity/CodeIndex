@@ -2011,6 +2011,34 @@ public class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsImportMetaResolveModuleSymbols(string language)
+    {
+        var content = """
+            const resolved = import.meta.resolve("./feature.js");
+            const scoped = import.meta.resolve(
+              "./scoped.js",
+              import.meta.url
+            );
+            client.import.meta.resolve("./method.js");
+            const dynamic = import.meta.resolve(path);
+            const text = "import.meta.resolve('./string.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
+        Assert.Equal(1, resolvedImport.Line);
+        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("import.meta.url", scopedImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "path");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
     public void Extract_JavaScriptTypeScript_DetectsNewUrlImportMetaModuleSymbols(string language)
     {
         var content = """

@@ -806,6 +806,16 @@ public static partial class SymbolExtractor
             "window.navigator.serviceWorker.register");
     }
 
+    private static void ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "import.meta.resolve");
+    }
+
     private static void ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(
         long fileId,
         string[] rawLines,
