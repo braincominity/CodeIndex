@@ -12962,6 +12962,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinUseSiteTypeAnnotations_DoNotBecomeTypeReferences()
+    {
+        // Kotlin use-site targets are prefixes on annotations, not part of the annotated type.
+        // The annotation should stay metadata and the following type should remain the dependency.
+        const string content = """
+            annotation class Fancy
+            class Payload
+
+            class Demo {
+                val value: @field:Fancy Payload = Payload()
+                fun run(input: @receiver:Fancy Payload): @param:Fancy Payload = input
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "Fancy" && r.ReferenceKind == "annotation") >= 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "field" or "receiver" or "param") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
     {
         // Regression for issue #644: real type names like `X` and `TResult` must not be
