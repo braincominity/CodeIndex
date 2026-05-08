@@ -21080,6 +21080,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustStructLiterals_CaptureInstantiationReferences()
+    {
+        const string content = """
+            struct Config {
+                enabled: bool,
+            }
+
+            pub(crate) struct Local {
+                enabled: bool,
+            }
+
+            fn build() {
+                let user = User { id: 1 };
+                let store = crate::models::Store { ready: true };
+                let wrapped = Wrapper::<User> { value: user };
+                let helper = crate::helpers::state { ready: true };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Config" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Local" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "state" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

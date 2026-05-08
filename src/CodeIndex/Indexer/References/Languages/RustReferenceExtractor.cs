@@ -28,6 +28,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex AssociatedCallReceiverRegex = new(
         $@"(?<![\w$])(?<receiver>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?::\s*{RustIdentifierPattern}(?:<[^>\n]+>)?\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex StructLiteralRegex = new(
+        $@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?\s*\{{",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -145,6 +148,7 @@ internal static class RustReferenceExtractor
         EmitEnumVariantTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, enumContainer);
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitStructLiteralInstantiationReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
@@ -882,6 +886,80 @@ internal static class RustReferenceExtractor
             return leaf.Length > 2 && IsRustIdentifierPart(leaf[2]);
 
         return leaf.Length > 0 && char.IsUpper(leaf[0]);
+    }
+
+    private static void EmitStructLiteralInstantiationReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? enumContainer)
+    {
+        if (enumContainer != null || IsRustTypeDeclarationLine(preparedLine))
+            return;
+
+        foreach (Match match in StructLiteralRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = nameGroup.Value;
+            var leafStart = name.LastIndexOf("::", StringComparison.Ordinal);
+            var leaf = leafStart >= 0 ? name[(leafStart + 2)..] : name;
+            var leafOffset = leafStart >= 0 ? leafStart + 2 : 0;
+            if (!IsLikelyRustTypePathLeaf(leaf))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                NormalizeIdentifier(leaf),
+                nameGroup.Index + leafOffset,
+                "instantiate",
+                context,
+                lineNumber,
+                resolveContainerForColumn(nameGroup.Index));
+
+            var argsGroup = match.Groups["args"];
+            if (!argsGroup.Success)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                argsGroup.Value,
+                argsGroup.Index,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(argsGroup.Index));
+        }
+    }
+
+    private static bool IsRustTypeDeclarationLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("pub", StringComparison.Ordinal))
+        {
+            var afterPub = "pub".Length;
+            if (afterPub < trimmed.Length && trimmed[afterPub] == '(')
+            {
+                var closeParen = ReferenceExtractor.FindMatchingChar(trimmed, afterPub, '(', ')');
+                if (closeParen > afterPub)
+                    trimmed = trimmed[(closeParen + 1)..].TrimStart();
+            }
+            else if (afterPub < trimmed.Length && char.IsWhiteSpace(trimmed[afterPub]))
+            {
+                trimmed = trimmed[afterPub..].TrimStart();
+            }
+        }
+
+        return trimmed.StartsWith("struct ", StringComparison.Ordinal)
+               || trimmed.StartsWith("enum ", StringComparison.Ordinal)
+               || trimmed.StartsWith("union ", StringComparison.Ordinal);
     }
 
     private static void EmitImplAndTraitTypeReferences(
