@@ -42,6 +42,7 @@ affected:
 - **Go standalone type-set terms expose approximation types** — constraint terms such as `~[]Element` and `~map[Key]Value` now link their element, key, and value types.
 - **Go package declarations are indexed as namespace symbols** — `package demo` now appears in symbol search, outline, and definition-oriented workflows.
 - **Go multi-name struct fields expose their shared type** — fields such as `Primary, Secondary *Client` now link the shared field type without indexing field names.
+- **Go struct fields with spaced generic types expose all type segments** — fields such as `Owner Repository[Key, Value]` now link the generic type and each concrete argument.
 
 ## 日本語
 
@@ -76,3 +77,4 @@ affected:
 - **Go standalone type-set term の approximation 型を参照として出すようになりました** — `~[]Element` や `~map[Key]Value` のような constraint term から element、key、value 型を辿れるようになりました。
 - **Go package 宣言を namespace symbol として索引するようになりました** — `package demo` が symbol search、outline、definition 系 workflow に現れるようになりました。
 - **Go の複数名 struct field で共有される型を参照として出すようになりました** — `Primary, Secondary *Client` のような field から field 名を索引せずに共有型を辿れるようになりました。
+- **Go struct field のスペース入り generic 型を参照として出すようになりました** — `Owner Repository[Key, Value]` のような field から generic 型と各具体型引数を辿れるようになりました。

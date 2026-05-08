@@ -969,6 +969,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoStandaloneTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameFieldDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoSingleNameFieldDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoChannelElementTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1118,6 +1119,57 @@ internal static class LanguageReferenceExtractionSupport
             return;
 
         EmitGoTypeExpression(line[typeStart..typeEnd], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoSingleNameFieldDeclarationTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+            return;
+
+        var nameStart = cursor;
+        cursor++;
+        while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        if (IsGoStatementKeyword(line[nameStart..cursor]))
+            return;
+
+        var typeStart = SkipWhitespace(line, cursor);
+        if (typeStart >= line.Length || line[typeStart] is ':' or '=' or '(' || !IsGoTypeExpressionStart(line, typeStart))
+            return;
+        if (!IsLikelyGoFieldDeclarationTypeStart(line, typeStart))
+            return;
+
+        var typeEnd = FindGoInlineTypeExpressionEnd(line, typeStart);
+        if (typeEnd <= typeStart)
+            return;
+
+        var afterType = SkipWhitespace(line, typeEnd);
+        if (afterType < line.Length && line[afterType] != '`')
+            return;
+
+        EmitGoTypeExpression(line[typeStart..typeEnd], typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static bool IsLikelyGoFieldDeclarationTypeStart(string line, int typeStart)
+    {
+        if (typeStart >= line.Length || line[typeStart] != '[')
+            return true;
+
+        var close = ReferenceExtractor.FindMatchingChar(line, typeStart, '[', ']');
+        if (close < 0)
+            return false;
+
+        var elementStart = SkipWhitespace(line, close + 1);
+        return elementStart < line.Length && IsGoTypeExpressionStart(line, elementStart);
     }
 
     private static void EmitGoInterfaceTypeSetTermReferences(
@@ -3077,8 +3129,9 @@ internal static class LanguageReferenceExtractionSupport
     }
 
     private static bool IsGoStatementKeyword(string value)
-        => value is "case" or "const" or "default" or "defer" or "else" or "for" or "func"
-            or "go" or "if" or "import" or "package" or "return" or "select" or "switch"
+        => value is "break" or "case" or "const" or "continue" or "default" or "defer"
+            or "else" or "fallthrough" or "for" or "func" or "go" or "goto" or "if"
+            or "import" or "package" or "range" or "return" or "select" or "switch"
             or "type" or "var";
 
     private static bool IsGoSignatureReturnStart(string line, int index)
