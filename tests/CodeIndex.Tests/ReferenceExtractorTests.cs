@@ -20773,6 +20773,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustConstStaticItems_CaptureTypeReferences()
+    {
+        const string content = """
+            const GLOBAL: Arc<User> = Arc::new(User);
+            static mut STATE: Option<State> = None;
+            pub static CACHE: crate::cache::Cache = crate::cache::Cache::new();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Arc" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Option" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "State" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
     {
         const string content = """

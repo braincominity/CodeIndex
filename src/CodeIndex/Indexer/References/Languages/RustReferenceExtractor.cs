@@ -6,6 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class RustReferenceExtractor
 {
     private const string RustIdentifierPattern = @"(?:r#)?[_\p{L}][\w$]*";
+    private static readonly string[] ConstStaticKeywords = ["const", "static"];
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -51,6 +52,7 @@ internal static class RustReferenceExtractor
     {
         EmitFunctionSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitLetTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitConstStaticTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTupleStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -146,6 +148,69 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(typeStart));
         }
+    }
+
+    private static void EmitConstStaticTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var keyword in ConstStaticKeywords)
+        {
+            foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
+            {
+                var declarationStart = keywordIndex + keyword.Length;
+                if (keyword == "static")
+                    declarationStart = SkipOptionalRustMut(preparedLine, declarationStart);
+
+                var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', declarationStart);
+                if (colonIndex < 0)
+                    continue;
+
+                var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', declarationStart);
+                if (assignmentIndex >= 0 && assignmentIndex < colonIndex)
+                    continue;
+
+                var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+                var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
+                if (typeEnd <= typeStart)
+                    continue;
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    preparedLine.Substring(typeStart, typeEnd - typeStart),
+                    typeStart,
+                    "rust",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(typeStart));
+            }
+        }
+    }
+
+    private static int SkipOptionalRustMut(string line, int startIndex)
+    {
+        var index = startIndex;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        if (index + "mut".Length > line.Length
+            || string.CompareOrdinal(line, index, "mut", 0, "mut".Length) != 0)
+        {
+            return startIndex;
+        }
+
+        var afterMut = index + "mut".Length;
+        if (afterMut < line.Length && IsRustIdentifierPart(line[afterMut]))
+            return startIndex;
+
+        return afterMut;
     }
 
     private static void EmitTupleStructFieldTypeReferences(
