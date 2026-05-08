@@ -3535,6 +3535,8 @@ public static partial class SymbolExtractor
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
+        if (lang == "go")
+            AssignGoMethodReceiverContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")

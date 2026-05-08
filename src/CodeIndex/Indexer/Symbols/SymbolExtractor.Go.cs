@@ -480,6 +480,65 @@ public static partial class SymbolExtractor
             && symbol.Name == name);
     }
 
+    private static void AssignGoMethodReceiverContainers(List<SymbolRecord> symbols)
+    {
+        var typeKinds = symbols
+            .Where(symbol => symbol.Kind is "struct" or "interface" or "class")
+            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Kind, StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function"
+                || string.IsNullOrWhiteSpace(symbol.Signature)
+                || !TryGetGoMethodReceiverTypeName(symbol.Signature, out var receiverTypeName))
+            {
+                continue;
+            }
+
+            symbol.ContainerName = receiverTypeName;
+            symbol.ContainerKind = typeKinds.TryGetValue(receiverTypeName, out var kind) ? kind : "class";
+        }
+    }
+
+    private static bool TryGetGoMethodReceiverTypeName(string signature, out string receiverTypeName)
+    {
+        receiverTypeName = string.Empty;
+        var funcIndex = signature.IndexOf("func", StringComparison.Ordinal);
+        if (funcIndex < 0)
+            return false;
+
+        var open = funcIndex + "func".Length;
+        while (open < signature.Length && char.IsWhiteSpace(signature[open]))
+            open++;
+        if (open >= signature.Length || signature[open] != '(')
+            return false;
+
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close <= open + 1)
+            return false;
+
+        var receiver = signature[(open + 1)..close].Trim();
+        if (receiver.Length == 0)
+            return false;
+
+        var typeStart = receiver.LastIndexOfAny([' ', '\t']);
+        var typeText = (typeStart >= 0 ? receiver[(typeStart + 1)..] : receiver).Trim();
+        while (typeText.StartsWith("*", StringComparison.Ordinal))
+            typeText = typeText[1..].TrimStart();
+
+        var genericStart = typeText.IndexOf('[');
+        if (genericStart >= 0)
+            typeText = typeText[..genericStart];
+
+        var dot = typeText.LastIndexOf('.');
+        if (dot >= 0 && dot + 1 < typeText.Length)
+            typeText = typeText[(dot + 1)..];
+
+        receiverTypeName = typeText.Trim();
+        return receiverTypeName.Length > 0;
+    }
+
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         string? blockKind = null;
