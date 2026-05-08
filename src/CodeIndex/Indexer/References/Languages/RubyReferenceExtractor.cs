@@ -26,8 +26,17 @@ internal static class RubyReferenceExtractor
         "require", "require_relative", "raise", "define_method",
     };
 
+    private static readonly HashSet<string> ClassNameOptionCommandNames = new(StringComparer.Ordinal)
+    {
+        "has_many", "has_one", "belongs_to",
+    };
+
     private static readonly Regex CommandTargetTokenRegex = new(
         @"(?<![\w$@])(?<token>:(?:""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|[A-Za-z_]\w*[?!]?)|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*')",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ClassNameOptionRegex = new(
+        @"(?<![\w$@]):?class_name\s*(?::|=>)\s*(?<quote>['""])(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\k<quote>",
         RegexOptions.Compiled);
 
     public static void EmitAdditionalCallReferences(
@@ -100,6 +109,17 @@ internal static class RubyReferenceExtractor
         if (commentIndex >= 0)
             tail = tail[..commentIndex];
 
+        EmitClassNameOptionReferences(
+            name,
+            tail,
+            argsStart,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
         var matchedAny = false;
         foreach (Match match in CommandTargetTokenRegex.Matches(tail))
         {
@@ -162,6 +182,38 @@ internal static class RubyReferenceExtractor
     }
 
     private static bool IsIdentifierStart(char ch) => char.IsLetter(ch) || ch == '_';
+
+    private static void EmitClassNameOptionReferences(
+        string commandName,
+        string tail,
+        int tailStartIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        if (!ClassNameOptionCommandNames.Contains(commandName))
+            return;
+
+        foreach (Match match in ClassNameOptionRegex.Matches(tail))
+        {
+            var name = match.Groups["name"].Value;
+            var tokenIndex = tailStartIndex + match.Groups["name"].Index;
+            var targetContainer = resolveContainerForCall(tokenIndex);
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                tokenIndex,
+                "reference",
+                context,
+                lineNumber,
+                targetContainer);
+        }
+    }
 
     private static bool IsHashOptionKey(string tail, Match match, string rawToken)
     {

@@ -2600,6 +2600,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyAssociationClassNameOption_IndexesClassNameTarget()
+    {
+        const string content = """
+            class Post
+              belongs_to :author, class_name: "User"
+              has_many :line_items, :class_name => 'Orders::LineItem'
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "author" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "line_items" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Post");
+        Assert.Contains(references, reference => reference.SymbolName == "Orders::LineItem" && reference.ContainerName == "Post");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """
