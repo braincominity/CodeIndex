@@ -193,6 +193,9 @@ public static partial class SymbolExtractor
     private static readonly Regex GoValueBlockSpecRegex = new(
         @"^(?<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoLabelRegex = new(
+        @"^(?<name>[A-Za-z_]\w*)\s*:\s*(?!=)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RustUseStartRegex = new(
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1209,6 +1212,7 @@ public static partial class SymbolExtractor
         ],
         ["go"] =
         [
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)(?:\[[^\]\r\n]+\])?\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
@@ -2017,6 +2021,9 @@ public static partial class SymbolExtractor
             {
                 continue;
             }
+            if (lang == "go")
+                TryAddGoLabelSymbol(fileId, line, i, symbols);
+
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
             var matchLine = structuralLine;
@@ -3528,6 +3535,8 @@ public static partial class SymbolExtractor
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
+        if (lang == "go")
+            AssignGoMethodReceiverContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")

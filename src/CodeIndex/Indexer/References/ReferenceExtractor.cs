@@ -2026,6 +2026,9 @@ public static partial class ReferenceExtractor
                         AddCallLikeReference);
                 }
 
+                if (language == "go")
+                    LanguageReferenceExtractionSupport.EmitGoBranchLabelReferences(preparedLine, AddCallLikeReference);
+
                 if (language == "swift")
                     SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
                 else if (language == "kotlin")

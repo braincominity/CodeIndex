@@ -487,6 +487,7 @@ public class SymbolExtractorTests
         var imports = symbols.Where(s => s.Kind == "import").ToList();
 
         Assert.Equal(6, imports.Count);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "demo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
         Assert.Contains(imports, s => s.Name == "\"bytes\"");
         Assert.Contains(imports, s => s.Name == "alias \"fmt\"");
@@ -506,26 +507,62 @@ public class SymbolExtractorTests
 
             const MaxRetries = 3
             const Timeout int = 30
+            const PrimaryStatus, SecondaryStatus = 1, 2
             const (
                 StatusActive = "active"
             )
 
             var ErrNotFound = errors.New("not found")
             var DefaultConfig *Config = &Config{}
+            var Primary, Secondary *Config
 
             func build() {
+                var local, cached *Config
+                const localStatus, cachedStatus = 1, 2
+                var (
+                    localGrouped = 1
+                    cachedGrouped = 2
+                )
+                const (
+                    localGroupedStatus = 1
+                    cachedGroupedStatus = 2
+                )
                 user := User{Name: "alice"}
                 _ = user
             }
+
+            func bracesInText() {
+                _ = "{"
+                _ = `{
+            }`
+                // {
+            }
+
+            const AfterText = 4
+            var AfterTextConfig *Config
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Timeout");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryStatus");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SecondaryStatus");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusActive");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ErrNotFound");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultConfig");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Primary");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterText");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterTextConfig");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cached");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localGrouped");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedGrouped");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localGroupedStatus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cachedGroupedStatus");
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
     }
 
@@ -10710,12 +10747,22 @@ public class SymbolExtractorTests
     {
         // Should detect both regular and method functions
         // 通常関数とメソッド関数の両方を検出する
-        var content = "func NewHandler() *Handler {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}";
+        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}\nfunc (Store[T, U]) Snapshot() {\n}";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Equal(2, symbols.Count);
+        Assert.Equal(5, symbols.Count(s => s.Kind == "function"));
         Assert.Contains(symbols, s => s.Name == "NewHandler");
-        Assert.Contains(symbols, s => s.Name == "ServeHTTP");
+        var regularFunction = Assert.Single(symbols, s => s.Name == "Load");
+        Assert.Null(regularFunction.ContainerName);
+        var method = Assert.Single(symbols, s => s.Name == "ServeHTTP");
+        Assert.Equal("struct", method.ContainerKind);
+        Assert.Equal("Handler", method.ContainerName);
+        var genericMethod = Assert.Single(symbols, s => s.Name == "Save");
+        Assert.Equal("struct", genericMethod.ContainerKind);
+        Assert.Equal("Store", genericMethod.ContainerName);
+        var unnamedGenericMethod = Assert.Single(symbols, s => s.Name == "Snapshot");
+        Assert.Equal("struct", unnamedGenericMethod.ContainerKind);
+        Assert.Equal("Store", unnamedGenericMethod.ContainerName);
     }
 
     [Fact]
@@ -10734,6 +10781,37 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Identity");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NewHandler");
         Assert.Equal(2, symbols.Count(s => s.Kind == "function"));
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsLabels()
+    {
+        var content = """
+            package demo
+
+            func run() {
+            Retry:
+                for {
+                    break Retry
+                }
+
+                item := User{
+                    Retry: true,
+                }
+                value := 1
+                _ = item
+                switch value {
+                case 1:
+                default:
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
+        Assert.Equal(4, label.Line);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
     }
 
     [Fact]

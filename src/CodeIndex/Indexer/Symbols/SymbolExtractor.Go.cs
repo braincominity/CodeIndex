@@ -168,11 +168,166 @@ public static partial class SymbolExtractor
         return true;
     }
 
+    private static bool TryAddGoLabelSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = rawLine.TrimStart();
+        if (trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal)
+            || trimmed.StartsWith("*", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var match = GoLabelRegex.Match(rawLine);
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value;
+        if (IsGoLabelKeyword(name) || HasGoSymbol(symbols, fileId, lineIndex + 1, "function", name))
+            return false;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = match.Groups["name"].Index,
+                EndLine = lineIndex + 1,
+                Signature = name,
+            },
+            rawLine);
+        return true;
+    }
+
+    private static bool IsGoLabelKeyword(string name)
+        => name is "break" or "case" or "chan" or "const" or "continue" or "default" or "defer"
+            or "else" or "fallthrough" or "for" or "func" or "go" or "goto" or "if" or "import"
+            or "interface" or "map" or "package" or "range" or "return" or "select" or "struct"
+            or "switch" or "type" or "var";
+
     private static int CountGoBraceDelta(string text)
     {
         var delta = 0;
         foreach (var ch in text)
         {
+            if (ch == '{')
+                delta++;
+            else if (ch == '}')
+                delta--;
+        }
+
+        return delta;
+    }
+
+    private static int CountGoCodeBraceDelta(string text, ref bool inBlockComment, ref bool inRawString)
+    {
+        var delta = 0;
+        var inString = false;
+        var inRune = false;
+        var escaped = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (inRawString)
+            {
+                if (ch == '`')
+                    inRawString = false;
+
+                continue;
+            }
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                    inString = false;
+
+                continue;
+            }
+
+            if (inRune)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    inRune = false;
+
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+                break;
+
+            if (ch == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inRawString = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inRune = true;
+                continue;
+            }
+
             if (ch == '{')
                 delta++;
             else if (ch == '}')
@@ -433,11 +588,97 @@ public static partial class SymbolExtractor
             && symbol.Name == name);
     }
 
+    private static void AssignGoMethodReceiverContainers(List<SymbolRecord> symbols)
+    {
+        var typeKinds = symbols
+            .Where(symbol => symbol.Kind is "struct" or "interface" or "class")
+            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Kind, StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function"
+                || string.IsNullOrWhiteSpace(symbol.Signature)
+                || !TryGetGoMethodReceiverTypeName(symbol.Signature, out var receiverTypeName))
+            {
+                continue;
+            }
+
+            symbol.ContainerName = receiverTypeName;
+            symbol.ContainerKind = typeKinds.TryGetValue(receiverTypeName, out var kind) ? kind : "class";
+        }
+    }
+
+    private static bool TryGetGoMethodReceiverTypeName(string signature, out string receiverTypeName)
+    {
+        receiverTypeName = string.Empty;
+        var funcIndex = signature.IndexOf("func", StringComparison.Ordinal);
+        if (funcIndex < 0)
+            return false;
+
+        var open = funcIndex + "func".Length;
+        while (open < signature.Length && char.IsWhiteSpace(signature[open]))
+            open++;
+        if (open >= signature.Length || signature[open] != '(')
+            return false;
+
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close <= open + 1)
+            return false;
+
+        var receiver = signature[(open + 1)..close].Trim();
+        if (receiver.Length == 0)
+            return false;
+
+        var typeText = receiver;
+        if (IsGoSymbolIdentifierStart(receiver[0]))
+        {
+            var cursor = 1;
+            while (cursor < receiver.Length && IsGoSymbolIdentifierPart(receiver[cursor]))
+                cursor++;
+
+            var afterReceiverName = SkipGoSymbolWhitespace(receiver, cursor);
+            if (afterReceiverName > cursor && afterReceiverName < receiver.Length)
+                typeText = receiver[afterReceiverName..];
+        }
+
+        typeText = typeText.Trim();
+        while (typeText.StartsWith("*", StringComparison.Ordinal))
+            typeText = typeText[1..].TrimStart();
+
+        var genericStart = typeText.IndexOf('[');
+        if (genericStart >= 0)
+            typeText = typeText[..genericStart];
+
+        var dot = typeText.LastIndexOf('.');
+        if (dot >= 0 && dot + 1 < typeText.Length)
+            typeText = typeText[(dot + 1)..];
+
+        receiverTypeName = typeText.Trim();
+        return receiverTypeName.Length > 0;
+    }
+
+    private static int SkipGoSymbolWhitespace(string text, int start)
+    {
+        while (start < text.Length && char.IsWhiteSpace(text[start]))
+            start++;
+        return start;
+    }
+
+    private static bool IsGoSymbolIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsGoSymbolIdentifierPart(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
+
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         string? blockKind = null;
         ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
+        var goBlockDepth = 0;
+        var goBlockInBlockComment = false;
+        var goBlockInRawString = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -449,6 +690,14 @@ public static partial class SymbolExtractor
                 typeBodyDepth += CountGoBraceDelta(line);
                 if (typeBodyDepth < 0)
                     typeBodyDepth = 0;
+                continue;
+            }
+
+            if (goBlockDepth > 0)
+            {
+                goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
+                if (goBlockDepth < 0)
+                    goBlockDepth = 0;
                 continue;
             }
 
@@ -496,10 +745,22 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (trimmed.StartsWith("const", StringComparison.Ordinal))
+            {
+                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["const".Length..].TrimStart());
+                continue;
+            }
+
             if (trimmed.StartsWith("var", StringComparison.Ordinal)
                 && trimmed["var".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
             {
                 blockKind = "var";
+                continue;
+            }
+
+            if (trimmed.StartsWith("var", StringComparison.Ordinal))
+            {
+                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["var".Length..].TrimStart());
                 continue;
             }
 
@@ -508,6 +769,10 @@ public static partial class SymbolExtractor
                 TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
                 continue;
             }
+
+            goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
+            if (goBlockDepth < 0)
+                goBlockDepth = 0;
         }
     }
 

@@ -1,0 +1,96 @@
+---
+category: changed
+affected:
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
+---
+
+## English
+
+- **Go generic function constraints are indexed as type references** — `func Decode[T WireMessage](...)` now surfaces `WireMessage` in reference search and inspect output.
+- **Go generic type constraints are indexed as type references** — `type Cache[T EntityConstraint] ...` now surfaces `EntityConstraint` in reference search and inspect output.
+- **Go method receiver types are indexed as type references** — `func (h *Handler) Serve(...)` now links `Handler` from reference search and inspect output.
+- **Go interface method signatures expose parameter and return types** — interface members such as `Handle(ctx Context) Response` now link `Context` and `Response`.
+- **Go multi-name value declarations expose their shared type** — declarations such as `var primary, secondary *Client` now link `Client`.
+- **Go embedded field types are indexed as type references** — embedded fields such as `*BaseStore` and `audit.Logger` now show up in reference search.
+- **Go builtin allocation type arguments are indexed as type references** — `make([]User, 0)` and `new(Client)` now link `User` and `Client` without turning `make` or `new` into calls.
+- **Go type assertions are indexed as type references** — `value.(User)` and `value.(*Admin)` now link the asserted types while ignoring the `.(type)` sentinel.
+- **Go function literal signatures expose parameter and return types** — callbacks such as `func(ctx Context) Result` now link `Context` and `Result`.
+- **Go generic call type arguments are indexed as type references** — call sites such as `Decode[User]()` and `Map[model.Event, Result]()` now link their concrete type arguments.
+- **Go function type declarations expose parameter and return types** — declarations such as `type Handler func(Request) Response` and `Callback func(Context) Result` now link their signature types.
+- **Go channel type declarations expose element types** — directional channel declarations such as `<-chan Event` and `chan<- Command` now link `Event` and `Command`.
+- **Go generic composite literals are indexed with their type arguments** — literals such as `Cache[Entry]{}` and `model.Set[Key, Value]{}` now link the instantiated type and concrete type arguments.
+- **Go map composite literals expose key and value types** — literals such as `map[Key]Value{}` and `map[model.Tenant]*Entry{}` now link both sides of the map type.
+- **Go parenthesized type conversions are indexed as type references** — idioms such as `(*Concrete)(nil)` and `(model.ID)(raw)` now link the converted type.
+- **Go method expressions expose receiver types** — expressions such as `Handler.Serve`, `(*Worker).Run`, and `model.User.String` now link the receiver type.
+- **Go generic instantiations without calls expose type arguments** — function values such as `Decode[User]` and `stream.Map[model.Event, Result]` now link their concrete type arguments.
+- **Go interface type sets expose union term types** — constraint terms such as `~CustomID | External` and `model.Token | ~Alias` now link custom type-set members.
+- **Go labels are indexed as navigation symbols** — labels such as `Retry:` now appear in symbol search and definition-oriented workflows.
+- **Go branch statements link to label symbols** — `goto Retry`, `break Retry`, and `continue Retry` now emit label references for graph workflows.
+- **Go type switch cases expose pointer and composite case types** — `case *Admin`, `case []Guest`, and `case map[Key]Value` now link their type case entries without indexing value-switch constants.
+- **Go slice and array composite literals expose element types** — literals such as `[]User{}`, `[3]*Widget{}`, and `[...]model.Event{}` now link their element types.
+- **Go composite type conversions are indexed as type references** — conversions such as `[]User(raw)`, `map[Key]Value(raw)`, and `chan Event(raw)` now link their target types.
+- **Go inline struct fields expose field types** — anonymous forms such as `struct{ ID UserID; Owner *User }{}` now link `UserID` and `User` without indexing field names.
+- **Go inline interface members expose signature types** — anonymous forms such as `interface{ Handle(Context) Result; io.Reader }` now link method parameter, return, and embedded interface types.
+- **Go multi-pointer parenthesized conversions expose converted types** — conversions such as `(**Node)(nil)` now link the underlying pointed-to type.
+- **Go parenthesized composite conversions expose converted types** — conversions such as `([]User)(raw)` and `(map[Key]Value)(raw)` now link their target types.
+- **Go generic method expressions expose receiver type arguments** — expressions such as `Repository[User].Find` and `(*Store[Entry]).Save` now link both receiver and type argument symbols.
+- **Go standalone type-set terms expose approximation types** — constraint terms such as `~[]Element` and `~map[Key]Value` now link their element, key, and value types.
+- **Go package declarations are indexed as namespace symbols** — `package demo` now appears in symbol search, outline, and definition-oriented workflows.
+- **Go multi-name struct fields expose their shared type** — fields such as `Primary, Secondary *Client` now link the shared field type without indexing field names.
+- **Go struct fields with spaced generic types expose all type segments** — fields such as `Owner Repository[Key, Value]` now link the generic type and each concrete argument.
+- **Go var/const declarations with spaced generic types expose all type segments** — declarations such as `var repo Repository[Key, Value]` now link the explicit generic type.
+- **Go type specs with spaced generic targets expose all type segments** — declarations such as `type Repo Repository[Key, Value]` now link the target type and arguments.
+- **Go top-level multi-name var declarations index every property symbol** — `var Primary, Secondary *Config` now exposes both names to symbol search and definition workflows.
+- **Go top-level multi-name const declarations index every property symbol** — `const PrimaryStatus, SecondaryStatus = 1, 2` now exposes both names to symbol search and definition workflows.
+- **Go method symbols are attributed to receiver type containers** — `func (h *Handler) ServeHTTP(...)` now appears under `Handler` in symbol-oriented workflows.
+- **Go generic receiver method containers tolerate spaced type parameters** — `func (s *Store[T, U]) Save(...)` now stays attributed to `Store`.
+- **Go unnamed generic receiver methods keep their type container** — `func (Store[T, U]) Snapshot()` now stays attributed to `Store`.
+- **Go local grouped value declarations no longer pollute package symbols** — function-local `var (...)` and `const (...)` blocks are not indexed as top-level properties.
+
+## 日本語
+
+- **Go の generic function 制約を型参照として索引するようになりました** — `func Decode[T WireMessage](...)` から `WireMessage` が reference search と inspect 出力に現れるようになりました。
+- **Go の generic type 制約を型参照として索引するようになりました** — `type Cache[T EntityConstraint] ...` から `EntityConstraint` が reference search と inspect 出力に現れるようになりました。
+- **Go method receiver の型を型参照として索引するようになりました** — `func (h *Handler) Serve(...)` から `Handler` が reference search と inspect 出力で辿れるようになりました。
+- **Go interface method signature の引数型と戻り値型を参照として出すようになりました** — `Handle(ctx Context) Response` のような interface member から `Context` と `Response` を辿れるようになりました。
+- **Go の複数名 value 宣言で共有される型を参照として出すようになりました** — `var primary, secondary *Client` のような宣言から `Client` を辿れるようになりました。
+- **Go の embedded field 型を型参照として索引するようになりました** — `*BaseStore` や `audit.Logger` のような embedded field が reference search に現れるようになりました。
+- **Go builtin allocation の型引数を型参照として索引するようになりました** — `make([]User, 0)` や `new(Client)` から `make` / `new` を call にせず `User` と `Client` を辿れるようになりました。
+- **Go type assertion を型参照として索引するようになりました** — `value.(User)` や `value.(*Admin)` から assertion 対象型を辿れるようにしつつ、`.(type)` sentinel は無視します。
+- **Go function literal signature の引数型と戻り値型を参照として出すようになりました** — `func(ctx Context) Result` のような callback から `Context` と `Result` を辿れるようになりました。
+- **Go generic call の型引数を型参照として索引するようになりました** — `Decode[User]()` や `Map[model.Event, Result]()` のような call site から具体型引数を辿れるようになりました。
+- **Go function type 宣言の引数型と戻り値型を参照として出すようになりました** — `type Handler func(Request) Response` や `Callback func(Context) Result` のような宣言から signature 内の型を辿れるようになりました。
+- **Go channel type 宣言の要素型を参照として出すようになりました** — `<-chan Event` や `chan<- Command` のような方向付き channel 宣言から `Event` と `Command` を辿れるようになりました。
+- **Go generic composite literal を型引数付きで索引するようになりました** — `Cache[Entry]{}` や `model.Set[Key, Value]{}` のような literal から生成型と具体型引数を辿れるようになりました。
+- **Go map composite literal の key/value 型を参照として出すようになりました** — `map[Key]Value{}` や `map[model.Tenant]*Entry{}` のような literal から map 型の両側を辿れるようになりました。
+- **Go の parenthesized type conversion を型参照として索引するようになりました** — `(*Concrete)(nil)` や `(model.ID)(raw)` のような idiom から変換対象型を辿れるようになりました。
+- **Go method expression の receiver 型を参照として出すようになりました** — `Handler.Serve`、`(*Worker).Run`、`model.User.String` のような expression から receiver 型を辿れるようになりました。
+- **Go の call しない generic instantiation でも型引数を参照として出すようになりました** — `Decode[User]` や `stream.Map[model.Event, Result]` のような関数値から具体型引数を辿れるようになりました。
+- **Go interface type set の union term 型を参照として出すようになりました** — `~CustomID | External` や `model.Token | ~Alias` のような constraint term から custom type-set member を辿れるようになりました。
+- **Go label を navigation symbol として索引するようになりました** — `Retry:` のような label が symbol search や definition 系 workflow に現れるようになりました。
+- **Go branch statement から label symbol へ参照を張るようになりました** — `goto Retry`、`break Retry`、`continue Retry` が graph workflow 用の label reference を出すようになりました。
+- **Go type switch case の pointer / composite 型を参照として出すようになりました** — `case *Admin`、`case []Guest`、`case map[Key]Value` が value switch の定数 case を索引せずに型 case entry を辿れるようになりました。
+- **Go slice / array composite literal の要素型を参照として出すようになりました** — `[]User{}`、`[3]*Widget{}`、`[...]model.Event{}` のような literal から要素型を辿れるようになりました。
+- **Go composite type conversion を型参照として索引するようになりました** — `[]User(raw)`、`map[Key]Value(raw)`、`chan Event(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go inline struct field の型を参照として出すようになりました** — `struct{ ID UserID; Owner *User }{}` のような anonymous form から field 名ではなく `UserID` と `User` を辿れるようになりました。
+- **Go inline interface member の signature 型を参照として出すようになりました** — `interface{ Handle(Context) Result; io.Reader }` のような anonymous form から method 引数、戻り値、embedded interface 型を辿れるようになりました。
+- **Go の multi-pointer parenthesized conversion で変換対象型を参照として出すようになりました** — `(**Node)(nil)` のような conversion から pointer の先の型を辿れるようになりました。
+- **Go の parenthesized composite conversion で変換対象型を参照として出すようになりました** — `([]User)(raw)` や `(map[Key]Value)(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go generic method expression の receiver 型引数を参照として出すようになりました** — `Repository[User].Find` や `(*Store[Entry]).Save` のような expression から receiver と型引数の両方を辿れるようになりました。
+- **Go standalone type-set term の approximation 型を参照として出すようになりました** — `~[]Element` や `~map[Key]Value` のような constraint term から element、key、value 型を辿れるようになりました。
+- **Go package 宣言を namespace symbol として索引するようになりました** — `package demo` が symbol search、outline、definition 系 workflow に現れるようになりました。
+- **Go の複数名 struct field で共有される型を参照として出すようになりました** — `Primary, Secondary *Client` のような field から field 名を索引せずに共有型を辿れるようになりました。
+- **Go struct field のスペース入り generic 型を参照として出すようになりました** — `Owner Repository[Key, Value]` のような field から generic 型と各具体型引数を辿れるようになりました。
+- **Go var/const 宣言のスペース入り generic 型を参照として出すようになりました** — `var repo Repository[Key, Value]` のような宣言から明示された generic 型を辿れるようになりました。
+- **Go type spec のスペース入り generic target を参照として出すようになりました** — `type Repo Repository[Key, Value]` のような宣言から target 型と型引数を辿れるようになりました。
+- **Go top-level の複数名 var 宣言で全 property symbol を索引するようになりました** — `var Primary, Secondary *Config` から両方の名前を symbol search と definition workflow で辿れるようになりました。
+- **Go top-level の複数名 const 宣言で全 property symbol を索引するようになりました** — `const PrimaryStatus, SecondaryStatus = 1, 2` から両方の名前を symbol search と definition workflow で辿れるようになりました。
+- **Go method symbol を receiver 型 container に帰属させるようになりました** — `func (h *Handler) ServeHTTP(...)` が symbol 系 workflow で `Handler` 配下に現れるようになりました。
+- **Go generic receiver method の container がスペース入り型パラメータに対応しました** — `func (s *Store[T, U]) Save(...)` が `Store` 配下に帰属し続けるようになりました。
+- **Go unnamed generic receiver method が型 container を維持するようになりました** — `func (Store[T, U]) Snapshot()` が `Store` 配下に帰属し続けるようになりました。
+- **Go local grouped value 宣言が package symbol を汚さないようになりました** — 関数内の `var (...)` / `const (...)` block を top-level property として索引しないようになりました。
