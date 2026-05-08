@@ -2536,6 +2536,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyAutoload_IndexesConstantTarget()
+    {
+        const string content = """
+            module Registry
+              autoload :User, "models/user"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "autoload" && reference.ContainerName == "Registry");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Registry");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """
