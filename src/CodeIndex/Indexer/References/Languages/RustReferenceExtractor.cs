@@ -109,6 +109,7 @@ internal static class RustReferenceExtractor
         EmitTupleStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitEnumVariantTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, enumContainer);
+        EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
@@ -593,6 +594,43 @@ internal static class RustReferenceExtractor
             && line[startIndex] == 'r'
             && line[startIndex + 1] == '#'
             && IsRustIdentifierPart(line[startIndex + 2]);
+    }
+
+    private static void EmitAsCastTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (trimmed.StartsWith("use ", StringComparison.Ordinal)
+            || trimmed.StartsWith("pub use ", StringComparison.Ordinal)
+            || trimmed.StartsWith("extern crate ", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
+        {
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, asIndex + "as".Length);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, typeEnd - typeStart),
+                typeStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+        }
     }
 
     private static void EmitImplAndTraitTypeReferences(
