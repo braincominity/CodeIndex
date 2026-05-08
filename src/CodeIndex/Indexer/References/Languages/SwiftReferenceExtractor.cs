@@ -36,6 +36,7 @@ internal static class SwiftReferenceExtractor
         EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCompilerDirectiveRootTypeReferences("selector", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCompilerDirectiveRootTypeReferences("keyPath", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitAttributeGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -92,6 +93,75 @@ internal static class SwiftReferenceExtractor
                 resolveContainerForColumn(rootStart));
             slashIndex = rootEnd;
         }
+    }
+
+    private static void EmitAttributeGenericArgumentReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var atIndex = 0; atIndex < preparedLine.Length; atIndex++)
+        {
+            if (preparedLine[atIndex] != '@')
+                continue;
+
+            var nameStart = atIndex + 1;
+            if (nameStart >= preparedLine.Length || !IsSwiftIdentifierStart(preparedLine[nameStart]))
+                continue;
+
+            var nameEnd = ReadSwiftQualifiedIdentifierEnd(preparedLine, nameStart);
+            var openAngle = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, nameEnd);
+            if (openAngle >= preparedLine.Length || preparedLine[openAngle] != '<')
+                continue;
+
+            var closeAngle = ReferenceExtractor.FindMatchingChar(preparedLine, openAngle, '<', '>');
+            if (closeAngle < 0)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitCommaSeparatedTypeListReferences(
+                preparedLine,
+                openAngle + 1,
+                closeAngle,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+            atIndex = closeAngle;
+        }
+    }
+
+    private static int ReadSwiftQualifiedIdentifierEnd(string preparedLine, int start)
+    {
+        var index = start;
+        while (index < preparedLine.Length)
+        {
+            if (IsSwiftIdentifierPart(preparedLine[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (preparedLine[index] == '.'
+                && index + 1 < preparedLine.Length
+                && IsSwiftIdentifierStart(preparedLine[index + 1]))
+            {
+                index += 2;
+                while (index < preparedLine.Length && IsSwiftIdentifierPart(preparedLine[index]))
+                    index++;
+                continue;
+            }
+
+            break;
+        }
+
+        return index;
     }
 
     private static void EmitCompilerDirectiveRootTypeReferences(

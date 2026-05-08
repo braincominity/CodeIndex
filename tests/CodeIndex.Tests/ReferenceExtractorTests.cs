@@ -17677,6 +17677,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftAttributeGenericArguments_AreTypeReferences()
+    {
+        const string content = """
+            struct UserViewModel {}
+            struct Failure {}
+            struct Loader<Value, Error> {}
+
+            @propertyWrapper
+            struct Relationship<Value> {
+                var wrappedValue: Value
+            }
+
+            struct Screen {
+                @Relationship<UserViewModel> var viewModel
+                @Relationship<Loader<UserViewModel, Failure>> var loader
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "UserViewModel"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Loader"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Relationship"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ScalaBlockCallSites_AreReferenced()
     {
         // issue #277: Scala block-call sites use `name { ... }` rather than a trailing `(`,
