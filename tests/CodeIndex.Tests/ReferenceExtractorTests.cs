@@ -20912,6 +20912,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTypeModifiers_DoNotBecomeTypeReferences()
+    {
+        const string content = """
+            fn make() -> impl Future<Output = User> {
+                todo!()
+            }
+
+            struct Service {
+                handler: Box<dyn Handler + Send>,
+                raw: *const Marker,
+                mutable: *mut State,
+                text: &'static str,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Future" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Send" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "State" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(
+            references,
+            r => r.ReferenceKind == "type_reference"
+                && r.SymbolName is "impl" or "dyn" or "const" or "mut" or "ref" or "static");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

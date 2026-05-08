@@ -615,8 +615,8 @@ public static partial class ReferenceExtractor
         },
         ["rust"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "Self", "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
-            "str", "u8", "u16", "u32", "u64", "u128", "usize",
+            "Self", "bool", "char", "const", "dyn", "f32", "f64", "i8", "i16", "i32", "i64", "i128",
+            "impl", "isize", "mut", "ref", "static", "str", "u8", "u16", "u32", "u64", "u128", "usize",
         },
         ["c"] = new HashSet<string>(StringComparer.Ordinal)
         {
