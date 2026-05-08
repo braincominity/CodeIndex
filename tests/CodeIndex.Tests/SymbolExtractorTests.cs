@@ -685,6 +685,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsModuleImports()
+    {
+        var content = """
+            export import std;
+            import std.compat;
+            import :partition;
+            import <vector>;
+            import "detail/config.hpp";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std.compat");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":partition");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "vector");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "detail/config.hpp");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
