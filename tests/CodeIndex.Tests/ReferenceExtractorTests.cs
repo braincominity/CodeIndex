@@ -17522,6 +17522,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftGenericStaticMemberExpressions_AreTypeReferences()
+    {
+        const string content = """
+            struct User {}
+            struct Failure {}
+            enum Result<Value, Error> {
+                case success(Value)
+            }
+
+            func configure() {
+                let value = Result<User, Failure>.success(User())
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Failure"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "configure");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "success"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_SwiftCatchPatternRoots_AreTypeReferences()
     {
         const string content = """

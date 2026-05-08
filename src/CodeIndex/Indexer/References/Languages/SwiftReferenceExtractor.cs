@@ -31,6 +31,7 @@ internal static class SwiftReferenceExtractor
         EmitKeyPathRootTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitMacroGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericInvocationArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGenericStaticMemberTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -495,6 +496,61 @@ internal static class SwiftReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn);
+            index = closeAngle;
+        }
+    }
+
+    private static void EmitGenericStaticMemberTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var index = 0; index < preparedLine.Length; index++)
+        {
+            if (!LooksLikeSwiftTypeExpressionStart(preparedLine[index]))
+                continue;
+
+            var nameStart = index;
+            index++;
+            while (index < preparedLine.Length && IsSwiftIdentifierPart(preparedLine[index]))
+                index++;
+
+            if (HasSwiftDeclarationKeywordBefore(preparedLine, nameStart)
+                || index >= preparedLine.Length
+                || preparedLine[index] != '<')
+            {
+                index--;
+                continue;
+            }
+
+            var closeAngle = ReferenceExtractor.FindMatchingChar(preparedLine, index, '<', '>');
+            if (closeAngle < 0)
+            {
+                index--;
+                continue;
+            }
+
+            var afterGeneric = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, closeAngle + 1);
+            if (afterGeneric >= preparedLine.Length || preparedLine[afterGeneric] != '.')
+            {
+                index = closeAngle;
+                continue;
+            }
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(nameStart, closeAngle - nameStart + 1),
+                nameStart,
+                "swift",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(nameStart));
             index = closeAngle;
         }
     }
