@@ -1666,6 +1666,31 @@ public static partial class ReferenceExtractor
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
+            if (language == "rust"
+                && c == 'r'
+                && i + 2 < expression.Length
+                && expression[i + 1] == '#'
+                && IsJavaIdentifierStart(expression[i + 2]))
+            {
+                var rustSegmentStart = i;
+                i += 2;
+                var rawNameStart = i;
+                i++;
+                while (i < expression.Length && IsJavaIdentifierPart(expression[i]))
+                    i++;
+
+                var rustSegment = expression.Substring(rawNameStart, i - rawNameStart);
+                if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
+                {
+                    i++;
+                    continue;
+                }
+
+                AddReference(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, "type_reference", context, lineNumber, container);
+                i--;
+                continue;
+            }
+
             if (language is "java" or "kotlin" or "swift" && c == '@')
             {
                 i = SkipJavaAnnotation(expression, i);
@@ -1703,6 +1728,12 @@ public static partial class ReferenceExtractor
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
+            if (language == "rust" && segmentStart > 0 && expression[segmentStart - 1] == '\'')
+            {
+                i--;
+                continue;
+            }
+
             var rawSegment = expression.Substring(segmentStart, i - segmentStart);
             var isEscapedCSharpIdentifier = language == "csharp" && rawSegment.Length > 0 && rawSegment[0] == '@';
             var segment = rawSegment;
@@ -1710,6 +1741,12 @@ public static partial class ReferenceExtractor
                 segment = NormalizeCSharpIdentifier(rawSegment);
 
             if (language == "kotlin" && KotlinTypeProjectionModifierNames.Contains(segment))
+            {
+                i--;
+                continue;
+            }
+
+            if (language == "rust" && IsRustAssociatedTypeBindingKey(expression, i))
             {
                 i--;
                 continue;
@@ -1736,6 +1773,15 @@ public static partial class ReferenceExtractor
             AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments);
             i--;
         }
+    }
+
+    private static bool IsRustAssociatedTypeBindingKey(string expression, int segmentEnd)
+    {
+        var index = segmentEnd;
+        while (index < expression.Length && char.IsWhiteSpace(expression[index]))
+            index++;
+
+        return index < expression.Length && expression[index] == '=';
     }
 
     private static bool IsSwiftTupleElementLabelSegment(string expression, int segmentStart, int segmentEnd)

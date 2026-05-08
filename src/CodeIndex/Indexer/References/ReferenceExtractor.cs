@@ -617,8 +617,8 @@ public static partial class ReferenceExtractor
         },
         ["rust"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "Self", "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
-            "str", "u8", "u16", "u32", "u64", "u128", "usize",
+            "Self", "bool", "char", "const", "dyn", "f32", "f64", "for", "i8", "i16", "i32", "i64", "i128",
+            "impl", "isize", "mut", "ref", "static", "str", "u8", "u16", "u32", "u64", "u128", "usize",
         },
         ["c"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1000,6 +1000,12 @@ public static partial class ReferenceExtractor
                              (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        var rustEnumCandidates = language == "rust"
+            ? symbols
+                .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+                .ToList()
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -1534,6 +1540,9 @@ public static partial class ReferenceExtractor
             }
             else if (language == "rust")
             {
+                var rustEnumContainer = rustEnumCandidates != null
+                    ? FindInnermostContainer(rustEnumCandidates, lineNumber)
+                    : null;
                 RustReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     references,
@@ -1542,7 +1551,8 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    container);
+                    container,
+                    rustEnumContainer);
             }
             else if (language == "c")
                 CReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
@@ -1820,6 +1830,8 @@ public static partial class ReferenceExtractor
 
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
+                if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
+                    return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -1847,6 +1859,12 @@ public static partial class ReferenceExtractor
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return true;
+                }
+                if (language == "rust"
+                    && RustReferenceExtractor.IsLikelyInstantiationCallName(name, normalizedName, preparedLine, callIndex))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
                     return true;
@@ -2082,6 +2100,7 @@ public static partial class ReferenceExtractor
             if (language == "rust")
             {
                 RustReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
+                RustReferenceExtractor.EmitAttributeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
             }
 
             if (language == "csharp")

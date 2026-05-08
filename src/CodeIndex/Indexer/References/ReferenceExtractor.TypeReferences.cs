@@ -1848,6 +1848,8 @@ public static partial class ReferenceExtractor
         var result = lang == "python"
             ? MaskPythonSingleLineFStrings(line)
             : line;
+        if (lang == "rust")
+            result = MaskRustLifetimeTokens(result);
         if (lang != "cobol")
         {
             var stringLiteralRegex = lang == "kotlin"
@@ -1905,6 +1907,38 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static string MaskRustLifetimeTokens(string line)
+    {
+        var quoteIndex = line.IndexOf('\'');
+        if (quoteIndex < 0)
+            return line;
+
+        var chars = line.ToCharArray();
+        for (var index = quoteIndex; index + 1 < chars.Length; index++)
+        {
+            if (chars[index] != '\'')
+                continue;
+
+            var next = chars[index + 1];
+            if (next != '_' && !char.IsLetter(next))
+                continue;
+
+            var end = index + 2;
+            while (end < chars.Length && IsJavaIdentifierPart(chars[end]))
+                end++;
+
+            if (end == index + 2 && end < chars.Length && chars[end] == '\'')
+                continue;
+
+            for (var maskIndex = index; maskIndex < end; maskIndex++)
+                chars[maskIndex] = ' ';
+
+            index = end - 1;
+        }
+
+        return new string(chars);
     }
 
     private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
