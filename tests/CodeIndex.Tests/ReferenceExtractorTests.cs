@@ -7553,6 +7553,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoMultiNameValueDeclarations_CapturesSharedType()
+    {
+        const string content = """
+            package main
+
+            var primary, secondary *Client
+            const first, second NamedConst = 1, 2
+
+            func configure() {
+                var local, cached *Session
+                assigned, other := load()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "NamedConst" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Session" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "load" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

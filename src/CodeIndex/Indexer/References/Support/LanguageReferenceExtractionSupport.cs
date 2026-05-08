@@ -950,6 +950,7 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
@@ -1012,6 +1013,63 @@ internal static class LanguageReferenceExtractionSupport
             return;
 
         EmitGoTypeParameterConstraints(line, cursor, close + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoMultiNameValueDeclarationTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (StartsWithKeyword(line, cursor, "var"))
+            cursor = SkipWhitespace(line, cursor + "var".Length);
+        else if (StartsWithKeyword(line, cursor, "const"))
+            cursor = SkipWhitespace(line, cursor + "const".Length);
+
+        if (!TryReadGoIdentifierList(line, ref cursor, requireComma: true))
+            return;
+
+        var typeStart = SkipWhitespace(line, cursor);
+        if (typeStart >= line.Length || line[typeStart] == '=' || line.AsSpan(typeStart).StartsWith(":=", StringComparison.Ordinal))
+            return;
+
+        var typeEnd = typeStart;
+        while (typeEnd < line.Length && line[typeEnd] != '=' && line[typeEnd] != '{')
+            typeEnd++;
+
+        var expression = line[typeStart..typeEnd].TrimEnd();
+        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static bool TryReadGoIdentifierList(string line, ref int cursor, bool requireComma)
+    {
+        var count = 0;
+        while (cursor < line.Length)
+        {
+            cursor = SkipWhitespace(line, cursor);
+            if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+                break;
+
+            cursor++;
+            while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+                cursor++;
+
+            count++;
+            var afterName = SkipWhitespace(line, cursor);
+            if (afterName >= line.Length || line[afterName] != ',')
+            {
+                cursor = afterName;
+                break;
+            }
+
+            cursor = afterName + 1;
+        }
+
+        return requireComma ? count > 1 : count > 0;
     }
 
     private static bool StartsWithKeyword(string line, int index, string keyword)
