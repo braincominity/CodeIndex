@@ -7732,6 +7732,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoChannelTypeDeclarations_CapturesElementTypes()
+    {
+        const string content = """
+            package main
+
+            var updates <-chan Event
+            var commands chan<- Command
+            type Stream chan Result
+
+            type Broker struct {
+                Inputs chan<- *Payload
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Command" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "chan" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

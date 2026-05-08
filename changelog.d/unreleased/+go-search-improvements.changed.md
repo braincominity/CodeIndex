@@ -18,6 +18,7 @@ affected:
 - **Go function literal signatures expose parameter and return types** — callbacks such as `func(ctx Context) Result` now link `Context` and `Result`.
 - **Go generic call type arguments are indexed as type references** — call sites such as `Decode[User]()` and `Map[model.Event, Result]()` now link their concrete type arguments.
 - **Go function type declarations expose parameter and return types** — declarations such as `type Handler func(Request) Response` and `Callback func(Context) Result` now link their signature types.
+- **Go channel type declarations expose element types** — directional channel declarations such as `<-chan Event` and `chan<- Command` now link `Event` and `Command`.
 
 ## 日本語
 
@@ -32,3 +33,4 @@ affected:
 - **Go function literal signature の引数型と戻り値型を参照として出すようになりました** — `func(ctx Context) Result` のような callback から `Context` と `Result` を辿れるようになりました。
 - **Go generic call の型引数を型参照として索引するようになりました** — `Decode[User]()` や `Map[model.Event, Result]()` のような call site から具体型引数を辿れるようになりました。
 - **Go function type 宣言の引数型と戻り値型を参照として出すようになりました** — `type Handler func(Request) Response` や `Callback func(Context) Result` のような宣言から signature 内の型を辿れるようになりました。
+- **Go channel type 宣言の要素型を参照として出すようになりました** — `<-chan Event` や `chan<- Command` のような方向付き channel 宣言から `Event` と `Command` を辿れるようになりました。

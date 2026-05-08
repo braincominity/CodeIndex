@@ -962,6 +962,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoEmbeddedFieldType(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoBuiltinTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoChannelElementTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoTypeAssertionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionLiteralSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoFunctionTypeSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1195,6 +1196,41 @@ internal static class LanguageReferenceExtractionSupport
 
             var trimStart = group.Value.IndexOf(expression, StringComparison.Ordinal);
             EmitGoTypeExpression(expression, group.Index + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitGoChannelElementTypeReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var chanIndex = line.IndexOf("chan", searchStart, StringComparison.Ordinal);
+            if (chanIndex < 0)
+                return;
+
+            searchStart = chanIndex + "chan".Length;
+            if (!IsIdentifierAt(line, chanIndex, "chan"))
+                continue;
+
+            var elementStart = SkipWhitespace(line, searchStart);
+            if (elementStart + 1 < line.Length && line[elementStart] == '<' && line[elementStart + 1] == '-')
+                elementStart = SkipWhitespace(line, elementStart + 2);
+
+            if (elementStart >= line.Length || !IsGoTypeExpressionStart(line, elementStart))
+                continue;
+
+            var elementEnd = FindGoInlineTypeExpressionEnd(line, elementStart);
+            if (elementEnd <= elementStart)
+                continue;
+
+            EmitGoTypeExpression(line[elementStart..elementEnd], elementStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
     }
 
@@ -2019,7 +2055,52 @@ internal static class LanguageReferenceExtractionSupport
         if (index >= line.Length)
             return false;
 
-        return line[index] is '(' or '*' or '[' or '<' || IsIdentifierStart(line[index]);
+        return line[index] == '(' || IsGoTypeExpressionStart(line, index);
+    }
+
+    private static bool IsGoTypeExpressionStart(string line, int index)
+    {
+        if (index >= line.Length)
+            return false;
+
+        return line[index] is '*' or '[' or '~' or '<' || IsIdentifierStart(line[index]);
+    }
+
+    private static int FindGoInlineTypeExpressionEnd(string line, int start)
+    {
+        var squareDepth = 0;
+        var parenDepth = 0;
+        for (var cursor = start; cursor < line.Length; cursor++)
+        {
+            switch (line[cursor])
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth == 0)
+                        return cursor;
+                    parenDepth--;
+                    break;
+                case ',':
+                case '{':
+                case '`':
+                case '=':
+                case ';':
+                    if (squareDepth == 0 && parenDepth == 0)
+                        return cursor;
+                    break;
+            }
+        }
+
+        return line.Length;
     }
 
     private static void EmitGoSignatureReturnTypes(
