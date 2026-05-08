@@ -1819,6 +1819,110 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsLocalNamedExportSurfaceSymbols(string language)
+    {
+        var content = """
+            const foo = 1;
+            const local = 2;
+            export { foo, local as renamed };
+            export
+            {
+              foo as multilineFoo,
+              local as multilineLocal,
+            };
+            export { forwarded } from './other';
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "renamed" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineFoo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineLocal" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded" && s.Visibility == "export");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsExportedVariableSurfaceSymbols(string language)
+    {
+        var content = """
+            export const foo = 1, bar = compute({ value: "," });
+            export let baz;
+            export var qux = call(1, 2);
+            export const
+                multilineFoo = 1,
+                multilineBar = compute(["x", "y"]);
+            export const noSemi = 1
+            export const afterNoSemi = 2
+            export const fn = () => {};
+            export const [skipped] = values;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineFoo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineBar" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "noSemi" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "afterNoSemi" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fn" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fn" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "skipped" && s.Visibility == "export");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsDeclareExportedVariableSurfaceSymbols()
+    {
+        var content = """
+            export declare const externalThing: string;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "externalThing" && s.Visibility == "export");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsLocalTypeOnlyNamedExportSurfaceSymbols()
+    {
+        var content = """
+            type User = { id: string };
+            type Admin = User & { role: string };
+            export type { User, Admin as RootAdmin };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "RootAdmin" && s.Visibility == "export");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsStringLiteralExportNames(string language)
+    {
+        var content = """
+            const handler = () => {};
+            const other = 1;
+            export { handler as "x-api", other as otherName /* keep */ };
+            export { remote as "remote-key", another as anotherName } from "./remote";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x-api" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "otherName" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "remote-key" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "anotherName" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "\"x-api\"");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./remote");
+    }
+
     [Fact]
     public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
     {
@@ -1868,8 +1972,224 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "node:fs");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./path-utils");
+        Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "node:fs"));
+        Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./path-utils"));
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsRequireModuleSymbols(string language)
+    {
+        var content = """
+            const fs = require("node:fs");
+            const helper = require(
+              "./helper"
+            );
+            const method = loader.require("./method");
+            const resolved = require.resolve("./resolved");
+            const resolvedWithPaths = require.resolve("./with-paths", { paths: [__dirname] });
+            const text = "require('./string')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var fsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "node:fs"));
+        Assert.Equal(1, fsImport.Line);
+        var helperImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./helper"));
+        Assert.Equal(3, helperImport.Line);
+        Assert.Contains("require(", helperImport.Signature);
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./resolved"));
+        Assert.Equal(6, resolvedImport.Line);
+        Assert.Contains("require.resolve", resolvedImport.Signature);
+        var resolvedWithPathsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./with-paths"));
+        Assert.Equal(7, resolvedWithPathsImport.Line);
+        Assert.Contains("paths", resolvedWithPathsImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsImportMetaResolveModuleSymbols(string language)
+    {
+        var content = """
+            const resolved = import.meta.resolve("./feature.js");
+            const scoped = import.meta.resolve(
+              "./scoped.js",
+              import.meta.url
+            );
+            client.import.meta.resolve("./method.js");
+            const dynamic = import.meta.resolve(path);
+            const text = "import.meta.resolve('./string.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
+        Assert.Equal(1, resolvedImport.Line);
+        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("import.meta.url", scopedImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "path");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsNewUrlImportMetaModuleSymbols(string language)
+    {
+        var content = """
+            const workerUrl = new URL("./worker.js", import.meta.url);
+            const imageUrl = new URL(
+              "./image.png",
+              import.meta.url
+            );
+            const templated = new URL(`./view.js`, import.meta.url);
+            const computed = new URL(`./${name}.js`, import.meta.url);
+            const plain = URL("./plain.js", import.meta.url);
+            const otherBase = new URL("./other.js", baseUrl);
+            const hrefBase = new URL("./href.js", import.meta.url.href);
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(1, workerImport.Line);
+        Assert.Contains("new URL", workerImport.Signature);
+        var imageImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./image.png"));
+        Assert.Equal(3, imageImport.Line);
+        Assert.Contains("import.meta.url", imageImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./view.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./other.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./href.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsImportScriptsModuleSymbols(string language)
+    {
+        var content = """
+            importScripts("./worker-a.js", "/worker-b.js");
+            importScripts(
+              "./legacy.js",
+              `./template-worker.js`,
+              `./${name}.js`
+            );
+            loader.importScripts("./method.js");
+            const text = "importScripts('./string.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./worker-a.js" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/worker-b.js" && s.Line == 1);
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.js"));
+        Assert.Equal(3, legacyImport.Line);
+        Assert.Contains("importScripts", legacyImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsServiceWorkerRegisterModuleSymbols(string language)
+    {
+        var content = """
+            navigator.serviceWorker.register("./sw.js");
+            navigator.serviceWorker.register(
+              "./scoped-sw.js",
+              { scope: "./" }
+            );
+            window.navigator.serviceWorker.register("./window-sw.js");
+            globalThis.navigator.serviceWorker.register("./global-sw.js");
+            navigator.serviceWorker.register(dynamicPath);
+            const text = "navigator.serviceWorker.register('./string-sw.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var serviceWorkerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./sw.js"));
+        Assert.Equal(1, serviceWorkerImport.Line);
+        Assert.Contains("navigator.serviceWorker.register", serviceWorkerImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped-sw.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("scope", scopedImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./global-sw.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-sw.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsWorkletAddModuleSymbols(string language)
+    {
+        var content = """
+            audioWorklet.addModule("./audio-processor.js");
+            CSS.paintWorklet.addModule(
+              "./paint-worklet.js",
+              { credentials: "same-origin" }
+            );
+            layoutWorklet.addModule(`./layout-worklet.js`);
+            this.audioWorklet.addModule("./method-audio.js");
+            worklet.addModule("./generic-worklet.js");
+            audioWorklet.addModule(dynamicPath);
+            const text = "audioWorklet.addModule('./string-audio.js')";
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var audioImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./audio-processor.js"));
+        Assert.Equal(1, audioImport.Line);
+        Assert.Contains("audioWorklet.addModule", audioImport.Signature);
+        var paintImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./paint-worklet.js"));
+        Assert.Equal(3, paintImport.Line);
+        Assert.Contains("credentials", paintImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./layout-worklet.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method-audio.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./generic-worklet.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-audio.js");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsWorkerConstructorModuleSymbols(string language)
+    {
+        var content = """
+            const worker = new Worker("./worker.js");
+            const shared = new SharedWorker(
+              "./shared-worker.js",
+              { type: "module" }
+            );
+            const templated = new Worker(`./template-worker.js`, { type: "module" });
+            const computed = new Worker(`./${name}.js`);
+            const windowWorker = new window.Worker("./window-worker.js");
+            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
+            const plain = Worker("./plain-worker.js");
+            const service = new ServiceWorker("./service-worker.js");
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(1, workerImport.Line);
+        Assert.Contains("new Worker", workerImport.Signature);
+        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
+        Assert.Equal(3, sharedImport.Line);
+        Assert.Contains("type", sharedImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./global-shared-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./service-worker.js");
     }
 
     [Fact]
@@ -2671,6 +2991,23 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsNumericBracketNamedExportAssignments(string language)
+    {
+        var content = """
+            exports[404] = notFound;
+            module.exports[500] = function serverError() { return 500; };
+            exports[dynamicKey] = hidden;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "500" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
+    }
+
     [Fact]
     public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
     {
@@ -2766,6 +3103,142 @@ public class SymbolExtractorTests
         Assert.Equal(8, bar.EndLine);
         Assert.Equal(6, bar.BodyStartLine);
         Assert.Equal(8, bar.BodyEndLine);
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefaultFunctionAssignments(string language)
+    {
+        var content = """
+            module.exports =
+              (
+                function createServer(req) {
+                  return req;
+                }
+              );
+            module.exports = async (value) => {
+              return value;
+            };
+            module.exports = class Service { run() {} };
+            module.exports = { named() {} };
+            module.exports = 42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var defaults = symbols
+            .Where(s => s.Kind == "function" && s.Name == "default" && s.Visibility == "export")
+            .ToList();
+        Assert.Equal(2, defaults.Count);
+        Assert.Contains(defaults, s => s.StartLine == 1 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
+        Assert.Contains(defaults, s => s.StartLine == 7 && s.BodyStartLine == 7 && s.BodyEndLine == 9);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "named" && s.ContainerName == "module.exports");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertyExports(string language)
+    {
+        var content = """
+            Object.defineProperty(exports, "__esModule", { value: true });
+            Object.defineProperty(exports, "foo", { enumerable: true, get: function () { return api.foo; } });
+            Object.defineProperty(exports, 404, { value: notFound });
+            Object.defineProperty(
+              module.exports,
+              "bar-baz",
+              { value: bar }
+            );
+            Object.defineProperty(
+              module.exports,
+              500,
+              { value: serverError }
+            );
+            Object.defineProperty(local, "hidden", { value: hidden });
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertiesExports(string language)
+    {
+        var content = """
+            Object.defineProperties(exports, {
+              __esModule: { value: true },
+              foo: { enumerable: true, get: function () { return api.foo; } },
+              "bar-baz": { value: bar },
+              ["computed-key"]: { value: computed },
+              [dynamicKey]: { value: hidden },
+              descriptorRef,
+            });
+            Object.defineProperties(
+              module.exports,
+              {
+                default: { value: api },
+                500: { value: serverError },
+              }
+            );
+            Object.defineProperties(exports, { sameLine: { value: sameLine } });
+            Object.defineProperties(local, { hidden: { value: hidden } });
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "descriptorRef" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectAssignExports(string language)
+    {
+        var content = """
+            Object.assign(exports, {
+              foo,
+              alias: value,
+              "bar-baz": bar,
+              ["computed-key"]: computed,
+              [dynamicKey]: hidden,
+            });
+            Object.assign(
+              module.exports,
+              {
+                default: api,
+                500: serverError,
+              }
+            );
+            Object.assign(exports, { sameLine: sameLine });
+            Object.assign(local, { hidden });
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
     }
 
     [Fact]
@@ -3545,6 +4018,184 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultTs");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Theory]
+    [InlineData("javascript", "export default function load() { return 1; }", "load")]
+    [InlineData("javascript", "export default function* () { yield 1; }", "default")]
+    [InlineData("typescript", "export default function load<T>(value: T): T { return value; }", "load")]
+    [InlineData("typescript", "export default function <T>(value: T): T { return value; }", "default")]
+    public void Extract_JavaScriptTypeScript_DetectsExportDefaultFunctionSymbols(
+        string language,
+        string content,
+        string expectedName)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == expectedName));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(content, function.Signature);
+    }
+
+    [Theory]
+    [InlineData("javascript", "export default\n  (value) => value;", null, null)]
+    [InlineData("typescript", "export default\n  (value) => value;", null, null)]
+    [InlineData("javascript", "export default async (value) => {\n  return value;\n};", 1, 3)]
+    [InlineData("typescript", "export default async (value) => {\n  return value;\n};", 1, 3)]
+    public void Extract_JavaScriptTypeScript_DetectsExportDefaultArrowFunctionSymbols(
+        string language,
+        string content,
+        int? expectedBodyStartLine,
+        int? expectedBodyEndLine)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(1, function.StartLine);
+        Assert.Equal(expectedBodyStartLine, function.BodyStartLine);
+        Assert.Equal(expectedBodyEndLine, function.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportDefaultGenericArrowFunctionSymbol()
+    {
+        var content = """
+            export default <T>(
+              value: T
+            ) => value;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        Assert.Equal("export", function.Visibility);
+        Assert.Equal(1, function.StartLine);
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsMultilineDynamicImportSymbols(string language)
+    {
+        var content = """
+            const loader = () => import(
+                "./feature"
+            );
+            const method = client.import(
+                "./method"
+            );
+            const optional = client?.import("./optional");
+            class Loader { #import(path) {} load() { return this.#import("./private"); } }
+            const text = "import('./string')";
+            // import('./comment')
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var importSymbol = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature"));
+        Assert.Equal(2, importSymbol.Line);
+        Assert.Contains("const loader", importSymbol.Signature);
+        Assert.Contains("import(", importSymbol.Signature);
+        Assert.Contains("./feature", importSymbol.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./optional");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./private");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsDynamicImportSymbolsWithImportOptions(string language)
+    {
+        var content = """
+            const data = await import("./data.json", {
+                with: { type: "json" }
+            });
+            const legacy = await import(
+                "./legacy.json",
+                { assert: { type: "json" } }
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Equal(1, dataImport.Line);
+        Assert.Contains("with", dataImport.Signature);
+        Assert.Contains("type", dataImport.Signature);
+
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Equal(5, legacyImport.Line);
+        Assert.Contains("assert", legacyImport.Signature);
+        Assert.Contains("./legacy.json", legacyImport.Signature);
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsTemplateLiteralDynamicImportSymbols(string language)
+    {
+        var content = """
+            const view = import(`./view.js`);
+            const computed = import(`./${name}.js`);
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
+        Assert.Equal(1, viewImport.Line);
+        Assert.Contains("`./view.js`", viewImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsStaticImportModuleSymbols(string language)
+    {
+        var content = """
+            import React from "react";
+            import {
+                computed,
+                ref,
+            } from
+                "vue";
+            import "./setup";
+            import data from "./data.json" with { type: "json" };
+            import legacy from "./legacy.json" assert {
+                type: "json"
+            };
+            import { with as withAlias, assert as assertAlias } from "./keywords"
+            const meta = import.meta.url;
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "react");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "vue");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./setup");
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Contains("with", dataImport.Signature);
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Contains("assert", legacyImport.Signature);
+        var keywordsImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./keywords"));
+        Assert.DoesNotContain("import.meta", keywordsImport.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "meta");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_MultilineImportTypeQuery_DoesNotEmitRuntimeImportSymbol()
+    {
+        var content = """
+            type Module = typeof import(
+                "./types"
+            );
+            const runtime = import(
+                "./runtime"
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./runtime");
     }
 
     [Fact]
@@ -19591,6 +20242,40 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_DetectsExportedObjectLiteralLiteralKeys(string language)
+    {
+        var content = """
+            const handler = () => 1;
+            const notFound = () => 2;
+            const dynamicKey = "runtime";
+            module.exports = {
+                "x-api": handler,
+                'content-type': handler,
+                404: notFound,
+                ["computed-api"]: handler,
+                [500]: notFound,
+                [dynamicKey]: handler,
+            };
+            export default {
+                "dash-key": handler,
+                ["computed-dash"]: handler,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x-api" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content-type" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-api" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "dash-key" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-dash" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
     [Fact]

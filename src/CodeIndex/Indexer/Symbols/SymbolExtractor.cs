@@ -661,8 +661,16 @@ public static partial class SymbolExtractor
         @"^\s*export\s+(?:const|let|var)\s*\{",
         RegexOptions.Compiled);
 
+    private static readonly Regex JavaScriptTypeScriptExportedVariableDeclarationRegex = new(
+        @"^\s*export\s+(?:declare\s+)?(?:const|let|var)\b",
+        RegexOptions.Compiled);
+
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
-        $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
+        $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*(?:['""](?<bracketName>[^'""]*)['""]|(?<numericBracketName>\d+(?:\.\d+)?))\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptCommonJsDefaultExportAssignmentRegex = new(
+        @"^\s*module\.exports(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptQualifiedAssignmentRegex = new(
@@ -713,7 +721,8 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?:async\s+)?function(?:\s+|\s*\*\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?function(?:\s+|\s*\*\s*)(?:\w+)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings such as
@@ -785,7 +794,8 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?:async\s+)?function(?:\s+|\s*\*\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -1958,6 +1968,9 @@ public static partial class SymbolExtractor
             return ExtractAssemblySymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var javaScriptTypeScriptSanitizedLines = lang is "javascript" or "typescript"
+            ? BuildJavaScriptTypeScriptSanitizedLines(lines)
+            : null;
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
@@ -2045,7 +2058,17 @@ public static partial class SymbolExtractor
                 ExtractPhpImportSymbols(symbols, line, i + 1);
 
             if (lang is "javascript" or "typescript")
-                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, line, structuralLine, i + 1, symbols);
+            {
+                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+            }
 
             if (lang is "javascript" or "typescript"
                 && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, line, i + 1, symbols))
