@@ -174,7 +174,7 @@ public static partial class ReferenceExtractor
         ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "raise", "yield", "super", "include", "extend", "prepend", "refine", "alias", "alias_method", "describe",
-            "resource", "resources", "create_table",
+            "resource", "resources", "create_table", "attribute",
             "private_constant", "public_constant", "module_function", "rescue_from", "gem",
             "unless", "case", "begin", "until", "module", "rescue", "ensure",
         },

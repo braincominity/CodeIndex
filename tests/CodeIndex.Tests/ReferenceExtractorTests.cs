@@ -2914,6 +2914,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRailsAttribute_IndexesAttributeName()
+    {
+        const string content = """
+            class User < ApplicationRecord
+              attribute :timezone, :string, default: "UTC"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "attribute");
+        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "default");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "UTC");
+    }
+
+    [Fact]
     public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
     {
         const string content = """
