@@ -1328,6 +1328,7 @@ public static partial class SymbolExtractor
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("property", new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\[\]=?|\*\*|<<|>>|<=>|===|==|!=|!~|=~|<=|>=|[+\-*/%&|^~<>]=?|[+\-]@|!)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("function", new Regex(@"^\s*def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("class",    new Regex(@"^\s*class\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("class",    new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
