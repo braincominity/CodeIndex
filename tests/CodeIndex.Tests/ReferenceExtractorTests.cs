@@ -7627,6 +7627,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoTypeAssertions_CapturesAssertedTypes()
+    {
+        const string content = """
+            package main
+
+            func classify(value any) {
+                user := value.(User)
+                admin := value.(*Admin)
+                qualified := value.(model.Member)
+                switch value.(type) {
+                case nil:
+                }
+                _, _, _ = user, admin, qualified
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """

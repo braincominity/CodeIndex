@@ -14,6 +14,7 @@ affected:
 - **Go multi-name value declarations expose their shared type** — declarations such as `var primary, secondary *Client` now link `Client`.
 - **Go embedded field types are indexed as type references** — embedded fields such as `*BaseStore` and `audit.Logger` now show up in reference search.
 - **Go builtin allocation type arguments are indexed as type references** — `make([]User, 0)` and `new(Client)` now link `User` and `Client` without turning `make` or `new` into calls.
+- **Go type assertions are indexed as type references** — `value.(User)` and `value.(*Admin)` now link the asserted types while ignoring the `.(type)` sentinel.
 
 ## 日本語
 
@@ -24,3 +25,4 @@ affected:
 - **Go の複数名 value 宣言で共有される型を参照として出すようになりました** — `var primary, secondary *Client` のような宣言から `Client` を辿れるようになりました。
 - **Go の embedded field 型を型参照として索引するようになりました** — `*BaseStore` や `audit.Logger` のような embedded field が reference search に現れるようになりました。
 - **Go builtin allocation の型引数を型参照として索引するようになりました** — `make([]User, 0)` や `new(Client)` から `make` / `new` を call にせず `User` と `Client` を辿れるようになりました。
+- **Go type assertion を型参照として索引するようになりました** — `value.(User)` や `value.(*Admin)` から assertion 対象型を辿れるようにしつつ、`.(type)` sentinel は無視します。
