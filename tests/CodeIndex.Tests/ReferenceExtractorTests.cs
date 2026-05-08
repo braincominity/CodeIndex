@@ -21059,6 +21059,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustAssociatedCalls_CaptureReceiverTypeReferences()
+    {
+        const string content = """
+            fn build() {
+                let user = User::new();
+                let store = crate::models::Store::open();
+                let users = Vec::<User>::new();
+                let helper = crate::helpers::build();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Vec" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "helpers" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeQuery_DynamicImportTypeMapsToImportSymbol()
     {
         const string content = """

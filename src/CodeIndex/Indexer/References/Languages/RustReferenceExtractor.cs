@@ -25,6 +25,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex UseStatementRegex = new(
         @"^\s*(?:pub(?:\s*\([^\)]*\))?\s+)?use\s+(?<body>.+);",
         RegexOptions.Compiled);
+    private static readonly Regex AssociatedCallReceiverRegex = new(
+        $@"(?<![\w$])(?<receiver>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?::\s*{RustIdentifierPattern}(?:<[^>\n]+>)?\s*\(",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -141,6 +144,7 @@ internal static class RustReferenceExtractor
         EmitStructFieldTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitEnumVariantTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, enumContainer);
         EmitAsCastTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitAssociatedCallReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
@@ -823,6 +827,61 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(typeStart));
         }
+    }
+
+    private static void EmitAssociatedCallReceiverTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
+        {
+            var receiverGroup = match.Groups["receiver"];
+            var receiver = receiverGroup.Value;
+            var leafStart = receiver.LastIndexOf("::", StringComparison.Ordinal);
+            var leaf = leafStart >= 0 ? receiver[(leafStart + 2)..] : receiver;
+            var leafOffset = leafStart >= 0 ? leafStart + 2 : 0;
+            if (!IsLikelyRustTypePathLeaf(leaf))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                NormalizeIdentifier(leaf),
+                receiverGroup.Index + leafOffset,
+                "type_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(receiverGroup.Index));
+
+            var argsGroup = match.Groups["args"];
+            if (!argsGroup.Success)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                argsGroup.Value,
+                argsGroup.Index,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(argsGroup.Index));
+        }
+    }
+
+    private static bool IsLikelyRustTypePathLeaf(string leaf)
+    {
+        if (leaf.StartsWith("r#", StringComparison.Ordinal))
+            return leaf.Length > 2 && IsRustIdentifierPart(leaf[2]);
+
+        return leaf.Length > 0 && char.IsUpper(leaf[0]);
     }
 
     private static void EmitImplAndTraitTypeReferences(
