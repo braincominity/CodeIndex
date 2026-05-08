@@ -44,6 +44,7 @@ affected:
 - **Go multi-name struct fields expose their shared type** — fields such as `Primary, Secondary *Client` now link the shared field type without indexing field names.
 - **Go struct fields with spaced generic types expose all type segments** — fields such as `Owner Repository[Key, Value]` now link the generic type and each concrete argument.
 - **Go var/const declarations with spaced generic types expose all type segments** — declarations such as `var repo Repository[Key, Value]` now link the explicit generic type.
+- **Go type specs with spaced generic targets expose all type segments** — declarations such as `type Repo Repository[Key, Value]` now link the target type and arguments.
 
 ## 日本語
 
@@ -80,3 +81,4 @@ affected:
 - **Go の複数名 struct field で共有される型を参照として出すようになりました** — `Primary, Secondary *Client` のような field から field 名を索引せずに共有型を辿れるようになりました。
 - **Go struct field のスペース入り generic 型を参照として出すようになりました** — `Owner Repository[Key, Value]` のような field から generic 型と各具体型引数を辿れるようになりました。
 - **Go var/const 宣言のスペース入り generic 型を参照として出すようになりました** — `var repo Repository[Key, Value]` のような宣言から明示された generic 型を辿れるようになりました。
+- **Go type spec のスペース入り generic target を参照として出すようになりました** — `type Repo Repository[Key, Value]` のような宣言から target 型と型引数を辿れるようになりました。

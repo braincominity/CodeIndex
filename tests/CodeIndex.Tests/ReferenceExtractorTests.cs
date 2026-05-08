@@ -7513,6 +7513,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_GoGenericTypeSpecTargets_CapturesSpacedTypeArguments()
+    {
+        const string content = """
+            package main
+
+            type Repo Repository[Key, Value]
+            type Alias = model.Store[Entry, Result]
+            type Wrapped struct {
+                ID string
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Repo" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoMethodReceiverTypes_CapturesReceiverType()
     {
         const string content = """
