@@ -1327,6 +1327,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+[?!=]?)\s+:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*enum\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(@"^\s*namespace\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("function", new Regex(@"^\s*factory\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
             new("property", new Regex(@"^\s*let!?\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
