@@ -2565,6 +2565,7 @@ public class ReferenceExtractorTests
             class Worker
               include Shared
               extend ModName
+              prepend AuditTrail
               before_action :authenticate
               attr_accessor :name
 
@@ -2579,10 +2580,12 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "prepend");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
         Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
         Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
