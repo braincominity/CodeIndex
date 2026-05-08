@@ -967,6 +967,7 @@ internal static class LanguageReferenceExtractionSupport
         EmitGoTypeDeclarationParameterConstraints(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoInterfaceTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoStandaloneTypeSetTermReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoSingleNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameValueDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoMultiNameFieldDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoSingleNameFieldDeclarationTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -1076,6 +1077,48 @@ internal static class LanguageReferenceExtractionSupport
         var typeEnd = typeStart;
         while (typeEnd < line.Length && line[typeEnd] != '=' && line[typeEnd] != '{')
             typeEnd++;
+
+        var expression = line[typeStart..typeEnd].TrimEnd();
+        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitGoSingleNameValueDeclarationTypes(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (StartsWithKeyword(line, cursor, "var"))
+            cursor = SkipWhitespace(line, cursor + "var".Length);
+        else if (StartsWithKeyword(line, cursor, "const"))
+            cursor = SkipWhitespace(line, cursor + "const".Length);
+        else
+            return;
+
+        if (cursor >= line.Length || !IsIdentifierStart(line[cursor]))
+            return;
+
+        cursor++;
+        while (cursor < line.Length && IsSimpleIdentifierPart(line[cursor]))
+            cursor++;
+
+        var afterName = SkipWhitespace(line, cursor);
+        if (afterName < line.Length && line[afterName] == ',')
+            return;
+
+        var typeStart = afterName;
+        if (typeStart >= line.Length || line[typeStart] == '=' || line.AsSpan(typeStart).StartsWith(":=", StringComparison.Ordinal))
+            return;
+        if (!IsGoTypeExpressionStart(line, typeStart))
+            return;
+
+        var typeEnd = FindGoInlineTypeExpressionEnd(line, typeStart);
+        if (typeEnd <= typeStart)
+            return;
 
         var expression = line[typeStart..typeEnd].TrimEnd();
         EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
