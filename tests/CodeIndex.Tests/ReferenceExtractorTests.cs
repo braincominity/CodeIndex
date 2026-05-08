@@ -2520,6 +2520,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRequireRelative_IndexesTargetPath()
+    {
+        const string content = """
+            def load_user
+              require_relative "models/user"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
+    }
+
+    [Fact]
     public void Extract_RubyRaiseSyntax_IsIgnored()
     {
         const string content = """

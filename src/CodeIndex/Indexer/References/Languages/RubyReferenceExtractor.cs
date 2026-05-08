@@ -15,14 +15,14 @@ internal static class RubyReferenceExtractor
 
     private static readonly HashSet<string> CommandTargetReferenceNames = new(StringComparer.Ordinal)
     {
-        "include", "extend", "require", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
+        "include", "extend", "require", "require_relative", "raise", "attr", "attr_accessor", "attr_reader", "attr_writer",
         "define_method", "before_action", "after_action", "around_action", "helper_method",
         "has_many", "has_one", "belongs_to", "scope", "delegate", "validates",
     };
 
     private static readonly HashSet<string> CommandTargetSingleTokenNames = new(StringComparer.Ordinal)
     {
-        "require", "raise", "define_method",
+        "require", "require_relative", "raise", "define_method",
     };
 
     private static readonly Regex CommandTargetTokenRegex = new(
@@ -127,6 +127,7 @@ internal static class RubyReferenceExtractor
             else if (rawToken[0] == '\'' || rawToken[0] == '"')
             {
                 if (!string.Equals(name, "require", StringComparison.Ordinal)
+                    && !string.Equals(name, "require_relative", StringComparison.Ordinal)
                     && !string.Equals(name, "define_method", StringComparison.Ordinal))
                 {
                     continue;
