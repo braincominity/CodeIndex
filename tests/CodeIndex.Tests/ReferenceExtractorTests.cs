@@ -10732,6 +10732,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsRaiseApplicationCalls()
+    {
+        const string content = """
+            let run user currentError =
+                do raise buildError user
+                raise currentError
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "buildError" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "raise" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "currentError" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
