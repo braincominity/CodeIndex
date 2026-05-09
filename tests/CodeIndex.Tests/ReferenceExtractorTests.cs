@@ -14543,6 +14543,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsDataCallReferences()
+    {
+        const string content = """
+            run <- function() {
+                data("iris", package = "datasets")
+                utils::data(list = "mtcars")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "iris"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "datasets"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "mtcars"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceReferenceOperators()
     {
         const string content = """
