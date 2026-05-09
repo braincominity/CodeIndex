@@ -63,6 +63,7 @@ affected:
 - **C references now capture `_t` `__builtin_offsetof` operands** — `__builtin_offsetof(widget_t, field)` now references the operand typedef.
 - **C references now capture tagged `__builtin_offsetof` operands** — `__builtin_offsetof(struct node, next)` now references the operand tag.
 - **C references now capture `_t` `__builtin_va_arg` operands** — `__builtin_va_arg(args, widget_t)` now references the requested typedef.
+- **C references now capture tagged `__builtin_va_arg` operands** — `__builtin_va_arg(args, struct node *)` now references the requested tag.
 
 ## 日本語
 
@@ -119,3 +120,4 @@ affected:
 - **C の参照抽出が `_t` `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(widget_t, field)` から operand typedef への参照を生成します。
 - **C の参照抽出が tag 付き `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(struct node, next)` から operand tag への参照を生成します。
 - **C の参照抽出が `_t` `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, widget_t)` から要求 typedef への参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, struct node *)` から要求 tag への参照を生成します。
