@@ -33,7 +33,7 @@ internal static class LanguageReferenceExtractionSupport
         @"(?<![\w])(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*(?=[=,;\[])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTaggedDeclarationTypeRegex = new(
-        @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?[A-Za-z_]\w*\s*(?=[=,;\[])",
+        @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*(?=[=,;\[])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefFunctionReturnTypeRegex = new(
         @"^\s*(?:(?:static|extern|inline|const|volatile|restrict|_Atomic)\s+)*(?<type>[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*[A-Za-z_]\w*\s*\(",
