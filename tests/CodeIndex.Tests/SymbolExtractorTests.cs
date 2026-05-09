@@ -18221,6 +18221,10 @@ public class SymbolExtractorTests
                         Return ""
                     End Function
 
+                    Public Iterator Function Values() As IEnumerable(Of Integer)
+                        Yield 1
+                    End Function
+
                     Property Count As Integer
 
                     Event Changed As EventHandler
@@ -18233,6 +18237,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnReady");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Values");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed");
     }
