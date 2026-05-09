@@ -64,6 +64,10 @@ internal static class FSharpReferenceExtractor
             (?=\s+(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
+    private static readonly Regex CompositionOperandCallRegex = new(
+        $@"(?<![\w$])(?:(?:{IdentifierPattern})\s*\.\s*)*(?<left>{IdentifierPattern})\b\s*(?:>>|<<)\s*(?:(?:{IdentifierPattern})\s*\.\s*)*(?<right>{IdentifierPattern})\b",
+        RegexOptions.Compiled);
+
     private static readonly Regex SpaceApplicationCallRegex = new(
         $@"(?:\b(?:then|do!?|else|in|to|downto|return!?|yield!?)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
@@ -171,6 +175,12 @@ internal static class FSharpReferenceExtractor
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             addCallLikeReference(name, callIndex);
+        }
+
+        foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
+        {
+            addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
+            addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
         }
 
         foreach (Match match in SpaceApplicationCallRegex.Matches(preparedLine))

@@ -10786,6 +10786,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsCompositionOperandCalls()
+    {
+        const string content = """
+            let workflow =
+                normalize >> persist
+
+            let loader =
+                Views.render << loadModel
+
+            let shifted flags count =
+                flags >>> count
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "normalize" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "loadModel" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "flags" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
