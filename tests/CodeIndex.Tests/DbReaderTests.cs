@@ -115,6 +115,8 @@ public class DbReaderTests : IDisposable
     [InlineData("src/vb-alias.vb", "vb", "vb.net")]
     [InlineData("src/visual-basic-alias.vb", "vb", "visual-basic")]
     [InlineData("src/visual_basic-alias.vb", "vb", "visual_basic")]
+    [InlineData("src/vbs-alias.vbs", "vb", "vbs")]
+    [InlineData("src/vbscript-alias.vbs", "vb", "vbscript")]
     [InlineData("src/java-alias.java", "java", "jav")]
     [InlineData("src/python-alias.py", "python", "py3")]
     [InlineData("src/python3-alias.py", "python", "python3")]

@@ -246,6 +246,8 @@ public class QueryCommandRunnerTests
     [InlineData("vb.net", "vb")]
     [InlineData("visual-basic", "vb")]
     [InlineData("visual_basic", "vb")]
+    [InlineData("vbs", "vb")]
+    [InlineData("vbscript", "vb")]
     [InlineData("py3", "python")]
     [InlineData("assembler", "assembly")]
     [InlineData("gas", "assembly")]

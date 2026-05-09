@@ -30,7 +30,7 @@ public static class QueryCommandRunner
         ["cpp"] = ["c++", "cplusplus"],
         ["fsharp"] = ["f#", "fs"],
         ["ruby"] = ["rb"],
-        ["vb"] = ["vb.net", "vbnet", "visual basic", "visual-basic", "visual_basic"],
+        ["vb"] = ["vb.net", "vbnet", "visual basic", "visual-basic", "visual_basic", "vbs", "vbscript"],
         ["python"] = ["py", "py3", "python3"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
