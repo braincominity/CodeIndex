@@ -31,6 +31,7 @@ affected:
 - **Dockerfile BuildKit mount stage dependencies are indexed** — `RUN --mount=type=bind,from=assets,...` now links to the `assets` stage.
 - **Tagged external `COPY --from` images are not mistaken for stages** — `COPY --from=builder:latest` no longer creates a false stage reference to `builder`.
 - **Multiple Dockerfile BuildKit mounts are indexed** — a single `RUN` with several `--mount=...,from=stage` flags now records each stage dependency.
+- **Digest external `COPY --from` images are not mistaken for stages** — `COPY --from=builder@sha256:...` no longer creates a false stage reference to `builder`.
 
 ## 日本語
 
@@ -53,3 +54,4 @@ affected:
 - **Dockerfile BuildKit mount の stage dependency を index するようになりました** — `RUN --mount=type=bind,from=assets,...` が `assets` stage に結びつくようになりました。
 - **tag 付き外部 image の `COPY --from` を stage と誤認しなくなりました** — `COPY --from=builder:latest` が `builder` への偽 stage 参照を作らなくなりました。
 - **Dockerfile BuildKit mount が複数ある場合も index するようになりました** — 1 つの `RUN` に複数の `--mount=...,from=stage` がある場合、それぞれの stage dependency を記録します。
+- **digest 付き外部 image の `COPY --from` を stage と誤認しなくなりました** — `COPY --from=builder@sha256:...` が `builder` への偽 stage 参照を作らなくなりました。

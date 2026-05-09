@@ -2173,6 +2173,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileCopyFromReferences_IgnoresDigestExternalImages()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            COPY --from=builder@sha256:123abc /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_DockerfileFromStageReferences_AllowsInlineComments()
     {
         const string content = """
