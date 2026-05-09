@@ -7,8 +7,8 @@ affected:
 
 ## English
 
-- **F# backticked open targets are now searchable** — `open ``Domain Helpers``` is indexed by the normalized module name.
+- **F# backticked open targets are now searchable** — open statements targeting backticked modules are indexed by the normalized module name.
 
 ## 日本語
 
-- **F# の backtick 付き open target を検索できるようになりました** — `open ``Domain Helpers``` を正規化した module 名で索引します。
+- **F# の backtick 付き open target を検索できるようになりました** — backtick 付き module を対象にする open statement を、正規化した module 名で索引します。
