@@ -4568,6 +4568,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropTableReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_table_reference_targets.sql", "sql",
+            """
+            CREATE TABLE dbo.OldOrders (Id int);
+            GO
+            CREATE TABLE sales.OldInvoices (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_table_reference_migration.sql", "sql",
+            """
+            DROP TABLE IF EXISTS dbo.OldOrders, sales.OldInvoices;
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.OldInvoices", lang: "sql", exact: true, pathPatterns: ["sql_drop_table_reference"]);
+        var reference = Assert.Single(references);
+        Assert.Equal("src/sql_drop_table_reference_migration.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.OldInvoices", lang: "sql", exact: true, pathPatterns: ["sql_drop_table_reference"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.OldInvoices", lang: "sql", exact: true, pathPatterns: ["sql_drop_table_reference"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

@@ -11358,6 +11358,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DropTableCapturesAllTargetReferences()
+    {
+        // T-SQL teardown migrations should still be searchable by the table names they touch,
+        // including SQL Server's `IF EXISTS` form and comma-separated drop lists.
+        // T-SQL の teardown migration も触った table 名で検索できるべき。SQL Server の
+        // `IF EXISTS` と comma-separated drop list も保持する。
+        const string content = """
+            DROP TABLE IF EXISTS dbo.OldOrders, [sales].[OldInvoices];
+            DROP TABLE archive.LegacyOrders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OldOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "OldInvoices" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "LegacyOrders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "IF" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXISTS" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

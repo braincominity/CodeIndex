@@ -78,13 +78,16 @@ internal static class SqlReferenceExtractor
         @"(?<![\w$])FROM\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferencePrefixRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE)\s*$",
+        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferenceRegex = new(
         $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+INTO\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+{TopTargetModifierPattern})\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{QualifiedIdentifierPattern}|MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierPattern}|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierPattern}|ALTER\s+TABLE\s+{QualifiedIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private static readonly Regex TruncateTargetRegex = new(
         $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropTableTargetRegex = new(
+        $@"(?<![\w$])DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TopCallSuppressionRegex = new(
         @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
@@ -406,7 +409,22 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitTruncateTargetReferences(
+        EmitMultiTargetReferences(
+            DropTableTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            TruncateTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
@@ -648,7 +666,8 @@ internal static class SqlReferenceExtractor
         }
     }
 
-    private static void EmitTruncateTargetReferences(
+    private static void EmitMultiTargetReferences(
+        MatchCollection matches,
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -661,7 +680,7 @@ internal static class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in TruncateTargetRegex.Matches(statement))
+        foreach (Match match in matches)
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
