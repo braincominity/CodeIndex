@@ -14469,6 +14469,10 @@ public class SymbolExtractorTests
             __declspec(dllexport) int exported(void) {
                 return 0;
             }
+
+            [[nodiscard]] int compute(void) {
+                return 1;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "c", content);
@@ -14476,6 +14480,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "die");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "exported");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute");
     }
 
     [Fact]

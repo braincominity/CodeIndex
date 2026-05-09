@@ -15,6 +15,7 @@ affected:
 - **C search now indexes `#import` headers** — import-style header directives now surface as import symbols for header navigation.
 - **C search now indexes union declarations** — named `union` definitions now produce `union` symbols alongside structs and enums.
 - **C search now indexes union typedef aliases** — forward `typedef union Name Alias;` declarations now provide searchable `union` symbols for alias names.
+- **C search now indexes bracket-attributed functions** — C23-style `[[nodiscard]] int f(...)` declarations now surface by function name.
 
 ## 日本語
 
@@ -23,3 +24,4 @@ affected:
 - **C 検索が `#import` ヘッダーをインデックスするようになりました** — import 形式のヘッダーディレクティブも import シンボルとして表面化し、ヘッダー移動に使えるようになりました。
 - **C 検索が union 宣言をインデックスするようになりました** — 名前付き `union` 定義も struct / enum と同じように `union` シンボルを生成します。
 - **C 検索が union typedef エイリアスをインデックスするようになりました** — forward `typedef union Name Alias;` 宣言でも alias 名の検索可能な `union` シンボルを生成します。
+- **C 検索が角括弧属性付き関数をインデックスするようになりました** — C23 形式の `[[nodiscard]] int f(...)` 宣言も関数名で表面化します。
