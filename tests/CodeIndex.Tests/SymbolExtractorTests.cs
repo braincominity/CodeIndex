@@ -39,6 +39,8 @@ public class SymbolExtractorTests
         var content = """
             type Vector = list[float]
             type Connection = str | int
+            JsonValue: TypeAlias = dict[str, object]
+            Handler: typing.TypeAlias = Callable[..., None]
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -64,6 +66,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Vector");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Connection");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "JsonValue");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
