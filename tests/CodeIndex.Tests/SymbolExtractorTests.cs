@@ -43,6 +43,9 @@ public class SymbolExtractorTests
             Handler: typing.TypeAlias = Callable[..., None]
             UserId = NewType("UserId", int)
             OrderId = typing.NewType("OrderId", int)
+            T = TypeVar("T")
+            P = typing.ParamSpec("P")
+            Ts = typing_extensions.TypeVarTuple("Ts")
             Point = NamedTuple("Point", [("x", int), ("y", int)])
             Coordinate = collections.namedtuple("Coordinate", "lat lon")
             DynamicUser = make_dataclass("DynamicUser", [("name", str)])
@@ -84,6 +87,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "T");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "P");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ts");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicUser");
