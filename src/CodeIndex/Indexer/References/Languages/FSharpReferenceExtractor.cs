@@ -65,7 +65,7 @@ internal static class FSharpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex CompositionOperandCallRegex = new(
-        $@"(?<![\w$])(?:(?:{IdentifierPattern})\s*\.\s*)*(?<left>{IdentifierPattern})\b\s*(?:>>|<<)\s*(?:(?:{IdentifierPattern})\s*\.\s*)*(?<right>{IdentifierPattern})\b",
+        $@"(?=(?<![\w$])(?:(?:{IdentifierPattern})\s*\.\s*)*(?<left>{IdentifierPattern})\b\s*(?:>>|<<)\s*(?:(?:{IdentifierPattern})\s*\.\s*)*(?<right>{IdentifierPattern})\b)",
         RegexOptions.Compiled);
 
     private static readonly Regex SpaceApplicationCallRegex = new(
