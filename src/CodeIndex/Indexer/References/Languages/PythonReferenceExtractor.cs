@@ -51,6 +51,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex QualifiedAssertTypeRegex = new(
         @"\b(?:typing|typing_extensions)\.assert_type\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)",
         RegexOptions.Compiled);
+    private static readonly Regex SingleClassBaseTypeRegex = new(
+        @"^\s*class\s+\w+\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)\s*:",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -358,6 +361,36 @@ internal static class PythonReferenceExtractor
                 context,
                 lineNumber,
                 container,
+                "python");
+        }
+    }
+
+    public static void EmitClassBaseReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<int, SymbolRecord?> resolveContainerForReference,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in SingleClassBaseTypeRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                context,
+                lineNumber,
+                resolveContainerForReference(match.Groups["name"].Index) ?? container,
                 "python");
         }
     }
