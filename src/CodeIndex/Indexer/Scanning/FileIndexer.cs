@@ -274,6 +274,7 @@ public class FileIndexer
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Dockerfile"]    = "dockerfile",
+        [".dockerfile"]   = "dockerfile",
         ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
         ["Makefile"]      = "makefile",
         ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
