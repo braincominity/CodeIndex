@@ -125,10 +125,10 @@ internal static class SqlReferenceExtractor
         $@"(?<![\w$])ALTER\s+TABLE\s+{QualifiedIdentifierNoCapturePattern}\s+SWITCH\b[\s\S]*?\bTO\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ObjectPermissionTargetRegex = new(
-        $@"(?<![\w$])(?:GRANT|DENY|REVOKE)\b[\s\S]*?\bON\s+OBJECT\s*::\s*{QualifiedIdentifierPattern}\s+(?:TO|FROM)\b",
+        $@"(?<![\w$])(?:GRANT|DENY|REVOKE)\b[\s\S]*?\bON\s+(?:OBJECT\s*::\s*)?(?![A-Z_]+\s*::){QualifiedIdentifierPattern}\s+(?:TO|FROM)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex RevokeObjectPermissionStatementRegex = new(
-        $@"(?<![\w$])REVOKE\b[\s\S]*?\bON\s+OBJECT\s*::\s*{QualifiedIdentifierNoCapturePattern}\s+FROM\b",
+    private static readonly Regex RevokePermissionStatementRegex = new(
+        $@"(?<![\w$])REVOKE\b[\s\S]*?\bON\s+(?:OBJECT\s*::\s*)?(?![A-Z_]+\s*::){QualifiedIdentifierNoCapturePattern}\s+FROM\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex UpdateStatisticsTargetRegex = new(
         $@"(?<![\w$])UPDATE\s+STATISTICS\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
@@ -722,7 +722,7 @@ internal static class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        if (RevokeObjectPermissionStatementRegex.IsMatch(statement))
+        if (RevokePermissionStatementRegex.IsMatch(statement))
             return;
 
         foreach (Match match in matches)

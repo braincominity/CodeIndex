@@ -11688,6 +11688,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_BareObjectPermissionsCaptureTargetReference()
+    {
+        const string content = """
+            GRANT SELECT ON dbo.Orders TO ReportingRole;
+            REVOKE DELETE ON archive.Customers FROM ReportingRole;
+            GRANT CONTROL ON SCHEMA::sales TO ReportingRole;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "ReportingRole" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
