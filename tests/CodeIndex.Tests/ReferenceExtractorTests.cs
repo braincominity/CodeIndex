@@ -11504,6 +11504,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateTriggerCapturesOnTableReference()
+    {
+        // Trigger definitions name the table after `ON`; that table should be visible to
+        // reference search independently of the trigger symbol itself.
+        // trigger 定義は `ON` 後に table を置く。trigger symbol とは別に、その table を
+        // reference search へ出す。
+        const string content = """
+            CREATE TRIGGER dbo.trg_Orders_Audit ON dbo.Orders AFTER INSERT AS SELECT 1;
+            CREATE OR ALTER TRIGGER [sales].[trg_Invoices_Audit] ON [sales].[Invoices] AFTER UPDATE AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "trg_Orders_Audit" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
