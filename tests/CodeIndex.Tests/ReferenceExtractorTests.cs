@@ -14566,6 +14566,55 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsBacktickNamespaceReferenceOperators()
+    {
+        const string content = """
+            lookup <- function(df) {
+                magrittr::`%>%`
+                rlang:::`%||%`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "magrittr::%>%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%>%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "rlang:::%||%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+    }
+
+    [Fact]
+    public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
+    {
+        const string content = """
+            `%>%` <- function(lhs, rhs) magrittr::`%>%`(lhs, rhs)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "magrittr::%>%"
+            && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "%>%"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsCallSites()
     {
         const string content = """

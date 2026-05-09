@@ -9,7 +9,7 @@ internal static class RReferenceExtractor
     // even when they are not invoked as calls.
     // R の namespace 参照 `pkg::fun` / `pkg:::fun` を参照として記録する。
     private static readonly Regex NamespaceReferenceRegex = new(
-        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?<name>[\w.]+)",
+        @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?:(?<backtickName>`[^`]+`)|(?<name>[\w.]+))",
         RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
@@ -26,7 +26,11 @@ internal static class RReferenceExtractor
         {
             var package = match.Groups["package"].Value;
             var separator = match.Groups["sep"].Value;
-            var name = match.Groups["name"].Value;
+            var backtickNameGroup = match.Groups["backtickName"];
+            var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
+            var name = backtickNameGroup.Success
+                ? backtickNameGroup.Value[1..^1]
+                : nameGroup.Value;
             ReferenceExtractor.AddReference(
                 references,
                 seen,
@@ -46,7 +50,7 @@ internal static class RReferenceExtractor
                 seen,
                 fileId,
                 name,
-                match.Groups["name"].Index,
+                nameGroup.Index + (backtickNameGroup.Success ? 1 : 0),
                 "reference",
                 context,
                 lineNumber,

@@ -1852,7 +1852,7 @@ public static partial class ReferenceExtractor
             result = MaskRustLifetimeTokens(result);
         if (lang != "cobol")
         {
-            var stringLiteralRegex = lang == "kotlin"
+            var stringLiteralRegex = lang is "kotlin" or "r"
                 ? NonBacktickStringLiteralRegex
                 : StringLiteralRegex;
             result = stringLiteralRegex.Replace(result, "\"\"");
