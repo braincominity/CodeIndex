@@ -5789,6 +5789,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterPartitionSchemeReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_partition_scheme_target.sql", "sql",
+            """
+            CREATE PARTITION SCHEME psOrders
+            AS PARTITION pfOrders
+            ALL TO ([PRIMARY]);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_partition_scheme_update.sql", "sql",
+            """
+            ALTER PARTITION SCHEME psOrders NEXT USED [PRIMARY];
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("psOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_scheme"]));
+        Assert.Equal("src/sql_alter_partition_scheme_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("psOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_scheme"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("psOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_scheme"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
