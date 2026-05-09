@@ -14570,6 +14570,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsInstallPackagesReferences()
+    {
+        const string content = """
+            bootstrap <- function() {
+                install.packages("dplyr")
+                utils::install.packages(c("ggplot2", "data.table"), repos = "https://example.invalid")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "ggplot2"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "data.table"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.DoesNotContain(references, r => r.SymbolName == "https://example.invalid");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceReferenceOperators()
     {
         const string content = """

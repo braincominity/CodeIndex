@@ -2606,6 +2606,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitInstallPackagesReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 RReferenceExtractor.EmitDollarMemberReferences(
                     preparedLine,
                     references,

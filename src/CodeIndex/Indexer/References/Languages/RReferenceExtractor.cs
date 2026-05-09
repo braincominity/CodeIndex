@@ -56,6 +56,12 @@ internal static class RReferenceExtractor
     private static readonly Regex DataCallPackageRegex = new(
         @"\bpackage\s*=\s*['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
+    private static readonly Regex InstallPackagesCallStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?install\.packages\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex InstallPackagesNameRegex = new(
+        @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))(?:c\s*\(\s*)?['""](?<name>[^'""]+)['""]",
+        RegexOptions.Compiled);
     private static readonly Regex DollarMemberReferenceRegex = new(
         @"(?<![\w.])(?:(?:`(?<backtickReceiver>[^`]+)`)|(?<receiver>[A-Za-z.][\w.]*))\$(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
         RegexOptions.Compiled);
@@ -570,6 +576,36 @@ internal static class RReferenceExtractor
             context,
             lineNumber,
             container);
+    }
+
+    public static void EmitInstallPackagesReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (!InstallPackagesCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        var line = StripRNamespaceDirectiveComment(originalLine);
+        foreach (Match match in InstallPackagesNameRegex.Matches(line))
+        {
+            var name = match.Groups["name"];
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name.Value,
+                name.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     public static void EmitDollarMemberReferences(
