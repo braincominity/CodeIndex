@@ -5427,6 +5427,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropAggregateReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_aggregate_target.sql", "sql",
+            """
+            CREATE AGGREGATE dbo.TotalAmount(@value int)
+            RETURNS int
+            EXTERNAL NAME SalesAssembly.TotalAmount;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_aggregate_cleanup.sql", "sql",
+            """
+            DROP AGGREGATE dbo.TotalAmount;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.TotalAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_aggregate"]));
+        Assert.Equal("src/sql_drop_aggregate_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.TotalAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_aggregate"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.TotalAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_aggregate"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
