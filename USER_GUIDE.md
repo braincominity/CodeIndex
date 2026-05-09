@@ -499,10 +499,32 @@ Languages:
   javascript      4
 ```
 
-`status --check` compares the current indexable workspace against the DB's saved file checksums. It uses the same `FileIndexer` path filtering and ignore rules as indexing, recomputes raw-byte SHA256 checksums for current files, and reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `unindexed_files`, `unverifiable_files`, and `scan_errors`. It exits `0` only when the DB exactly matches the current workspace; stale indexes exit `5`. Use this at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
+`status --check` is the freshness gate. It:
 
-`status --json` also reports trust flags / availability fields such as `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, and `csharp_metadata_target_ready`. When `fold_ready` is the only degraded readiness bit, `status --json` also adds `degraded_reason`, `recommended_action`, and `alternative_action` so tools can surface a concrete remediation (`cdidx backfill-fold` first, full rebuild as fallback) instead of guessing from a generic warning. For explicit read-only `file:` DB URIs, including both absolute `file:///...?...` and relative `file:codeindex.db?...` forms, those remediation fields are normalized back to a writable filesystem path instead of echoing the read-only URI into commands that would fail. If `sql_graph_contract_ready` is `false`, rerun `cdidx index .` before trusting SQL `references` / `callers` / `deps` / `unused` / `hotspots`, because unchanged SQL rows may still reflect an older graph contract. The same SQL graph-contract pair is also mirrored by SQL-relevant `inspect --json`, JSON graph/dependency outputs, and MCP graph/dependency tools whenever SQL-backed graph reads contribute to the payload, so stale SQL rows do not masquerade as authoritative hits or zero-result answers while unrelated C# / JS / etc. graph queries stay clean. If `hotspot_family_ready` is `false`, `hotspots` may still run but duplicate-name families are conservatively degraded until you rerun `cdidx index .` to restamp authoritative hotspot-family metadata. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names. If `csharp_metadata_target_ready` is `false`, the `deps` / `impact` metadata-attribute edges fall back to a signature-shape heuristic that can drop non-attribute impostors silently; run `cdidx index .` once to let the authoritative resolver stamp each C# class as attribute-derived or not.
-Without `--check`, `status` summary freshness is based on the stored `indexed_at` and `latest_modified` timestamps, not on how long ago the index was built. A clean workspace with `indexed_at >= latest_modified` should read as fresh even if the index itself is older than a few minutes.
+- scans the current indexable files with the same `FileIndexer` path filters and ignore rules used for indexing;
+- recomputes raw-byte SHA256 checksums and compares them with the DB's saved checksums;
+- reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `unindexed_files`, `unverifiable_files`, and `scan_errors`;
+- exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
+
+Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
+
+`status --json` also reports readiness and availability metadata:
+
+- storage/index readiness: `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`;
+- SQL graph readiness: `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`;
+- hotspot and C# metadata readiness: `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`.
+
+Use these fields as concrete remediation hints:
+
+- `fold_ready=false`: `status --json` includes `degraded_reason`, `recommended_action`, and `alternative_action`. Prefer `cdidx backfill-fold`; use a full rebuild as the fallback. For read-only `file:` DB URIs such as `file:///...?...` or `file:codeindex.db?...`, the remediation path is normalized back to a writable filesystem path.
+- `sql_graph_contract_ready=false`: rerun `cdidx index .` before trusting SQL `references` / `callers` / `deps` / `unused` / `hotspots`. The same readiness pair is mirrored by SQL-backed `inspect --json`, JSON graph/dependency output, and MCP graph/dependency tools.
+- `hotspot_family_ready=false`: `hotspots` can still run, but duplicate-name families use a conservative fallback until `cdidx index .` restamps hotspot-family metadata.
+- `csharp_symbol_name_ready=false`: rerun `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
+- `csharp_metadata_target_ready=false`: `deps` / `impact` metadata-attribute edges fall back to a signature-shape heuristic; rerun `cdidx index .` once so the authoritative resolver stamps whether each C# class is attribute-derived.
+
+`reference_lines` stores each reference body once per file/line, so new indexes are smaller than the legacy schema. If an existing `.cdidx/codeindex.db` is already bloated, `VACUUM` cannot remove old duplicate rows; rebuild with `cdidx . --rebuild` to reclaim the space.
+
+Without `--check`, the `status` summary freshness indicator is based on stored `indexed_at` and `latest_modified` timestamps, not elapsed wall-clock time. A clean workspace with `indexed_at >= latest_modified` should read as fresh even if the index itself is older than a few minutes.
 
 ### Map the repo before searching
 
@@ -602,6 +624,8 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name.
+
 | Language | Extensions | Symbols |
 |---|---|:---:|
 | Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel` (Bazel Starlark) | yes |
@@ -633,20 +657,17 @@ The database reflects the working tree at the time of the last index. After swit
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
 | Solidity | `.sol` | -- |
 | Tcl | `.tcl`, `.tk` | -- |
-| R | `.r`, `.R` | yes (function assignments, methods::setClass/methods::setClassUnion/methods::setIs/methods::setOldClass/R6::R6Class/methods::setRefClass with named arguments, methods::setValidity, R6 inherit vectors and public/private/active methods, methods::setGeneric/methods::setMethod with named arguments, library/require) |
+| R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
 | VB.NET | `.vb`, `.vbs` | yes |
-| Razor/Blazor | `.cshtml`, `.razor` | yes (as C#) |
-
-`.h` ファイルは既定では C のままですが、`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーを含むヘッダーは、index 時に `cpp` へ昇格します。
-
+| Razor/Blazor | `.cshtml`, `.razor` | yes (C#) |
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
-| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes; `ARG` build args are searchable as `property` symbols |
-| Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes (labels, PROC/MACRO blocks, sections/segments, extern/include/import directives, constants, and call/branch targets for graph queries) |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
+| Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
 | CUDA | `.cu`, `.cuh` | -- |
 | GLSL | `.glsl`, `.vert`, `.frag` | -- |
 | HLSL | `.hlsl` | -- |
@@ -655,8 +676,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Verilog | `.v` | -- |
 | SystemVerilog | `.sv`, `.svh` | -- |
 | VHDL | `.vhd`, `.vhdl` | -- |
-| Common Lisp | `.lisp`, `.lsp`, `.cl` | yes (defpackage, in-package, use-package, import/shadowing-import, defclass, defstruct, defun/defmacro/defgeneric/defmethod) |
-| Racket | `.rkt` | yes (module, define, define-syntax-rule, define-syntaxes, define-for-syntax, struct, require, provide) |
+| Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
+| Racket | `.rkt` | yes |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
 | Ada | `.ada`, `.adb`, `.ads` | -- |
 | Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
@@ -665,62 +686,36 @@ The database reflects the working tree at the time of the last index. After swit
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
-| Shell | `.sh`, `.bash`, `.zsh`, `.fish` | command-style function calls |
-| PowerShell | `.ps1`, `.psm1`, `.psd1` | function/filter (scope prefixes), configuration, workflow, class constructors/methods/properties, enum values, Import-Module, using module/namespace/assembly |
-| Batch | `.bat`, `.cmd` | labels + `goto`/`call` targets, including inline/chained control flow and `if` comparison forms |
+| Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
+| Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
-Query-time `--lang tsql` is accepted as an alias for the SQL bucket.
-T-SQL `CREATE AGGREGATE` / `ALTER AGGREGATE` and `CREATE/ALTER ASSEMBLY` / `XML SCHEMA COLLECTION` declarations are also searchable.
-| Markdown | `.md` | yes (ATX/setext heading symbols; local anchor references) |
+| Markdown | `.md` | yes |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
-| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes (`$variable`, `%placeholder`, `@extend`) |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
 | Sass (indented) | `.sass` | -- |
 | Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-`.h` files stay on the C path by default, but headers that clearly look like C++ source are promoted to `cpp` at index time when they contain unmistakable markers such as `namespace`, `template`, `using`, `class`, or `std::`.
+**Symbol notes**
 
-C# symbol extraction covers modern partial member forms, including partial methods, properties, indexers, events, and constructors, so declaration/implementation pairs remain visible to `symbols`, `definition`, and `outline`.
-
-Java reference extraction records sealed type `permits` lists as `type_reference` edges, so graph queries can see permitted subtype dependencies.
-
-JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, `export type { User } from`, `export type * from`, and `export type * as ns from`, including commented forms, multiline named re-export clauses, multiline `export *` / `export * as ns` layouts, import-attributes suffixes such as `with { type: 'json' }` / `assert { type: 'json' }`, and valid minified forms such as `export*from` / `export{foo as bar}from`. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value` / `exports[404] = notFound`, `Object.defineProperty(exports, "foo", ...)` / `Object.defineProperty(exports, 404, ...)`, `Object.defineProperties(exports, { foo: ... })`, and `Object.assign(exports, { foo })` export markers, same-line and multiline parenthesized wrappers, and TypeScript generic arrow RHS such as `module.exports.fn = <T>(x: T) => x`, `module.exports.foo = <T>(\n  value: T\n) => value`, and constrained/async variants, while keeping identifier prefixes like `functionCall()` / `classyThing` as ordinary property values. Whole-module CommonJS function exports such as `module.exports = function () {}` and `module.exports = async () => {}` are indexed as exported `default` function symbols. Exported object-literal alias/shorthand, literal-key, and computed literal-key properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }` / `module.exports = { "x-api": handler, 404: notFound, ["computed-api"]: handler }` are also surfaced.
-
-Local named export lists such as `export { foo, local as publicName }`, string-literal export aliases such as `export { handler as "x-api" }`, TypeScript `export type { User }`, and exported variable declarations such as `export const foo = 1, bar = 2` are indexed as exported `property` symbols, so the module's public surface stays searchable whether declarations and exports are separated or inline.
-
-Default-export functions such as `export default function Page() {}` are indexed as `function` symbols by their declared name; anonymous forms such as `export default function () {}` and default arrow exports such as `export default () => value` / `export default async () => {}` are indexed as the module `default` function surface.
-
-Runtime dynamic imports are indexed as `import` symbols even when the module specifier is split across lines, for example `import(\n  "./feature"\n)`, when the call uses a no-substitution template literal such as `` import(`./view.js`) ``, and when it includes import options such as `import("./data.json", { with: { type: "json" } })`. TypeScript `typeof import(...)` type queries remain type-only and do not create runtime import symbols.
-
-Static JavaScript/TypeScript imports also surface their source module specifier as an `import` symbol, including side-effect imports such as `import "./setup"`, multiline `import { ... } from "./module"` declarations, and import-attributes suffixes.
-
-CommonJS `require()` calls such as `const fs = require("node:fs")`, multiline `require(\n  "./helper"\n)`, `require.resolve("./resolved")`, and `require.resolve("./resolved", { paths: [...] })` also surface their source module specifier as an `import` symbol.
-
-ES module resolution probes written as `import.meta.resolve("./feature.js")` also add `import` symbols for static module specifiers, including calls with a parent URL argument.
-
-ES module asset references written as `new URL("./worker.js", import.meta.url)` also add `import` symbols for static string and no-substitution template specifiers.
-
-Worker script dependencies written as `importScripts("./worker-a.js", "/worker-b.js")` also add one `import` symbol per static string or no-substitution template specifier.
-
-Service Worker registrations written as `navigator.serviceWorker.register("./sw.js")` or `window.navigator.serviceWorker.register("./sw.js")` also add `import` symbols for static script specifiers, including calls with registration options.
-
-Worklet module loads written as `audioWorklet.addModule("./processor.js")` or `CSS.paintWorklet.addModule("./paint.js")` also add `import` symbols for static module specifiers.
-
-Worker constructors written as `new Worker("./worker.js")`, `new SharedWorker("./shared-worker.js", { type: "module" })`, `new window.Worker("./worker.js")`, or `new globalThis.SharedWorker("./shared-worker.js")` also add `import` symbols for static script specifiers.
-
-Destructured named exports such as `export const { foo, renamed: localName } = source` are indexed by the exported binding names, including rest bindings and nested object/array binding names.
-
-Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
-
-All languages are fully searchable via FTS5. Languages with **Symbols = yes** also support structured queries by function/class/import name.
-
-Extensionless scripts are also indexed when their first line has a recognized shebang. Current shebang fallback coverage includes shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
+- C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
+- SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
+- R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
+- Markdown and CSS: Markdown heading and local-anchor symbols are indexed; CSS variables, placeholders, and `@extend` references are indexed.
+- Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
+- Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
+- C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
+- JavaScript/TypeScript exports: barrel re-exports, local and string-literal export aliases, exported variables, default exports, destructured exports, and CommonJS named/default exports are indexed as exported symbols.
+- JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static.
+- Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
+- Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ## Prerequisites: sqlite3
 
@@ -1536,11 +1531,33 @@ Languages:
   javascript      4
 ```
 
-`status --check` は、現在 index 対象になる workspace と DB に保存されたファイル checksum を比較します。indexing と同じ `FileIndexer` の path filter / ignore rule を使って現在ファイルを走査し、raw bytes の SHA256 を再計算して、`index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`unindexed_files`、`unverifiable_files`、`scan_errors` を返します。DB が現在の workspace と完全一致するときだけ終了コード `0`、stale な index では終了コード `5` です。AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
+`status --check` は鮮度確認の入口です。次を実行します。
 
-`status --json` には `fold_ready`、`fold_ready_reason`、`graph_table_available`、`issues_table_available`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、`hotspot_family_ready`、`hotspot_family_degraded_reason`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready` などの trust flag / availability field も含まれます。`fold_ready` だけが縮退している場合は、generic な warning を推測させないように `degraded_reason`、`recommended_action`、`alternative_action` も追加され、まず `cdidx backfill-fold`、必要なら full rebuild という具体的な対処をそのまま機械的に扱えます。明示的な read-only `file:` DB URI を渡している場合でも、absolute な `file:///...?...` と relative な `file:codeindex.db?...` の両方で、これらの remediation field は失敗する read-only URI をそのまま返さず、writable な filesystem path に正規化して返します。`sql_graph_contract_ready` が `false` の場合、unchanged な SQL 行が古い graph contract のまま残っている可能性があるため、SQL の `references` / `callers` / `deps` / `unused` / `hotspots` を信頼する前に `cdidx index .` を再実行してください。同じ SQL graph contract のペアは、SQL の graph read が実際に関与した `inspect --json`、JSON の graph/dependency 系出力、MCP の graph/dependency 系ツールにも反映されるため、stale な SQL 行が authoritative なヒットや 0 件応答に見えてしまうのを防ぎつつ、無関係な C# / JS などの graph query には混入しません。`hotspot_family_ready` が `false` の間も `hotspots` 自体は使えますが、duplicate-name family は authoritative ではない保守的 fallback に縮退しうるため、`cdidx index .` を再実行して hotspot-family metadata を restamp してください。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。`csharp_metadata_target_ready` が `false` の場合、`deps` / `impact` の metadata attribute edge 判定はシグネチャ形状ヒューリスティックへフォールバックし、attribute でない同名クラスを黙ってドロップしうるため、`cdidx index .` を 1 回実行して authoritative resolver に各 C# クラスが attribute 派生かどうかを永続化させてください。
-参照本文は `reference_lines` に file/line ごと 1 回だけ保存されるため、新規 index は legacy schema より小さくなります。既存の `.cdidx/codeindex.db` がすでに肥大化している場合は、`VACUUM` だけでは古い重複行を消せないので、`cdidx . --rebuild` で再構築して空き領域を回収してください。
- `--check` なしの `status` の summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
+- indexing と同じ `FileIndexer` の path filter / ignore rule で、現在 index 対象になるファイルを走査します。
+- raw bytes の SHA256 を再計算し、DB に保存された checksum と比較します。
+- `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`unindexed_files`、`unverifiable_files`、`scan_errors` を返します。
+- DB が現在の workspace と完全一致するときだけ終了コード `0`、stale な index では終了コード `5` です。
+
+AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
+
+`status --json` は readiness / availability metadata も返します。
+
+- storage / index: `fold_ready`、`fold_ready_reason`、`graph_table_available`、`issues_table_available`
+- SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
+- hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
+- C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
+
+各 flag の対処は機械的に判断できます。
+
+- `fold_ready=false`: `degraded_reason`、`recommended_action`、`alternative_action` に従い、まず `cdidx backfill-fold`、必要なら full rebuild を実行します。read-only `file:` DB URI の場合も、対処用 path は writable な filesystem path に正規化されます。
+- `sql_graph_contract_ready=false`: unchanged な SQL 行が古い graph contract のまま残っている可能性があります。SQL の `references` / `callers` / `deps` / `unused` / `hotspots` を信頼する前に `cdidx index .` を再実行してください。
+- `hotspot_family_ready=false`: `hotspots` は使えますが、duplicate-name family は保守的 fallback に縮退しうるため、`cdidx index .` で hotspot-family metadata を restamp してください。
+- `csharp_symbol_name_ready=false`: `cdidx index .` を 1 回実行し、unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
+- `csharp_metadata_target_ready=false`: `deps` / `impact` の metadata attribute edge 判定がヒューリスティックへフォールバックします。`cdidx index .` を 1 回実行し、各 C# class が attribute 派生かどうかを authoritative resolver で永続化してください。
+
+参照本文は `reference_lines` に file/line ごと 1 回だけ保存されるため、新規 index は legacy schema より小さくなります。既存の `.cdidx/codeindex.db` が肥大化している場合は、`VACUUM` だけでは古い重複行を消せないので、`cdidx . --rebuild` で再構築して空き領域を回収してください。
+
+`--check` なしの `status` summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
 
 ### 検索前にリポジトリ全体を俯瞰する
 
@@ -1641,6 +1658,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 
 ## 対応言語
 
+全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。
+
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
 | Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel`（Bazel Starlark） | yes |
@@ -1661,77 +1680,76 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Scala | `.scala`, `.sc` | yes |
 | Elixir | `.ex`, `.exs` | yes |
 | Lua | `.lua` | yes |
+| Groovy | `.groovy`, `.gvy`, `.gy`, `.gsh` | -- |
+| Crystal | `.cr` | -- |
+| Clojure | `.clj`, `.cljs`, `.cljc`, `.edn` | -- |
+| D | `.d` | -- |
+| Erlang | `.erl`, `.hrl` | -- |
+| Julia | `.jl` | -- |
+| Nim | `.nim`, `.nims` | -- |
+| OCaml | `.ml`, `.mli` | -- |
+| Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
+| Solidity | `.sol` | -- |
+| Tcl | `.tcl`, `.tk` | -- |
 | R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |
 | F# | `.fs`, `.fsx`, `.fsi` | yes |
 | VB.NET | `.vb`, `.vbs` | yes |
-| Razor/Blazor | `.cshtml`, `.razor` | yes (as C#) |
-
-`.h` ファイルは既定では C のままですが、`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーを含むヘッダーは、index 時に `cpp` へ昇格します。
-
+| Razor/Blazor | `.cshtml`, `.razor` | yes (C#) |
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
-| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes; `ARG` ビルド引数も `property` シンボルとして検索可 |
-| Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes（ラベル、PROC/MACRO、section/segment、extern/include/import、定数。call/branch ターゲットは graph 対応） |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
+| Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
+| CUDA | `.cu`, `.cuh` | -- |
+| GLSL | `.glsl`, `.vert`, `.frag` | -- |
+| HLSL | `.hlsl` | -- |
+| WGSL | `.wgsl` | -- |
+| Metal | `.metal` | -- |
+| Verilog | `.v` | -- |
+| SystemVerilog | `.sv`, `.svh` | -- |
+| VHDL | `.vhd`, `.vhdl` | -- |
+| Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
+| Racket | `.rkt` | yes |
+| Pascal | `.pas`, `.pp`, `.dpr` | -- |
+| Ada | `.ada`, `.adb`, `.ads` | -- |
+| Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
+| Raku | `.raku`, `.rakumod`, `.rakutest` | -- |
+| Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
-| Shell | `.sh`, `.bash`, `.zsh`, `.fish` | 関数のコマンド構文呼び出し |
-| PowerShell | `.ps1`, `.psm1`, `.psd1` | 関数/フィルタ（scope プレフィックス付き）、configuration、workflow、class、enum、Import-Module、using module/namespace/assembly |
-| Batch | `.bat`, `.cmd` | ラベル + `goto`/`call` ターゲット、inline / chained な制御フローに加えて `if` 比較式も含む |
+| Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
+| Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
-クエリ時の `--lang tsql` は SQL バケットの別名として受け付けられます。
-T-SQL の `CREATE AGGREGATE` / `ALTER AGGREGATE` と `CREATE/ALTER ASSEMBLY` / `XML SCHEMA COLLECTION` も検索対象です。
-| Markdown | `.md` | yes (ATX/setext heading symbols; local anchor references) |
+| Markdown | `.md` | yes |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
-| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes (`$variable`, `%placeholder`, `@extend`) |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
 | Sass（インデント構文） | `.sass` | -- |
 | Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-C# のシンボル抽出は partial method、partial property、partial indexer、partial event、partial constructor などの近年の partial member 形式に対応しているため、宣言 / 実装ペアも `symbols`、`definition`、`outline` から見えます。
+**シンボル抽出メモ**
 
-Java の参照抽出は sealed 型の `permits` リストを `type_reference` edge として記録するため、graph query で許可サブタイプ依存も見えます。
-
-JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` / `export type * from` / `export type * as ns from` を、comment 付き、複数行の named re-export clause、複数行の `export *` / `export * as ns`、`with { type: 'json' }` / `assert { type: 'json' }` のような import attributes suffix、さらに `export*from` / `export{foo as bar}from` のような minified でも有効な構文を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` / `exports[404] = notFound` のような直接的な CommonJS named export、`Object.defineProperty(exports, "foo", ...)` / `Object.defineProperty(exports, 404, ...)`、`Object.defineProperties(exports, { foo: ... })`、`Object.assign(exports, { foo })` の export marker、同一行 / 複数行の括弧付き右辺、`module.exports.fn = <T>(x: T) => x`、`module.exports.foo = <T>(\n  value: T\n) => value`、constraint / async 付き TypeScript generic arrow 右辺も含めて表面化しつつ、`functionCall()` や `classyThing` のような識別子接頭辞は通常の property 値として扱います。`module.exports = function () {}` や `module.exports = async () => {}` のような whole-module CommonJS function export は exported `default` function シンボルとして索引されます。`module.exports = { foo: inner }` / `module.exports = { foo, bar }` / `module.exports = { "x-api": handler, 404: notFound, ["computed-api"]: handler }` のような exported object-literal の alias / shorthand / literal-key / computed literal-key property も表面化します。
-
-`export { foo, local as publicName }`、`export { handler as "x-api" }` のような string-literal export alias、TypeScript の `export type { User }`、`export const foo = 1, bar = 2` のような exported variable declaration も exported `property` シンボルとして索引されるため、宣言と export が分かれている場合でも inline の場合でもモジュールの公開面を検索できます。
-
-`export default function Page() {}` のような default export 関数は宣言名の `function` シンボルとして索引され、`export default function () {}` のような無名形式や `export default () => value` / `export default async () => {}` のような default arrow export はモジュールの `default` 関数面として索引されます。
-
-runtime の dynamic import は、`import(\n  "./feature"\n)` のように module specifier が複数行に分かれている場合、`` import(`./view.js`) `` のような no-substitution template literal を使う場合、`import("./data.json", { with: { type: "json" } })` のように import options を含む場合でも `import` シンボルとして索引されます。TypeScript の `typeof import(...)` type query は型専用のままで、runtime import シンボルは作りません。
-
-静的な JavaScript/TypeScript import でも source module specifier を `import` シンボルとして表面化します。`import "./setup"` のような side-effect import、複数行の `import { ... } from "./module"` 宣言、import attributes suffix を含む import も対象です。
-
-`const fs = require("node:fs")`、複数行の `require(\n  "./helper"\n)`、`require.resolve("./resolved")`、`require.resolve("./resolved", { paths: [...] })` のような CommonJS `require()` 呼び出しでも、source module specifier を `import` シンボルとして表面化します。
-
-`import.meta.resolve("./feature.js")` のような ES module resolution probe も、parent URL 引数付きの call を含め、静的な module specifier を `import` シンボルとして追加します。
-
-`new URL("./worker.js", import.meta.url)` のような ES module asset reference も、静的な string / no-substitution template specifier を `import` シンボルとして追加します。
-
-`importScripts("./worker-a.js", "/worker-b.js")` のような worker script dependency も、静的な string / no-substitution template specifier ごとに `import` シンボルを追加します。
-
-`navigator.serviceWorker.register("./sw.js")` や `window.navigator.serviceWorker.register("./sw.js")` のような Service Worker registration も、registration options 付きの call を含め、静的な script specifier を `import` シンボルとして追加します。
-
-`audioWorklet.addModule("./processor.js")` や `CSS.paintWorklet.addModule("./paint.js")` のような Worklet module load も、静的な module specifier を `import` シンボルとして追加します。
-
-`new Worker("./worker.js")`、`new SharedWorker("./shared-worker.js", { type: "module" })`、`new window.Worker("./worker.js")`、`new globalThis.SharedWorker("./shared-worker.js")` のような Worker constructor も、静的な script specifier を `import` シンボルとして追加します。
-
-`export const { foo, renamed: localName } = source` のような destructured named export も、rest binding やネストした object / array binding 名を含め、実際に export される binding 名で索引します。
-
-モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
-
-全言語がFTS5による全文検索に対応。**シンボル = yes** の言語は関数・クラス・インポート名での構造化検索にも対応しています。
-
-拡張子なしスクリプトでも、先頭行の shebang が認識できればインデックス対象になります。現在の shebang フォールバック対応は shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell です。
+- C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
+- SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
+- R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
+- Markdown と CSS: Markdown の heading / local anchor、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
+- Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
+- Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
+- C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
+- JavaScript/TypeScript export: barrel re-export、local / string-literal export alias、exported variable、default export、destructured export、CommonJS named/default export を exported symbol として索引します。
+- JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。
+- Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
+- 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ## 前提条件: sqlite3
 
