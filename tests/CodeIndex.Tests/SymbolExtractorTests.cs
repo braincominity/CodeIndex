@@ -18555,6 +18555,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsRightwardFunctionAssignments()
+    {
+        // R supports rightward assignment forms for function values.
+        // R は function 値の右代入形式もサポートする。
+        const string content = """
+            function(x) x + 1 -> increment
+            function(data) data ->> global_transform
+            \(value) value -> `plot-model`
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "increment");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "global_transform");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+    }
+
+    [Fact]
     public void Extract_R_DetectsAssignFunctionDefinitions()
     {
         // R: assign() can install a function under a string name.
