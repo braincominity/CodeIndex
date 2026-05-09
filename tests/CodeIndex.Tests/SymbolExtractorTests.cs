@@ -14684,7 +14684,9 @@ public class SymbolExtractorTests
 
             let workflow user =
                 task {
+                    use client = createClient user
                     let! loadedUser = loadUser user
+                    use! lease = acquireLease loadedUser
                     return loadedUser
                 }
             """;
@@ -14710,7 +14712,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "client");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadedUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "lease");
     }
 
     [Fact]
