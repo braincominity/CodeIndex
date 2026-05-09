@@ -71,6 +71,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CTaggedTypeofUnqualTypeRegex = new(
         @"\b(?:typeof_unqual|__typeof_unqual__|__typeof_unqual)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefBuiltinTypesCompatibleFirstTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*,",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefBuiltinTypesCompatibleSecondTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\([^,;{}]+,\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefGenericAssociationTypeRegex = new(
         @"(?:_Generic\s*\([^,;{}]*,|,)\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*:",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1199,6 +1205,18 @@ internal static class LanguageReferenceExtractionSupport
             }
 
             foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);

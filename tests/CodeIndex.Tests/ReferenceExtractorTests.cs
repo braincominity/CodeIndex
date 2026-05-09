@@ -2370,6 +2370,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefBuiltinTypesCompatibleOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int same(void) {
+                return __builtin_types_compatible_p(widget_t *, message_t);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
     {
         const string content = """
