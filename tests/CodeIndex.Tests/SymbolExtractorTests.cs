@@ -14553,6 +14553,7 @@ public class SymbolExtractorTests
         // C: include targets should be searchable by header name / C: include 先はヘッダー名で検索できるべき
         var content = """
             #include <stdio.h>
+            # include <stdlib.h>
             #include "project/foo.h"
             #include HEADER_NAME
             """;
@@ -14560,6 +14561,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdlib.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
     }
