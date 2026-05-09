@@ -3734,12 +3734,13 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var startMatch = RPacmanPackageLoaderStartRegex.Match(line);
+        var codeLine = StripRCommentForPackageLoader(line);
+        var startMatch = RPacmanPackageLoaderStartRegex.Match(codeLine);
         if (!startMatch.Success)
             return false;
 
         var argsStart = startMatch.Index + startMatch.Length;
-        var args = line[argsStart..];
+        var args = codeLine[argsStart..];
         var added = false;
         foreach (Match match in RPacmanPackageLoaderArgumentRegex.Matches(args))
         {
@@ -3768,6 +3769,52 @@ public static partial class SymbolExtractor
         }
 
         return added;
+    }
+
+    private static string StripRCommentForPackageLoader(string line)
+    {
+        var inBacktickIdentifier = false;
+        var quote = '\0';
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (inBacktickIdentifier)
+            {
+                if (ch == '`')
+                    inBacktickIdentifier = false;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inBacktickIdentifier = true;
+                continue;
+            }
+
+            if (ch is '"' or '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+        }
+
+        return line;
     }
 
     private static bool TryGetSameLineSignatureKey(SymbolRecord symbol, out SameLineSignatureKey key)
