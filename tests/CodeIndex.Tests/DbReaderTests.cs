@@ -5212,6 +5212,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropSynonymReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_synonym_target.sql", "sql",
+            """
+            CREATE SYNONYM dbo.CustomerAlias FOR dbo.Customers;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_synonym_cleanup.sql", "sql",
+            """
+            DROP SYNONYM dbo.CustomerAlias;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.CustomerAlias", lang: "sql", exact: true, pathPatterns: ["sql_drop_synonym"]));
+        Assert.Equal("src/sql_drop_synonym_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.CustomerAlias", lang: "sql", exact: true, pathPatterns: ["sql_drop_synonym"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.CustomerAlias", lang: "sql", exact: true, pathPatterns: ["sql_drop_synonym"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

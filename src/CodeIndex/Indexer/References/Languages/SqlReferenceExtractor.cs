@@ -144,6 +144,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateSynonymForTargetRegex = new(
         $@"(?<![\w$])CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\b\s+{QualifiedIdentifierNoCapturePattern}\s+FOR\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropSynonymTargetRegex = new(
+        $@"(?<![\w$])DROP\s+(?:PUBLIC\s+)?SYNONYM\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -676,6 +679,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             CreateSynonymForTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropSynonymTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
