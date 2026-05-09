@@ -11486,6 +11486,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DropIndexCapturesOnTableReference()
+    {
+        // SQL Server `DROP INDEX name ON table` should make the affected table searchable.
+        // SQL Server の `DROP INDEX name ON table` でも対象 table を検索可能にする。
+        const string content = """
+            DROP INDEX IX_Orders_CreatedAt ON dbo.Orders;
+            DROP INDEX IF EXISTS IX_Invoices ON [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "IX_Orders_CreatedAt" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

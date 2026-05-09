@@ -4702,6 +4702,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropIndexReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_index_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int, CreatedAt datetime2);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_index_cleanup.sql", "sql",
+            """
+            DROP INDEX IX_Orders_CreatedAt ON dbo.Orders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_drop_index"]));
+        Assert.Equal("src/sql_drop_index_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_drop_index"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_drop_index"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
