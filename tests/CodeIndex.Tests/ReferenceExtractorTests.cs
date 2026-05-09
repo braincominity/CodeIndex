@@ -10854,6 +10854,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedCallTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    [Select]()
+                    Me.[Save]()
+                    Dim item = New [Widget]()
+                End Sub
+
+                Private Sub [Select]()
+                End Sub
+
+                Private Sub [Save]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "Select" && r.ReferenceKind == "call"));
+        Assert.Single(references.Where(r => r.SymbolName == "Save" && r.ReferenceKind == "call"));
+        Assert.Single(references.Where(r => r.SymbolName == "Widget" && r.ReferenceKind == "instantiate"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Save]" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
     {
         const string content = """

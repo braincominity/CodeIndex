@@ -2080,6 +2080,19 @@ public static partial class ReferenceExtractor
                     LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
                 else if (language == "smalltalk")
                     SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "vb")
+                    LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
+                        "vb",
+                        preparedLine,
+                        originalLine,
+                        AddCallLikeReference,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        definitionNames);
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
                 // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and

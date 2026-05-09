@@ -298,6 +298,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbRaiseEventRegex = new(
         @"\bRaiseEvent\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbCallRegex = new(
+        @"(?<![\w\]])(?<name>" + VbQualifiedIdentifierPattern + @")\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+(?<name>[A-Za-z_]\w*)",
@@ -472,6 +475,9 @@ internal static class LanguageReferenceExtractionSupport
                 break;
             case "smalltalk":
                 EmitSmalltalkMessageReferences(preparedLine, addCallLikeReference, definitionNames);
+                break;
+            case "vb":
+                EmitVisualBasicEscapedCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
                 break;
         }
     }
@@ -3366,6 +3372,77 @@ internal static class LanguageReferenceExtractionSupport
             var nameIndex = group.Index + Math.Max(0, nameOffset);
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
+    }
+
+    private static void EmitVisualBasicEscapedCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? definitionNames)
+    {
+        foreach (Match match in VbCallRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            if (!group.Value.Contains('['))
+                continue;
+
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            if (ShouldSkipVisualBasicEscapedCall(preparedLine, group.Index, name, definitionNames))
+                continue;
+
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+    }
+
+    private static bool ShouldSkipVisualBasicEscapedCall(
+        string line,
+        int nameIndex,
+        string name,
+        IReadOnlySet<string>? definitionNames)
+    {
+        var previous = GetPreviousSimpleWord(line, nameIndex);
+        if (previous.Length == 0)
+            return false;
+
+        if (string.Equals(previous, "New", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(previous, "RaiseEvent", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (definitionNames?.Contains(name) != true)
+            return false;
+
+        return previous.Equals("Sub", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Function", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Property", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Event", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Delegate", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Class", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Structure", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Interface", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Enum", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetPreviousSimpleWord(string line, int index)
+    {
+        var cursor = index - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+            cursor--;
+        if (cursor < 0)
+            return string.Empty;
+
+        var end = cursor + 1;
+        while (cursor >= 0 && IsSimpleIdentifierPart(line[cursor]))
+            cursor--;
+
+        return line[(cursor + 1)..end];
     }
 
     private static void EmitFortranTypeReferences(
