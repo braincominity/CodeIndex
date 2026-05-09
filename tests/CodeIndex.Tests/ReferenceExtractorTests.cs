@@ -11544,6 +11544,11 @@ public class ReferenceExtractorTests
               end type RepositoryBase
               type, extends(RepositoryBase) :: Repository
               end type Repository
+              abstract interface
+                subroutine create_repository()
+                  import :: RepositoryFactory
+                end subroutine create_repository
+              end interface
             contains
               subroutine run(repo)
                 type(Repository) :: repo
@@ -11563,6 +11568,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
