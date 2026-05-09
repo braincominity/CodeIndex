@@ -26,6 +26,9 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceUseDynLibDirectiveRegex = new(
         @"^\s*useDynLib\s*\(\s*(?:`(?<packageBacktick>[^`]+)`|['""](?<packageQuoted>[^'""]+)['""]|(?<package>[\w.]+))",
         RegexOptions.Compiled);
+    private static readonly Regex NamespaceUseDynLibRoutineRegex = new(
+        @"(?:^|,)\s*(?!(?:\.[A-Za-z.][\w.]*|[A-Za-z.][\w.]*\s*=))(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveStartRegex = new(
         @"^\s*(?:import\s*\(|import(?:Classes|Methods)?From\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\(|useDynLib\s*\()",
         RegexOptions.Compiled);
@@ -252,6 +255,30 @@ internal static class RReferenceExtractor
                     fileId,
                     package.Value.Name,
                     package.Value.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
+            var routines = directiveLine[routinesStart..];
+            foreach (Match routineMatch in NamespaceUseDynLibRoutineRegex.Matches(routines))
+            {
+                var routine = GetNamespaceDirectiveToken(
+                    routineMatch,
+                    "backtickName",
+                    "quotedName",
+                    "name");
+                if (routine == null)
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    routine.Value.Name,
+                    routinesStart + routine.Value.Index,
                     "reference",
                     context,
                     lineNumber,

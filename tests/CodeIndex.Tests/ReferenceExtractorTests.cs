@@ -14848,7 +14848,7 @@ public class ReferenceExtractorTests
             importMethodsFrom(stats, predict)
             S3method(print, model)
             S3method("[", indexed, `[.indexed`)
-            useDynLib("mypkg", .registration = TRUE)
+            useDynLib("mypkg", routine_a, `routine-b`, .registration = TRUE)
             export(plot_model, `%.%`)
             exportClasses(Person)
             """;
@@ -14870,6 +14870,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "[" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "indexed" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "mypkg" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "routine_a" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "routine-b" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "plot_model" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "%.%" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Person" && r.ReferenceKind == "reference");
