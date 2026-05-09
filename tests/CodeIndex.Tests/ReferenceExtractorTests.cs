@@ -452,6 +452,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonGenericParameterAnnotation_CapturesNestedTypeReference()
+    {
+        const string content = """
+            def save(users: Sequence[models.User]):
+                persist(users)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "save");
+    }
+
+    [Fact]
     public void Extract_PythonVariableAnnotation_CapturesVariableTypeReference()
     {
         const string content = """

@@ -72,6 +72,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex DirectAnnotationTypeRegex = new(
         @":\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|,|$))",
         RegexOptions.Compiled);
+    private static readonly Regex AnnotationExpressionTypeRegex = new(
+        @":\s*(?<type>[^=,]+)(?=\s*(?:=|,|$))",
+        RegexOptions.Compiled);
     private static readonly Regex VariableAnnotationTypeRegex = new(
         @"^\s*(?:self\.)?\w+\s*:\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|#|$))",
         RegexOptions.Compiled);
@@ -526,6 +529,29 @@ internal static class PythonReferenceExtractor
         foreach (Match functionMatch in FunctionParameterListRegex.Matches(preparedLine))
         {
             var paramsGroup = functionMatch.Groups["params"];
+            foreach (Match annotationMatch in AnnotationExpressionTypeRegex.Matches(paramsGroup.Value))
+            {
+                var typeGroup = annotationMatch.Groups["type"];
+                foreach (Match typeMatch in TypeNameRegex.Matches(typeGroup.Value))
+                {
+                    var name = typeMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
+
+                    var nameIndex = paramsGroup.Index + typeGroup.Index + typeMatch.Groups["name"].Index;
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForReference(nameIndex) ?? container,
+                        "python");
+                }
+            }
+
             foreach (Match annotationMatch in DirectAnnotationTypeRegex.Matches(paramsGroup.Value))
             {
                 var name = annotationMatch.Groups["name"].Value;
