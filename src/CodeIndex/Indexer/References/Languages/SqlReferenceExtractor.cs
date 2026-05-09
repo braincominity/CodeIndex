@@ -129,6 +129,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateTriggerOnTargetRegex = new(
         $@"(?<![\w$])CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\b\s+{QualifiedIdentifierNoCapturePattern}[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateSecurityPolicyPredicateTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+SECURITY\s+POLICY\b[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ToggleTriggerOnTargetRegex = new(
         $@"(?<![\w$])(?:ENABLE|DISABLE)\s+TRIGGER\b\s+(?:ALL|{QualifiedIdentifierNoCapturePattern})\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -596,6 +599,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             CreateTriggerOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateSecurityPolicyPredicateTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

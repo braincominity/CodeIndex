@@ -5143,6 +5143,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_CreateSecurityPolicyReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_create_security_policy_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int, TenantId int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_create_security_policy_definition.sql", "sql",
+            """
+            CREATE SECURITY POLICY sec.OrderPolicy
+                ADD FILTER PREDICATE sec.fn_tenant(TenantId) ON dbo.Orders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_create_security_policy"]));
+        Assert.Equal("src/sql_create_security_policy_definition.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_create_security_policy"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_create_security_policy"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
