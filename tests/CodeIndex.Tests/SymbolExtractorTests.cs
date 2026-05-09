@@ -14428,10 +14428,15 @@ public class SymbolExtractorTests
         var content = """
             typedef struct Node Node_t;
             typedef struct Payload* PayloadRef;
+            typedef union Value Value_t;
             typedef enum Mode Mode_t;
 
             struct Node {
                 int value;
+            };
+
+            union Value {
+                int number;
             };
 
             enum Mode {
@@ -14443,6 +14448,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node_t");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "PayloadRef");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value_t");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode_t");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");

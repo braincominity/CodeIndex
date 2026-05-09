@@ -14,6 +14,7 @@ affected:
 - **C search now indexes `#include_next` targets** — GNU-style next-header directives now produce import symbols alongside ordinary `#include` rows.
 - **C search now indexes `#import` headers** — import-style header directives now surface as import symbols for header navigation.
 - **C search now indexes union declarations** — named `union` definitions now produce `union` symbols alongside structs and enums.
+- **C search now indexes union typedef aliases** — forward `typedef union Name Alias;` declarations now provide searchable `union` symbols for alias names.
 
 ## 日本語
 
@@ -21,3 +22,4 @@ affected:
 - **C 検索が `#include_next` の参照先をインデックスするようになりました** — GNU 風の next-header ディレクティブも通常の `#include` と同じように import シンボルを生成します。
 - **C 検索が `#import` ヘッダーをインデックスするようになりました** — import 形式のヘッダーディレクティブも import シンボルとして表面化し、ヘッダー移動に使えるようになりました。
 - **C 検索が union 宣言をインデックスするようになりました** — 名前付き `union` 定義も struct / enum と同じように `union` シンボルを生成します。
+- **C 検索が union typedef エイリアスをインデックスするようになりました** — forward `typedef union Name Alias;` 宣言でも alias 名の検索可能な `union` シンボルを生成します。
