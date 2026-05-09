@@ -307,6 +307,7 @@ public class SymbolExtractorTests
         var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
 
         Assert.Contains("tools.build", imports);
+        Assert.Contains("package.subpkg.tools", imports);
         Assert.Contains("package.subpkg.tools.build", imports);
     }
 

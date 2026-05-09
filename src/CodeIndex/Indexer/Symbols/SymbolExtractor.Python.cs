@@ -92,7 +92,7 @@ public static partial class SymbolExtractor
 
         var modulePart = fromImportMatch.Groups["module"].Value;
         var fromImportSpecs = fromImportMatch.Groups["imports"].Value;
-        AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames);
+        AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames, pythonModulePrefix);
         if (TryExpandPythonMultilineParenthesizedImportBlock(
                 lines,
                 lineIndex,
@@ -497,24 +497,37 @@ public static partial class SymbolExtractor
         int absoluteStartColumn,
         string modulePart,
         List<PythonImportSymbolEntry> entries,
-        HashSet<string> seenNames)
+        HashSet<string> seenNames,
+        string? pythonModulePrefix)
     {
         modulePart = modulePart.Trim();
         if (modulePart.Length == 0)
             return;
 
-        var normalizedModule = modulePart.TrimStart('.');
-        if (normalizedModule.Length == 0)
-            return;
-
         var searchStartColumn = absoluteStartColumn;
-        AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
-        if (normalizedModule.Contains('.'))
+        var normalizedModule = modulePart.TrimStart('.');
+        if (normalizedModule.Length > 0)
         {
-            AddPythonImportDottedPrefixEntries(
+            AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
+            if (normalizedModule.Contains('.'))
+            {
+                AddPythonImportDottedPrefixEntries(
+                    line,
+                    absoluteStartColumn,
+                    normalizedModule,
+                    entries,
+                    seenNames,
+                    ref searchStartColumn);
+            }
+        }
+
+        var relativeQualifiedModule = ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix);
+        if (!string.IsNullOrEmpty(relativeQualifiedModule))
+        {
+            AddPythonImportEntry(
                 line,
                 absoluteStartColumn,
-                normalizedModule,
+                relativeQualifiedModule,
                 entries,
                 seenNames,
                 ref searchStartColumn);
