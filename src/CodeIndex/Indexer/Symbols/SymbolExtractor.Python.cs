@@ -17,6 +17,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassMatchArgsAssignmentRegex = new(@"^\s*__match_args__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -219,6 +220,8 @@ public static partial class SymbolExtractor
                 }
 
                 var slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
+                if (!slotsMatch.Success)
+                    slotsMatch = PythonClassMatchArgsAssignmentRegex.Match(line);
                 if (slotsMatch.Success)
                 {
                     var slots = TryExpandPythonAllExportSymbolsFromValues(lines, i, slotsMatch.Groups["values"].Index);

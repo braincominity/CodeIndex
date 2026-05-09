@@ -182,6 +182,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_ExpandsMatchArgsAsClassProperties()
+    {
+        var content = """
+            class Point:
+                __match_args__ = ("x", "y")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__match_args__");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsDecoratedAndDunderMethods()
     {
         var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";
