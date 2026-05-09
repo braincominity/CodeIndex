@@ -10811,6 +10811,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesAsNewTargetType()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customer As New Customer()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "New" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesNameOfTargets()
     {
         const string content = """
