@@ -15,6 +15,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex DecoratorCallRegex = new(
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex BareRaiseTypeRegex = new(
+        @"^\s*raise\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*(?:#.*)?$",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -47,6 +50,35 @@ internal static class PythonReferenceExtractor
                 continue;
 
             ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+        }
+    }
+
+    public static void EmitRaiseReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in BareRaiseTypeRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                context,
+                lineNumber,
+                container,
+                "python");
         }
     }
 }
