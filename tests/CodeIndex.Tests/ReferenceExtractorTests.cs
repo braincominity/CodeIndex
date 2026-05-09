@@ -11542,6 +11542,8 @@ public class ReferenceExtractorTests
               include 'repository_kinds.inc'
               use, intrinsic :: iso_c_binding, only: c_ptr, c_int, c_char, repository_ptr => c_ptr
               use, intrinsic :: iso_fortran_env, only: real64
+              public :: Repository, create_repository
+              private :: legacy_hook
               type :: RepositoryBase
               end type RepositoryBase
               type, extends(RepositoryBase) :: Repository
@@ -11595,6 +11597,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "demo_mod" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "demo_parent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "create_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference" && r.Context.Contains("private ::", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference" && r.Context.Contains("integer(c_int)", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference" && r.Context.Contains("real(kind=real64)", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "c_char" && r.ReferenceKind == "type_reference" && r.Context.Contains("character(kind=c_char", StringComparison.Ordinal));
