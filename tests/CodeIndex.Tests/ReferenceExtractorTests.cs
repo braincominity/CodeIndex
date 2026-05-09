@@ -11466,6 +11466,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterIndexCapturesOnTableReference()
+    {
+        // T-SQL index maintenance names the table after `ON`; search should surface that table
+        // even when the index name itself is `ALL`.
+        // T-SQL の index maintenance は `ON` 後に table を置く。index 名が `ALL` の場合でも
+        // その table を検索対象にする。
+        const string content = """
+            ALTER INDEX IX_Orders_CreatedAt ON dbo.Orders REBUILD;
+            ALTER INDEX ALL ON [sales].[Invoices] REORGANIZE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "ALL" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
