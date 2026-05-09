@@ -10874,6 +10874,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesNewTypeInstantiation()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customer = New Customer()
+                    Dim order = New Global.App.Order()
+                    Dim anonymous = New With {.Name = "value"}
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "With" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

@@ -254,6 +254,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbTypeKeywordRegex = new(
         @"\b(?:As|New|Inherits|Implements|Of)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbNewTypeRegex = new(
+        @"\bNew\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbImplementsListRegex = new(
         @"\bImplements\s+(?<list>[^\r\n]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3239,6 +3242,18 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            var name = LastQualifiedSegment(group.Value);
+            if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var nameOffset = group.Value.LastIndexOf(name, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
 
         foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
