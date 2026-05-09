@@ -713,6 +713,8 @@ public class SymbolExtractorTests
             import :partition;
             import <vector>;
             import "detail/config.hpp";
+            #import <UIKit/UIKit.h>
+            # import "objc/Bridge.h"
             """;
 
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
@@ -722,6 +724,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":partition");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "vector");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "detail/config.hpp");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UIKit/UIKit.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "objc/Bridge.h");
     }
 
     [Fact]

@@ -1399,7 +1399,7 @@ public static partial class SymbolExtractor
             new("union",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*#\s*(?:include|import)\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["php"] =
         [
