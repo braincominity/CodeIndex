@@ -18520,11 +18520,16 @@ public class SymbolExtractorTests
               data
             })
 
+            assign(x = "format_model", value = function(model) {
+              model
+            })
+
             assign("not_a_function", 42)
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "format_model");
         Assert.DoesNotContain(symbols, s => s.Name == "not_a_function");
     }
 
