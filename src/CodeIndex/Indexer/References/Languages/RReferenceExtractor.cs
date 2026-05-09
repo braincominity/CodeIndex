@@ -20,6 +20,12 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceExportDirectiveRegex = new(
         @"^\s*export(?:Classes|Methods)?\s*\(\s*(?<names>[^)]*)\)",
         RegexOptions.Compiled);
+    private static readonly Regex NamespaceS3MethodDirectiveRegex = new(
+        @"^\s*S3method\s*\(\s*(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[A-Za-z.][\w.]*))\s*,\s*(?:`(?<classBacktick>[^`]+)`|['""](?<classQuoted>[^'""]+)['""]|(?<class>[A-Za-z.][\w.]*))(?:\s*,\s*(?:`(?<methodBacktick>[^`]+)`|['""](?<methodQuoted>[^'""]+)['""]|(?<method>[A-Za-z.][\w.]*)))?\s*\)",
+        RegexOptions.Compiled);
+    private static readonly Regex NamespaceDirectiveStartRegex = new(
+        @"^\s*(?:import\s*\(|importFrom\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\()",
+        RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveNameRegex = new(
         @"`(?<backtickName>[^`]+)`|(?<name>[A-Za-z.][\w.]*)",
         RegexOptions.Compiled);
@@ -72,6 +78,7 @@ internal static class RReferenceExtractor
 
     public static void EmitNamespaceDirectiveReferences(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -79,7 +86,11 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var importFromMatch = NamespaceImportFromDirectiveRegex.Match(preparedLine);
+        var directiveLine = NamespaceDirectiveStartRegex.IsMatch(preparedLine)
+            ? StripRNamespaceDirectiveComment(originalLine)
+            : preparedLine;
+
+        var importFromMatch = NamespaceImportFromDirectiveRegex.Match(directiveLine);
         if (importFromMatch.Success)
         {
             var package = importFromMatch.Groups["package"].Value;
@@ -111,7 +122,7 @@ internal static class RReferenceExtractor
             return;
         }
 
-        var importMatch = NamespaceImportDirectiveRegex.Match(preparedLine);
+        var importMatch = NamespaceImportDirectiveRegex.Match(directiveLine);
         if (importMatch.Success)
         {
             ReferenceExtractor.AddReference(
@@ -127,7 +138,63 @@ internal static class RReferenceExtractor
             return;
         }
 
-        var exportMatch = NamespaceExportDirectiveRegex.Match(preparedLine);
+        var s3MethodMatch = NamespaceS3MethodDirectiveRegex.Match(directiveLine);
+        if (s3MethodMatch.Success)
+        {
+            var generic = GetNamespaceDirectiveToken(
+                s3MethodMatch,
+                "genericBacktick",
+                "genericQuoted",
+                "generic");
+            var @class = GetNamespaceDirectiveToken(
+                s3MethodMatch,
+                "classBacktick",
+                "classQuoted",
+                "class");
+            var explicitMethod = GetNamespaceDirectiveToken(
+                s3MethodMatch,
+                "methodBacktick",
+                "methodQuoted",
+                "method");
+            if (generic != null && @class != null)
+            {
+                var method = explicitMethod ?? ($"{generic.Value.Name}.{@class.Value.Name}", generic.Value.Index);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    method.Name,
+                    method.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    generic.Value.Name,
+                    generic.Value.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    @class.Value.Name,
+                    @class.Value.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            return;
+        }
+
+        var exportMatch = NamespaceExportDirectiveRegex.Match(directiveLine);
         if (!exportMatch.Success)
             return;
 
@@ -155,5 +222,69 @@ internal static class RReferenceExtractor
             var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
             yield return (nameGroup.Value, baseIndex + nameGroup.Index + (backtickNameGroup.Success ? 1 : 0));
         }
+    }
+
+    private static (string Name, int Index)? GetNamespaceDirectiveToken(Match match, params string[] groupNames)
+    {
+        foreach (var groupName in groupNames)
+        {
+            var group = match.Groups[groupName];
+            if (group.Success)
+                return (group.Value, group.Index);
+        }
+
+        return null;
+    }
+
+    private static string StripRNamespaceDirectiveComment(string line)
+    {
+        var inBacktickIdentifier = false;
+        var quote = '\0';
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (inBacktickIdentifier)
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == '`')
+                    inBacktickIdentifier = false;
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inBacktickIdentifier = true;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+        }
+
+        return line;
     }
 }
