@@ -2538,6 +2538,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitBacktickCallReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 

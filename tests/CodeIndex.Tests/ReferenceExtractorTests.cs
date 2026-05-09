@@ -14620,6 +14620,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsBacktickCallSites()
+    {
+        const string content = """
+            run <- function(data) {
+                `plot-model`(data)
+                `%||%`(data, list())
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "plot-model"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
     {
         const string content = """

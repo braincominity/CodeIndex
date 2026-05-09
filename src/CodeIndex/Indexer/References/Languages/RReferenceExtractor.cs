@@ -32,6 +32,9 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceDirectiveNameRegex = new(
         @"`(?<backtickName>[^`]+)`|(?<name>[A-Za-z.][\w.]*)",
         RegexOptions.Compiled);
+    private static readonly Regex BacktickCallRegex = new(
+        @"`(?<name>[^`]+)`\s*\(",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -236,6 +239,36 @@ internal static class RReferenceExtractor
                 name,
                 nameIndex,
                 "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitBacktickCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        HashSet<string>? definitionNames)
+    {
+        foreach (Match match in BacktickCallRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = nameGroup.Value;
+            if (definitionNames != null && definitionNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index,
+                "call",
                 context,
                 lineNumber,
                 container);
