@@ -14647,6 +14647,8 @@ public class ReferenceExtractorTests
             docs <- function() {
                 vignette("dplyr")
                 utils::vignette("programming", package = "dplyr")
+                help("filter", package = "dplyr")
+                utils::example("lm")
             }
             """;
 
@@ -14659,6 +14661,14 @@ public class ReferenceExtractorTests
             && r.ContainerName == "docs");
         Assert.Contains(references, r =>
             r.SymbolName == "programming"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "lm"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "docs");
     }

@@ -68,6 +68,9 @@ internal static class RReferenceExtractor
     private static readonly Regex VignetteCallStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?vignette\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex HelpExampleCallStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?(?:help|example)\s*\(",
+        RegexOptions.Compiled);
     private static readonly Regex DocumentationTopicRegex = new(
         @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
@@ -692,6 +695,28 @@ internal static class RReferenceExtractor
             lineNumber,
             container,
             VignetteCallStartRegex);
+    }
+
+    public static void EmitHelpExampleReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        EmitDocumentationTopicReferences(
+            preparedLine,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            HelpExampleCallStartRegex);
     }
 
     private static void EmitDocumentationTopicReferences(

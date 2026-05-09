@@ -2632,6 +2632,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitHelpExampleReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 RReferenceExtractor.EmitInstallPackagesReferences(
                     preparedLine,
                     originalLine,
