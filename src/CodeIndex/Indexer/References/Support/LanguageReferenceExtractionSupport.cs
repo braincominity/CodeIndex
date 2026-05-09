@@ -266,8 +266,8 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbAddressOfRegex = new(
         @"\bAddressOf\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex VbHandlesRegex = new(
-        @"\bHandles\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
+    private static readonly Regex VbHandlesTargetRegex = new(
+        @"(?:\bHandles|,)\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddHandlerRegex = new(
         @"\bAddHandler\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
@@ -3262,8 +3262,17 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
 
-        foreach (Match match in VbHandlesRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+        var handlesIndex = preparedLine.IndexOf("Handles", StringComparison.OrdinalIgnoreCase);
+        if (handlesIndex >= 0)
+        {
+            var handlesText = preparedLine[handlesIndex..];
+            foreach (Match match in VbHandlesTargetRegex.Matches(handlesText))
+            {
+                var group = match.Groups["name"];
+                var nameIndex = handlesIndex + group.Index;
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, nameIndex, "subscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
+        }
 
         foreach (Match match in VbAddHandlerRegex.Matches(preparedLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
