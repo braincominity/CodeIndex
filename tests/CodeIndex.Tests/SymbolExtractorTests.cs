@@ -45,6 +45,8 @@ public class SymbolExtractorTests
             OrderId = typing.NewType("OrderId", int)
             Point = NamedTuple("Point", [("x", int), ("y", int)])
             Coordinate = collections.namedtuple("Coordinate", "lat lon")
+            DynamicUser = make_dataclass("DynamicUser", [("name", str)])
+            DynamicOrder = dataclasses.make_dataclass("DynamicOrder", [("id", int)])
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -76,6 +78,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicOrder");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
