@@ -11,6 +11,9 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceReferenceRegex = new(
         @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?:(?<backtickName>`[^`]+`)|(?<name>[\w.]+))",
         RegexOptions.Compiled);
+    private static readonly Regex NamespaceImportDirectiveRegex = new(
+        @"^\s*import\s*\(\s*(?<package>[\w.]+)(?:\s*,|\s*\))",
+        RegexOptions.Compiled);
     private static readonly Regex NamespaceImportFromDirectiveRegex = new(
         @"^\s*importFrom\s*\(\s*(?<package>[\w.]+)\s*,(?<names>[^)]*)\)",
         RegexOptions.Compiled);
@@ -105,6 +108,22 @@ internal static class RReferenceExtractor
                     container);
             }
 
+            return;
+        }
+
+        var importMatch = NamespaceImportDirectiveRegex.Match(preparedLine);
+        if (importMatch.Success)
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                importMatch.Groups["package"].Value,
+                importMatch.Groups["package"].Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
             return;
         }
 

@@ -14623,6 +14623,7 @@ public class ReferenceExtractorTests
     public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
     {
         const string content = """
+            import(methods)
             importFrom(dplyr, filter, select)
             export(plot_model, `%.%`)
             exportClasses(Person)
@@ -14635,9 +14636,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "dplyr::select" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "methods" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "plot_model" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "%.%" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Person" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "import" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "importFrom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "export" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "exportClasses" && r.ReferenceKind == "call");
