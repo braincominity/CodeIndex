@@ -12061,6 +12061,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DropFullTextCatalogCapturesTargetReference()
+    {
+        const string content = """
+            DROP FULLTEXT CATALOG ftOrders;
+            DROP FULLTEXT CATALOG [ftInvoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ftOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "ftInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
