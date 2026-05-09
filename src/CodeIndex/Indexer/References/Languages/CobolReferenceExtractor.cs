@@ -43,6 +43,9 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolExecCicsResourceReferenceRegex = new(
         @"^\s*EXEC\s+CICS\s+(?:ENQ|DEQ)\b.*?\bRESOURCE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsTransidReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+START\b.*?\bTRANSID\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolExecSqlSimpleReferenceRegex = new(
         @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN|CLOSE|PREPARE|EXECUTE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -106,6 +109,7 @@ internal static class CobolReferenceExtractor
         new(CobolExecCicsFileReferenceRegex, "reference"),
         new(CobolExecCicsQueueReferenceRegex, "reference"),
         new(CobolExecCicsResourceReferenceRegex, "reference"),
+        new(CobolExecCicsTransidReferenceRegex, "reference"),
         new(CobolExecSqlSimpleReferenceRegex, "reference"),
         new(CobolGotoRegex, "call"),
         new(CobolUseAfterProcedureRegex, "reference"),

@@ -1212,6 +1212,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS WRITEQ TD QUEUE('CUSTOMER-TD') FROM(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-TD")]
     [InlineData("EXEC CICS ENQ RESOURCE('CUSTOMER-LOCK') END-EXEC", "CUSTOMER-LOCK")]
     [InlineData("EXEC CICS DEQ RESOURCE('CUSTOMER-LOCK') END-EXEC", "CUSTOMER-LOCK")]
+    [InlineData("EXEC CICS START TRANSID('PAY1') FROM(CUSTOMER-RECORD) END-EXEC", "PAY1")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
