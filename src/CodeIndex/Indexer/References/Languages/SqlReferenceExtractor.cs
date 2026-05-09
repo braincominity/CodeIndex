@@ -153,6 +153,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterAuthorizationObjectTargetRegex = new(
         $@"(?<![\w$])ALTER\s+AUTHORIZATION\s+ON\s+OBJECT\s*::\s*{QualifiedIdentifierPattern}\s+TO\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterAuthorizationBareTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+AUTHORIZATION\s+ON\s+(?![A-Z_]+\s*::){QualifiedIdentifierPattern}\s+TO\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex UpdateStatisticsTargetRegex = new(
         $@"(?<![\w$])UPDATE\s+STATISTICS\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -692,6 +695,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterAuthorizationObjectTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAuthorizationBareTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
