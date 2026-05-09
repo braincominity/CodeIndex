@@ -14659,6 +14659,7 @@ public class SymbolExtractorTests
             namespace rec MyApp.Domain
             module Json = System.Text.Json
             module ``Domain Helpers``
+            open ``Domain Helpers``
 
             type UserId = int
             type OrderId = string
@@ -14707,6 +14708,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Text.Json");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Domain Helpers");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Domain Helpers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker Type");

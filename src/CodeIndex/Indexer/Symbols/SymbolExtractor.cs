@@ -1494,7 +1494,7 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:static\s+)?val\s+(?:mutable\s+)?(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?val\s+(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*open\s+(?:type\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*open\s+(?:type\s+)?(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["vb"] =
         [
