@@ -14682,6 +14682,9 @@ public class SymbolExtractorTests
             let validate user =
                 user.Age > 0
 
+            let rec isEven n = n = 0 || isOdd (n - 1)
+            and isOdd n = n <> 0 && isEven (n - 1)
+
             let workflow user =
                 task {
                     use client = createClient user
@@ -14712,6 +14715,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isEven");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isOdd");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "client");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadedUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "lease");

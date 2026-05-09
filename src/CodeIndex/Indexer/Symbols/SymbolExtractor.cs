@@ -1465,6 +1465,7 @@ public static partial class SymbolExtractor
         [
             new("function", new Regex(@"^\s*let!?\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*use!?\s+(?<name>(?:``[^`]+``|\w+))\s*(?:=|:)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*and\s+(?<name>(?:``[^`]+``|\w+))\s+(?:``[^`]+``|\w+|\()", RegexOptions.Compiled), BodyStyle.None),
             new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None),
             new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None),
