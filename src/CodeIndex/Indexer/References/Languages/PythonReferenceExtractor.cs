@@ -48,6 +48,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex AssertTypeRegex = new(
         @"(?<!\.)\bassert_type\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)",
         RegexOptions.Compiled);
+    private static readonly Regex QualifiedAssertTypeRegex = new(
+        @"\b(?:typing|typing_extensions)\.assert_type\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -322,6 +325,24 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in QualifiedAssertTypeRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+
         foreach (Match match in AssertTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
