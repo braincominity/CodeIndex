@@ -5403,6 +5403,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropDefaultReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_default_target.sql", "sql",
+            """
+            CREATE DEFAULT dbo.ZeroDefault
+            AS
+            0;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_default_cleanup.sql", "sql",
+            """
+            DROP DEFAULT dbo.ZeroDefault;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.ZeroDefault", lang: "sql", exact: true, pathPatterns: ["sql_drop_default"]));
+        Assert.Equal("src/sql_drop_default_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.ZeroDefault", lang: "sql", exact: true, pathPatterns: ["sql_drop_default"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.ZeroDefault", lang: "sql", exact: true, pathPatterns: ["sql_drop_default"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
