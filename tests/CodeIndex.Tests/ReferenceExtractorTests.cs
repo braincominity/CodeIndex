@@ -10838,6 +10838,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesQualifiedHandlesEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Private Sub OnClick() Handles Me.Toolbar.Button.Click
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesMultipleImplementsTypes()
     {
         const string content = """
