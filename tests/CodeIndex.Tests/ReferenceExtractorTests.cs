@@ -2133,6 +2133,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexMultipleStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+            FROM alpine AS cache
+
+            FROM alpine AS runtime
+            RUN --mount=type=bind,from=assets,target=/assets --mount=type=bind,from=cache,target=/cache true
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "cache"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_DockerfileCopyFromReferences_IgnoresTaggedExternalImages()
     {
         const string content = """

@@ -14,7 +14,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
-        @"^\s*RUN\b.*?--mount=\S*\bfrom=(?<name>[A-Za-z0-9_.-]+)(?![:/])\b",
+        @"(?:^|\s)--mount=\S*\bfrom=(?<name>[A-Za-z0-9_.-]+)(?![:/])\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex BracedVariableReferenceRegex = new(
@@ -108,6 +108,9 @@ internal static class DockerfileReferenceExtractor
                 lineNumber,
                 container);
         }
+
+        if (!preparedLine.TrimStart().StartsWith("RUN", StringComparison.OrdinalIgnoreCase))
+            return;
 
         foreach (Match match in RunMountFromReferenceRegex.Matches(preparedLine))
         {
