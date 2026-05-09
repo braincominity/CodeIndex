@@ -8091,6 +8091,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppCStyleCasts_CaptureTypeReferences()
+    {
+        const string content = """
+            void Convert(void* raw, Value value) {
+              auto widget = (Widget*)raw;
+              auto handle = (ns::Handle&)value;
+              auto count = (int)value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
