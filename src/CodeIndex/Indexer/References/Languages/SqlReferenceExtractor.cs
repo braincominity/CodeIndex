@@ -195,6 +195,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterViewTargetRegex = new(
         $@"(?<![\w$])ALTER\s+VIEW\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterProcedureTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+(?:PROCEDURE|PROC)\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -965,6 +968,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterViewTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterProcedureTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
