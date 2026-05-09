@@ -11576,6 +11576,9 @@ public class ReferenceExtractorTests
                 end select
               end subroutine run
             end module demo_mod
+
+            submodule (demo_mod:demo_parent) demo_child
+            end submodule demo_child
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fortran", content);
@@ -11587,6 +11590,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "iso_fortran_env" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "demo_mod" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "demo_parent" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference" && r.Context.Contains("integer(c_int)", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference" && r.Context.Contains("real(kind=real64)", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "c_char" && r.ReferenceKind == "type_reference" && r.Context.Contains("character(kind=c_char", StringComparison.Ordinal));

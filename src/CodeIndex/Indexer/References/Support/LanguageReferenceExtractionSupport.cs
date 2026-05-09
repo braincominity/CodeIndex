@@ -338,6 +338,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranSlashGroupNameRegex = new(
         @"/\s*(?<name>[A-Za-z_]\w*)\s*/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranSubmoduleParentRegex = new(
+        @"^\s*submodule\s*\(\s*(?<parent>[A-Za-z_]\w*)(?:\s*:\s*(?<ancestor>[A-Za-z_]\w*))?\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranTypeRegex = new(
         @"\b(?:type|class)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3753,6 +3756,17 @@ internal static class LanguageReferenceExtractionSupport
         {
             foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
+        if (submoduleMatch.Success)
+        {
+            var parent = submoduleMatch.Groups["parent"];
+            ReferenceExtractor.AddReference(references, seen, fileId, parent.Value, parent.Index, "type_reference", context, lineNumber, container);
+
+            var ancestor = submoduleMatch.Groups["ancestor"];
+            if (ancestor.Success)
+                ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
         }
 
         if (FortranProcedureBindingLineRegex.IsMatch(preparedLine))
