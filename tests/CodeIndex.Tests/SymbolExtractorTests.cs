@@ -18494,6 +18494,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsTestthatTestCases()
+    {
+        // R testthat cases are useful search units in package test suites.
+        // R の testthat case は package test suite で有用な検索単位。
+        const string content = """
+            test_that("filters missing rows", {
+              expect_equal(drop_missing(data), expected)
+            })
+
+            testthat::test_that("plots model output", {
+              expect_s3_class(plot_model(model), "ggplot")
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "filters missing rows");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plots model output");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
