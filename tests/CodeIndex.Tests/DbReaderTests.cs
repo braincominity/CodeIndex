@@ -5698,6 +5698,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterSequenceReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_sequence_target.sql", "sql",
+            """
+            CREATE SEQUENCE dbo.OrderNumbers
+                START WITH 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_sequence_update.sql", "sql",
+            """
+            ALTER SEQUENCE dbo.OrderNumbers RESTART WITH 10;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.OrderNumbers", lang: "sql", exact: true, pathPatterns: ["sql_alter_sequence"]));
+        Assert.Equal("src/sql_alter_sequence_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.OrderNumbers", lang: "sql", exact: true, pathPatterns: ["sql_alter_sequence"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.OrderNumbers", lang: "sql", exact: true, pathPatterns: ["sql_alter_sequence"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
