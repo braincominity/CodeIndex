@@ -15374,6 +15374,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsNotOverridableMembers()
+    {
+        var content = """
+            Public Class DerivedWidget
+                Public NotOverridable Overrides Sub Render()
+                End Sub
+
+                Public NotOverridable Overrides Property Count As Integer
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Render");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNestedEnumMembersAndMembersAfterEnum()
     {
         // VB.NET enum bodies should stay searchable, and nested enums must not cut off later
