@@ -13,6 +13,10 @@ internal static class DockerfileReferenceExtractor
         @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_.-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex BracedVariableReferenceRegex = new(
+        @"\$\{(?<name>[A-Za-z_][A-Za-z0-9_]*)\}",
+        RegexOptions.Compiled);
+
     public static HashSet<string>? BuildStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "dockerfile")
@@ -22,6 +26,23 @@ internal static class DockerfileReferenceExtractor
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            names.Add(symbol.Name);
+        }
+
+        return names;
+    }
+
+    public static HashSet<string>? BuildVariableNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language != "dockerfile")
+            return null;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             names.Add(symbol.Name);
@@ -75,6 +96,38 @@ internal static class DockerfileReferenceExtractor
                 name,
                 match.Groups["name"].Index,
                 "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitVariableReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? variableNames,
+        SymbolRecord? container)
+    {
+        if (variableNames == null || variableNames.Count == 0)
+            return;
+
+        foreach (Match match in BracedVariableReferenceRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (!variableNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                "reference",
                 context,
                 lineNumber,
                 container);

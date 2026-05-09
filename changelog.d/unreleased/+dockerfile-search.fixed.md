@@ -3,6 +3,7 @@ category: fixed
 affected:
   - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/DockerfileReferenceExtractor.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
@@ -22,6 +23,7 @@ affected:
 - **Underscore-suffixed Containerfile names are detected** — files such as `Containerfile_prod` now index through the Dockerfile analyzer.
 - **Dockerfile stage aliases can include dots** — aliases such as `build.env` now stay intact in stage symbols and `FROM` / `COPY --from` references.
 - **Commented `FROM` stage reuse lines keep references** — `FROM builder AS runtime # comment` now indexes the `builder` stage dependency.
+- **Dockerfile braced ARG/ENV uses become references** — `${NODE_VERSION}` now links back to the indexed `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol.
 
 ## 日本語
 
@@ -36,3 +38,4 @@ affected:
 - **underscore suffix の Containerfile 名を検出するようになりました** — `Containerfile_prod` のようなファイルも Dockerfile analyzer で index されるようになりました。
 - **Dockerfile の stage alias で dot を扱えるようになりました** — `build.env` のような alias が stage symbol と `FROM` / `COPY --from` 参照で欠けずに保持されるようになりました。
 - **コメント付きの `FROM` stage 再利用行でも参照を保持するようになりました** — `FROM builder AS runtime # comment` が `builder` stage dependency として index されるようになりました。
+- **Dockerfile の braced ARG/ENV 利用を参照として扱うようになりました** — `${NODE_VERSION}` が index 済みの `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol に結びつくようになりました。
