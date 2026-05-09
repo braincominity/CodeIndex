@@ -18458,12 +18458,16 @@ public class SymbolExtractorTests
             library("ggplot2")
             requireNamespace("jsonlite", quietly = TRUE)
             require(dplyr)
+            library(package = "stringr")
+            require(package = tidyr)
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ggplot2");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "jsonlite");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "dplyr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stringr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "tidyr");
     }
 
     [Fact]
