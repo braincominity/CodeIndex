@@ -23,7 +23,7 @@ internal static class CobolReferenceExtractor
         @"^\s*EXEC\s+SQL\s+CALL\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolExecSqlSimpleReferenceRegex = new(
-        @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN|CLOSE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolGotoRegex = new(
         @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
