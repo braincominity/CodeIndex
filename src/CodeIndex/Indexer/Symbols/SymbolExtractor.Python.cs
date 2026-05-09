@@ -13,6 +13,36 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
+    {
+        for (var i = defLineIndex - 1; i >= 0; i--)
+        {
+            var trimmed = lines[i].Trim();
+            if (!trimmed.StartsWith('@'))
+                return false;
+
+            if (IsPythonPropertyDecorator(trimmed))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsPythonPropertyDecorator(string trimmedDecorator)
+    {
+        var decorator = trimmedDecorator[1..];
+        var commentIndex = decorator.IndexOf('#');
+        if (commentIndex >= 0)
+            decorator = decorator[..commentIndex];
+        var parenIndex = decorator.IndexOf('(');
+        if (parenIndex >= 0)
+            decorator = decorator[..parenIndex];
+
+        decorator = decorator.Trim();
+        return decorator is "property" or "cached_property"
+            || decorator.EndsWith(".cached_property", StringComparison.Ordinal);
+    }
+
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(
         string[] lines,
         int lineIndex,

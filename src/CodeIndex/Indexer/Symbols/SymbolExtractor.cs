@@ -2546,7 +2546,7 @@ public static partial class SymbolExtractor
                     // Python @property decorator: reclassify the def as property
                     // Python @property デコレータ: def を property に再分類
                     var kind = pattern.Kind;
-                    if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
+                    if (kind == "function" && lang == "python" && HasPythonPropertyDecorator(lines, i))
                         kind = "property";
 
                     if (lang == "css")

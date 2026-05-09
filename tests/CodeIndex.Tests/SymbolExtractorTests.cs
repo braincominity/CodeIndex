@@ -82,6 +82,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_CachedPropertyDecoratorsAreProperties()
+    {
+        var content = """
+            import functools
+            from functools import cached_property
+
+            class Metrics:
+                @cached_property
+                def total(self) -> int:
+                    return 1
+
+                @functools.cached_property
+                def count(self) -> int:
+                    return 2
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "total");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "total");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
     public void Extract_Python_ExpandsImportAliasesAndImportedNames()
     {
         var content = """
