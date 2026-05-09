@@ -10830,6 +10830,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_IgnoresConversionIntrinsicsAsCalls()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(value As Object)
+                    Dim count = CInt(value)
+                    Dim label = CStr(value)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "CInt" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CStr" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesNameOfTargets()
     {
         const string content = """
