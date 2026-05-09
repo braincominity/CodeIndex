@@ -11524,6 +11524,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_EnableDisableTriggerCapturesOnTableReference()
+    {
+        // T-SQL trigger toggles also name the owning table after `ON`; the trigger name itself
+        // should not be mistaken for the table reference.
+        // T-SQL の trigger toggle も `ON` 後に所有 table を置く。trigger 名自体を
+        // table reference と誤認しない。
+        const string content = """
+            DISABLE TRIGGER dbo.trg_Orders_Audit ON dbo.Orders;
+            ENABLE TRIGGER ALL ON [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "trg_Orders_Audit" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ALL" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
