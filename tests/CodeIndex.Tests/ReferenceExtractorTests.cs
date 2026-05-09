@@ -14517,6 +14517,7 @@ public class ReferenceExtractorTests
             load_helpers <- function() {
                 source("R/helpers.R")
                 base::source(file = "R/models/fit.R", local = TRUE)
+                sys.source("R/bootstrap.R", envir = environment())
             }
             """;
 
@@ -14529,6 +14530,10 @@ public class ReferenceExtractorTests
             && r.ContainerName == "load_helpers");
         Assert.Contains(references, r =>
             r.SymbolName == "R/models/fit.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/bootstrap.R"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "load_helpers");
         Assert.Contains(references, r =>

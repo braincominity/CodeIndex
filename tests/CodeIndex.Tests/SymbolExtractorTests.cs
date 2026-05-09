@@ -18478,11 +18478,13 @@ public class SymbolExtractorTests
         const string content = """
             source("R/helpers.R")
             source(file = "R/models/fit.R", local = TRUE)
+            sys.source("R/bootstrap.R", envir = environment())
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/helpers.R");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/models/fit.R");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/bootstrap.R");
     }
 
     [Fact]

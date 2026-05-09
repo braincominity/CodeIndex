@@ -39,10 +39,10 @@ internal static class RReferenceExtractor
         @"(?<!`)(?<name>%[^%\s]+%)(?!`)",
         RegexOptions.Compiled);
     private static readonly Regex SourceFileReferenceRegex = new(
-        @"^\s*(?:(?:[\w.]+)::)?source\s*\(\s*(?:file\s*=\s*)?['""](?<path>[^'""]+)['""]",
+        @"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(\s*(?:file\s*=\s*)?['""](?<path>[^'""]+)['""]",
         RegexOptions.Compiled);
     private static readonly Regex SourceFileReferenceStartRegex = new(
-        @"^\s*(?:(?:[\w.]+)::)?source\s*\(",
+        @"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(",
         RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
