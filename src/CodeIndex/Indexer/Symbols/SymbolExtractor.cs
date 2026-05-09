@@ -703,6 +703,7 @@ public static partial class SymbolExtractor
     private const string VbOperatorModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Shadows|Async|Partial|Widening|Narrowing)";
     private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Overloads|Shadows|Default|ReadOnly|WriteOnly)";
     private const string VbEventModifierPattern = @"(?:Shared|Overloads|Shadows|Custom)";
+    private const string VbIdentifierPattern = @"(?:\[[^\]\r\n]+\]|\w+)";
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
@@ -1522,10 +1523,10 @@ public static partial class SymbolExtractor
             new("property", new Regex(@$"^\s*(?:(?:Shared|Shadows|ReadOnly|WithEvents)\s+)*(?<visibility>{VbVisibilityPattern})\s+(?:(?:Shared|Shadows|ReadOnly|WithEvents)\s+)*(?<name>\w+)\s+As\s+", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
             new("property", new Regex(@$"^\s*(?:(?:{VbPropertyModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbPropertyModifierPattern})\s+)*Property\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
             new("event",    new Regex(@$"^\s*(?:(?:{VbEventModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbEventModifierPattern})\s+)*Event\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("interface", new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
-            new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
-            new("struct",   new Regex(@$"^\s*(?:(?:Partial)\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
-            new("class",    new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("interface", new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*Interface\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("struct",   new Regex(@$"^\s*(?:(?:Partial)\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:Partial)\s+)*Structure\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("class",    new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module)\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("import",   new Regex(@"^\s*Imports\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["scala"] =
@@ -7772,9 +7773,19 @@ public static partial class SymbolExtractor
             "rust" => RustSymbolNameNormalizer.Normalize(name),
             "smalltalk" => NormalizeSmalltalkSelectorName(name),
             "swift" => SwiftSymbolNameNormalizer.Normalize(name),
+            "vb" => NormalizeVisualBasicSymbolName(name),
             "sql" => SqlSymbolNameNormalizer.Normalize(name),
             _ => name,
         };
+    }
+
+    private static string NormalizeVisualBasicSymbolName(string name)
+    {
+        var trimmed = name.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']')
+            return trimmed[1..^1];
+
+        return trimmed;
     }
 
     private static string NormalizeRubySymbolName(string name, string matchLine)

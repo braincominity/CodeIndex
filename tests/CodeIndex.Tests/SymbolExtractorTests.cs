@@ -18263,6 +18263,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsEscapedTypeDeclarationNames()
+    {
+        var content = """
+            Public Class [Class]
+            End Class
+
+            Public Interface [Interface]
+            End Interface
+
+            Public Structure [Structure]
+            End Structure
+
+            Public Enum [Enum]
+                One
+            End Enum
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Class");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Interface");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Structure");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Enum");
+        Assert.DoesNotContain(symbols, s => s.Name == "[Class]");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsLeadingModifiersAndMemberKindsWithoutVisibility()
     {
         var content = """
