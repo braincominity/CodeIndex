@@ -11562,6 +11562,7 @@ public class ReferenceExtractorTests
                 integer(c_int) :: status_code
                 real(kind=real64) :: elapsed
                 character(kind=c_char, len=1) :: delimiter
+                common /repository_state/ status_code
                 value = prefix() // suffix()
                 call process(repo)
                 call repo%persist()
@@ -11593,6 +11594,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "persist_impl" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "assign_repository" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "assign_repository_alt" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_state" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");

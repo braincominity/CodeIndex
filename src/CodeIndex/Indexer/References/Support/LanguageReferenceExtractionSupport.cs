@@ -329,6 +329,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranIncludeRegex = new(
         @"^\s*include\s*['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranCommonLineRegex = new(
+        @"^\s*common\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranCommonBlockRegex = new(
+        @"/\s*(?<name>[A-Za-z_]\w*)\s*/",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranTypeRegex = new(
         @"\b(?:type|class)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3739,6 +3745,12 @@ internal static class LanguageReferenceExtractionSupport
 
         foreach (Match match in FortranIncludeRegex.Matches(originalLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+
+        if (FortranCommonLineRegex.IsMatch(preparedLine))
+        {
+            foreach (Match match in FortranCommonBlockRegex.Matches(preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
 
         if (FortranProcedureBindingLineRegex.IsMatch(preparedLine))
         {
