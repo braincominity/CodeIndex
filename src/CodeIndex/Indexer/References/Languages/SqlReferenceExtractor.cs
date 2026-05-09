@@ -122,6 +122,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex UpdateStatisticsTargetRegex = new(
         $@"(?<![\w$])UPDATE\s+STATISTICS\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateStatisticsOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+STATISTICS\b\s+{QualifiedIdentifierNoCapturePattern}\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SelectIntoTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -549,6 +552,21 @@ internal static class SqlReferenceExtractor
             fileId,
             resolveContainerForCall,
             shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateStatisticsOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
 
         EmitTargetReferences(
             statement,
