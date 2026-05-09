@@ -11548,6 +11548,7 @@ public class ReferenceExtractorTests
               subroutine run(repo)
                 type(Repository) :: repo
                 class(User), allocatable :: current
+                procedure(RepositoryCallback), pointer :: callback
                 value = prefix() // suffix()
                 call process(repo)
               end subroutine run
@@ -11563,6 +11564,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "RepositoryBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "call");
         Assert.Contains(references, r =>
