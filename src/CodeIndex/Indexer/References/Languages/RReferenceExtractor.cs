@@ -56,6 +56,9 @@ internal static class RReferenceExtractor
     private static readonly Regex RoxygenImportFromTagRegex = new(
         @"^\s*#'\s*@(?:importFrom|importClassesFrom|importMethodsFrom)\s+(?<package>[\w.]+)\s+(?<names>.*)$",
         RegexOptions.Compiled);
+    private static readonly Regex RoxygenImportTagRegex = new(
+        @"^\s*#'\s*@import\s+(?<packages>.*)$",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -299,6 +302,35 @@ internal static class RReferenceExtractor
                 fileId,
                 name,
                 nameIndex,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitRoxygenImportReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = RoxygenImportTagRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var packagesGroup = match.Groups["packages"];
+        foreach (var (package, packageIndex) in EnumerateNamespaceDirectiveNames(packagesGroup.Value, packagesGroup.Index))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                package,
+                packageIndex,
                 "reference",
                 context,
                 lineNumber,

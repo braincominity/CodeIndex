@@ -14881,6 +14881,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsRoxygenImportReferences()
+    {
+        const string content = """
+            #' @import ggplot2 dplyr
+            plot_model <- function(data) {
+                ggplot(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "ggplot2"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """
