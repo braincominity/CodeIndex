@@ -24,6 +24,7 @@ affected:
 - **C references now capture `_t` alignment operands** — `_Alignof(widget_t)` and `alignof(config_t)` now surface typedef operands as type references.
 - **C references now capture `_t` declaration types** — local declarations such as `widget_t *current;` now point search results back to typedef names.
 - **C references now capture tagged declaration types** — declarations such as `struct node *next;` now produce type references for the tag name.
+- **C references now capture `_t` return types** — functions returning typedefs such as `widget_t *make_widget(void)` now reference the typedef name.
 
 ## 日本語
 
@@ -41,3 +42,4 @@ affected:
 - **C の参照抽出が `_t` の alignment operand を捕捉するようになりました** — `_Alignof(widget_t)` と `alignof(config_t)` でも typedef operand を type reference として表面化します。
 - **C の参照抽出が `_t` 宣言型を捕捉するようになりました** — `widget_t *current;` のような local declaration から typedef 名へ search result が戻れるようになりました。
 - **C の参照抽出が tag 付き宣言型を捕捉するようになりました** — `struct node *next;` のような宣言から tag 名の type reference を生成します。
+- **C の参照抽出が `_t` 戻り値型を捕捉するようになりました** — `widget_t *make_widget(void)` のように typedef を返す関数から typedef 名への参照を生成します。
