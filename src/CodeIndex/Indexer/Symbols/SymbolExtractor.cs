@@ -1527,7 +1527,7 @@ public static partial class SymbolExtractor
             new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("struct",   new Regex(@$"^\s*(?:(?:Partial)\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:Partial)\s+)*Structure\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("class",    new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module)\s+(?<name>{VbIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
-            new("import",   new Regex(@"^\s*Imports\s+<\s*xmlns:(?<name>[A-Za-z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*Imports\s+<\s*xmlns:(?<name>[A-Za-z_][\w.-]*)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",   new Regex(@$"^\s*Imports\s+(?<name>{VbIdentifierPattern})\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",   new Regex(@"^\s*Imports\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],

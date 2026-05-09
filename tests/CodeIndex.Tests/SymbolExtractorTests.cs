@@ -18322,6 +18322,7 @@ public class SymbolExtractorTests
     {
         var content = """
             Imports <xmlns:ui="urn:ui">
+            Imports <xmlns:ui-kit="urn:ui-kit">
 
             Public Class ViewModel
             End Class
@@ -18329,6 +18330,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "vb", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ui");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ui-kit");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("xmlns", StringComparison.OrdinalIgnoreCase));
     }
 
