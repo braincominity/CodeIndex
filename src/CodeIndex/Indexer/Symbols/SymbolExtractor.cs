@@ -1470,7 +1470,7 @@ public static partial class SymbolExtractor
             new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None),
             new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None),
             new("delegate", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*delegate\b", RegexOptions.Compiled), BodyStyle.None),
-            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
+            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?(?:\s+when\b[^=]+)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
             // Generic abbreviations such as `type Result<'T> = Choice<'T, string>` should not be
             // mistaken for union cases just because the right-hand side starts with a capitalized
             // type name.

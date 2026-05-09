@@ -14668,6 +14668,7 @@ public class SymbolExtractorTests
             type ``Color Choice`` = Red | Blue
             type ``Worker Type``() = class end
             type Box<'T> = class end
+            type ConstrainedBox<'T when 'T : not struct> = class end
             type Factory<'T>(value: 'T) = class end
 
             type Person(name: string) =
@@ -14715,6 +14716,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker Type");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ConstrainedBox");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Factory");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User Record");
