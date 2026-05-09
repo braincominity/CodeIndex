@@ -81,6 +81,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex VariableAnnotationExpressionRegex = new(
         @"^\s*(?:self\.)?\w+\s*:\s*(?<type>[^=#]+)(?=\s*(?:=|#|$))",
         RegexOptions.Compiled);
+    private static readonly Regex TypeAliasRhsExpressionRegex = new(
+        @"^\s*(?:type\s+\w+(?:\[[^\]]*\])?\s*=|\w+\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=)\s*(?<type>.+)$",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -625,6 +628,39 @@ internal static class PythonReferenceExtractor
                 lineNumber,
                 container,
                 "python");
+        }
+    }
+
+    public static void EmitTypeAliasReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in TypeAliasRhsExpressionRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typeGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    typeGroup.Index + typeMatch.Groups["name"].Index,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
         }
     }
 }
