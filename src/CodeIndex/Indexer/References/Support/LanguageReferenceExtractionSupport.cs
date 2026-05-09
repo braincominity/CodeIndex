@@ -332,7 +332,10 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranCommonLineRegex = new(
         @"^\s*common\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranCommonBlockRegex = new(
+    private static readonly Regex FortranNamelistLineRegex = new(
+        @"^\s*namelist\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranSlashGroupNameRegex = new(
         @"/\s*(?<name>[A-Za-z_]\w*)\s*/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranTypeRegex = new(
@@ -3746,9 +3749,9 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in FortranIncludeRegex.Matches(originalLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
 
-        if (FortranCommonLineRegex.IsMatch(preparedLine))
+        if (FortranCommonLineRegex.IsMatch(preparedLine) || FortranNamelistLineRegex.IsMatch(preparedLine))
         {
-            foreach (Match match in FortranCommonBlockRegex.Matches(preparedLine))
+            foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
