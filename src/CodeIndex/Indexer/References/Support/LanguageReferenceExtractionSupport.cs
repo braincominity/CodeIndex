@@ -23,6 +23,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CTypedefCastTypeRegex = new(
         @"(?<![\w])\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)\s*(?:[A-Za-z_]\w*|\*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefSizeofTypeRegex = new(
+        @"\bsizeof\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppTypeOperandOperatorRegex = new(
         @"\b(?:sizeof|alignof)\s*\(\s*(?<type>(?:(?:const|volatile|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}]+>)?(?:\s*[*&])*)\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1007,6 +1010,12 @@ internal static class LanguageReferenceExtractionSupport
         if (language == "c")
         {
             foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
