@@ -13,7 +13,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -193,13 +193,26 @@ public static partial class SymbolExtractor
 
         var extendMatch = PythonAllExtendRegex.Match(line);
         if (extendMatch.Success)
-            return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+            return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
 
         var match = PythonAllAssignmentRegex.Match(line);
         if (!match.Success)
             return null;
 
         return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, match.Groups["values"].Index);
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbolsFromCallValues(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        if (valuesStartColumn < lines[lineIndex].Length)
+            return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, valuesStartColumn);
+
+        return lineIndex + 1 < lines.Length
+            ? TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex + 1, 0)
+            : null;
     }
 
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbolsFromValues(

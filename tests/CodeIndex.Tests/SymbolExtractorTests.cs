@@ -293,6 +293,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllExtendExportsWhenValuesStartOnNextLine()
+    {
+        var content = """
+            __all__ = []
+            __all__.extend(
+                [
+                    "split_api",
+                ]
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("split_api", exports);
+        Assert.Contains("package.subpkg.split_api", exports);
+    }
+
+    [Fact]
     public void Extract_Python_IndexesQualifiedModuleAliasesFromInitModules()
     {
         var content = """
