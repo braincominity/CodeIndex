@@ -50,6 +50,9 @@ internal static class RReferenceExtractor
     private static readonly Regex BracketMemberReferenceRegex = new(
         @"(?<![\w.])(?:(?:`(?<backtickReceiver>[^`]+)`)|(?<receiver>[A-Za-z.][\w.]*))\s*\[\[\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\]\]",
         RegexOptions.Compiled);
+    private static readonly Regex SlotMemberReferenceRegex = new(
+        @"(?<![\w.])(?:(?:`(?<backtickReceiver>[^`]+)`)|(?<receiver>[A-Za-z.][\w.]*))@(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -425,6 +428,52 @@ internal static class RReferenceExtractor
                 seen,
                 fileId,
                 $"{receiver}${name}",
+                receiverGroup.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+
+            if (definitionNames != null && definitionNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitSlotMemberReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        HashSet<string>? definitionNames)
+    {
+        foreach (Match match in SlotMemberReferenceRegex.Matches(preparedLine))
+        {
+            var backtickReceiverGroup = match.Groups["backtickReceiver"];
+            var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
+            var receiver = receiverGroup.Value;
+            var backtickNameGroup = match.Groups["backtickName"];
+            var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
+            var name = nameGroup.Value;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                $"{receiver}@{name}",
                 receiverGroup.Index,
                 "reference",
                 context,

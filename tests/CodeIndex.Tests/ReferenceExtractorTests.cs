@@ -14780,6 +14780,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsSlotMemberReferences()
+    {
+        const string content = """
+            run <- function(model) {
+                model@coefficients
+                model@`fit value`
+                `model object`@metadata
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "model@coefficients"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "coefficients"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model@fit value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model object@metadata"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
     {
         const string content = """

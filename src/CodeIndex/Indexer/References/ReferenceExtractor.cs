@@ -2584,6 +2584,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     definitionNames);
+                RReferenceExtractor.EmitSlotMemberReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 
