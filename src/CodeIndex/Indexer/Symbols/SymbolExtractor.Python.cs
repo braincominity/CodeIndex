@@ -40,7 +40,9 @@ public static partial class SymbolExtractor
 
         decorator = decorator.Trim();
         return decorator is "property" or "cached_property"
-            || decorator.EndsWith(".cached_property", StringComparison.Ordinal);
+            || decorator.EndsWith(".cached_property", StringComparison.Ordinal)
+            || decorator.EndsWith(".setter", StringComparison.Ordinal)
+            || decorator.EndsWith(".deleter", StringComparison.Ordinal);
     }
 
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(

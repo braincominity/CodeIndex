@@ -106,6 +106,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_PropertyAccessorDecoratorsAreProperties()
+    {
+        var content = """
+            class User:
+                @property
+                def name(self) -> str:
+                    return self._name
+
+                @name.setter
+                def name(self, value: str) -> None:
+                    self._name = value
+
+                @name.deleter
+                def name(self) -> None:
+                    del self._name
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Equal(3, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+    }
+
+    [Fact]
     public void Extract_Python_ExpandsImportAliasesAndImportedNames()
     {
         var content = """
