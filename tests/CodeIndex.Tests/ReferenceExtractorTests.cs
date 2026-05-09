@@ -8091,6 +8091,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppQualifiedTemplateBraceConstruction_CapturesTypeArgumentReferences()
+    {
+        const string content = """
+            std::optional<Widget> Make() {
+              auto value = std::optional<Widget>{};
+              return ns::Result<Success, Error>{};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Success" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "optional" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CppCStyleCasts_CaptureTypeReferences()
     {
         const string content = """
