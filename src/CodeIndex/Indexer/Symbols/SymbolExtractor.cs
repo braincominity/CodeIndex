@@ -710,7 +710,16 @@ public static partial class SymbolExtractor
         [
             new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*\(", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|collections)\.)?(?:NamedTuple|namedtuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?TypedDict\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:enum\.)?(?:Enum|IntEnum|Flag|IntFlag|StrEnum)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:pydantic\.)?create_model\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?NewType\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cobol"] =
@@ -2548,7 +2557,7 @@ public static partial class SymbolExtractor
                     // Python @property decorator: reclassify the def as property
                     // Python @property デコレータ: def を property に再分類
                     var kind = pattern.Kind;
-                    if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
+                    if (kind == "function" && lang == "python" && HasPythonPropertyDecorator(lines, i))
                         kind = "property";
 
                     if (lang == "css")
@@ -3561,6 +3570,8 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
+        if (lang == "python")
+            ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);

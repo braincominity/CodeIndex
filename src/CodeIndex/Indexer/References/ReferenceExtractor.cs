@@ -2308,6 +2308,198 @@ public static partial class ReferenceExtractor
                     container,
                     definitionNames,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitRaiseReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitExceptReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitIsInstanceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitIsSubclassReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitCastReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitAssertTypeReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitClassBaseReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    index => ResolveContainerForCall(index)
+                        ?? symbols.FirstOrDefault(symbol =>
+                            symbol.Line == lineNumber
+                            && string.Equals(symbol.Kind, "class", StringComparison.Ordinal)),
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitFunctionReturnReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    index => ResolveContainerForCall(index)
+                        ?? symbols.FirstOrDefault(symbol =>
+                            symbol.Line == lineNumber
+                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitFunctionParameterReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    index => ResolveContainerForCall(index)
+                        ?? symbols.FirstOrDefault(symbol =>
+                            symbol.Line == lineNumber
+                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitVariableAnnotationReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitTypeAliasReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitNewTypeReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitTypeVarBoundReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitTypeVarConstraintReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitGetTypeHintsReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitDataclassesFieldsReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitAttrsFieldsReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitPydanticTypeAdapterReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitPytestRaisesReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitContextlibSuppressReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")

@@ -39,6 +39,27 @@ public class SymbolExtractorTests
         var content = """
             type Vector = list[float]
             type Connection = str | int
+            JsonValue: TypeAlias = dict[str, object]
+            Handler: typing.TypeAlias = Callable[..., None]
+            UserId = NewType("UserId", int)
+            OrderId = typing.NewType("OrderId", int)
+            T = TypeVar("T")
+            P = typing.ParamSpec("P")
+            Ts = typing_extensions.TypeVarTuple("Ts")
+            Point = NamedTuple("Point", [("x", int), ("y", int)])
+            Coordinate = collections.namedtuple("Coordinate", "lat lon")
+            DynamicUser = make_dataclass("DynamicUser", [("name", str)])
+            DynamicOrder = dataclasses.make_dataclass("DynamicOrder", [("id", int)])
+            UserPayload = TypedDict("UserPayload", {"name": str})
+            OrderPayload = typing.TypedDict("OrderPayload", {"id": int})
+            Color = Enum("Color", "RED BLUE")
+            Status = enum.Enum("Status", "OPEN CLOSED")
+            ErrorCode = IntEnum("ErrorCode", "NOT_FOUND INVALID")
+            Permission = enum.IntFlag("Permission", "READ WRITE")
+            RuntimeUser = create_model("RuntimeUser", name=(str, ...))
+            RuntimeOrder = pydantic.create_model("RuntimeOrder", id=(int, ...))
+            DEFAULT_TIMEOUT: Final[int] = 30
+            API_HOST: typing.Final = "example.invalid"
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -64,8 +85,133 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Vector");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Connection");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "JsonValue");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "T");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "P");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ts");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicOrder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserPayload");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OrderPayload");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ErrorCode");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Permission");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeOrder");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "API_HOST");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsAnnotatedClassAttributesAsProperties()
+    {
+        var content = """
+            class User:
+                name: str
+                age: int = 0
+
+                def hydrate(self) -> None:
+                    local_value: str = "ignored"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsAssignedClassAttributesAsProperties()
+    {
+        var content = """
+            class Settings:
+                DEFAULT_TIMEOUT = 30
+                endpoint = "https://example.invalid"
+
+                def configure(self) -> None:
+                    local_value = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT" && s.ContainerName == "Settings");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "endpoint" && s.ContainerName == "Settings");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
+    }
+
+    [Fact]
+    public void Extract_Python_ExpandsSlotsAsClassProperties()
+    {
+        var content = """
+            class User:
+                __slots__ = (
+                    "name",
+                    "age",
+                )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__slots__");
+    }
+
+    [Fact]
+    public void Extract_Python_ExpandsAugmentedSlotsAsClassProperties()
+    {
+        var content = """
+            class User:
+                __slots__ = ("name",)
+                __slots__ += ("email",)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "User");
+    }
+
+    [Fact]
+    public void Extract_Python_ExpandsMatchArgsAsClassProperties()
+    {
+        var content = """
+            class Point:
+                __match_args__ = ("x", "y")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__match_args__");
+    }
+
+    [Fact]
+    public void Extract_Python_ExpandsAnnotationsDictionaryAsClassProperties()
+    {
+        var content = """
+            class User:
+                __annotations__ = {
+                    "name": str,
+                    "age": int,
+                }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__annotations__");
     }
 
     [Fact]
@@ -79,6 +225,77 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "display_name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__str__");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
+    }
+
+    [Fact]
+    public void Extract_Python_CachedPropertyDecoratorsAreProperties()
+    {
+        var content = """
+            import functools
+            from functools import cached_property
+
+            class Metrics:
+                @cached_property
+                def total(self) -> int:
+                    return 1
+
+                @functools.cached_property
+                def count(self) -> int:
+                    return 2
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "total");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "total");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
+    public void Extract_Python_PropertyAccessorDecoratorsAreProperties()
+    {
+        var content = """
+            class User:
+                @property
+                def name(self) -> str:
+                    return self._name
+
+                @name.setter
+                def name(self, value: str) -> None:
+                    self._name = value
+
+                @name.deleter
+                def name(self) -> None:
+                    del self._name
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Equal(3, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+    }
+
+    [Fact]
+    public void Extract_Python_AbstractPropertyDecoratorsAreProperties()
+    {
+        var content = """
+            import abc
+            from abc import abstractproperty
+
+            class Base:
+                @abstractproperty
+                def name(self) -> str:
+                    raise NotImplementedError
+
+                @abc.abstractproperty
+                def value(self) -> int:
+                    raise NotImplementedError
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "value");
     }
 
     [Fact]
@@ -187,6 +404,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllAppendExportsFromInitModules()
+    {
+        var content = """
+            __all__ = []
+            __all__.append("dynamic_api")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("dynamic_api", exports);
+        Assert.Contains("package.subpkg.dynamic_api", exports);
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesAllExtendExportsFromInitModules()
+    {
+        var content = """
+            __all__ = []
+            __all__.extend([
+                "first_api",
+                "second_api",
+            ])
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("first_api", exports);
+        Assert.Contains("package.subpkg.first_api", exports);
+        Assert.Contains("second_api", exports);
+        Assert.Contains("package.subpkg.second_api", exports);
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesAllExtendExportsWhenValuesStartOnNextLine()
+    {
+        var content = """
+            __all__ = []
+            __all__.extend(
+                [
+                    "split_api",
+                ]
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("split_api", exports);
+        Assert.Contains("package.subpkg.split_api", exports);
+    }
+
+    [Fact]
     public void Extract_Python_IndexesQualifiedModuleAliasesFromInitModules()
     {
         var content = """
@@ -209,6 +480,49 @@ public class SymbolExtractorTests
         Assert.Contains("helper", imports);
         Assert.Contains("alias", imports);
         Assert.Contains("package.subpkg.alias", imports);
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesCurrentPackageRelativeFromImports()
+    {
+        var content = """
+            from . import helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("helper", imports);
+        Assert.Contains("package.subpkg.helper", imports);
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesCurrentPackageRelativeModuleImports()
+    {
+        var content = """
+            from .tools import build
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("tools.build", imports);
+        Assert.Contains("package.subpkg.tools", imports);
+        Assert.Contains("package.subpkg.tools.build", imports);
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesParentPackageRelativeModuleImports()
+    {
+        var content = """
+            from ..shared import helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("shared.helper", imports);
+        Assert.Contains("package.shared.helper", imports);
     }
 
     [Fact]

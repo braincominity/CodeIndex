@@ -1,0 +1,14 @@
+---
+category: fixed
+affected:
+  - src/CodeIndex/Indexer/References/Languages/PythonReferenceExtractor.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+---
+
+## English
+
+- **Python variable annotations emit type references** — `user: models.User = load_user()` now records the annotated type for reference search.
+
+## 日本語
+
+- **Python の変数型注釈が型参照を出すようになりました** — `user: models.User = load_user()` が注釈された型を参照検索に記録するようになりました。

@@ -12,6 +12,46 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassMatchArgsAssignmentRegex = new(@"^\s*__match_args__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAnnotationsAssignmentRegex = new(@"^\s*__annotations__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
+    {
+        for (var i = defLineIndex - 1; i >= 0; i--)
+        {
+            var trimmed = lines[i].Trim();
+            if (!trimmed.StartsWith('@'))
+                return false;
+
+            if (IsPythonPropertyDecorator(trimmed))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsPythonPropertyDecorator(string trimmedDecorator)
+    {
+        var decorator = trimmedDecorator[1..];
+        var commentIndex = decorator.IndexOf('#');
+        if (commentIndex >= 0)
+            decorator = decorator[..commentIndex];
+        var parenIndex = decorator.IndexOf('(');
+        if (parenIndex >= 0)
+            decorator = decorator[..parenIndex];
+
+        decorator = decorator.Trim();
+        return decorator is "property" or "cached_property" or "abstractproperty"
+            || decorator.EndsWith(".cached_property", StringComparison.Ordinal)
+            || decorator.EndsWith(".abstractproperty", StringComparison.Ordinal)
+            || decorator.EndsWith(".setter", StringComparison.Ordinal)
+            || decorator.EndsWith(".deleter", StringComparison.Ordinal);
+    }
 
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(
         string[] lines,
@@ -59,7 +99,7 @@ public static partial class SymbolExtractor
 
         var modulePart = fromImportMatch.Groups["module"].Value;
         var fromImportSpecs = fromImportMatch.Groups["imports"].Value;
-        AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames);
+        AddPythonImportModuleEntry(line, absoluteStartColumn, modulePart, entries, seenNames, pythonModulePrefix);
         if (TryExpandPythonMultilineParenthesizedImportBlock(
                 lines,
                 lineIndex,
@@ -141,14 +181,272 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void ExtractPythonClassAttributeSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols)
+    {
+        var classSymbols = symbols
+            .Where(static symbol => symbol.Kind == "class" && symbol.BodyStartLine.HasValue)
+            .ToList();
+
+        foreach (var classSymbol in classSymbols)
+        {
+            var classLineIndex = Math.Max(0, classSymbol.Line - 1);
+            var classIndent = CountIndent(lines[classLineIndex]);
+            int? memberIndent = null;
+            var bodyStartIndex = Math.Max(classSymbol.BodyStartLine!.Value - 1, classLineIndex + 1);
+            var bodyEndIndex = Math.Min(classSymbol.EndLine, lines.Length);
+
+            for (var i = bodyStartIndex; i < bodyEndIndex; i++)
+            {
+                var line = lines[i];
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('@'))
+                    continue;
+
+                var indent = CountIndent(line);
+                if (indent <= classIndent)
+                    break;
+                memberIndent ??= indent;
+                if (indent != memberIndent.Value)
+                    continue;
+
+                if (trimmed.StartsWith("def ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("async def ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("class ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("type ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
+                if (!slotsMatch.Success)
+                    slotsMatch = PythonClassMatchArgsAssignmentRegex.Match(line);
+                if (slotsMatch.Success)
+                {
+                    var slots = TryExpandPythonAllExportSymbolsFromValues(lines, i, slotsMatch.Groups["values"].Index);
+                    if (slots != null)
+                    {
+                        foreach (var slot in slots)
+                        {
+                            AddPythonClassPropertySymbol(
+                                fileId,
+                                lines,
+                                symbols,
+                                slot.Name,
+                                slot.LineIndex,
+                                slot.StartColumn);
+                        }
+                    }
+
+                    continue;
+                }
+
+                var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
+                if (annotationsMatch.Success)
+                {
+                    var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
+                    if (annotationKeys != null)
+                    {
+                        foreach (var key in annotationKeys)
+                        {
+                            AddPythonClassPropertySymbol(
+                                fileId,
+                                lines,
+                                symbols,
+                                key.Name,
+                                key.LineIndex,
+                                key.StartColumn);
+                        }
+                    }
+
+                    continue;
+                }
+
+                var match = PythonClassAnnotatedAttributeRegex.Match(line);
+                if (!match.Success)
+                    match = PythonClassAssignedAttributeRegex.Match(line);
+                if (!match.Success)
+                    continue;
+
+                AddPythonClassPropertySymbol(
+                    fileId,
+                    lines,
+                    symbols,
+                    match.Groups["name"].Value,
+                    i,
+                    match.Groups["name"].Index);
+            }
+        }
+    }
+
+    private static void AddPythonClassPropertySymbol(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        string name,
+        int lineIndex,
+        int startColumn)
+    {
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = lines[lineIndex].Trim(),
+            },
+            lines[lineIndex]);
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonStringDictionaryKeys(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        var entries = new List<PythonExportSymbolEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var currentLineIndex = lineIndex;
+        var currentColumn = valuesStartColumn;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
+            }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var afterStringColumn = currentColumn + 1;
+                    while (afterStringColumn < currentLine.Length && char.IsWhiteSpace(currentLine[afterStringColumn]))
+                        afterStringColumn++;
+
+                    if (afterStringColumn < currentLine.Length && currentLine[afterStringColumn] == ':')
+                    {
+                        var name = currentLine[stringStartColumn..currentColumn].Trim();
+                        if (name.Length > 0 && seenNames.Add(name))
+                            entries.Add(new PythonExportSymbolEntry(name, currentLineIndex, stringStartColumn));
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch == '\'' || ch == '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '{' or '[' or '(')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '}' or ']' or ')')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
+        }
+
+        return entries.Count > 0 ? entries : null;
+    }
+
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
     {
         var line = lines[lineIndex];
+        var appendMatch = PythonAllAppendRegex.Match(line);
+        if (appendMatch.Success)
+        {
+            return
+            [
+                new PythonExportSymbolEntry(
+                    appendMatch.Groups["name"].Value,
+                    lineIndex,
+                    appendMatch.Groups["name"].Index),
+            ];
+        }
+
+        var extendMatch = PythonAllExtendRegex.Match(line);
+        if (extendMatch.Success)
+            return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+
         var match = PythonAllAssignmentRegex.Match(line);
         if (!match.Success)
             return null;
 
-        var valuesStartColumn = match.Groups["values"].Index;
+        return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, match.Groups["values"].Index);
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbolsFromCallValues(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        if (valuesStartColumn < lines[lineIndex].Length)
+            return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, valuesStartColumn);
+
+        return lineIndex + 1 < lines.Length
+            ? TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex + 1, 0)
+            : null;
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbolsFromValues(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        var line = lines[lineIndex];
         if (valuesStartColumn < 0 || valuesStartColumn >= line.Length)
             return null;
 
@@ -344,6 +642,9 @@ public static partial class SymbolExtractor
         var normalizedModulePart = treatAsFromImport
             ? modulePart?.Trim().TrimStart('.').TrimEnd('.')
             : null;
+        var relativeQualifiedModulePart = treatAsFromImport
+            ? ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix)
+            : null;
         foreach (var rawSpec in importedNames.Split(','))
         {
             var spec = rawSpec.Trim();
@@ -395,6 +696,17 @@ public static partial class SymbolExtractor
                         seenNames,
                         ref searchStartColumn);
                 }
+
+                if (!string.IsNullOrEmpty(relativeQualifiedModulePart))
+                {
+                    AddPythonImportEntry(
+                        line,
+                        absoluteStartColumn,
+                        $"{relativeQualifiedModulePart}.{importedName}",
+                        entries,
+                        seenNames,
+                        ref searchStartColumn);
+                }
             }
 
             if (localName.Length > 0
@@ -419,29 +731,68 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static string? ResolvePythonRelativeFromImportModuleName(string? modulePart, string? pythonModulePrefix)
+    {
+        if (string.IsNullOrEmpty(modulePart)
+            || string.IsNullOrEmpty(pythonModulePrefix)
+            || !modulePart.StartsWith(".", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var leadingDots = 0;
+        while (leadingDots < modulePart.Length && modulePart[leadingDots] == '.')
+            leadingDots++;
+
+        var levelsToDrop = leadingDots - 1;
+        var packageParts = pythonModulePrefix.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (levelsToDrop >= packageParts.Length)
+            return null;
+
+        var basePartCount = packageParts.Length - levelsToDrop;
+        var resolved = string.Join('.', packageParts.Take(basePartCount));
+        var suffix = modulePart[leadingDots..].Trim('.');
+        return suffix.Length == 0
+            ? resolved
+            : $"{resolved}.{suffix}";
+    }
+
     private static void AddPythonImportModuleEntry(
         string line,
         int absoluteStartColumn,
         string modulePart,
         List<PythonImportSymbolEntry> entries,
-        HashSet<string> seenNames)
+        HashSet<string> seenNames,
+        string? pythonModulePrefix)
     {
         modulePart = modulePart.Trim();
         if (modulePart.Length == 0)
             return;
 
-        var normalizedModule = modulePart.TrimStart('.');
-        if (normalizedModule.Length == 0)
-            return;
-
         var searchStartColumn = absoluteStartColumn;
-        AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
-        if (normalizedModule.Contains('.'))
+        var normalizedModule = modulePart.TrimStart('.');
+        if (normalizedModule.Length > 0)
         {
-            AddPythonImportDottedPrefixEntries(
+            AddPythonImportEntry(line, absoluteStartColumn, normalizedModule, entries, seenNames, ref searchStartColumn);
+            if (normalizedModule.Contains('.'))
+            {
+                AddPythonImportDottedPrefixEntries(
+                    line,
+                    absoluteStartColumn,
+                    normalizedModule,
+                    entries,
+                    seenNames,
+                    ref searchStartColumn);
+            }
+        }
+
+        var relativeQualifiedModule = ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix);
+        if (!string.IsNullOrEmpty(relativeQualifiedModule))
+        {
+            AddPythonImportEntry(
                 line,
                 absoluteStartColumn,
-                normalizedModule,
+                relativeQualifiedModule,
                 entries,
                 seenNames,
                 ref searchStartColumn);
