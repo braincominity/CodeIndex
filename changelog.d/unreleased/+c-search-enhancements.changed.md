@@ -17,6 +17,7 @@ affected:
 - **C search now indexes union typedef aliases** — forward `typedef union Name Alias;` declarations now provide searchable `union` symbols for alias names.
 - **C search now indexes bracket-attributed functions** — C23-style `[[nodiscard]] int f(...)` declarations now surface by function name.
 - **C references now capture `#include_next` headers** — next-header directives now appear in reference-oriented queries, not only symbol search.
+- **C references now capture macro include targets** — `#include PROJECT_HEADER` now produces a header reference for macro-based include wiring.
 
 ## 日本語
 
@@ -27,3 +28,4 @@ affected:
 - **C 検索が union typedef エイリアスをインデックスするようになりました** — forward `typedef union Name Alias;` 宣言でも alias 名の検索可能な `union` シンボルを生成します。
 - **C 検索が角括弧属性付き関数をインデックスするようになりました** — C23 形式の `[[nodiscard]] int f(...)` 宣言も関数名で表面化します。
 - **C の参照抽出が `#include_next` ヘッダーを捕捉するようになりました** — next-header ディレクティブが symbol search だけでなく参照系クエリにも出るようになりました。
+- **C の参照抽出が macro include の参照先を捕捉するようになりました** — `#include PROJECT_HEADER` でも macro ベースの include 配線をヘッダー参照として生成します。

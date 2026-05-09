@@ -1742,12 +1742,14 @@ public class ReferenceExtractorTests
     {
         const string content = """
             #include_next <limits.h>
+            #include PROJECT_HEADER
             """;
 
         var symbols = SymbolExtractor.Extract(1, "c", content);
         var references = ReferenceExtractor.Extract(1, "c", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "limits.h" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "PROJECT_HEADER" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
