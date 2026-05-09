@@ -5168,7 +5168,7 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void SqlQualifiedNames_AlterSecurityPolicyReferencesResolveThroughSearch()
     {
-        InsertIndexedFile("src/sql_alter_security_policy_name_target.sql", "sql",
+        InsertIndexedFile("src/sql_alter_security_policy_target.sql", "sql",
             """
             CREATE TABLE dbo.Orders (Id int, TenantId int);
             GO
@@ -5723,7 +5723,7 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void SqlQualifiedNames_AlterSecurityPolicyNameReferencesResolveThroughSearch()
     {
-        InsertIndexedFile("src/sql_alter_security_policy_target.sql", "sql",
+        InsertIndexedFile("src/sql_alter_security_policy_name_target.sql", "sql",
             """
             CREATE SECURITY POLICY dbo.CustomerFilter
             ADD FILTER PREDICATE dbo.fn_filter(CustomerId) ON dbo.Customers;
