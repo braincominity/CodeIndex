@@ -8033,6 +8033,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppFriendDeclarations_CaptureTypeReferences()
+    {
+        const string content = """
+            class Widget {
+              friend class Inspector;
+              friend struct ns::Peer;
+              friend enum class Status;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Inspector" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Peer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Status" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
