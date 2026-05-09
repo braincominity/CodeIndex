@@ -11375,6 +11375,11 @@ public class SymbolExtractorTests
               print *, "hello"
             end program demo
 
+            block data constants_block
+              common /constants/ pi
+              data pi /3.14159/
+            end block data constants_block
+
             integer function add(a, b)
             end function add
 
@@ -11409,6 +11414,10 @@ public class SymbolExtractorTests
         var demo = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "demo");
         Assert.NotNull(demo.BodyStartLine);
         Assert.NotNull(demo.BodyEndLine);
+
+        var constantsBlock = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "constants_block");
+        Assert.NotNull(constantsBlock.BodyStartLine);
+        Assert.NotNull(constantsBlock.BodyEndLine);
 
         var point = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "point_t");
         Assert.Equal("namespace", point.ContainerKind);

@@ -192,6 +192,16 @@ public static partial class SymbolExtractor
             return true;
         }
 
+        if (StartsWithFortranWord(trimmed, "block"))
+        {
+            var remainder = trimmed["block".Length..].TrimStart();
+            if (StartsWithFortranWord(remainder, "data"))
+            {
+                kind = "block data";
+                return true;
+            }
+        }
+
         if (IsFortranDerivedTypeStartLine(trimmed))
         {
             kind = "type";
