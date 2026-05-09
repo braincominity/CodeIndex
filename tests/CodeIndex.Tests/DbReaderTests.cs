@@ -5234,6 +5234,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropViewReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_view_target.sql", "sql",
+            """
+            CREATE VIEW dbo.OrderSummary AS SELECT 1 AS Id;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_view_cleanup.sql", "sql",
+            """
+            DROP VIEW dbo.OrderSummary;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.OrderSummary", lang: "sql", exact: true, pathPatterns: ["sql_drop_view"]));
+        Assert.Equal("src/sql_drop_view_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.OrderSummary", lang: "sql", exact: true, pathPatterns: ["sql_drop_view"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.OrderSummary", lang: "sql", exact: true, pathPatterns: ["sql_drop_view"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
