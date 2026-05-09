@@ -813,7 +813,11 @@ public partial class DbReader
         AddQueryLanguageAlias(aliases, "rb", "ruby");
         AddQueryLanguageAlias(aliases, "vb.net", "vb");
         AddQueryLanguageAlias(aliases, "vbnet", "vb");
+        AddQueryLanguageAlias(aliases, "vbs", "vb");
+        AddQueryLanguageAlias(aliases, "vbscript", "vb");
         AddQueryLanguageAlias(aliases, "visual basic", "vb");
+        AddQueryLanguageAlias(aliases, "visual-basic", "vb");
+        AddQueryLanguageAlias(aliases, "visual_basic", "vb");
         AddQueryLanguageAlias(aliases, "visualbasic", "vb");
         AddQueryLanguageAlias(aliases, "sqlserver", "sql");
         AddQueryLanguageAlias(aliases, "mssql", "sql");

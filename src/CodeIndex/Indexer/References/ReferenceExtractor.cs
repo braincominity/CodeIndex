@@ -251,10 +251,12 @@ public static partial class ReferenceExtractor
         ["vb"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "AddHandler", "AddressOf", "Alias", "And", "AndAlso", "As", "ByRef", "ByVal",
-            "Call", "Case", "Catch", "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
+            "Call", "CallByName", "Case", "Catch", "CBool", "CByte", "CChar", "CDate", "CDbl", "CDec",
+            "CInt", "CLng", "CObj", "CSByte", "CShort", "CSng", "CStr", "CType", "CUInt", "CULng", "CUShort",
+            "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
             "GetXMLNamespace", "Global", "Handles", "Inherits", "Implements", "Imports", "Me",
             "Module", "MustInherit", "MustOverride", "MyBase", "MyClass", "Namespace", "Narrowing",
-            "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
+            "NameOf", "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
             "Overloads", "Overrides", "ParamArray", "Partial", "RaiseEvent", "ReadOnly",
             "RemoveHandler", "Resume", "Return", "Select", "Set", "Shadows", "Shared", "Static",
             "Step", "Stop", "SyncLock", "Then", "TryCast", "Using", "When", "Widening", "With",
@@ -2080,6 +2082,19 @@ public static partial class ReferenceExtractor
                     LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
                 else if (language == "smalltalk")
                     SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                else if (language == "vb")
+                    LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
+                        "vb",
+                        preparedLine,
+                        originalLine,
+                        AddCallLikeReference,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        definitionNames);
 
                 // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
                 // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and

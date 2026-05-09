@@ -15374,6 +15374,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsNotOverridableMembers()
+    {
+        var content = """
+            Public Class DerivedWidget
+                Public NotOverridable Overrides Sub Render()
+                End Sub
+
+                Public NotOverridable Overrides Property Count As Integer
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Render");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNestedEnumMembersAndMembersAfterEnum()
     {
         // VB.NET enum bodies should stay searchable, and nested enums must not cut off later
@@ -18159,6 +18176,70 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsDeclareFunctionDeclarations()
+    {
+        var content = """
+            Public Class NativeMethods
+                Private Declare Unicode Function GetWindowText Lib "user32" Alias "GetWindowTextW" () As Integer
+                Public Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+                Friend Declare Auto Sub SendMessage Lib "user32" ()
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var function = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "GetWindowText");
+        Assert.Equal("Private", function.Visibility);
+
+        var ptrSafe = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "GetTickCount");
+        Assert.Equal("Public", ptrSafe.Visibility);
+
+        var sub = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "SendMessage");
+        Assert.Equal("Friend", sub.Visibility);
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsConstMembersAsProperties()
+    {
+        var content = """
+            Public Class Limits
+                Public Const MaxItems As Integer = 10
+                Private Shared Const CacheKey As String = "items"
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var maxItems = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "MaxItems");
+        Assert.Equal("Public", maxItems.Visibility);
+
+        var cacheKey = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "CacheKey");
+        Assert.Equal("Private", cacheKey.Visibility);
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsVisibleFieldsAsProperties()
+    {
+        var content = """
+            Public Class State
+                Private ReadOnly repo As Repository
+                Public Shared Count As Integer
+
+                Public Sub New()
+                    Dim localValue As Integer
+                End Sub
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var repo = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "repo");
+        Assert.Equal("Private", repo.Visibility);
+
+        var count = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Count");
+        Assert.Equal("Public", count.Visibility);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "localValue");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """
@@ -18203,6 +18284,109 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsEscapedNamespaceSegments()
+    {
+        var content = """
+            Namespace [My].App
+                Public Class Widget
+                End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "My.App"));
+        Assert.Equal(1, ns.StartLine);
+        Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "[My].App");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsImportAliasSymbols()
+    {
+        var content = """
+            Imports CustomerAlias = App.Domain.Customer
+            Imports [Select] = App.Domain.Selector
+
+            Public Class Controller
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CustomerAlias");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Select");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "CustomerAlias = App.Domain.Customer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "[Select]");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsXmlNamespaceImportPrefixes()
+    {
+        var content = """
+            Imports <xmlns:ui="urn:ui">
+            Imports <xmlns:ui-kit="urn:ui-kit">
+
+            Public Class ViewModel
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ui");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ui-kit");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("xmlns", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsEscapedTypeDeclarationNames()
+    {
+        var content = """
+            Public Class [Class]
+            End Class
+
+            Public Interface [Interface]
+            End Interface
+
+            Public Structure [Structure]
+            End Structure
+
+            Public Enum [Enum]
+                One
+            End Enum
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Class");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Interface");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Structure");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Enum");
+        Assert.DoesNotContain(symbols, s => s.Name == "[Class]");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsEscapedMemberDeclarationNames()
+    {
+        var content = """
+            Public Class EscapedMembers
+                Public Delegate Sub [Delegate]()
+                Public Sub [Select]()
+                End Sub
+
+                Public Property [Property] As Integer
+                Public Event [Event] As EventHandler
+                Public Const [Const] As Integer = 1
+                Private [Dim] As Integer
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Delegate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Select");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Property");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Event");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Const");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Dim");
+        Assert.DoesNotContain(symbols, s => s.Name == "[Select]");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsLeadingModifiersAndMemberKindsWithoutVisibility()
     {
         var content = """
@@ -18221,6 +18405,10 @@ public class SymbolExtractorTests
                         Return ""
                     End Function
 
+                    Public Iterator Function Values() As IEnumerable(Of Integer)
+                        Yield 1
+                    End Function
+
                     Property Count As Integer
 
                     Event Changed As EventHandler
@@ -18233,6 +18421,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnReady");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Values");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed");
     }

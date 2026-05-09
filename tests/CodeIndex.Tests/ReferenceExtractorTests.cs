@@ -10690,6 +10690,734 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesCastTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(raw As Object)
+                    Dim customer = DirectCast(raw, Customer)
+                    Dim widget = TryCast(raw, ViewModels.Widget)
+                    Dim order = CType(raw, Global.App.Order)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DirectCast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TryCast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CType" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedCastTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(raw As Object)
+                    Dim value = DirectCast(raw, [Class])
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesGetTypeTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customerType = GetType(Customer)
+                    Dim orderType = GetType(Global.App.Order)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GetType" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedGetTypeTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim valueType = GetType([Class])
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesTypeOfTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(value As Object)
+                    If TypeOf value Is Customer Then
+                    End If
+
+                    If TypeOf value IsNot ViewModels.Widget Then
+                    End If
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedTypeOfTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(value As Object)
+                    If TypeOf value Is [Class] Then
+                    End If
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesAsNewTargetType()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customer As New Customer()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "New" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_IgnoresConversionIntrinsicsAsCalls()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(value As Object)
+                    Dim count = CInt(value)
+                    Dim label = CStr(value)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "CInt" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CStr" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesNameOfTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(customer As Customer)
+                    Dim customerName = NameOf(Customer)
+                    Dim saveName = NameOf(Me.[Save])
+                    Dim keywordName = NameOf([Select])
+                End Sub
+
+                Private Sub [Save]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NameOf" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Save]" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesGetXmlNamespacePrefixes()
+    {
+        const string content = """
+            Imports <xmlns:svg = "urn:svg">
+
+            Public Class Controller
+                Public Sub Run()
+                    Dim ns = GetXmlNamespace(svg)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "svg");
+        Assert.Contains(references, r => r.SymbolName == "svg" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GetXmlNamespace" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesAddHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Wire(button As Button)
+                    AddHandler button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AddHandler" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedAddressOfTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Wire(button As Button)
+                    AddHandler button.Click, AddressOf [Select]
+                End Sub
+
+                Private Sub [Select]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedCallTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    [Select]()
+                    Me.[Save]()
+                    Dim item = New [Widget]()
+                End Sub
+
+                Private Sub [Select]()
+                End Sub
+
+                Private Sub [Save]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "Select" && r.ReferenceKind == "call"));
+        Assert.Single(references.Where(r => r.SymbolName == "Save" && r.ReferenceKind == "call"));
+        Assert.Single(references.Where(r => r.SymbolName == "Widget" && r.ReferenceKind == "instantiate"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Save]" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesBareSubCallStatements()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Save
+                    Me.Refresh currentUser
+                    [Select]
+                    Dim localValue As Integer
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Me" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dim" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesBareWithMemberCallStatements()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(service As Service)
+                    With service
+                        .Refresh currentUser
+                        .[Select]
+                    End With
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "With" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesCallByNameTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(target As Object)
+                    CallByName(target, "Save", CallType.Method)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CallByName" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Wire()
+                    AddHandler Me.Toolbar.Button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedAddHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Wire()
+                    AddHandler Me.Toolbar.Button.[Click], AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesRaiseEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Event Changed As EventHandler
+
+                Public Sub Save()
+                    RaiseEvent Changed(Me, EventArgs.Empty)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Changed" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RaiseEvent" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedRaiseEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Event [Event] As EventHandler
+
+                Public Sub Save()
+                    RaiseEvent [Event](Me, EventArgs.Empty)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Event]" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesRemoveHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Unwire(button As Button)
+                    RemoveHandler button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RemoveHandler" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesQualifiedRemoveHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Unwire()
+                    RemoveHandler Me.Toolbar.Button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "unsubscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedRemoveHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Unwire()
+                    RemoveHandler Me.Toolbar.Button.[Click], AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "unsubscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesMultipleHandlesTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Private Sub OnClick(sender As Object, e As EventArgs) Handles button.Click, menu.Opened
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.Contains(references, r => r.SymbolName == "Opened" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "e" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesQualifiedHandlesEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Private Sub OnClick() Handles Me.Toolbar.Button.Click
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedHandlesEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Private Sub OnClick() Handles Me.Toolbar.Button.[Click]
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesMultipleImplementsTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Implements IRequestHandler, IAuditable
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IRequestHandler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IAuditable" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesMemberImplementsOwnerTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Save() Implements IController.Save
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IController" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesImportsTargets()
+    {
+        const string content = """
+            Imports System.IO, App.Models
+            Imports CustomerAlias = App.Domain.Customer
+
+            Public Class Controller
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IO" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Models" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesImportsAliasesWithoutSpaces()
+    {
+        const string content = """
+            Imports CustomerAlias=App.Domain.Customer
+
+            Public Class Controller
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesNewTypeInstantiation()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customer = New Customer()
+                    Dim order = New Global.App.Order()
+                    Dim anonymous = New With {.Name = "value"}
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "With" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesGenericTypeArgumentsWithoutGenericParameters()
+    {
+        const string content = """
+            Public Class Box(Of T)
+                Private repo As Repository(Of Customer)
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_SkipsEscapedGenericDeclarationParameters()
+    {
+        const string content = """
+            Public Class [Box](Of T)
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesGenericConstraintTypes()
+    {
+        const string content = """
+            Public Class Box(Of T As IDisposable)
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedGenericConstraintTypes()
+    {
+        const string content = """
+            Public Class Box(Of [T] As [Class])
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[T]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedTypeNames()
+    {
+        const string content = """
+            Public Class Controller
+                Private value As [Class]
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedNewTypeInstantiation()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim value = New [Class]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

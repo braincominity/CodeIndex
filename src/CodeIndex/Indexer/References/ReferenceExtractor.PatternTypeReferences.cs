@@ -1719,6 +1719,28 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "vb" && c == '[')
+            {
+                var closeIndex = expression.IndexOf(']', i + 1);
+                if (closeIndex < 0)
+                    continue;
+
+                var escapedSegment = expression.Substring(i + 1, closeIndex - i - 1);
+                AddTypeReferenceSegment(
+                    references,
+                    seen,
+                    fileId,
+                    escapedSegment,
+                    expressionStartInLine + i,
+                    context,
+                    lineNumber,
+                    container,
+                    language,
+                    ignoredSegments: ignoredSegments);
+                i = closeIndex;
+                continue;
+            }
+
             if (!IsTypeExpressionIdentifierStart(language, c))
                 continue;
 

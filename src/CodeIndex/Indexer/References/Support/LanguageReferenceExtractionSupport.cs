@@ -251,14 +251,70 @@ internal static class LanguageReferenceExtractionSupport
         @"(?:^|,)\s*(?:(?:required|covariant|final)\s+)*(?<type>[A-Z]\w*(?:\s*<[^,)=]+>)?)\s+[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private const string VbIdentifierPattern = @"(?:\[[^\]\r\n]+\]|[A-Za-z_]\w*)";
+    private const string VbQualifiedIdentifierPattern = @"(?:Global\.)?(?:" + VbIdentifierPattern + @")(?:\.(?:" + VbIdentifierPattern + @"))*";
     private static readonly Regex VbTypeKeywordRegex = new(
-        @"\b(?:As|New|Inherits|Implements|Of)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\b(?:As\s+(?:New\s+)?|New\s+|Inherits\s+|Implements\s+)(?<type>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericArgumentListRegex = new(
+        @"\(\s*Of\s+(?<list>[^)\r\n]+)\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericDeclarationOwnerRegex = new(
+        @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+" + VbIdentifierPattern + @"\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericConstraintRegex = new(
+        @"^\s*(?<param>" + VbIdentifierPattern + @")\s+As\s+(?<constraint>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbNewTypeRegex = new(
+        @"\bNew\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbImplementsListRegex = new(
+        @"\bImplements\s+(?<list>[^\r\n]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbImportsListRegex = new(
+        @"^\s*Imports\s+(?<list>[^\r\n]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbCastTypeRegex = new(
+        @"\b(?:DirectCast|TryCast|CType)\s*\([^,\r\n]+,\s*(?<type>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGetTypeRegex = new(
+        @"\bGetType\s*\(\s*(?<type>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbTypeOfRegex = new(
+        @"\bTypeOf\b.+?\bIs(?:Not)?\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbNameOfRegex = new(
+        @"\bNameOf\s*\(\s*(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGetXmlNamespaceRegex = new(
+        @"\bGetXmlNamespace\s*\(\s*(?<name>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
-        @"\bAddressOf\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\bAddressOf\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex VbHandlesRegex = new(
-        @"\bHandles\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
+    private static readonly Regex VbHandlesTargetRegex = new(
+        @"(?:\bHandles|,)\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbAddHandlerRegex = new(
+        @"\bAddHandler\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbRemoveHandlerRegex = new(
+        @"\bRemoveHandler\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbRaiseEventRegex = new(
+        @"\bRaiseEvent\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbCallRegex = new(
+        @"(?<![\w\]])(?<name>" + VbQualifiedIdentifierPattern + @")\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbBareCallRegex = new(
+        @"^\s*(?:Call\s+)?(?<name>" + VbQualifiedIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbBareMemberCallRegex = new(
+        @"^\s*\.\s*(?<name>" + VbIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbCallByNameRegex = new(
+        @"\bCallByName\s*\([^,\r\n]+,\s*""(?<name>[^""\r\n]+)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
@@ -434,6 +490,12 @@ internal static class LanguageReferenceExtractionSupport
                 break;
             case "smalltalk":
                 EmitSmalltalkMessageReferences(preparedLine, addCallLikeReference, definitionNames);
+                break;
+            case "vb":
+                EmitVisualBasicCallByNameReferences(originalLine, preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                EmitVisualBasicEscapedCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
+                EmitVisualBasicBareCallReferences(preparedLine, addCallLikeReference, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                EmitVisualBasicBareMemberCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 break;
         }
     }
@@ -3217,17 +3279,404 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
         }
 
+        foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
+        {
+            if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+            {
+                var constraintGroup = match.Groups["list"];
+                EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                continue;
+            }
+
+            var group = match.Groups["list"];
+            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+        }
+
+        foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+
+        foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["list"];
+            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
+                EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+
+        var importsMatch = VbImportsListRegex.Match(preparedLine);
+        if (importsMatch.Success)
+        {
+            var group = importsMatch.Groups["list"];
+            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+        }
+
+        foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+
+        foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+        }
+
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
-            var name = LastQualifiedSegment(group.Value);
-            var nameOffset = group.Value.LastIndexOf(name, StringComparison.Ordinal);
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
             var nameIndex = group.Index + Math.Max(0, nameOffset);
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
 
-        foreach (Match match in VbHandlesRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+        var handlesIndex = preparedLine.IndexOf("Handles", StringComparison.OrdinalIgnoreCase);
+        if (handlesIndex >= 0)
+        {
+            var handlesText = preparedLine[handlesIndex..];
+            foreach (Match match in VbHandlesTargetRegex.Matches(handlesText))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = handlesIndex + group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "subscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
+        }
+
+        foreach (Match match in VbAddHandlerRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "subscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+
+        foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+
+        foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+    }
+
+    private static void EmitVisualBasicEscapedCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? definitionNames)
+    {
+        foreach (Match match in VbCallRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            if (!group.Value.Contains('['))
+                continue;
+
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            if (ShouldSkipVisualBasicEscapedCall(preparedLine, group.Index, name, definitionNames))
+                continue;
+
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+    }
+
+    private static void EmitVisualBasicBareCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var match = VbBareCallRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var group = match.Groups["name"];
+        var tail = match.Groups["tail"].Value.TrimStart();
+        if (ShouldSkipVisualBasicBareCall(group.Value, tail))
+            return;
+
+        var rawName = LastQualifiedSegment(group.Value);
+        var name = NormalizeVbIdentifierSegment(rawName);
+        var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+        var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+        var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+        if (rawName.StartsWith('['))
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        else
+            addCallLikeReference(name, nameIndex);
+    }
+
+    private static void EmitVisualBasicCallByNameReferences(
+        string originalLine,
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in VbCallByNameRegex.Matches(originalLine))
+        {
+            if (match.Index >= preparedLine.Length || char.IsWhiteSpace(preparedLine[match.Index]))
+                continue;
+
+            var group = match.Groups["name"];
+            var name = group.Value.Trim();
+            if (!IsSimpleVisualBasicIdentifier(name))
+                continue;
+
+            ReferenceExtractor.AddReference(references, seen, fileId, name, group.Index, "call", context, lineNumber, resolveContainerForColumn(group.Index));
+        }
+    }
+
+    private static bool IsSimpleVisualBasicIdentifier(string value)
+    {
+        if (value.Length == 0 || !IsIdentifierStart(value[0]))
+            return false;
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (!IsSimpleIdentifierPart(value[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool ShouldSkipVisualBasicBareCall(string rawName, string tail)
+    {
+        if (tail.StartsWith('(') || tail.StartsWith('=') || tail.StartsWith(':'))
+            return true;
+        if (tail.StartsWith("As ", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var firstSegment = rawName;
+        var dotIndex = rawName.IndexOf('.');
+        if (dotIndex >= 0)
+            firstSegment = rawName[..dotIndex];
+        firstSegment = NormalizeVbIdentifierSegment(firstSegment);
+
+        return IsVisualBasicBareCallStatementHead(firstSegment);
+    }
+
+    private static bool IsVisualBasicBareCallStatementHead(string name) =>
+        name.Equals("Public", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Private", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Protected", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Friend", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Shared", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overrides", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overridable", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("NotOverridable", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("MustOverride", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overloads", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Shadows", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Async", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Iterator", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Partial", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Declare", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Dim", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ReDim", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Const", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Let", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Loop", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ElseIf", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Finally", StringComparison.OrdinalIgnoreCase);
+
+    private static void EmitVisualBasicBareMemberCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var match = VbBareMemberCallRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var group = match.Groups["name"];
+        var tail = match.Groups["tail"].Value.TrimStart();
+        if (tail.StartsWith('(') || tail.StartsWith('=') || tail.StartsWith(':') || tail.StartsWith("As ", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var rawName = group.Value;
+        var name = NormalizeVbIdentifierSegment(rawName);
+        var nameIndex = rawName.StartsWith('[') ? group.Index + 1 : group.Index;
+        ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+    }
+
+    private static bool IsVisualBasicMemberImplementsClause(string line, int implementsIndex)
+    {
+        var head = line[..implementsIndex];
+        return head.Contains(')')
+            || head.Contains(" Property ", StringComparison.OrdinalIgnoreCase)
+            || head.TrimStart().StartsWith("Property ", StringComparison.OrdinalIgnoreCase)
+            || head.Contains(" Event ", StringComparison.OrdinalIgnoreCase)
+            || head.TrimStart().StartsWith("Event ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void EmitVisualBasicImplementsOwnerReferences(
+        string list,
+        int listStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var trimmed = segment.Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            var dotIndex = LastVisualBasicQualifierDot(trimmed);
+            if (dotIndex <= 0)
+                continue;
+
+            var owner = trimmed[..dotIndex].Trim();
+            if (owner.Length == 0)
+                continue;
+
+            var ownerOffset = segment.IndexOf(owner, StringComparison.Ordinal);
+            var ownerStart = listStart + segmentStart + Math.Max(0, ownerOffset);
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, owner, ownerStart, context, lineNumber, resolveContainerForColumn(ownerStart), "vb");
+        }
+    }
+
+    private static int LastVisualBasicQualifierDot(string value)
+    {
+        var inEscapedIdentifier = false;
+        for (var i = value.Length - 1; i >= 0; i--)
+        {
+            if (value[i] == ']')
+            {
+                inEscapedIdentifier = true;
+                continue;
+            }
+
+            if (value[i] == '[')
+            {
+                inEscapedIdentifier = false;
+                continue;
+            }
+
+            if (value[i] == '.' && !inEscapedIdentifier)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool ShouldSkipVisualBasicEscapedCall(
+        string line,
+        int nameIndex,
+        string name,
+        IReadOnlySet<string>? definitionNames)
+    {
+        var previous = GetPreviousSimpleWord(line, nameIndex);
+        if (previous.Length == 0)
+            return false;
+
+        if (string.Equals(previous, "New", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(previous, "RaiseEvent", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (definitionNames?.Contains(name) != true)
+            return false;
+
+        return previous.Equals("Sub", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Function", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Property", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Event", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Delegate", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Class", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Structure", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Interface", StringComparison.OrdinalIgnoreCase)
+            || previous.Equals("Enum", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetPreviousSimpleWord(string line, int index)
+    {
+        var cursor = index - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+            cursor--;
+        if (cursor < 0)
+            return string.Empty;
+
+        var end = cursor + 1;
+        while (cursor >= 0 && IsSimpleIdentifierPart(line[cursor]))
+            cursor--;
+
+        return line[(cursor + 1)..end];
     }
 
     private static void EmitFortranTypeReferences(
@@ -4001,11 +4450,80 @@ internal static class LanguageReferenceExtractionSupport
             var raw = list.Substring(segmentStart, segmentLength).Trim();
             if (raw.Length == 0)
                 continue;
+            var expressionStart = segmentStart + ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            if (language == "vb")
+            {
+                var equalsIndex = list.IndexOf('=', segmentStart, segmentLength);
+                if (equalsIndex >= 0)
+                {
+                    var rhsStart = equalsIndex + 1;
+                    var rhsLength = segmentStart + segmentLength - rhsStart;
+                    var rhsLeading = ReferenceExtractor.CountLeadingWhitespace(list, rhsStart, rhsLength);
+                    expressionStart = rhsStart + rhsLeading;
+                    raw = list.Substring(expressionStart, rhsLength - rhsLeading).TrimEnd();
+                    if (raw.Length == 0)
+                        continue;
+                }
+            }
+
             var name = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? raw;
-            var offset = list.IndexOf(name, segmentStart, StringComparison.Ordinal);
+            var offset = list.IndexOf(name, expressionStart, StringComparison.Ordinal);
             if (offset < 0)
-                offset = segmentStart;
+                offset = expressionStart;
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, name, listStart + offset, context, lineNumber, container, language);
+        }
+    }
+
+    private static void EmitVbGenericConstraintReferences(
+        string list,
+        int listStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var ignoredSegments = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "As", "Class", "New", "Structure",
+        };
+
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var match = VbGenericConstraintRegex.Match(segment);
+            if (match.Success)
+            {
+                ignoredSegments.Add(match.Groups["param"].Value);
+                ignoredSegments.Add(NormalizeVbIdentifierSegment(match.Groups["param"].Value));
+            }
+        }
+
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var match = VbGenericConstraintRegex.Match(segment);
+            if (!match.Success)
+                continue;
+
+            var constraintGroup = match.Groups["constraint"];
+            // The generic-list regex is shallow; skip nested constraints rather than emit type parameters as concrete types.
+            if (constraintGroup.Value.Contains("(Of", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var absoluteConstraintStart = listStart + segmentStart + constraintGroup.Index;
+            ReferenceExtractor.AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                constraintGroup.Value,
+                absoluteConstraintStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteConstraintStart),
+                "vb",
+                ignoredSegments);
         }
     }
 
@@ -4043,6 +4561,15 @@ internal static class LanguageReferenceExtractionSupport
     {
         var dot = value.LastIndexOf('.');
         return dot >= 0 && dot + 1 < value.Length ? value[(dot + 1)..] : value;
+    }
+
+    private static string NormalizeVbIdentifierSegment(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']')
+            return trimmed[1..^1];
+
+        return trimmed;
     }
 
     private static string LastPathSegment(string value)
