@@ -18511,6 +18511,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsAssignFunctionDefinitions()
+    {
+        // R: assign() can install a function under a string name.
+        // R: assign() は文字列名で function を配置できる。
+        const string content = """
+            assign("build_plot", function(data) {
+              data
+            })
+
+            assign("not_a_function", 42)
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build_plot");
+        Assert.DoesNotContain(symbols, s => s.Name == "not_a_function");
+    }
+
+    [Fact]
     public void Extract_R_DetectsS4AndReferenceClassDefinitions()
     {
         // R: setClass, setClassUnion, setIs, setRefClass, R6Class, setGeneric, setMethod, inherit metadata / R: setClass、setClassUnion、setIs、setRefClass、R6Class、setGeneric、setMethod、inherit メタデータ
