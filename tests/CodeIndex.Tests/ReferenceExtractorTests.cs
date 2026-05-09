@@ -8072,6 +8072,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppCoReturnBraceConstruction_CapturesInstantiationReferences()
+    {
+        const string content = """
+            task<Result> Load() {
+              co_return Result{};
+              co_return ns::Outcome{42};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Outcome" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Outcome" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
