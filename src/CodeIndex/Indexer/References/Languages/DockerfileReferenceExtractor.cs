@@ -17,6 +17,10 @@ internal static class DockerfileReferenceExtractor
         @"\$\{(?<name>[A-Za-z_][A-Za-z0-9_]*)(?::[-+?=][^}]*)?\}",
         RegexOptions.Compiled);
 
+    private static readonly Regex UnbracedVariableReferenceRegex = new(
+        @"(?<!\$)\$(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.Compiled);
+
     public static HashSet<string>? BuildStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "dockerfile")
@@ -116,6 +120,24 @@ internal static class DockerfileReferenceExtractor
             return;
 
         foreach (Match match in BracedVariableReferenceRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (!variableNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in UnbracedVariableReferenceRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (!variableNames.Contains(name))

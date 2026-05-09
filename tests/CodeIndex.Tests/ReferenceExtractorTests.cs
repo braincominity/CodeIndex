@@ -2164,6 +2164,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IndexUnbracedArgVariables()
+    {
+        const string content = """
+            ARG APP_HOME=/app
+            WORKDIR $APP_HOME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "APP_HOME"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
