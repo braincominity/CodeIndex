@@ -62,6 +62,9 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespacePackageInstallCallStartRegex = new(
         @"^\s*(?:(?:renv)::install|(?:pak)::pkg_install)\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex GitHubPackageInstallCallStartRegex = new(
+        @"^\s*(?:(?:remotes|devtools)::)install_github\s*\(",
+        RegexOptions.Compiled);
     private static readonly Regex InstallPackagesNameRegex = new(
         @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))(?:c\s*\(\s*)?['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
@@ -623,6 +626,28 @@ internal static class RReferenceExtractor
             lineNumber,
             container,
             NamespacePackageInstallCallStartRegex);
+    }
+
+    public static void EmitGitHubPackageInstallReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        EmitPackageNameArgumentReferences(
+            preparedLine,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            GitHubPackageInstallCallStartRegex);
     }
 
     private static void EmitPackageNameArgumentReferences(

@@ -14578,6 +14578,7 @@ public class ReferenceExtractorTests
                 utils::install.packages(c("ggplot2", "data.table"), repos = "https://example.invalid")
                 renv::install("tibble")
                 pak::pkg_install(c("readr", "stringr"))
+                remotes::install_github("r-lib/cli", ref = "main")
             }
             """;
 
@@ -14608,7 +14609,12 @@ public class ReferenceExtractorTests
             r.SymbolName == "stringr"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "r-lib/cli"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
         Assert.DoesNotContain(references, r => r.SymbolName == "https://example.invalid");
+        Assert.DoesNotContain(references, r => r.SymbolName == "main");
     }
 
     [Fact]
