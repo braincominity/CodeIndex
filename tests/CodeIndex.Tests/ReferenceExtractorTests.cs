@@ -12272,6 +12272,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterXmlSchemaCollectionCapturesTargetReference()
+    {
+        const string content = """
+            ALTER XML SCHEMA COLLECTION dbo.InvoiceSchema ADD '<schema/>';
+            ALTER XML SCHEMA COLLECTION [archive].[CustomerSchema] ADD '<schema/>';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "InvoiceSchema" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "CustomerSchema" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
