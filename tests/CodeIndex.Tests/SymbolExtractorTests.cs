@@ -18443,7 +18443,7 @@ public class SymbolExtractorTests
     {
         // Ordinary assignment should not be detected as a function
         // 通常の代入は関数として検出されないこと
-        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)";
+        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)\nglobal <<- 42";
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "function");
@@ -18483,6 +18483,26 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsSuperassignmentFunctionDefinitions()
+    {
+        // R: superassignment can define functions in an enclosing environment.
+        // R: superassignment は外側の環境へ関数を定義できる。
+        const string content = """
+            register_handler <<- function(event) {
+              event
+            }
+
+            `plot-model` <<- function(data) {
+              data
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "register_handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
     }
 
     [Fact]
