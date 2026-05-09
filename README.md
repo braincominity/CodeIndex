@@ -147,13 +147,13 @@ cdidx mcp
 
 ## ドキュメント
 
-- [ユーザーガイド](USER_GUIDE.md): 詳細なインストール、コマンド例、オプション、
+- [ユーザーガイド](USER_GUIDE.md#cdidx日本語): 詳細なインストール、コマンド例、オプション、
   対応言語、MCP 設定、トラブルシュート。
-- [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md): 制限されたクラウド
+- [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md#日本語): 制限されたクラウド
   エージェント環境でのインストール手順。
-- [開発者ガイド](DEVELOPER_GUIDE.md): アーキテクチャ、実装メモ、リリース手順。
-- [テストガイド](TESTING_GUIDE.md): テスト規約と検証コマンド。
-- [自己改善コントラクト](SELF_IMPROVEMENT.md): CodeIndex 自身を改善する
+- [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド): アーキテクチャ、実装メモ、リリース手順。
+- [テストガイド](TESTING_GUIDE.md#テストガイド): テスト規約と検証コマンド。
+- [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ): CodeIndex 自身を改善する
   エージェント向けルール。
 - [統合ポリシー](INTEGRATION_POLICY.md): CLI、JSON、MCP、各種統合で許可される利用。
 

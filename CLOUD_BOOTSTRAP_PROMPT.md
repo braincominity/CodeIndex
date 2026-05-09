@@ -1,7 +1,7 @@
 # Cloud Bootstrap Prompt
 
 > **Maintainers / authorized operators only** — see [MAINTAINERS.md](MAINTAINERS.md). End users running cdidx on their own codebase don't need this file.
-> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
+> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md#maintainer-と認可オペレーター向け) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
 
 Kickoff prompt for cloud AI coding sessions (for example Claude Code or OpenAI
 Codex) that work on this repo without a local .NET SDK. Paste the English
