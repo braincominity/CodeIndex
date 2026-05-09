@@ -23,7 +23,7 @@ public static partial class SymbolExtractor
 
     private static readonly Regex FSharpTypeDeclarationRegex = new(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)*(?<name>(?:``[^`]+``|[_\p{L}][\w']*))(?:\s*<[^>]+>)?\s*=\s*(?<rest>.*)$", RegexOptions.Compiled);
     private static readonly Regex FSharpRecordFieldRegex = new(@"^(?:\[\<[^>]+\>\]\s*)*(?:mutable\s+)?(?<name>(?:``[^`]+``|[_\p{L}][\w']*))\s*:\s*.+$", RegexOptions.Compiled);
-    private static readonly Regex FSharpUnionCaseRegex = new(@"^\|?\s*(?<name>(?:``[^`]+``|[_\p{L}][\w']*))(?:\s+of\b.*)?$", RegexOptions.Compiled);
+    private static readonly Regex FSharpUnionCaseRegex = new(@"^\|?\s*(?:\[\<[^>]+\>\]\s*)*(?<name>(?:``[^`]+``|[_\p{L}][\w']*))(?:\s+of\b.*)?$", RegexOptions.Compiled);
     private static readonly Regex FSharpActivePatternDefinitionRegex = new(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*\(\|(?<cases>.+?)\|\)", RegexOptions.Compiled);
     private static readonly Regex FSharpActivePatternNameRegex = new(@"^(?:``[^`]+``|[_\p{L}][\w']*)$", RegexOptions.Compiled);
     private static readonly Regex FSharpOperatorDefinitionRegex = new(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>\((?!\|)[^)\s]+\))(?:\s+(?:\w+|\())?", RegexOptions.Compiled);

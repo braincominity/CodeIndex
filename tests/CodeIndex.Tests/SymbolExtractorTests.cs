@@ -14787,6 +14787,7 @@ public class SymbolExtractorTests
 
             type Color =
                 | Red
+                | [<Obsolete>] Amber
                 | Green
                 | Blue
 
@@ -14797,6 +14798,7 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
         Assert.Contains(symbols, s => s.Name == "Red");
+        Assert.Contains(symbols, s => s.Name == "Amber");
         Assert.Contains(symbols, s => s.Name == "Green");
         Assert.Contains(symbols, s => s.Name == "Blue");
         Assert.Contains(symbols, s => s.Name == "Name");
