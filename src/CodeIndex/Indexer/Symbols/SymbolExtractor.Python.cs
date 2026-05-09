@@ -18,6 +18,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassMatchArgsAssignmentRegex = new(@"^\s*__match_args__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAnnotationsAssignmentRegex = new(@"^\s*__annotations__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -242,6 +243,27 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
+                if (annotationsMatch.Success)
+                {
+                    var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
+                    if (annotationKeys != null)
+                    {
+                        foreach (var key in annotationKeys)
+                        {
+                            AddPythonClassPropertySymbol(
+                                fileId,
+                                lines,
+                                symbols,
+                                key.Name,
+                                key.LineIndex,
+                                key.StartColumn);
+                        }
+                    }
+
+                    continue;
+                }
+
                 var match = PythonClassAnnotatedAttributeRegex.Match(line);
                 if (!match.Success)
                     match = PythonClassAssignedAttributeRegex.Match(line);
@@ -283,6 +305,101 @@ public static partial class SymbolExtractor
                 Signature = lines[lineIndex].Trim(),
             },
             lines[lineIndex]);
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonStringDictionaryKeys(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        var entries = new List<PythonExportSymbolEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var currentLineIndex = lineIndex;
+        var currentColumn = valuesStartColumn;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
+            }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var afterStringColumn = currentColumn + 1;
+                    while (afterStringColumn < currentLine.Length && char.IsWhiteSpace(currentLine[afterStringColumn]))
+                        afterStringColumn++;
+
+                    if (afterStringColumn < currentLine.Length && currentLine[afterStringColumn] == ':')
+                    {
+                        var name = currentLine[stringStartColumn..currentColumn].Trim();
+                        if (name.Length > 0 && seenNames.Add(name))
+                            entries.Add(new PythonExportSymbolEntry(name, currentLineIndex, stringStartColumn));
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch == '\'' || ch == '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '{' or '[' or '(')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '}' or ']' or ')')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
+        }
+
+        return entries.Count > 0 ? entries : null;
     }
 
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
