@@ -1470,6 +1470,7 @@ public static partial class SymbolExtractor
             new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None),
             new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None),
             new("delegate", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*delegate\b", RegexOptions.Compiled), BodyStyle.None),
+            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
             // Generic abbreviations such as `type Result<'T> = Choice<'T, string>` should not be
             // mistaken for union cases just because the right-hand side starts with a capitalized
             // type name.
@@ -1480,8 +1481,7 @@ public static partial class SymbolExtractor
             // Simple aliases without generic parameters stay searchable as `typealias`.
             // generic 引数なしの単純な alias も `typealias` として検索可能にする。
             new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
             new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None),

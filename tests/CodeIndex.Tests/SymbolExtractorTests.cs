@@ -14665,6 +14665,8 @@ public class SymbolExtractorTests
             type ``User Record`` = { Name: string }
             type ``Color Choice`` = Red | Blue
             type ``Worker Type``() = class end
+            type Box<'T> = class end
+            type Factory<'T>(value: 'T) = class end
 
             type Person(name: string) =
                 member this.Name = name
@@ -14708,6 +14710,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Domain Helpers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker Type");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Factory");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User Record");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color Choice");
