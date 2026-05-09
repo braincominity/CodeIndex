@@ -5543,6 +5543,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropXmlSchemaCollectionReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_xml_schema_collection_target.sql", "sql",
+            """
+            CREATE XML SCHEMA COLLECTION dbo.InvoiceSchema AS '<schema/>';
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_xml_schema_collection_cleanup.sql", "sql",
+            """
+            DROP XML SCHEMA COLLECTION dbo.InvoiceSchema;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.InvoiceSchema", lang: "sql", exact: true, pathPatterns: ["sql_drop_xml_schema_collection"]));
+        Assert.Equal("src/sql_drop_xml_schema_collection_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.InvoiceSchema", lang: "sql", exact: true, pathPatterns: ["sql_drop_xml_schema_collection"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.InvoiceSchema", lang: "sql", exact: true, pathPatterns: ["sql_drop_xml_schema_collection"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
