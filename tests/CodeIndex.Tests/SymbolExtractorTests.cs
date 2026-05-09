@@ -14555,6 +14555,7 @@ public class SymbolExtractorTests
             #include <stdio.h>
             # include <stdlib.h>
             #include_next <limits.h>
+            #import "legacy.h"
             #include "project/foo.h"
             #include HEADER_NAME
             """;
@@ -14564,6 +14565,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdlib.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "limits.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "legacy.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
     }
