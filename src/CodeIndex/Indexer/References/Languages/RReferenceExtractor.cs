@@ -23,8 +23,11 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceS3MethodDirectiveRegex = new(
         @"^\s*S3method\s*\(\s*(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[A-Za-z.][\w.]*))\s*,\s*(?:`(?<classBacktick>[^`]+)`|['""](?<classQuoted>[^'""]+)['""]|(?<class>[A-Za-z.][\w.]*))(?:\s*,\s*(?:`(?<methodBacktick>[^`]+)`|['""](?<methodQuoted>[^'""]+)['""]|(?<method>[A-Za-z.][\w.]*)))?\s*\)",
         RegexOptions.Compiled);
+    private static readonly Regex NamespaceUseDynLibDirectiveRegex = new(
+        @"^\s*useDynLib\s*\(\s*(?:`(?<packageBacktick>[^`]+)`|['""](?<packageQuoted>[^'""]+)['""]|(?<package>[\w.]+))",
+        RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveStartRegex = new(
-        @"^\s*(?:import\s*\(|importFrom\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\()",
+        @"^\s*(?:import\s*\(|importFrom\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\(|useDynLib\s*\()",
         RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveNameRegex = new(
         @"`(?<backtickName>[^`]+)`|(?<name>[A-Za-z.][\w.]*)",
@@ -185,6 +188,31 @@ internal static class RReferenceExtractor
                     fileId,
                     @class.Value.Name,
                     @class.Value.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            return;
+        }
+
+        var useDynLibMatch = NamespaceUseDynLibDirectiveRegex.Match(directiveLine);
+        if (useDynLibMatch.Success)
+        {
+            var package = GetNamespaceDirectiveToken(
+                useDynLibMatch,
+                "packageBacktick",
+                "packageQuoted",
+                "package");
+            if (package != null)
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    package.Value.Name,
+                    package.Value.Index,
                     "reference",
                     context,
                     lineNumber,

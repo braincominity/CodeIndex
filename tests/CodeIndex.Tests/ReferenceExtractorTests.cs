@@ -14627,6 +14627,7 @@ public class ReferenceExtractorTests
             importFrom(dplyr, filter, select)
             S3method(print, model)
             S3method("[", indexed, `[.indexed`)
+            useDynLib("mypkg", .registration = TRUE)
             export(plot_model, `%.%`)
             exportClasses(Person)
             """;
@@ -14645,12 +14646,14 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "[.indexed" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "[" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "indexed" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "mypkg" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "plot_model" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "%.%" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Person" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "import" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "importFrom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "S3method" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "useDynLib" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "export" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "exportClasses" && r.ReferenceKind == "call");
     }

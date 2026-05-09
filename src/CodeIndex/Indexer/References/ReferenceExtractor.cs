@@ -229,7 +229,7 @@ public static partial class ReferenceExtractor
         {
             "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
             "invisible", "tryCatch", "withCallingHandlers", "requireNamespace", "next", "break", "repeat",
-            "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method",
+            "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method", "useDynLib",
         },
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
