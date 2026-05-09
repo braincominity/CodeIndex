@@ -675,6 +675,7 @@ public class SymbolExtractorTests
 
             namespace demo {
                 using namespace std; // comment to ignore
+                using typename Base::value_type;
             }
             """;
 
@@ -684,6 +685,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ptr");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "colors::Mode");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Base::value_type" && s.ContainerName == "demo");
     }
 
     [Fact]
