@@ -20258,6 +20258,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsDottedStageNames()
+    {
+        var content = """
+            FROM node:20 AS build.env
+            FROM build.env AS runtime
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build.env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "runtime");
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsSymbols()
     {
         var content = """
