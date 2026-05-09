@@ -229,6 +229,7 @@ public static partial class ReferenceExtractor
         {
             "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
             "invisible", "tryCatch", "withCallingHandlers", "requireNamespace", "next", "break", "repeat",
+            "import", "importFrom", "export", "exportClasses", "exportMethods",
         },
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
@@ -2528,6 +2529,14 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     definitionNames);
+                RReferenceExtractor.EmitNamespaceDirectiveReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
         }
 

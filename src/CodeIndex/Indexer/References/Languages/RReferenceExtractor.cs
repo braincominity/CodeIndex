@@ -11,6 +11,15 @@ internal static class RReferenceExtractor
     private static readonly Regex NamespaceReferenceRegex = new(
         @"(?<![\w.])(?<package>[\w.]+)(?<sep>:::?)(?:(?<backtickName>`[^`]+`)|(?<name>[\w.]+))",
         RegexOptions.Compiled);
+    private static readonly Regex NamespaceImportFromDirectiveRegex = new(
+        @"^\s*importFrom\s*\(\s*(?<package>[\w.]+)\s*,(?<names>[^)]*)\)",
+        RegexOptions.Compiled);
+    private static readonly Regex NamespaceExportDirectiveRegex = new(
+        @"^\s*export(?:Classes|Methods)?\s*\(\s*(?<names>[^)]*)\)",
+        RegexOptions.Compiled);
+    private static readonly Regex NamespaceDirectiveNameRegex = new(
+        @"`(?<backtickName>[^`]+)`|(?<name>[A-Za-z.][\w.]*)",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -55,6 +64,77 @@ internal static class RReferenceExtractor
                 context,
                 lineNumber,
                 container);
+        }
+    }
+
+    public static void EmitNamespaceDirectiveReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var importFromMatch = NamespaceImportFromDirectiveRegex.Match(preparedLine);
+        if (importFromMatch.Success)
+        {
+            var package = importFromMatch.Groups["package"].Value;
+            var namesGroup = importFromMatch.Groups["names"];
+            foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(namesGroup.Value, namesGroup.Index))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    $"{package}::{name}",
+                    importFromMatch.Groups["package"].Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            return;
+        }
+
+        var exportMatch = NamespaceExportDirectiveRegex.Match(preparedLine);
+        if (!exportMatch.Success)
+            return;
+
+        var exportNamesGroup = exportMatch.Groups["names"];
+        foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(exportNamesGroup.Value, exportNamesGroup.Index))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameIndex,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    private static IEnumerable<(string Name, int Index)> EnumerateNamespaceDirectiveNames(string value, int baseIndex)
+    {
+        foreach (Match match in NamespaceDirectiveNameRegex.Matches(value))
+        {
+            var backtickNameGroup = match.Groups["backtickName"];
+            var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
+            yield return (nameGroup.Value, baseIndex + nameGroup.Index + (backtickNameGroup.Success ? 1 : 0));
         }
     }
 }

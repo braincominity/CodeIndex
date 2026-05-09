@@ -14620,6 +14620,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
+    {
+        const string content = """
+            importFrom(dplyr, filter, select)
+            export(plot_model, `%.%`)
+            exportClasses(Person)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "dplyr::filter" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "dplyr::select" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "plot_model" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "%.%" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Person" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "importFrom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "export" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "exportClasses" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """
