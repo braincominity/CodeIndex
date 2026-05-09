@@ -260,7 +260,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\(\s*Of\s+(?<list>[^)\r\n]+)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbGenericDeclarationOwnerRegex = new(
-        @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+\w+\s*$",
+        @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+" + VbIdentifierPattern + @"\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbGenericConstraintRegex = new(
         @"^\s*(?<param>[A-Za-z_]\w*)\s+As\s+(?<constraint>.+)$",

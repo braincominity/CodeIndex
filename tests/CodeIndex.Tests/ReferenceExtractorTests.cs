@@ -11126,6 +11126,20 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_SkipsEscapedGenericDeclarationParameters()
+    {
+        const string content = """
+            Public Class [Box](Of T)
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesGenericConstraintTypes()
     {
         const string content = """
