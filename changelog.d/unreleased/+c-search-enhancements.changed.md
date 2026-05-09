@@ -36,6 +36,7 @@ affected:
 - **C references now capture tagged `_Generic` associations** — `_Generic(value, struct node *: ...)` now references tag association types.
 - **C references now capture `_t` `_Atomic` type specifiers** — `_Atomic(widget_t)` now references the typedef type.
 - **C references now capture tagged `_Atomic` type specifiers** — `_Atomic(struct node *)` now references the tag type.
+- **C references now capture `_t` `_Alignas` specifiers** — `_Alignas(widget_t)` and `alignas(message_t *)` now reference typedef types.
 
 ## 日本語
 
@@ -65,3 +66,4 @@ affected:
 - **C の参照抽出が tag 付き `_Generic` association を捕捉するようになりました** — `_Generic(value, struct node *: ...)` から tag association 型への参照を生成します。
 - **C の参照抽出が `_t` の `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(widget_t)` から typedef 型への参照を生成します。
 - **C の参照抽出が tag 付き `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(struct node *)` から tag 型への参照を生成します。
+- **C の参照抽出が `_t` の `_Alignas` specifier を捕捉するようになりました** — `_Alignas(widget_t)` と `alignas(message_t *)` から typedef 型への参照を生成します。
