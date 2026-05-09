@@ -10714,6 +10714,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesGetTypeTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Dim customerType = GetType(Customer)
+                    Dim orderType = GetType(Global.App.Order)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GetType" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """
