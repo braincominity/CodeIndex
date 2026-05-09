@@ -1184,6 +1184,7 @@ public class ReferenceExtractorTests
     [InlineData("GENERATE SALES-REPORT", "SALES-REPORT")]
     [InlineData("INITIATE SALES-REPORT", "SALES-REPORT")]
     [InlineData("TERMINATE SALES-REPORT", "SALES-REPORT")]
+    [InlineData("USE AFTER STANDARD ERROR PROCEDURE ON CUSTOMER-FILE", "CUSTOMER-FILE")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""

@@ -22,6 +22,9 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolPerformRegex = new(
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolUseAfterProcedureRegex = new(
+        @"^\s*USE\s+AFTER\s+(?:STANDARD\s+)?(?:ERROR|EXCEPTION)\s+PROCEDURE\s+ON\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolSetRegex = new(
         @"^\s*SET\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s+\b(?:TO\s+TRUE|TO\b)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -65,6 +68,7 @@ internal static class CobolReferenceExtractor
         new(CobolCancelRegex, "reference"),
         new(CobolCopyRegex, "reference"),
         new(CobolGotoRegex, "call"),
+        new(CobolUseAfterProcedureRegex, "reference"),
         new(CobolSetRegex, "reference"),
         new(CobolOpenRegex, "reference"),
         new(CobolSearchRegex, "reference"),
