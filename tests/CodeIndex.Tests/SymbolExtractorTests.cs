@@ -41,6 +41,8 @@ public class SymbolExtractorTests
             type Connection = str | int
             JsonValue: TypeAlias = dict[str, object]
             Handler: typing.TypeAlias = Callable[..., None]
+            UserId = NewType("UserId", int)
+            OrderId = typing.NewType("OrderId", int)
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -68,6 +70,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Connection");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "JsonValue");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
