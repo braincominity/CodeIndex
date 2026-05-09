@@ -1196,6 +1196,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS SEND MAP('CUSTOMER-MAP') MAPSET('CUSTOMER-SET') END-EXEC", "CUSTOMER-SET")]
     [InlineData("EXEC CICS RECEIVE MAP('CUSTOMER-MAP') INTO(CUSTOMER-AREA) END-EXEC", "CUSTOMER-MAP")]
     [InlineData("EXEC CICS READ FILE('CUSTOMER-FILE') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
+    [InlineData("EXEC CICS WRITE FILE('CUSTOMER-FILE') FROM(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
