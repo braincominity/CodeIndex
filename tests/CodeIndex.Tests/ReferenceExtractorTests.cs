@@ -2148,6 +2148,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IndexDefaultedBracedArgVariables()
+    {
+        const string content = """
+            ARG NODE_VERSION
+            FROM node:${NODE_VERSION:-20} AS builder
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "NODE_VERSION"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)

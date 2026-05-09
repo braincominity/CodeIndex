@@ -24,6 +24,7 @@ affected:
 - **Dockerfile stage aliases can include dots** — aliases such as `build.env` now stay intact in stage symbols and `FROM` / `COPY --from` references.
 - **Commented `FROM` stage reuse lines keep references** — `FROM builder AS runtime # comment` now indexes the `builder` stage dependency.
 - **Dockerfile braced ARG/ENV uses become references** — `${NODE_VERSION}` now links back to the indexed `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol.
+- **Dockerfile defaulted braced variables become references** — `${NODE_VERSION:-20}` now links back to `NODE_VERSION` instead of being skipped.
 
 ## 日本語
 
@@ -39,3 +40,4 @@ affected:
 - **Dockerfile の stage alias で dot を扱えるようになりました** — `build.env` のような alias が stage symbol と `FROM` / `COPY --from` 参照で欠けずに保持されるようになりました。
 - **コメント付きの `FROM` stage 再利用行でも参照を保持するようになりました** — `FROM builder AS runtime # comment` が `builder` stage dependency として index されるようになりました。
 - **Dockerfile の braced ARG/ENV 利用を参照として扱うようになりました** — `${NODE_VERSION}` が index 済みの `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol に結びつくようになりました。
+- **Dockerfile の default 付き braced variable を参照として扱うようになりました** — `${NODE_VERSION:-20}` が skip されず `NODE_VERSION` に結びつくようになりました。
