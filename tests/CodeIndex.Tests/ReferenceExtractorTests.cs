@@ -14576,6 +14576,8 @@ public class ReferenceExtractorTests
             bootstrap <- function() {
                 install.packages("dplyr")
                 utils::install.packages(c("ggplot2", "data.table"), repos = "https://example.invalid")
+                renv::install("tibble")
+                pak::pkg_install(c("readr", "stringr"))
             }
             """;
 
@@ -14592,6 +14594,18 @@ public class ReferenceExtractorTests
             && r.ContainerName == "bootstrap");
         Assert.Contains(references, r =>
             r.SymbolName == "data.table"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "tibble"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "readr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "stringr"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "bootstrap");
         Assert.DoesNotContain(references, r => r.SymbolName == "https://example.invalid");

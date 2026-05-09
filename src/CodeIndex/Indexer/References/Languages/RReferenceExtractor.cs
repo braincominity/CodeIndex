@@ -59,6 +59,9 @@ internal static class RReferenceExtractor
     private static readonly Regex InstallPackagesCallStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?install\.packages\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex NamespacePackageInstallCallStartRegex = new(
+        @"^\s*(?:(?:renv)::install|(?:pak)::pkg_install)\s*\(",
+        RegexOptions.Compiled);
     private static readonly Regex InstallPackagesNameRegex = new(
         @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))(?:c\s*\(\s*)?['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
@@ -588,7 +591,52 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        if (!InstallPackagesCallStartRegex.IsMatch(preparedLine))
+        EmitPackageNameArgumentReferences(
+            preparedLine,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            InstallPackagesCallStartRegex);
+    }
+
+    public static void EmitNamespacePackageInstallReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        EmitPackageNameArgumentReferences(
+            preparedLine,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            NamespacePackageInstallCallStartRegex);
+    }
+
+    private static void EmitPackageNameArgumentReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Regex startRegex)
+    {
+        if (!startRegex.IsMatch(preparedLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
