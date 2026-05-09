@@ -12212,6 +12212,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterSecurityPolicyCapturesTargetReference()
+    {
+        const string content = """
+            ALTER SECURITY POLICY dbo.CustomerFilter WITH (STATE = ON);
+            ALTER SECURITY POLICY [security].[InvoiceFilter] WITH (STATE = OFF);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomerFilter" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceFilter" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

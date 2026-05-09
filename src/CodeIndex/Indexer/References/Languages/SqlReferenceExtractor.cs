@@ -207,6 +207,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterSequenceTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SEQUENCE\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterSecurityPolicyTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+SECURITY\s+POLICY\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -1033,6 +1036,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterSequenceTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterSecurityPolicyTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

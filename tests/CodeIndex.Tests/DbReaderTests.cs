@@ -5168,7 +5168,7 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void SqlQualifiedNames_AlterSecurityPolicyReferencesResolveThroughSearch()
     {
-        InsertIndexedFile("src/sql_alter_security_policy_target.sql", "sql",
+        InsertIndexedFile("src/sql_alter_security_policy_name_target.sql", "sql",
             """
             CREATE TABLE dbo.Orders (Id int, TenantId int);
             GO
@@ -5718,6 +5718,29 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/sql_alter_sequence_update.sql", reference.Path);
         Assert.Equal(1, _reader.CountSearchReferences("dbo.OrderNumbers", lang: "sql", exact: true, pathPatterns: ["sql_alter_sequence"]));
         Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.OrderNumbers", lang: "sql", exact: true, pathPatterns: ["sql_alter_sequence"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AlterSecurityPolicyNameReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_security_policy_target.sql", "sql",
+            """
+            CREATE SECURITY POLICY dbo.CustomerFilter
+            ADD FILTER PREDICATE dbo.fn_filter(CustomerId) ON dbo.Customers;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_security_policy_name_update.sql", "sql",
+            """
+            ALTER SECURITY POLICY dbo.CustomerFilter WITH (STATE = OFF);
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_alter_security_policy_name"]));
+        Assert.Equal("src/sql_alter_security_policy_name_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_alter_security_policy_name"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_alter_security_policy_name"]));
     }
 
     [Fact]
