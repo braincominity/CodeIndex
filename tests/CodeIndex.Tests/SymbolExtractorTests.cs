@@ -18297,6 +18297,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsXmlNamespaceImportPrefixes()
+    {
+        var content = """
+            Imports <xmlns:ui="urn:ui">
+
+            Public Class ViewModel
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ui");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("xmlns", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Extract_VB_DetectsEscapedTypeDeclarationNames()
     {
         var content = """
