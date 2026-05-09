@@ -418,6 +418,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonGenericReturnAnnotation_CapturesNestedTypeReference()
+    {
+        const string content = """
+            def load_many() -> list[models.User]:
+                return []
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load_many");
+    }
+
+    [Fact]
     public void Extract_PythonFunctionParameterAnnotation_CapturesParameterTypeReference()
     {
         const string content = """

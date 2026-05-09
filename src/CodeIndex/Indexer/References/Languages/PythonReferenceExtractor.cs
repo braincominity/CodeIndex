@@ -63,6 +63,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex FunctionReturnTypeRegex = new(
         @"^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*->\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*:",
         RegexOptions.Compiled);
+    private static readonly Regex FunctionReturnAnnotationExpressionRegex = new(
+        @"^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*->\s*(?<type>[^:]+)\s*:",
+        RegexOptions.Compiled);
     private static readonly Regex FunctionParameterListRegex = new(
         @"^\s*(?:async\s+)?def\s+\w+\s*\((?<params>[^)]*)\)",
         RegexOptions.Compiled);
@@ -466,6 +469,29 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in FunctionReturnAnnotationExpressionRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typeGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                var nameIndex = typeGroup.Index + typeMatch.Groups["name"].Index;
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    context,
+                    lineNumber,
+                    resolveContainerForReference(nameIndex) ?? container,
+                    "python");
+            }
+        }
+
         foreach (Match match in FunctionReturnTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
