@@ -13,6 +13,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -190,11 +191,23 @@ public static partial class SymbolExtractor
             ];
         }
 
+        var extendMatch = PythonAllExtendRegex.Match(line);
+        if (extendMatch.Success)
+            return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+
         var match = PythonAllAssignmentRegex.Match(line);
         if (!match.Success)
             return null;
 
-        var valuesStartColumn = match.Groups["values"].Index;
+        return TryExpandPythonAllExportSymbolsFromValues(lines, lineIndex, match.Groups["values"].Index);
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbolsFromValues(
+        string[] lines,
+        int lineIndex,
+        int valuesStartColumn)
+    {
+        var line = lines[lineIndex];
         if (valuesStartColumn < 0 || valuesStartColumn >= line.Length)
             return null;
 
