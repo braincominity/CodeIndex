@@ -18177,6 +18177,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsConstMembersAsProperties()
+    {
+        var content = """
+            Public Class Limits
+                Public Const MaxItems As Integer = 10
+                Private Shared Const CacheKey As String = "items"
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var maxItems = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "MaxItems");
+        Assert.Equal("Public", maxItems.Visibility);
+
+        var cacheKey = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "CacheKey");
+        Assert.Equal("Private", cacheKey.Visibility);
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """
