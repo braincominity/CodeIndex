@@ -1487,7 +1487,7 @@ public static partial class SymbolExtractor
             new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!\{)(?!\|)(?!class\b)(?!delegate\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(@"^\s*namespace\s+(?:(?:rec|global)\s+)*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?:``[^`]+``|[\w.]+)\s*=\s*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?:``[^`]+``|[\w.]+)\s*=\s*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>(?:``[^`]+``|\w+))\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?abstract\s+(?!member\b)(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
