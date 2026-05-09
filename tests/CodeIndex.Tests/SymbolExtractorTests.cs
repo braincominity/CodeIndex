@@ -703,6 +703,7 @@ public class SymbolExtractorTests
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
             MAIN-SECTION SECTION.
+                ENTRY "ALT-ENTRY".
                 PERFORM HELPER-SECTION
                 PERFORM HELPER-PARA THRU EXIT-PARA
                 STOP RUN.
@@ -719,12 +720,52 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "HELLO-WORLD");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ALT-ENTRY");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MIDDLE-PARA");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "EXIT-PARA");
         Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cobol");
+    }
+
+    [Fact]
+    public void Extract_CobolClassId_DetectsClassSymbolAndContainers()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            CLASS-ID. customer-service.
+            PROCEDURE DIVISION.
+            MAIN-SECTION SECTION.
+                DISPLAY "A".
+            END CLASS customer-service.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "CUSTOMER-SERVICE");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "MAIN-SECTION"
+            && symbol.ContainerName == "CUSTOMER-SERVICE");
+    }
+
+    [Fact]
+    public void Extract_CobolMethodId_DetectsFunctionSymbol()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            CLASS-ID. customer-service.
+            METHOD-ID. "load-customer".
+            PROCEDURE DIVISION.
+                DISPLAY "A".
+            END METHOD load-customer.
+            END CLASS customer-service.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "LOAD-CUSTOMER");
     }
 
     [Fact]

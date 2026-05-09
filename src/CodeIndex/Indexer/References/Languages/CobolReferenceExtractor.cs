@@ -10,14 +10,71 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolCallRegex = new(
         @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolCancelRegex = new(
+        @"^\s*CANCEL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolCopyRegex = new(
         @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecSqlIncludeRegex = new(
+        @"^\s*EXEC\s+SQL\s+INCLUDE\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecSqlCallRegex = new(
+        @"^\s*EXEC\s+SQL\s+CALL\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsProgramCallRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:LINK|XCTL)\b.*?\bPROGRAM\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsHandleConditionCallRegex = new(
+        @"^\s*EXEC\s+CICS\s+HANDLE\s+CONDITION\b.*?\b[A-Z0-9-]+\s*\(\s*(?<name>[A-Z0-9][A-Z0-9-]*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsProgramReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:LOAD)\b.*?\bPROGRAM\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsMapReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:SEND|RECEIVE)\b.*?\bMAP\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsMapsetReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:SEND|RECEIVE)\b.*?\bMAPSET\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsFileReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:READ|WRITE|REWRITE|DELETE|STARTBR|READNEXT|READPREV|RESETBR|ENDBR|UNLOCK)\b.*?\bFILE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsQueueReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:READQ\s+(?:TS|TD)|WRITEQ\s+(?:TS|TD)|DELETEQ\s+TS)\b.*?\bQUEUE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsResourceReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:ENQ|DEQ)\b.*?\bRESOURCE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsTransidReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:START|RETURN)\b.*?\bTRANSID\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsAssignReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+ASSIGN\b.*?\bAPPLID\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsAddressReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+ADDRESS\b.*?\bCOMMAREA\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsStorageReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:GETMAIN\b.*?\bSET|FREEMAIN\b.*?\bDATA)\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsReceiveReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+RECEIVE\b.*?\bINTO\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsSendReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+SEND\b.*?\bFROM\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecSqlSimpleReferenceRegex = new(
+        @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN|CLOSE|PREPARE|EXECUTE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolGotoRegex = new(
         @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolPerformRegex = new(
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolUseAfterProcedureRegex = new(
+        @"^\s*USE\s+AFTER\s+(?:STANDARD\s+)?(?:ERROR|EXCEPTION)\s+PROCEDURE\s+ON\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolSetRegex = new(
         @"^\s*SET\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s+\b(?:TO\s+TRUE|TO\b)",
@@ -29,7 +86,7 @@ internal static class CobolReferenceExtractor
         @"^\s*SEARCH\s+(?:(?:ALL|FIRST)\s+)?(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolSimpleReferenceRegex = new(
-        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT|START|RETURN|RELEASE|GENERATE|INITIATE|TERMINATE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolMoveRegex = new(
         @"^\s*MOVE\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
@@ -59,8 +116,27 @@ internal static class CobolReferenceExtractor
     private static readonly StatementPattern[] StatementPatterns =
     [
         new(CobolCallRegex, "call"),
+        new(CobolCancelRegex, "reference"),
         new(CobolCopyRegex, "reference"),
+        new(CobolExecSqlIncludeRegex, "reference"),
+        new(CobolExecSqlCallRegex, "call"),
+        new(CobolExecCicsProgramCallRegex, "call"),
+        new(CobolExecCicsHandleConditionCallRegex, "call"),
+        new(CobolExecCicsProgramReferenceRegex, "reference"),
+        new(CobolExecCicsMapReferenceRegex, "reference"),
+        new(CobolExecCicsMapsetReferenceRegex, "reference"),
+        new(CobolExecCicsFileReferenceRegex, "reference"),
+        new(CobolExecCicsQueueReferenceRegex, "reference"),
+        new(CobolExecCicsResourceReferenceRegex, "reference"),
+        new(CobolExecCicsTransidReferenceRegex, "reference"),
+        new(CobolExecCicsAssignReferenceRegex, "reference"),
+        new(CobolExecCicsAddressReferenceRegex, "reference"),
+        new(CobolExecCicsStorageReferenceRegex, "reference"),
+        new(CobolExecCicsReceiveReferenceRegex, "reference"),
+        new(CobolExecCicsSendReferenceRegex, "reference"),
+        new(CobolExecSqlSimpleReferenceRegex, "reference"),
         new(CobolGotoRegex, "call"),
+        new(CobolUseAfterProcedureRegex, "reference"),
         new(CobolSetRegex, "reference"),
         new(CobolOpenRegex, "reference"),
         new(CobolSearchRegex, "reference"),
