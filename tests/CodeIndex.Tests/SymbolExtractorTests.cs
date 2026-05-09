@@ -18279,6 +18279,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsImportAliasSymbols()
+    {
+        var content = """
+            Imports CustomerAlias = App.Domain.Customer
+            Imports [Select] = App.Domain.Selector
+
+            Public Class Controller
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CustomerAlias");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Select");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "CustomerAlias = App.Domain.Customer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "[Select]");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsEscapedTypeDeclarationNames()
     {
         var content = """
