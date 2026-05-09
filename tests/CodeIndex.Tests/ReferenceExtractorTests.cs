@@ -14511,6 +14511,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsSourceFileReferences()
+    {
+        const string content = """
+            load_helpers <- function() {
+                source("R/helpers.R")
+                base::source(file = "R/models/fit.R", local = TRUE)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/helpers.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/models/fit.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.DoesNotContain(references, r => r.SymbolName == "source" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceReferenceOperators()
     {
         const string content = """

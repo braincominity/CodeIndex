@@ -38,6 +38,12 @@ internal static class RReferenceExtractor
     private static readonly Regex InfixOperatorCallRegex = new(
         @"(?<!`)(?<name>%[^%\s]+%)(?!`)",
         RegexOptions.Compiled);
+    private static readonly Regex SourceFileReferenceRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?source\s*\(\s*(?:file\s*=\s*)?['""](?<path>[^'""]+)['""]",
+        RegexOptions.Compiled);
+    private static readonly Regex SourceFileReferenceStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?source\s*\(",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -306,6 +312,37 @@ internal static class RReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    public static void EmitSourceFileReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (!SourceFileReferenceStartRegex.IsMatch(preparedLine))
+            return;
+
+        var line = StripRNamespaceDirectiveComment(originalLine);
+        var match = SourceFileReferenceRegex.Match(line);
+        if (!match.Success)
+            return;
+
+        var path = match.Groups["path"];
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            path.Value,
+            path.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
     }
 
     private static IEnumerable<(string Name, int Index)> EnumerateNamespaceDirectiveNames(string value, int baseIndex)

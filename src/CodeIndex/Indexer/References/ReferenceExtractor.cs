@@ -229,7 +229,7 @@ public static partial class ReferenceExtractor
         {
             "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
             "invisible", "tryCatch", "withCallingHandlers", "requireNamespace", "next", "break", "repeat",
-            "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method", "useDynLib",
+            "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method", "useDynLib", "source",
         },
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
@@ -2556,6 +2556,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     definitionNames);
+                RReferenceExtractor.EmitSourceFileReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
         }
 
