@@ -347,6 +347,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranExternalRegex = new(
         @"^\s*external(?:\s*::)?\s*(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranIntrinsicProcedureRegex = new(
+        @"^\s*intrinsic(?:\s*::)?\s*(?<list>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranSimpleListNameRegex = new(
         @"(?:^|,)\s*(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -3791,6 +3794,17 @@ internal static class LanguageReferenceExtractionSupport
         if (externalMatch.Success)
         {
             var list = externalMatch.Groups["list"];
+            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+            }
+        }
+
+        var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
+        if (intrinsicProcedureMatch.Success)
+        {
+            var list = intrinsicProcedureMatch.Groups["list"];
             foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
             {
                 var group = match.Groups["name"];
