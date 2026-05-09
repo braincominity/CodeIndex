@@ -14531,7 +14531,10 @@ public class ReferenceExtractorTests
             r.SymbolName == "R/models/fit.R"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "load_helpers");
-        Assert.DoesNotContain(references, r => r.SymbolName == "source" && r.ReferenceKind == "call");
+        Assert.Contains(references, r =>
+            r.SymbolName == "source"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "load_helpers");
     }
 
     [Fact]
