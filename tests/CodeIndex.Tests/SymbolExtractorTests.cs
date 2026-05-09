@@ -11342,6 +11342,9 @@ public class SymbolExtractorTests
               type, extends(point_t) :: colored_point
                 integer :: color
               end type colored_point
+              enum, bind(c)
+                enumerator :: color_red = 1, color_blue = 2
+              end enum
             contains
               integer(kind=4) &
               function split_value(value)
@@ -11403,6 +11406,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "abstract_callback");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_value");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_subroutine");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "color_red");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "color_blue");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_restart");
