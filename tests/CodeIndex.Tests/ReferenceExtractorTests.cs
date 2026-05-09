@@ -10734,6 +10734,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesTypeOfTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(value As Object)
+                    If TypeOf value Is Customer Then
+                    End If
+
+                    If TypeOf value IsNot ViewModels.Widget Then
+                    End If
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

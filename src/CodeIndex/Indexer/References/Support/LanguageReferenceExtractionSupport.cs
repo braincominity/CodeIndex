@@ -260,6 +260,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbGetTypeRegex = new(
         @"\bGetType\s*\(\s*(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbTypeOfRegex = new(
+        @"\bTypeOf\b.+?\bIs(?:Not)?\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
         @"\bAddressOf\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3230,6 +3233,12 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
