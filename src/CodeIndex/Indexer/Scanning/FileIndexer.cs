@@ -233,6 +233,7 @@ public class FileIndexer
         [".fs"]     = "fsharp",
         [".fsx"]    = "fsharp",
         [".fsi"]    = "fsharp",
+        [".bas"]    = "vb",
         [".vb"]     = "vb",
         [".vbs"]    = "vb",
         [".hs"]     = "haskell",

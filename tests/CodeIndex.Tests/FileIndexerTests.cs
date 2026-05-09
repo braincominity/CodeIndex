@@ -41,6 +41,7 @@ public class FileIndexerTests
     [InlineData("script.lua", "lua")]
     [InlineData("Program.fs", "fsharp")]
     [InlineData("Script.fsx", "fsharp")]
+    [InlineData("Module.bas", "vb")]
     [InlineData("Module1.vb", "vb")]
     [InlineData("script.vbs", "vb")]
     [InlineData("index.html", "html")]
