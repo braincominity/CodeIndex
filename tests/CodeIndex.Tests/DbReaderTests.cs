@@ -4812,6 +4812,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterSchemaTransferReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_schema_transfer_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_schema_transfer_move.sql", "sql",
+            """
+            ALTER SCHEMA archive TRANSFER dbo.Orders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_schema_transfer"]));
+        Assert.Equal("src/sql_alter_schema_transfer_move.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_schema_transfer"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_schema_transfer"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
