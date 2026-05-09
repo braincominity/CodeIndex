@@ -1982,6 +1982,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefGenericAssociations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, widget_t: 1, message_t *: 2, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
