@@ -1801,6 +1801,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefAlignof_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void measure(void) {
+                unsigned long widgetAlign = _Alignof(widget_t);
+                unsigned long configAlign = alignof(config_t);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "config_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
