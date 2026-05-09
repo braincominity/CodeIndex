@@ -51,6 +51,8 @@ public class SymbolExtractorTests
             OrderPayload = typing.TypedDict("OrderPayload", {"id": int})
             Color = Enum("Color", "RED BLUE")
             Status = enum.Enum("Status", "OPEN CLOSED")
+            RuntimeUser = create_model("RuntimeUser", name=(str, ...))
+            RuntimeOrder = pydantic.create_model("RuntimeOrder", id=(int, ...))
             DEFAULT_TIMEOUT: Final[int] = 30
             API_HOST: typing.Final = "example.invalid"
 
@@ -90,6 +92,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OrderPayload");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeOrder");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "API_HOST");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
