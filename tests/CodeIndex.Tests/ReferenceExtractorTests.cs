@@ -1771,6 +1771,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefCasts_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void convert(void *raw) {
+                widget_t *widget = (widget_t *)raw;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"

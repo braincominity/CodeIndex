@@ -19,6 +19,7 @@ affected:
 - **C references now capture `#include_next` headers** — next-header directives now appear in reference-oriented queries, not only symbol search.
 - **C references now capture macro include targets** — `#include PROJECT_HEADER` now produces a header reference for macro-based include wiring.
 - **C references now suppress type-keyword noise** — `struct`, `enum`, `union`, and qualifiers are filtered out of C type-reference rows so typedef edges point at real tag names.
+- **C references now capture `_t` cast types** — lowercase typedef casts such as `(widget_t *)raw` now produce type-reference rows.
 
 ## 日本語
 
@@ -31,3 +32,4 @@ affected:
 - **C の参照抽出が `#include_next` ヘッダーを捕捉するようになりました** — next-header ディレクティブが symbol search だけでなく参照系クエリにも出るようになりました。
 - **C の参照抽出が macro include の参照先を捕捉するようになりました** — `#include PROJECT_HEADER` でも macro ベースの include 配線をヘッダー参照として生成します。
 - **C の参照抽出が型キーワード由来のノイズを抑えるようになりました** — `struct` / `enum` / `union` や修飾子を C の type-reference 行から除外し、typedef edge が実際の tag 名を指すようにしました。
+- **C の参照抽出が `_t` cast 型を捕捉するようになりました** — `(widget_t *)raw` のような lowercase typedef cast でも type-reference 行を生成します。
