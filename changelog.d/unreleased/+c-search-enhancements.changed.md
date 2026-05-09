@@ -55,6 +55,7 @@ affected:
 - **C references now capture pointer-qualified tagged `sizeof` operands** — `sizeof(struct node * const)` now references the measured tag.
 - **C references now capture tagged alignment operands** — `_Alignof(struct node *)` and `alignof(union value)` now reference measured tags.
 - **C references now capture `_t` GNU alignment operands** — `__alignof__(widget_t *)` now references the measured typedef.
+- **C references now capture tagged GNU alignment operands** — `__alignof__(struct node *)` now references the measured tag.
 
 ## 日本語
 
@@ -103,3 +104,4 @@ affected:
 - **C の参照抽出が pointer-qualified tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node * const)` から測定 tag への参照を生成します。
 - **C の参照抽出が tag 付き alignment operand を捕捉するようになりました** — `_Alignof(struct node *)` と `alignof(union value)` から測定 tag への参照を生成します。
 - **C の参照抽出が `_t` GNU alignment operand を捕捉するようになりました** — `__alignof__(widget_t *)` から測定 typedef への参照を生成します。
+- **C の参照抽出が tag 付き GNU alignment operand を捕捉するようになりました** — `__alignof__(struct node *)` から測定 tag への参照を生成します。
