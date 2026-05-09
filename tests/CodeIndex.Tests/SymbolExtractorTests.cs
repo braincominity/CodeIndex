@@ -43,6 +43,8 @@ public class SymbolExtractorTests
             Handler: typing.TypeAlias = Callable[..., None]
             UserId = NewType("UserId", int)
             OrderId = typing.NewType("OrderId", int)
+            Point = NamedTuple("Point", [("x", int), ("y", int)])
+            Coordinate = collections.namedtuple("Coordinate", "lat lon")
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -72,6 +74,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
