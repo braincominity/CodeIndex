@@ -35,7 +35,7 @@ internal static class CobolReferenceExtractor
         @"^\s*EXEC\s+CICS\s+(?:SEND|RECEIVE)\b.*?\bMAPSET\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolExecCicsFileReferenceRegex = new(
-        @"^\s*EXEC\s+CICS\s+(?:READ|WRITE|REWRITE|DELETE|STARTBR)\b.*?\bFILE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        @"^\s*EXEC\s+CICS\s+(?:READ|WRITE|REWRITE|DELETE|STARTBR|READNEXT)\b.*?\bFILE\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolExecSqlSimpleReferenceRegex = new(
         @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN|CLOSE|PREPARE|EXECUTE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
