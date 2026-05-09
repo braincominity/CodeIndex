@@ -18514,6 +18514,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsTestthatBddBlocks()
+    {
+        // testthat also exposes describe()/it() BDD-style test blocks.
+        // testthat には describe()/it() の BDD 形式 test block もある。
+        const string content = """
+            describe("model plotting", {
+              it("renders residuals", {
+                expect_s3_class(plot_residuals(model), "ggplot")
+              })
+            })
+
+            testthat::it("handles missing values", {
+              expect_true(all(is.na(clean(data))))
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "model plotting");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "renders residuals");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handles missing values");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
