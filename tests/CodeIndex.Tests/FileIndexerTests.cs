@@ -90,6 +90,7 @@ public class FileIndexerTests
     [InlineData("Podfile", "ruby")]
     [InlineData("Guardfile", "ruby")]
     [InlineData("Capfile", "ruby")]
+    [InlineData("NAMESPACE", "r")]
     [InlineData("GNUmakefile", "makefile")]
     [InlineData("Containerfile", "dockerfile")]
     [InlineData("BUILD", "python")]
@@ -416,6 +417,7 @@ public class FileIndexerTests
         Assert.Equal("makefile", map["GNUmakefile"]);
         Assert.Equal("ruby", map["Gemfile"]);
         Assert.Equal("ruby", map["Rakefile"]);
+        Assert.Equal("r", map["NAMESPACE"]);
         Assert.Equal("python", map["BUILD.bazel"]);
         Assert.Equal("python", map["pyproject.toml"]);
         Assert.Equal("python", map["requirements.txt"]);
