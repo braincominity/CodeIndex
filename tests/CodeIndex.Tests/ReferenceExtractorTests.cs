@@ -11918,6 +11918,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DropProcedureCapturesTargetReference()
+    {
+        const string content = """
+            DROP PROCEDURE dbo.RebuildOrders;
+            DROP PROC IF EXISTS [jobs].[SyncInvoices], archive.CleanupCustomers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "RebuildOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "SyncInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "CleanupCustomers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

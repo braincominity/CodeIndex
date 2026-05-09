@@ -150,6 +150,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DropViewTargetRegex = new(
         $@"(?<![\w$])DROP\s+(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropProcedureTargetRegex = new(
+        $@"(?<![\w$])DROP\s+(?:PROCEDURE|PROC)\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -710,6 +713,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             DropViewTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropProcedureTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

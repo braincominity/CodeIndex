@@ -5256,6 +5256,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropProcedureReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_procedure_target.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.RebuildOrders
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_procedure_cleanup.sql", "sql",
+            """
+            DROP PROCEDURE dbo.RebuildOrders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.RebuildOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_procedure"]));
+        Assert.Equal("src/sql_drop_procedure_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.RebuildOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_procedure"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.RebuildOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_procedure"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
