@@ -32,6 +32,8 @@ internal static class SqlReferenceExtractor
         @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
     private const string QualifiedIdentifierPattern =
         @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
+    private const string QualifiedIdentifierWithQualifierPattern =
+        @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)+(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
     private const string SourceAliasTailPattern =
         @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + "))?";
     private const string SourceTableHintTailPattern =
@@ -49,6 +51,8 @@ internal static class SqlReferenceExtractor
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string MergeTargetHintPattern =
         @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
+    private const string DropStatisticsItemPattern =
+        @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
 
     private static readonly Regex ProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + ProcCallQualifierPattern + @"(?<name>" + ProcCallIdentifierPattern + @")",
@@ -68,6 +72,12 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DeleteUsingSourceRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{QualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{QualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?)*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DeleteTargetWithoutFromRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+(?!FROM\b){QualifiedIdentifierWithQualifierPattern}(?=\s*(?:;|$)|\s+(?:FROM|WHERE|OUTPUT|OPTION|RETURNING)\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex OutputIntoTargetRegex = new(
+        $@"(?<![\w$])OUTPUT\b[\s\S]*?\bINTO\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DeleteUsingPrefixRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -78,13 +88,16 @@ internal static class SqlReferenceExtractor
         @"(?<![\w$])FROM\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferencePrefixRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
+        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?|BULK\s+INSERT|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+INTO\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+{TopTargetModifierPattern})\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{QualifiedIdentifierPattern}|MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierPattern}|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierPattern})",
+        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+(?:INTO\s+|(?!OR\b|IGNORE\b|OVERWRITE\b|LOW_PRIORITY\b|DELAYED\b|HIGH_PRIORITY\b)){QualifiedIdentifierPattern}|BULK\s+INSERT\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+{TopTargetModifierPattern})\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{QualifiedIdentifierPattern}|MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierPattern}|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierPattern}|ALTER\s+TABLE\s+{QualifiedIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private static readonly Regex TruncateTargetRegex = new(
         $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropTableTargetRegex = new(
+        $@"(?<![\w$])DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TopCallSuppressionRegex = new(
         @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
@@ -92,10 +105,169 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AccessMethodCallSuppressionRegex = new(
         $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SelectIntoTempTargetStatementRegex = new(
-        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{TempIdentifierPattern})",
+    private static readonly Regex CreateIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?(?:\s+(?:NONCLUSTERED\s+COLUMNSTORE|CLUSTERED|NONCLUSTERED|COLUMNSTORE|XML|SPATIAL))?\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateSpecialXmlIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+(?:PRIMARY\s+XML|SELECTIVE\s+XML)\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateClusteredColumnstoreIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+CLUSTERED\s+COLUMNSTORE\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateHashIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+NONCLUSTERED\s+HASH\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateFullTextIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+FULLTEXT\s+INDEX\b\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterIndexOnTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+INDEX\b\s+(?:ALL|{QualifiedIdentifierNoCapturePattern})\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterFullTextIndexOnTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+FULLTEXT\s+INDEX\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropIndexOnTargetRegex = new(
+        $@"(?<![\w$])DROP\s+INDEX\b\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierNoCapturePattern}\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropIndexLegacyTargetRegex = new(
+        $@"(?<![\w$])DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?{DropStatisticsItemPattern}(?:\s*,\s*{DropStatisticsItemPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropFullTextIndexOnTargetRegex = new(
+        $@"(?<![\w$])DROP\s+FULLTEXT\s+INDEX\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateTriggerOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\b\s+{QualifiedIdentifierNoCapturePattern}[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateSecurityPolicyPredicateTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+SECURITY\s+POLICY\b[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterSecurityPolicyPredicateTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+SECURITY\s+POLICY\b[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:[\s\S]*?\b(?:FILTER|BLOCK)\s+PREDICATE\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ToggleTriggerOnTargetRegex = new(
+        $@"(?<![\w$])(?:ENABLE|DISABLE)\s+TRIGGER\b\s+(?:ALL|{QualifiedIdentifierNoCapturePattern})\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ForeignKeyReferencesTargetRegex = new(
+        $@"(?<![\w$])REFERENCES\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateSynonymForTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\b\s+{QualifiedIdentifierNoCapturePattern}\s+FOR\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropSynonymTargetRegex = new(
+        $@"(?<![\w$])DROP\s+(?:PUBLIC\s+)?SYNONYM\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropViewTargetRegex = new(
+        $@"(?<![\w$])DROP\s+(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropProcedureTargetRegex = new(
+        $@"(?<![\w$])DROP\s+(?:PROCEDURE|PROC)\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropFunctionTargetRegex = new(
+        $@"(?<![\w$])DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropTriggerTargetRegex = new(
+        $@"(?<![\w$])DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropSequenceTargetRegex = new(
+        $@"(?<![\w$])DROP\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropTypeTargetRegex = new(
+        $@"(?<![\w$])DROP\s+TYPE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropRuleTargetRegex = new(
+        $@"(?<![\w$])DROP\s+RULE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropDefaultTargetRegex = new(
+        $@"(?<![\w$])DROP\s+DEFAULT\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropAggregateTargetRegex = new(
+        $@"(?<![\w$])DROP\s+AGGREGATE\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropSecurityPolicyTargetRegex = new(
+        $@"(?<![\w$])DROP\s+SECURITY\s+POLICY\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropFullTextCatalogTargetRegex = new(
+        $@"(?<![\w$])DROP\s+FULLTEXT\s+CATALOG\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropPartitionSchemeTargetRegex = new(
+        $@"(?<![\w$])DROP\s+PARTITION\s+SCHEME\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropPartitionFunctionTargetRegex = new(
+        $@"(?<![\w$])DROP\s+PARTITION\s+FUNCTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropXmlSchemaCollectionTargetRegex = new(
+        $@"(?<![\w$])DROP\s+XML\s+SCHEMA\s+COLLECTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropAssemblyTargetRegex = new(
+        $@"(?<![\w$])DROP\s+ASSEMBLY\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterViewTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+VIEW\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterProcedureTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+(?:PROCEDURE|PROC)\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterFunctionTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+FUNCTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterTriggerTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+TRIGGER\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterSequenceTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+SEQUENCE\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterSecurityPolicyTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+SECURITY\s+POLICY\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterFullTextCatalogTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+FULLTEXT\s+CATALOG\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterPartitionFunctionTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+PARTITION\s+FUNCTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterPartitionSchemeTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+PARTITION\s+SCHEME\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterXmlSchemaCollectionTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+XML\s+SCHEMA\s+COLLECTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterAssemblyTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+ASSEMBLY\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterSchemaTransferTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterTableSwitchTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+TABLE\s+{QualifiedIdentifierNoCapturePattern}\s+SWITCH\b[\s\S]*?\bTO\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterTableSystemVersioningHistoryTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+TABLE\s+{QualifiedIdentifierNoCapturePattern}[\s\S]*?\bSYSTEM_VERSIONING\s*=\s*ON\b[\s\S]*?\bHISTORY_TABLE\s*=\s*{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ObjectPermissionTargetRegex = new(
+        $@"(?<![\w$])(?:GRANT|DENY|REVOKE)\b[\s\S]*?\bON\s+(?:OBJECT\s*::\s*)?(?![A-Z_]+\s*::){QualifiedIdentifierPattern}\s+(?:TO|FROM)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex RevokePermissionStatementRegex = new(
+        $@"(?<![\w$])REVOKE\b[\s\S]*?\bON\s+(?:OBJECT\s*::\s*)?(?![A-Z_]+\s*::){QualifiedIdentifierNoCapturePattern}\s+FROM\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterAuthorizationObjectTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+AUTHORIZATION\s+ON\s+OBJECT\s*::\s*{QualifiedIdentifierPattern}\s+TO\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterAuthorizationBareTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+AUTHORIZATION\s+ON\s+(?![A-Z_]+\s*::){QualifiedIdentifierPattern}\s+TO\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex UpdateStatisticsTargetRegex = new(
+        $@"(?<![\w$])UPDATE\s+STATISTICS\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateStatisticsOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+STATISTICS\b\s+{QualifiedIdentifierNoCapturePattern}\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropStatisticsTargetRegex = new(
+        $@"(?<![\w$])DROP\s+STATISTICS\s+{DropStatisticsItemPattern}(?:\s*,\s*{DropStatisticsItemPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SelectIntoTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex SelectIntoTempPrefixRegex = new(
+    private static readonly Regex SelectIntoTargetPrefixRegex = new(
         @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CreateTempTableRegex = new(
@@ -379,7 +551,771 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitSelectIntoTempReferences(
+        EmitMultiTargetReferences(
+            DeleteTargetWithoutFromRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            OutputIntoTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitSelectIntoTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateSpecialXmlIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateClusteredColumnstoreIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateHashIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateFullTextIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            AlterIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterFullTextIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropIndexLegacyTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropFullTextIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateTriggerOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateSecurityPolicyPredicateTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterSecurityPolicyPredicateTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            ToggleTriggerOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            ForeignKeyReferencesTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateSynonymForTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropSynonymTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropViewTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropProcedureTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropFunctionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropTriggerTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropSequenceTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropTypeTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropRuleTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropDefaultTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropAggregateTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropSecurityPolicyTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropFullTextCatalogTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropPartitionSchemeTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropPartitionFunctionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropXmlSchemaCollectionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropAssemblyTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterViewTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterProcedureTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterFunctionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterTriggerTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterSequenceTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterSecurityPolicyTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterFullTextCatalogTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterPartitionFunctionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterPartitionSchemeTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterXmlSchemaCollectionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAssemblyTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterSchemaTransferTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterTableSwitchTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterTableSystemVersioningHistoryTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            ObjectPermissionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAuthorizationObjectTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAuthorizationBareTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            UpdateStatisticsTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateStatisticsOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            DropStatisticsTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
@@ -406,7 +1342,22 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitTruncateTargetReferences(
+        EmitMultiTargetReferences(
+            DropTableTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            TruncateTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
@@ -475,6 +1426,9 @@ internal static class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
+        if (RevokePermissionStatementRegex.IsMatch(statement))
+            return;
+
         foreach (Match match in matches)
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
@@ -581,7 +1535,7 @@ internal static class SqlReferenceExtractor
         ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, referenceContainer);
     }
 
-    private static void EmitSelectIntoTempReferences(
+    private static void EmitSelectIntoTargetReferences(
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -592,9 +1546,10 @@ internal static class SqlReferenceExtractor
         HashSet<string> seen,
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in SelectIntoTempTargetStatementRegex.Matches(statement))
+        foreach (Match match in SelectIntoTargetStatementRegex.Matches(statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -640,15 +1595,20 @@ internal static class SqlReferenceExtractor
                 && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
                 && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
                 continue;
+            if (!wasQuoted
+                && string.Equals(resolvedName, "STATISTICS", StringComparison.OrdinalIgnoreCase)
+                && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                continue;
 
             var container = resolveContainerForCall(nameGroup.Index);
             ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
             if (IsFollowedByOpenParen(statement, nameGroup.Index + nameGroup.Length))
-                suppressedCallIndices.Add(GetCallLikeSuppressionIndex(statement, nameGroup.Index) + statementStart - lineOffset);
+                AddCallLikeSuppressionIndices(suppressedCallIndices, statement, nameGroup.Index, statementStart, lineOffset);
         }
     }
 
-    private static void EmitTruncateTargetReferences(
+    private static void EmitMultiTargetReferences(
+        MatchCollection matches,
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -659,9 +1619,10 @@ internal static class SqlReferenceExtractor
         HashSet<string> seen,
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in TruncateTargetRegex.Matches(statement))
+        foreach (Match match in matches)
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -677,6 +1638,8 @@ internal static class SqlReferenceExtractor
 
                 var container = resolveContainerForCall(capture.Index);
                 ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
+                if (suppressedCallIndices != null && IsFollowedByOpenParen(statement, capture.Index + capture.Length))
+                    AddCallLikeSuppressionIndices(suppressedCallIndices, statement, capture.Index, statementStart, lineOffset);
             }
         }
     }
@@ -724,6 +1687,87 @@ internal static class SqlReferenceExtractor
         return index;
     }
 
+    private static void AddCallLikeSuppressionIndices(
+        HashSet<int> suppressedCallIndices,
+        string line,
+        int leafIndex,
+        int statementStart,
+        int lineOffset)
+    {
+        var leafSuppressionIndex = GetCallLikeSuppressionIndex(line, leafIndex) + statementStart - lineOffset;
+        suppressedCallIndices.Add(leafSuppressionIndex);
+
+        var qualifiedStart = FindQualifiedIdentifierStart(line, leafIndex);
+        if (qualifiedStart == leafIndex)
+            return;
+
+        suppressedCallIndices.Add(GetCallLikeSuppressionIndex(line, qualifiedStart) + statementStart - lineOffset);
+    }
+
+    private static int FindQualifiedIdentifierStart(string line, int leafIndex)
+    {
+        var start = leafIndex;
+        while (start > 0)
+        {
+            var scan = start - 1;
+            while (scan >= 0 && char.IsWhiteSpace(line[scan]))
+                scan--;
+            if (scan < 0 || line[scan] != '.')
+                break;
+
+            scan--;
+            while (scan >= 0 && char.IsWhiteSpace(line[scan]))
+                scan--;
+            if (scan < 0)
+                break;
+
+            start = ScanIdentifierSegmentStart(line, scan);
+        }
+
+        return start;
+    }
+
+    private static int ScanIdentifierSegmentStart(string line, int index)
+    {
+        if (line[index] == ']')
+        {
+            index--;
+            while (index >= 0)
+            {
+                if (line[index] == '[')
+                    return index;
+                index--;
+            }
+
+            return 0;
+        }
+
+        if (line[index] is '"' or '`')
+        {
+            var quote = line[index--];
+            while (index >= 0)
+            {
+                if (line[index] == quote)
+                    return index;
+                index--;
+            }
+
+            return 0;
+        }
+
+        while (index >= 0 && IsIdentifierContinuationForReverseScan(line[index]))
+            index--;
+
+        return index + 1;
+    }
+
+    private static bool IsIdentifierContinuationForReverseScan(char ch)
+        => ch is '_' or '$' or '#'
+           || char.IsLetterOrDigit(ch)
+           || char.GetUnicodeCategory(ch) is System.Globalization.UnicodeCategory.NonSpacingMark
+               or System.Globalization.UnicodeCategory.SpacingCombiningMark
+               or System.Globalization.UnicodeCategory.ConnectorPunctuation;
+
     private static string CombineStatementPrefix(string prefix, string line, out int lineOffset)
     {
         if (string.IsNullOrEmpty(prefix))
@@ -767,7 +1811,7 @@ internal static class SqlReferenceExtractor
 
         return TargetReferenceRegex.IsMatch(statement)
             || TruncateTargetRegex.IsMatch(statement)
-            || SelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SelectIntoTargetStatementRegex.IsMatch(statement)
             || CreateTempTableRegex.IsMatch(statement)
             || CreateTempRoutineRegex.IsMatch(statement);
     }
@@ -780,7 +1824,7 @@ internal static class SqlReferenceExtractor
         return CanStatementEstablishTempObject(statement)
             || TargetReferencePrefixRegex.IsMatch(statement)
             || FromListContinuationPrefixRegex.IsMatch(statement)
-            || SelectIntoTempPrefixRegex.IsMatch(statement)
+            || SelectIntoTargetPrefixRegex.IsMatch(statement)
             || DeleteUsingPrefixRegex.IsMatch(statement)
             || DeleteUsingListContinuationPrefixRegex.IsMatch(statement)
             || MergeUsingPrefixRegex.IsMatch(statement)
@@ -973,7 +2017,7 @@ internal static class SqlReferenceExtractor
     {
         CollectTempObjectNamesFromMatches(TargetReferenceRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(SelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
     }

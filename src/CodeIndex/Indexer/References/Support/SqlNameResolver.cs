@@ -251,6 +251,13 @@ internal static class SqlNameResolver
                 match = candidate;
                 return true;
             }
+
+            if (zeroBasedColumn >= candidate.StartIndex
+                && zeroBasedColumn < candidate.EndIndexExclusive
+                && TryReadQualifiedNamePrefixAtColumn(context, candidate.StartIndex, zeroBasedColumn, out match))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -512,6 +519,59 @@ internal static class SqlNameResolver
 
         segment = current.ToString().Trim();
         return segment.Length > 0;
+    }
+
+    private static bool TryReadQualifiedNamePrefixAtColumn(
+        string text,
+        int startIndex,
+        int zeroBasedColumn,
+        out QualifiedNameMatch match)
+    {
+        match = default;
+        var segments = new List<(string Name, int StartIndex, int EndIndexExclusive)>();
+        var index = startIndex;
+        while (true)
+        {
+            var segmentStartIndex = index;
+            if (!TryReadQualifiedNameSegment(text, ref index, out var segment))
+                return false;
+
+            segments.Add((segment, segmentStartIndex, index));
+            var scan = index;
+            while (scan < text.Length && char.IsWhiteSpace(text[scan]))
+                scan++;
+
+            if (scan >= text.Length || text[scan] != '.')
+                break;
+
+            scan++;
+            while (scan < text.Length && char.IsWhiteSpace(text[scan]))
+                scan++;
+
+            if (scan >= text.Length || !IsSqlIdentifierStartChar(text[scan]))
+                break;
+
+            index = scan;
+        }
+
+        for (var i = 1; i < segments.Count; i++)
+        {
+            var segment = segments[i];
+            if (zeroBasedColumn < segment.StartIndex || zeroBasedColumn >= segment.EndIndexExclusive)
+                continue;
+
+            var normalizedName = string.Join(".", segments.Take(i + 1).Select(part => part.Name));
+            match = new QualifiedNameMatch(
+                normalizedName,
+                i + 1,
+                startIndex,
+                segment.EndIndexExclusive,
+                segment.StartIndex,
+                segment.EndIndexExclusive);
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsSqlIdentifierStartChar(char ch)

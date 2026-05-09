@@ -12065,6 +12065,1016 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterTableCapturesTargetReference()
+    {
+        // T-SQL schema changes are table usages too. Without an `ALTER TABLE` target edge,
+        // references/search miss migration-only changes to a table.
+        // T-SQL の schema 変更も table 使用箇所。`ALTER TABLE` target edge がないと、
+        // migration だけで触られる table を references/search が見落とす。
+        const string content = """
+            ALTER TABLE dbo.Orders ADD UpdatedAt datetime2 NULL;
+            ALTER TABLE [sales].[Invoices] NOCHECK CONSTRAINT FK_Invoices_Customers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DropTableCapturesAllTargetReferences()
+    {
+        // T-SQL teardown migrations should still be searchable by the table names they touch,
+        // including SQL Server's `IF EXISTS` form and comma-separated drop lists.
+        // T-SQL の teardown migration も触った table 名で検索できるべき。SQL Server の
+        // `IF EXISTS` と comma-separated drop list も保持する。
+        const string content = """
+            DROP TABLE IF EXISTS dbo.OldOrders, [sales].[OldInvoices];
+            DROP TABLE archive.LegacyOrders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OldOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "OldInvoices" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "LegacyOrders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "IF" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXISTS" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_InsertWithoutIntoCapturesTargetReference()
+    {
+        // T-SQL permits `INSERT table ...` without `INTO`; the table is still the write target
+        // and should be searchable as a reference.
+        // T-SQL は `INTO` なしの `INSERT table ...` を許す。table は write target なので
+        // reference として検索できるべき。
+        const string content = """
+            INSERT dbo.AuditLog (Action) VALUES ('login');
+            INSERT TOP (10) [sales].[Orders] (Id) SELECT Id FROM staging.Orders;
+            INSERT OR REPLACE INTO sqlite_users (id) VALUES (1);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "AuditLog" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OR" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "REPLACE" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_SelectIntoCapturesNonTempTargetReference()
+    {
+        // T-SQL `SELECT ... INTO schema.Table` creates/writes a table. Non-temp targets should
+        // be searchable just like the existing temp-table path.
+        // T-SQL の `SELECT ... INTO schema.Table` は table 作成/書き込み。temp 以外の target も
+        // 既存の temp-table 経路と同様に検索できるべき。
+        const string content = """
+            SELECT Id, Total INTO dbo.OrderArchive FROM dbo.Orders;
+            SELECT * INTO [sales].[InvoiceArchive] FROM sales.Invoices;
+            SELECT * INTO OUTFILE 'orders.csv' FROM dbo.Orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderArchive" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceArchive" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OUTFILE" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_BulkInsertCapturesTargetReference()
+    {
+        // T-SQL `BULK INSERT` names the destination table before the file path; that table should
+        // be indexed as a write target.
+        // T-SQL の `BULK INSERT` は file path の前に destination table を置く。この table は
+        // write target として索引する。
+        const string content = """
+            BULK INSERT dbo.ImportQueue FROM 'queue.csv';
+            BULK INSERT [sales].[InvoiceImport] FROM 'invoices.csv';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ImportQueue" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceImport" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateIndexCapturesOnTableReference()
+    {
+        // `CREATE INDEX ... ON table` is a table usage. The access method after `USING` must stay
+        // suppressed while the indexed table becomes searchable.
+        // `CREATE INDEX ... ON table` は table 使用箇所。`USING` 後の access method は抑止しつつ、
+        // index 対象 table は検索可能にする。
+        const string content = """
+            CREATE INDEX IX_Orders_CreatedAt ON dbo.Orders (CreatedAt);
+            CREATE UNIQUE NONCLUSTERED INDEX IX_Invoices ON [sales].[Invoices] (Id);
+            CREATE INDEX idx_users_name ON users USING btree (name);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterIndexCapturesOnTableReference()
+    {
+        // T-SQL index maintenance names the table after `ON`; search should surface that table
+        // even when the index name itself is `ALL`.
+        // T-SQL の index maintenance は `ON` 後に table を置く。index 名が `ALL` の場合でも
+        // その table を検索対象にする。
+        const string content = """
+            ALTER INDEX IX_Orders_CreatedAt ON dbo.Orders REBUILD;
+            ALTER INDEX ALL ON [sales].[Invoices] REORGANIZE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "ALL" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DropIndexCapturesOnTableReference()
+    {
+        // SQL Server `DROP INDEX name ON table` should make the affected table searchable.
+        // SQL Server の `DROP INDEX name ON table` でも対象 table を検索可能にする。
+        const string content = """
+            DROP INDEX IX_Orders_CreatedAt ON dbo.Orders;
+            DROP INDEX IF EXISTS IX_Invoices ON [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "IX_Orders_CreatedAt" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateTriggerCapturesOnTableReference()
+    {
+        // Trigger definitions name the table after `ON`; that table should be visible to
+        // reference search independently of the trigger symbol itself.
+        // trigger 定義は `ON` 後に table を置く。trigger symbol とは別に、その table を
+        // reference search へ出す。
+        const string content = """
+            CREATE TRIGGER dbo.trg_Orders_Audit ON dbo.Orders AFTER INSERT AS SELECT 1;
+            CREATE OR ALTER TRIGGER [sales].[trg_Invoices_Audit] ON [sales].[Invoices] AFTER UPDATE AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "trg_Orders_Audit" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_EnableDisableTriggerCapturesOnTableReference()
+    {
+        // T-SQL trigger toggles also name the owning table after `ON`; the trigger name itself
+        // should not be mistaken for the table reference.
+        // T-SQL の trigger toggle も `ON` 後に所有 table を置く。trigger 名自体を
+        // table reference と誤認しない。
+        const string content = """
+            DISABLE TRIGGER dbo.trg_Orders_Audit ON dbo.Orders;
+            ENABLE TRIGGER ALL ON [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "trg_Orders_Audit" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ALL" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_ForeignKeyReferencesCapturesTargetTableReference()
+    {
+        // Foreign-key clauses name the referenced table after `REFERENCES`; keep that table visible
+        // and suppress the phantom call that would otherwise come from the following column list.
+        // foreign key 節は `REFERENCES` 後に参照先 table を置く。後続の column list による
+        // phantom call を抑止しつつ table reference として残す。
+        const string content = """
+            ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id);
+            CREATE TABLE sales.Invoices (CustomerId int REFERENCES [sales].[Customers](Id));
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateSynonymCapturesBaseObjectReference()
+    {
+        // T-SQL/Oracle synonym definitions should point reference search at the base object after `FOR`,
+        // not at the synonym name being defined.
+        // T-SQL/Oracle の synonym 定義では、定義される synonym 名ではなく `FOR` 後の base object を
+        // reference search に出す。
+        const string content = """
+            CREATE SYNONYM dbo.CustomerAlias FOR dbo.Customers;
+            CREATE OR REPLACE PUBLIC SYNONYM InvoiceAlias FOR [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterSchemaTransferCapturesMovedObjectReference()
+    {
+        // T-SQL `ALTER SCHEMA ... TRANSFER object` should surface the object being moved, not only
+        // the destination schema.
+        // T-SQL の `ALTER SCHEMA ... TRANSFER object` は destination schema だけでなく、
+        // 移動される object を reference として出す。
+        const string content = """
+            ALTER SCHEMA archive TRANSFER dbo.Orders;
+            ALTER SCHEMA [history] TRANSFER [sales].[Invoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_UpdateStatisticsCapturesTableReference()
+    {
+        const string content = """
+            UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
+            UPDATE STATISTICS [sales].[Invoices] ([IX_Invoices]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "STATISTICS" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateStatisticsCapturesTableReference()
+    {
+        const string content = """
+            CREATE STATISTICS st_OrderDate ON dbo.Orders (OrderDate);
+            CREATE STATISTICS [st_InvoiceDate] ON [sales].[Invoices] ([InvoiceDate]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_DropStatisticsCapturesOwningTableReference()
+    {
+        const string content = """
+            DROP STATISTICS dbo.Orders.st_OrderDate;
+            DROP STATISTICS [sales].[Invoices].[st_InvoiceDate], archive.Customers.st_CustomerName;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "st_OrderDate" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterTableSwitchCapturesTargetTableReference()
+    {
+        const string content = """
+            ALTER TABLE dbo.Orders SWITCH TO archive.OrdersArchive;
+            ALTER TABLE [sales].[Invoices] SWITCH PARTITION 2 TO [history].[InvoicesArchive] PARTITION 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "OrdersArchive" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoicesArchive" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_ObjectPermissionsCaptureTargetReference()
+    {
+        const string content = """
+            GRANT SELECT ON OBJECT::dbo.Orders TO ReportingRole;
+            DENY UPDATE ON OBJECT::[sales].[Invoices] TO ReportingRole;
+            REVOKE DELETE ON OBJECT::archive.Customers FROM ReportingRole;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "ReportingRole" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_BareObjectPermissionsCaptureTargetReference()
+    {
+        const string content = """
+            GRANT SELECT ON dbo.Orders TO ReportingRole;
+            REVOKE DELETE ON archive.Customers FROM ReportingRole;
+            GRANT CONTROL ON SCHEMA::sales TO ReportingRole;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "ReportingRole" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateFullTextIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE FULLTEXT INDEX ON dbo.Documents (Title) KEY INDEX PK_Documents;
+            CREATE FULLTEXT INDEX ON [content].[Articles] ([Body]) KEY INDEX [PK_Articles];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateSpecialXmlIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE PRIMARY XML INDEX IX_Documents_Xml ON dbo.Documents (Payload);
+            CREATE SELECTIVE XML INDEX IX_Articles_Xml ON [content].[Articles] ([Body]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateClusteredColumnstoreIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSales ON dbo.FactSales;
+            CREATE CLUSTERED COLUMNSTORE INDEX [CCI_InvoiceFacts] ON [warehouse].[InvoiceFacts];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "FactSales" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceFacts" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateHashIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE NONCLUSTERED HASH INDEX IX_OrderCache_Id ON dbo.OrderCache (Id) WITH (BUCKET_COUNT = 1024);
+            CREATE UNIQUE NONCLUSTERED HASH INDEX [IX_InvoiceCache_Id] ON [memory].[InvoiceCache] ([Id]) WITH (BUCKET_COUNT = 2048);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderCache" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceCache" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterFullTextIndexCapturesTableReference()
+    {
+        const string content = """
+            ALTER FULLTEXT INDEX ON dbo.Documents ENABLE;
+            ALTER FULLTEXT INDEX ON [content].[Articles] START FULL POPULATION;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropFullTextIndexCapturesTableReference()
+    {
+        const string content = """
+            DROP FULLTEXT INDEX ON dbo.Documents;
+            DROP FULLTEXT INDEX ON [content].[Articles];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropIndexLegacyCapturesOwningTableReference()
+    {
+        const string content = """
+            DROP INDEX dbo.Orders.IX_Orders_Date;
+            DROP INDEX [sales].[Invoices].[IX_Invoices_Date], archive.Customers.IX_Customers_Name;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "IX_Orders_Date" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteWithoutFromCapturesQualifiedTargetReference()
+    {
+        const string content = """
+            DELETE dbo.Orders WHERE Id = 1;
+            DELETE TOP (10) [sales].[Invoices] OUTPUT deleted.Id WHERE InvoiceDate < @cutoff;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "deleted" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_OutputIntoCapturesTargetTableReference()
+    {
+        const string content = """
+            UPDATE dbo.Orders SET Status = 'Closed' OUTPUT inserted.Id INTO audit.OrderAudit (OrderId) WHERE Id = 1;
+            DELETE FROM [sales].[Invoices] OUTPUT deleted.Id INTO [audit].[InvoiceAudit] ([InvoiceId]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderAudit" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceAudit" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OrderAudit" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterAuthorizationObjectCapturesTargetReference()
+    {
+        const string content = """
+            ALTER AUTHORIZATION ON OBJECT::dbo.Orders TO app_owner;
+            ALTER AUTHORIZATION ON OBJECT::[sales].[Invoices] TO app_owner;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "app_owner" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterAuthorizationBareObjectCapturesTargetReference()
+    {
+        const string content = """
+            ALTER AUTHORIZATION ON dbo.Orders TO app_owner;
+            ALTER AUTHORIZATION ON [sales].[Invoices] TO app_owner;
+            ALTER AUTHORIZATION ON SCHEMA::sales TO app_owner;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "app_owner" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_CreateSecurityPolicyCapturesPredicateTableReferences()
+    {
+        const string content = """
+            CREATE SECURITY POLICY sec.OrderPolicy
+                ADD FILTER PREDICATE sec.fn_tenant(TenantId) ON dbo.Orders,
+                ADD BLOCK PREDICATE sec.fn_tenant(TenantId) ON [sales].[Invoices] AFTER INSERT;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "OrderPolicy" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterSecurityPolicyCapturesPredicateTableReferences()
+    {
+        const string content = """
+            ALTER SECURITY POLICY sec.OrderPolicy
+                ADD FILTER PREDICATE sec.fn_tenant(TenantId) ON dbo.Orders,
+                ADD BLOCK PREDICATE sec.fn_tenant(TenantId) ON [sales].[Invoices] AFTER UPDATE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "OrderPolicy" && r.ReferenceKind == "reference" && r.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterTableSystemVersioningCapturesHistoryTableReference()
+    {
+        const string content = """
+            ALTER TABLE dbo.Orders
+                SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = history.OrdersHistory));
+            ALTER TABLE [sales].[Invoices]
+                SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [history].[InvoicesHistory]));
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "OrdersHistory" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "InvoicesHistory" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DropSynonymCapturesTargetReference()
+    {
+        const string content = """
+            DROP SYNONYM dbo.CustomerAlias;
+            DROP PUBLIC SYNONYM [sales].[InvoiceAlias];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceAlias" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropViewCapturesTargetReference()
+    {
+        const string content = """
+            DROP VIEW dbo.OrderSummary;
+            DROP VIEW IF EXISTS [sales].[InvoiceSummary], archive.CustomerSummary;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderSummary" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceSummary" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "CustomerSummary" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropProcedureCapturesTargetReference()
+    {
+        const string content = """
+            DROP PROCEDURE dbo.RebuildOrders;
+            DROP PROC IF EXISTS [jobs].[SyncInvoices], archive.CleanupCustomers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "RebuildOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "SyncInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "CleanupCustomers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropFunctionCapturesTargetReference()
+    {
+        const string content = """
+            DROP FUNCTION dbo.CalculateTax;
+            DROP FUNCTION IF EXISTS [reporting].[FormatInvoice], archive.TrimCustomerName;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CalculateTax" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "FormatInvoice" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "TrimCustomerName" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropTriggerCapturesTargetReference()
+    {
+        const string content = """
+            DROP TRIGGER audit.OrdersAudit;
+            DROP TRIGGER IF EXISTS [audit].[InvoicesAudit], ddl_sync ON DATABASE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrdersAudit" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoicesAudit" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "ddl_sync" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropSequenceCapturesTargetReference()
+    {
+        const string content = """
+            DROP SEQUENCE dbo.OrderNumbers;
+            DROP SEQUENCE IF EXISTS [billing].[InvoiceNumbers], archive.CustomerNumbers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderNumbers" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceNumbers" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "CustomerNumbers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropTypeCapturesTargetReference()
+    {
+        const string content = """
+            DROP TYPE dbo.CustomerKey;
+            DROP TYPE IF EXISTS [billing].[InvoiceTableType], archive.LegacyCustomerType;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomerKey" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceTableType" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "LegacyCustomerType" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropRuleCapturesTargetReference()
+    {
+        const string content = """
+            DROP RULE dbo.PositiveAmount;
+            DROP RULE IF EXISTS [billing].[InvoiceRule], archive.LegacyCustomerRule;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "PositiveAmount" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceRule" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "LegacyCustomerRule" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropDefaultCapturesTargetReference()
+    {
+        const string content = """
+            DROP DEFAULT dbo.ZeroDefault;
+            DROP DEFAULT IF EXISTS [billing].[InvoiceDefault], archive.LegacyCustomerDefault;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ZeroDefault" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceDefault" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "LegacyCustomerDefault" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropAggregateCapturesTargetReference()
+    {
+        const string content = """
+            DROP AGGREGATE dbo.TotalAmount;
+            DROP AGGREGATE IF EXISTS [billing].[InvoiceTotal], archive.LegacyCustomerTotal;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "TotalAmount" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceTotal" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "LegacyCustomerTotal" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropSecurityPolicyCapturesTargetReference()
+    {
+        const string content = """
+            DROP SECURITY POLICY dbo.CustomerFilter;
+            DROP SECURITY POLICY IF EXISTS [security].[InvoiceFilter];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomerFilter" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceFilter" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropFullTextCatalogCapturesTargetReference()
+    {
+        const string content = """
+            DROP FULLTEXT CATALOG ftOrders;
+            DROP FULLTEXT CATALOG [ftInvoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ftOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "ftInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropPartitionSchemeCapturesTargetReference()
+    {
+        const string content = """
+            DROP PARTITION SCHEME psOrders;
+            DROP PARTITION SCHEME [psInvoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "psOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "psInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropPartitionFunctionCapturesTargetReference()
+    {
+        const string content = """
+            DROP PARTITION FUNCTION pfOrders;
+            DROP PARTITION FUNCTION [pfInvoices];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "pfOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "pfInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropXmlSchemaCollectionCapturesTargetReference()
+    {
+        const string content = """
+            DROP XML SCHEMA COLLECTION dbo.InvoiceSchema;
+            DROP XML SCHEMA COLLECTION [archive].[CustomerSchema];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "InvoiceSchema" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "CustomerSchema" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_DropAssemblyCapturesTargetReference()
+    {
+        const string content = """
+            DROP ASSEMBLY SalesAssembly;
+            DROP ASSEMBLY IF EXISTS [InvoiceAssembly], archive.CustomerAssembly;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "SalesAssembly" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceAssembly" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "CustomerAssembly" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterViewCapturesTargetReference()
+    {
+        const string content = """
+            ALTER VIEW dbo.OrderSummary AS SELECT 1 AS Id;
+            ALTER VIEW [sales].[InvoiceSummary] AS SELECT 1 AS Id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderSummary" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceSummary" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterProcedureCapturesTargetReference()
+    {
+        const string content = """
+            ALTER PROCEDURE dbo.RebuildOrders AS SELECT 1;
+            ALTER PROC [jobs].[SyncInvoices] AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "RebuildOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "SyncInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterFunctionCapturesTargetReference()
+    {
+        const string content = """
+            ALTER FUNCTION dbo.CalculateTax() RETURNS int AS BEGIN RETURN 1; END;
+            ALTER FUNCTION [reporting].[FormatInvoice]() RETURNS int AS BEGIN RETURN 1; END;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CalculateTax" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "FormatInvoice" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterTriggerCapturesTargetReference()
+    {
+        const string content = """
+            ALTER TRIGGER audit.OrdersAudit ON dbo.Orders AFTER INSERT AS SELECT 1;
+            ALTER TRIGGER [audit].[InvoicesAudit] ON dbo.Invoices AFTER UPDATE AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrdersAudit" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoicesAudit" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterSequenceCapturesTargetReference()
+    {
+        const string content = """
+            ALTER SEQUENCE dbo.OrderNumbers RESTART WITH 1;
+            ALTER SEQUENCE [billing].[InvoiceNumbers] INCREMENT BY 10;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderNumbers" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceNumbers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterSecurityPolicyCapturesTargetReference()
+    {
+        const string content = """
+            ALTER SECURITY POLICY dbo.CustomerFilter WITH (STATE = ON);
+            ALTER SECURITY POLICY [security].[InvoiceFilter] WITH (STATE = OFF);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "CustomerFilter" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceFilter" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterFullTextCatalogCapturesTargetReference()
+    {
+        const string content = """
+            ALTER FULLTEXT CATALOG ftOrders REBUILD;
+            ALTER FULLTEXT CATALOG [ftInvoices] REORGANIZE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ftOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "ftInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterPartitionFunctionCapturesTargetReference()
+    {
+        const string content = """
+            ALTER PARTITION FUNCTION pfOrders() SPLIT RANGE (100);
+            ALTER PARTITION FUNCTION [pfInvoices]() MERGE RANGE (200);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "pfOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "pfInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterPartitionSchemeCapturesTargetReference()
+    {
+        const string content = """
+            ALTER PARTITION SCHEME psOrders NEXT USED [PRIMARY];
+            ALTER PARTITION SCHEME [psInvoices] NEXT USED [PRIMARY];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "psOrders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "psInvoices" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterXmlSchemaCollectionCapturesTargetReference()
+    {
+        const string content = """
+            ALTER XML SCHEMA COLLECTION dbo.InvoiceSchema ADD '<schema/>';
+            ALTER XML SCHEMA COLLECTION [archive].[CustomerSchema] ADD '<schema/>';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "InvoiceSchema" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "CustomerSchema" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterAssemblyCapturesTargetReference()
+    {
+        const string content = """
+            ALTER ASSEMBLY SalesAssembly FROM 0x4D5A;
+            ALTER ASSEMBLY [InvoiceAssembly] WITH PERMISSION_SET = SAFE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "SalesAssembly" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceAssembly" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
@@ -12461,10 +13471,10 @@ public class ReferenceExtractorTests
     {
         // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,
         // including `##global` names and `SELECT ... INTO #temp`, while procedural
-        // `SELECT ... INTO variable` still must not leak into the object graph.
+        // `SELECT ... INTO @variable` still must not leak into the object graph.
         // issue #638 / #639 / #648 / #649: temp table は SQL reference 経路に残し、
         // `##global` 名と `SELECT ... INTO #temp` も拾いつつ、手続き系の
-        // `SELECT ... INTO variable` は object graph に混ぜない。
+        // `SELECT ... INTO @variable` は object graph に混ぜない。
         const string content = """
             INSERT INTO #audit_log (action) VALUES ('login');
             UPDATE #audit_log SET action = 'logout';
@@ -12476,7 +13486,7 @@ public class ReferenceExtractorTests
 
             SELECT id INTO #selected_users FROM users;
             SELECT id INTO ##selected_global_users FROM users;
-            SELECT id INTO target_var FROM users;
+            SELECT id INTO @target_var FROM users;
             SELECT * FROM users # comment with ##ignored_temp;
 
             INSERT TOP (10) INTO #audit_log (action) VALUES ('merge-ready');
