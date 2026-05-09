@@ -18159,6 +18159,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsDeclareFunctionDeclarations()
+    {
+        var content = """
+            Public Class NativeMethods
+                Private Declare Unicode Function GetWindowText Lib "user32" Alias "GetWindowTextW" () As Integer
+                Friend Declare Auto Sub SendMessage Lib "user32" ()
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var function = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "GetWindowText");
+        Assert.Equal("Private", function.Visibility);
+
+        var sub = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "SendMessage");
+        Assert.Equal("Friend", sub.Visibility);
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """
