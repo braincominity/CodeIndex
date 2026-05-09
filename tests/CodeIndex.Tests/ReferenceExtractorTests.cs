@@ -1268,6 +1268,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC SQL CALL CUSTOMER-PROC(:CUSTOMER-ID) END-EXEC", "CUSTOMER-PROC")]
     [InlineData("EXEC CICS LINK PROGRAM('CUSTOMER-SERVICE') END-EXEC", "CUSTOMER-SERVICE")]
     [InlineData("EXEC CICS XCTL PROGRAM('NEXT-PROGRAM') END-EXEC", "NEXT-PROGRAM")]
+    [InlineData("EXEC CICS HANDLE CONDITION ERROR(ERROR-HANDLER) END-EXEC", "ERROR-HANDLER")]
     public void Extract_CobolExternalCallStatement_CapturesSearchableCall(string statement, string expectedSymbolName)
     {
         var content = $$"""
