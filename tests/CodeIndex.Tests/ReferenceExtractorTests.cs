@@ -7807,6 +7807,500 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppModuleImports_CaptureTypeReferences()
+    {
+        const string content = """
+            export import std;
+            import std.compat;
+            import :partition;
+            import <vector>;
+            import "detail/config.hpp";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "std.compat" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == ":partition" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "vector" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "detail/config.hpp" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppNamedCasts_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            void Run(Base* base, void* raw) {
+              auto derived = static_cast<Derived*>(base);
+              auto iface = dynamic_cast<ns::IFace&>(*base);
+              auto bytes = reinterpret_cast<std::byte*>(raw);
+              auto same = const_cast<const Service*>(service);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IFace" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "byte" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppSizeofAlignof_CaptureTypeOperandReferences()
+    {
+        const string content = """
+            void Run() {
+              auto bytes = sizeof(Widget);
+              auto alignment = alignof(ns::Packet);
+              auto count = sizeof(count);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Packet" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppTypeId_CapturesTypeOperandReferences()
+    {
+        const string content = """
+            void Run(void* service) {
+              auto serviceType = typeid(Service);
+              auto messageType = typeid(ns::Message);
+              auto runtimeType = typeid(*service);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Message" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "service" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppFactoryTemplates_CaptureTemplateTypeReferences()
+    {
+        const string content = """
+            void Run() {
+              auto user = std::make_unique<User>();
+              auto repo = make_shared<ns::Repository>();
+              auto maybe = std::make_optional<Result>();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppBraceConstruction_CapturesInstantiationReferences()
+    {
+        const string content = """
+            ns::Result Build() {
+              auto user = User{};
+              auto holder = Box<Item>{};
+              return ns::Result{};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Item" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+    }
+
+    [Fact]
+    public void Extract_CppUsingAliases_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            using ServicePtr = std::unique_ptr<Service>;
+            using HandlerMap = std::map<std::string, Handler>;
+            template <typename T> using RepoBox = Box<Repository>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppTypedefAliases_CaptureTargetTypeReferences()
+    {
+        const string content = """
+            typedef ns::Handler* HandlerPtr;
+            typedef std::vector<Service> ServiceList;
+            typedef int (*Callback)(Service*);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Callback" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppExportedBaseLists_CaptureBaseTypeReferences()
+    {
+        const string content = """
+            export class Child final : public virtual Base, protected ns::Iface {
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Iface" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppQualifiedMemberReceivers_CaptureTypeReferences()
+    {
+        const string content = """
+            void Run() {
+              auto user = UserFactory::Create();
+              auto repo = ns::RepositoryFactory::Build();
+              auto member = &Widget::Run;
+              auto moved = std::move(user);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "UserFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppTrailingReturnTypes_CaptureTypeReferences()
+    {
+        const string content = """
+            auto Make() -> Result { return {}; }
+            auto Build() -> ns::Builder* { return nullptr; }
+            auto Count() -> int { return 0; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Builder" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppRequiresConcepts_CaptureConceptTypeReferences()
+    {
+        const string content = """
+            template <typename T>
+            requires Serializable<T>
+            void Save(T value) {}
+
+            template <typename T>
+            concept Persistable = Serializable<T> && ns::EntityLike<T>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "EntityLike" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppFriendDeclarations_CaptureTypeReferences()
+    {
+        const string content = """
+            class Widget {
+              friend class Inspector;
+              friend struct ns::Peer;
+              friend enum class Status;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Inspector" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Peer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Status" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppThrowBraceConstruction_CapturesInstantiationReferences()
+    {
+        const string content = """
+            void Fail() {
+              throw Error{};
+              throw ns::Failure{42};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppCoReturnBraceConstruction_CapturesInstantiationReferences()
+    {
+        const string content = """
+            task<Result> Load() {
+              co_return Result{};
+              co_return ns::Outcome{42};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Outcome" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Outcome" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppQualifiedTemplateBraceConstruction_CapturesTypeArgumentReferences()
+    {
+        const string content = """
+            std::optional<Widget> Make() {
+              auto value = std::optional<Widget>{};
+              return ns::Result<Success, Error>{};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Success" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "optional" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppCStyleCasts_CaptureTypeReferences()
+    {
+        const string content = """
+            void Convert(void* raw, Value value) {
+              auto widget = (Widget*)raw;
+              auto handle = (ns::Handle&)value;
+              auto count = (int)value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppPointerToMemberTypes_CaptureReceiverTypeReferences()
+    {
+        const string content = """
+            int Widget::* field = nullptr;
+            void (ns::Handler::*callback)();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppDecltypeBraceConstruction_CapturesTypeReferences()
+    {
+        const string content = """
+            using WidgetValue = decltype(Widget{});
+            using ResultValue = decltype(ns::Result{42});
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppTypeTraits_CaptureTemplateArgumentTypeReferences()
+    {
+        const string content = """
+            static_assert(std::is_same_v<T, Widget>);
+            static_assert(is_base_of<Base, ns::Derived>::value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppTemplateParameterDefaultTypes_CaptureTypeReferences()
+    {
+        const string content = """
+            template <typename T = Widget, class Alloc = ns::Allocator<Widget>>
+            class Box {};
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Allocator" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppDynamicExceptionSpecifications_CaptureTypeReferences()
+    {
+        const string content = """
+            void Load() throw(Error, ns::Failure&);
+            void Run() { throw (error); }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "error" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppCompoundRequirements_CaptureConceptAndArgumentReferences()
+    {
+        const string content = """
+            template <typename T>
+            concept Persistable = requires(T t) {
+              { t.save() } -> std::same_as<Result>;
+              { t.convert() } -> ConvertibleTo<ns::Target>;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "same_as" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "ConvertibleTo" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Target" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppParenthesizedRequiresConcepts_CaptureConceptReferences()
+    {
+        const string content = """
+            template <typename T>
+            requires (Serializable<T>)
+            void Save(T value) {}
+
+            template <typename T>
+            requires(ns::EntityLike<T>)
+            void Persist(T value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "EntityLike" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppQualifiedRequiresConcepts_CaptureConceptAndArgumentReferences()
+    {
+        const string content = """
+            template <typename T>
+            requires std::derived_from<T, Base>
+            void Attach(T value) {}
+
+            template <typename T>
+            requires(std::same_as<T, ns::Result>)
+            void Save(T value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "derived_from" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "same_as" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CppExplicitTemplateInstantiations_CaptureTypeReferences()
+    {
+        const string content = """
+            extern template class std::vector<Widget>;
+            template struct ns::Holder<Service>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """

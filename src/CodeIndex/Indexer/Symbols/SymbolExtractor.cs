@@ -151,6 +151,7 @@ public static partial class SymbolExtractor
     private const string CFunctionNameBlacklistPattern = @"(?!(?:int|void|char|short|long|float|double|signed|unsigned|bool|_Bool|size_t|ssize_t|intptr_t|uintptr_t|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t)\b)";
     private const string CppFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof|using|namespace)\s*[\(\{;<])";
     private const string CppTemplatePrefixPattern = @"(?:template\s*<[^>]*>\s*)*";
+    private const string CppAttributePrefixPattern = @"(?:\[\[[^\r\n]*?\]\]\s*)*";
     private const string CppTypeAtomPattern = @"(?:decltype\s*\(\s*auto\s*\)|[\w:<>~]+)";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportSpecRegex = new(
@@ -1376,11 +1377,13 @@ public static partial class SymbolExtractor
         ],
         ["cpp"] =
         [
-            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?module\s+(?<name>[\w.]+(?::[\w.]+)?)\b", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Type alias / 型エイリアス
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),
@@ -1390,12 +1393,14 @@ public static partial class SymbolExtractor
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^(?:export\s+)?(?:(?:inline|static)\s+)*constexpr\s+(?<returnType>(?:[\w:<>~]+(?:\s*[*&])?\s+)+)(?<name>(?:[A-Z_]\w*|k[A-Z]\w*))\s*=", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("struct",   new Regex(@"^\s*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("struct",   new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("union",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*(?:export\s+)?namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*(?:export\s+)?(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import",   new Regex(@"^\s*#\s*(?:include|import)\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["php"] =
         [

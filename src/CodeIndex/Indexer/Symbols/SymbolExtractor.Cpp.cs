@@ -173,8 +173,57 @@ public static partial class SymbolExtractor
             }
         }
 
+        if (trimmed.StartsWith("using typename ", StringComparison.Ordinal))
+        {
+            var target = NormalizeCppUsingNamespaceTarget(trimmed["using typename ".Length..]);
+
+            if (target.Length > 0)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = target,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = trimmed
+                    });
+                return true;
+            }
+        }
+
         if (line.Length == line.TrimStart().Length)
             return false;
+
+        if (trimmed.StartsWith("using ", StringComparison.Ordinal)
+            && !trimmed.StartsWith("using enum ", StringComparison.Ordinal)
+            && !trimmed.Contains('='))
+        {
+            var target = NormalizeCppUsingNamespaceTarget(trimmed["using ".Length..]);
+            if (target.Length > 0 && target.Contains("::", StringComparison.Ordinal))
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = target,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = trimmed
+                    });
+                return true;
+            }
+        }
 
         if (trimmed.StartsWith("using ", StringComparison.Ordinal))
         {

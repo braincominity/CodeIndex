@@ -671,9 +671,11 @@ public class SymbolExtractorTests
         var content = """
             using StringList = std::vector<std::string>;
             template <typename T> using Ptr = std::unique_ptr<T>;
+            using enum colors::Mode;
 
             namespace demo {
                 using namespace std; // comment to ignore
+                using typename Base::value_type;
             }
             """;
 
@@ -681,7 +683,151 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "StringList");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ptr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "colors::Mode");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Base::value_type" && s.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsUsingDeclarations()
+    {
+        var content = """
+            namespace demo {
+                using ns::Type;
+                using std::size_t; // comment to ignore
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ns::Type" && s.ContainerName == "demo");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::size_t" && s.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsModuleImports()
+    {
+        var content = """
+            export import std;
+            import std.compat;
+            import :partition;
+            import <vector>;
+            import "detail/config.hpp";
+            #import <UIKit/UIKit.h>
+            # import "objc/Bridge.h"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std.compat");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":partition");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "vector");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "detail/config.hpp");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UIKit/UIKit.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "objc/Bridge.h");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsModulePartitionDeclarations()
+    {
+        var content = """
+            export module app.core:api;
+            module app.impl:detail;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app.core:api");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "app.impl:detail");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsTemplateTypeDeclarationsOnOneLine()
+    {
+        var content = """
+            template <typename T> class Box {};
+            template <class T> struct Slot {};
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Slot");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsExportedTypeDeclarations()
+    {
+        var content = """
+            export class Api {};
+            export template <typename T> struct ApiBox {};
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Api");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ApiBox");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsUnionDeclarations()
+    {
+        var content = """
+            union Value { int number; float real; };
+            export template <typename T> union Tagged { T value; };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Tagged");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsExportedEnumDeclarations()
+    {
+        var content = """
+            export enum class Mode { Read, Write };
+            export enum Status { Ok, Failed };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsExportedNamespaces()
+    {
+        var content = """
+            export namespace api {
+                class Service {};
+            }
+            export namespace outer::inner {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "api");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "outer::inner");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.ContainerName == "api");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsConstexprConstants()
+    {
+        var content = """
+            inline constexpr int kMaxConnections = 8;
+            constexpr std::size_t BUFFER_SIZE = 4096;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "kMaxConnections" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BUFFER_SIZE" && s.ReturnType == "std::size_t");
     }
 
     [Fact]
@@ -14444,6 +14590,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Handler" && s.ContainerName == "Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Handler" && s.ContainerName == "Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator+" && s.ContainerName == "Handler");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsExternLinkageFunctions()
+    {
+        var content = """
+            extern "C" int plugin_entry() { return 0; }
+            extern "C++" Handler* create_handler() { return nullptr; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        var entry = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "plugin_entry");
+        Assert.Equal("int", entry.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create_handler");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsAttributePrefixedFunctions()
+    {
+        var content = """
+            [[nodiscard]] int compute_score() { return 1; }
+            [[gnu::always_inline]] inline int fast_path() { return 2; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute_score");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fast_path");
     }
 
     [Fact]
