@@ -278,7 +278,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\b(?:DirectCast|TryCast|CType)\s*\([^,\r\n]+,\s*(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbGetTypeRegex = new(
-        @"\bGetType\s*\(\s*(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\bGetType\s*\(\s*(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbTypeOfRegex = new(
         @"\bTypeOf\b.+?\bIs(?:Not)?\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
