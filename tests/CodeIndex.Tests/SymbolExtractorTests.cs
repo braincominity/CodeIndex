@@ -799,6 +799,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsExportedNamespaces()
+    {
+        var content = """
+            export namespace api {
+                class Service {};
+            }
+            export namespace outer::inner {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "api");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "outer::inner");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.ContainerName == "api");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス
