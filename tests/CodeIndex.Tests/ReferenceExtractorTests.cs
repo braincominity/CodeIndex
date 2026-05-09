@@ -14597,6 +14597,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsHashInsideBacktickNamespaceReferences()
+    {
+        const string content = """
+            lookup <- function() {
+                pkg::`a#b` # fake_call()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "pkg::a#b"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "a#b"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_call");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """
