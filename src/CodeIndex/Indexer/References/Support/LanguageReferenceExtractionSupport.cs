@@ -323,6 +323,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranUseOnlyRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+[A-Za-z_]\w*\s*,\s*only\s*:\s*(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranUseAliasRegex = new(
+        @"(?:^|,)\s*(?<alias>[A-Za-z_]\w*)\s*=>\s*[A-Za-z_]\w*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranImportRegex = new(
         @"^\s*import(?:\s*,\s*only)?(?:\s*::|\s*:)?\s+(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3749,7 +3752,16 @@ internal static class LanguageReferenceExtractionSupport
 
         var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
         if (useOnlyMatch.Success)
+        {
             EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+
+            var list = useOnlyMatch.Groups["list"];
+            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+            {
+                var group = match.Groups["alias"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+            }
+        }
 
         var importMatch = FortranImportRegex.Match(preparedLine);
         if (importMatch.Success)
