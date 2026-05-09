@@ -2547,6 +2547,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     definitionNames);
+                RReferenceExtractor.EmitInfixOperatorCallReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 

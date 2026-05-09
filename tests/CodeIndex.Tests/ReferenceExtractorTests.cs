@@ -14643,6 +14643,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsInfixOperatorCallSites()
+    {
+        const string content = """
+            run <- function(data, fallback) {
+                data %>% transform()
+                fallback %||% list()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "%>%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
     {
         const string content = """
