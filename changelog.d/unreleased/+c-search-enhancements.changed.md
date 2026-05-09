@@ -47,6 +47,7 @@ affected:
 - **C references now capture `_t` pointer-to-array declarations** — `widget_t (*items)[4];` now references the array element typedef.
 - **C references now capture tagged pointer-to-array declarations** — `struct node (*items)[4];` now references the array element tag.
 - **C references now capture `_t` `offsetof` operands** — `offsetof(widget_t, field)` now references the operand typedef.
+- **C references now capture tagged `offsetof` operands** — `offsetof(struct node, next)` now references the operand tag.
 
 ## 日本語
 
@@ -87,3 +88,4 @@ affected:
 - **C の参照抽出が `_t` pointer-to-array 宣言を捕捉するようになりました** — `widget_t (*items)[4];` から配列要素 typedef への参照を生成します。
 - **C の参照抽出が tag 付き pointer-to-array 宣言を捕捉するようになりました** — `struct node (*items)[4];` から配列要素 tag への参照を生成します。
 - **C の参照抽出が `_t` `offsetof` operand を捕捉するようになりました** — `offsetof(widget_t, field)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `offsetof` operand を捕捉するようになりました** — `offsetof(struct node, next)` から operand tag への参照を生成します。
