@@ -5744,6 +5744,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterFullTextCatalogReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_fulltext_catalog_target.sql", "sql",
+            """
+            CREATE FULLTEXT CATALOG ftOrders;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_fulltext_catalog_update.sql", "sql",
+            """
+            ALTER FULLTEXT CATALOG ftOrders REBUILD;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("ftOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_catalog"]));
+        Assert.Equal("src/sql_alter_fulltext_catalog_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("ftOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_catalog"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("ftOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_catalog"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
