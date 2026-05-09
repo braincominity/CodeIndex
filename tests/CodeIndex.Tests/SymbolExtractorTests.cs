@@ -18515,6 +18515,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsShorthandFunctionAssignments()
+    {
+        // R 4.1 shorthand functions use \(...) instead of function(...).
+        // R 4.1 の shorthand function は function(...) の代わりに \(...) を使う。
+        const string content = """
+            compact <- \(x) x + 1
+            `plot-model` = \(data) data
+            global <<- \(value) value
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compact");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "global");
+    }
+
+    [Fact]
     public void Extract_R_DetectsAssignFunctionDefinitions()
     {
         // R: assign() can install a function under a string name.

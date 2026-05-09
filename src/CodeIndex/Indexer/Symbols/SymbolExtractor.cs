@@ -1549,10 +1549,10 @@ public static partial class SymbolExtractor
         ],
         ["r"] =
         [
-            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<<?-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<<?-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*assign\s*\(\s*(?:x\s*=\s*)?['""](?<name>[^'""]+)['""]\s*,\s*(?:value\s*=\s*)?function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass|R6Class)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?setIs\s*\(.*?\b(?:class2|to)\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
