@@ -626,8 +626,9 @@ public static partial class ReferenceExtractor
         },
         ["c"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "bool", "char", "double", "float", "int", "long", "short", "signed", "size_t",
-            "ssize_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "unsigned", "void",
+            "_Atomic", "bool", "char", "const", "double", "enum", "float", "int", "long",
+            "restrict", "short", "signed", "size_t", "ssize_t", "struct", "uint8_t",
+            "uint16_t", "uint32_t", "uint64_t", "union", "unsigned", "void", "volatile",
         },
         ["cpp"] = new HashSet<string>(StringComparer.Ordinal)
         {

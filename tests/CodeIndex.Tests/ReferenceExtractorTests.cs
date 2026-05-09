@@ -1753,6 +1753,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefTags_SkipsTypeKeywords()
+    {
+        const string content = """
+            typedef struct node node_t;
+            typedef enum mode mode_t;
+            typedef union value value_t;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum" or "union");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
