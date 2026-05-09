@@ -689,6 +689,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsUsingDeclarations()
+    {
+        var content = """
+            namespace demo {
+                using ns::Type;
+                using std::size_t; // comment to ignore
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ns::Type" && s.ContainerName == "demo");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::size_t" && s.ContainerName == "demo");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsModuleImports()
     {
         var content = """
