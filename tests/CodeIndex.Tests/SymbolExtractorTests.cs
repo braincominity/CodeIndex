@@ -18562,6 +18562,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsShinyReactiveSymbols()
+    {
+        // Shiny reactive assignments are named server endpoints even though they are not function().
+        // Shiny reactive 代入は function() ではないが名前付き server endpoint。
+        const string content = """
+            filtered <- reactive({
+              data
+            })
+
+            selected = eventReactive(input$go, {
+              input$id
+            })
+
+            `refresh-cache` <- observeEvent(input$refresh, {
+              update_cache()
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "filtered");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "selected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "refresh-cache");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
