@@ -119,6 +119,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex UpdateStatisticsTargetRegex = new(
+        $@"(?<![\w$])UPDATE\s+STATISTICS\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SelectIntoTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -533,6 +536,20 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
+        EmitMultiTargetReferences(
+            UpdateStatisticsTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
         EmitTargetReferences(
             statement,
             statementStart,
@@ -795,6 +812,10 @@ internal static class SqlReferenceExtractor
                 continue;
             if (!wasQuoted
                 && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
+                && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!wasQuoted
+                && string.Equals(resolvedName, "STATISTICS", StringComparison.OrdinalIgnoreCase)
                 && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
                 continue;
 

@@ -11605,6 +11605,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_UpdateStatisticsCapturesTableReference()
+    {
+        const string content = """
+            UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
+            UPDATE STATISTICS [sales].[Invoices] ([IX_Invoices]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "STATISTICS" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

@@ -4834,6 +4834,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_UpdateStatisticsReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_update_statistics_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_update_statistics_refresh.sql", "sql",
+            """
+            UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_update_statistics"]));
+        Assert.Equal("src/sql_update_statistics_refresh.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_update_statistics"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_update_statistics"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
