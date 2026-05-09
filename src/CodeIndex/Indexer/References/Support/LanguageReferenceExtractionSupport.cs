@@ -56,6 +56,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CppRequiresConceptTypeRegex = new(
         @"\brequires\s+(?<type>(?:(?:[A-Za-z_]\w*)\s*::\s*)*[A-Z_]\w*)\s*<",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppParenthesizedRequiresConceptTypeRegex = new(
+        @"\brequires\s*\(\s*(?<type>(?:(?:[A-Za-z_]\w*)\s*::\s*)*[A-Z_]\w*)\s*<",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppConceptExpressionTypeRegex = new(
         @"(?:=|&&|\|\|)\s*(?<type>(?:(?:[A-Za-z_]\w*)\s*::\s*)*[A-Z_]\w*)\s*<",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1058,6 +1061,12 @@ internal static class LanguageReferenceExtractionSupport
         if (preparedLine.Contains("requires", StringComparison.Ordinal) || preparedLine.Contains("concept", StringComparison.Ordinal))
         {
             foreach (Match match in CppRequiresConceptTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CppParenthesizedRequiresConceptTypeRegex.Matches(preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
