@@ -6,11 +6,11 @@ namespace CodeIndex.Indexer;
 internal static class DockerfileReferenceExtractor
 {
     private static readonly Regex StageReferenceRegex = new(
-        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\w+)\s+AS\s+\w+\s*$",
+        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>[A-Za-z0-9_-]+)\s+AS\s+[A-Za-z0-9_-]+\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CopyFromReferenceRegex = new(
-        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>\w+)\b",
+        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static HashSet<string>? BuildStageNames(string language, IReadOnlyList<SymbolRecord> symbols)

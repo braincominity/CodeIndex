@@ -2079,6 +2079,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IndexHyphenatedStageNames()
+    {
+        const string content = """
+            FROM node:20 AS build-env
+
+            FROM build-env AS runtime
+            COPY --from=build-env /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "build-env"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
