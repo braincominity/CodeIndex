@@ -435,6 +435,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonVariableAnnotation_CapturesVariableTypeReference()
+    {
+        const string content = """
+            def save():
+                user: models.User = load_user()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "save");
+    }
+
+    [Fact]
     public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
     {
         // issue #258: Rust macro invocations need to surface as call-like references so

@@ -2400,6 +2400,15 @@ public static partial class ReferenceExtractor
                             symbol.Line == lineNumber
                             && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitVariableAnnotationReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")
