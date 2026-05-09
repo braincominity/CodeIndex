@@ -1185,6 +1185,14 @@ public static partial class ReferenceExtractor
                         roxygenContext,
                         lineNumber,
                         container: null);
+                    RReferenceExtractor.EmitRoxygenMethodReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        roxygenContext,
+                        lineNumber,
+                        container: null);
                 }
             }
 

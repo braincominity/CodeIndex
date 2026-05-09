@@ -14902,6 +14902,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsRoxygenMethodReferences()
+    {
+        const string content = """
+            #' @method print model
+            #' @method "[" indexed
+            print.model <- function(x, ...) {
+                x
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "print.model"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "print"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "[.indexed"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """

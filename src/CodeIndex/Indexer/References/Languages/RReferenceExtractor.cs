@@ -59,6 +59,9 @@ internal static class RReferenceExtractor
     private static readonly Regex RoxygenImportTagRegex = new(
         @"^\s*#'\s*@import\s+(?<packages>.*)$",
         RegexOptions.Compiled);
+    private static readonly Regex RoxygenMethodTagRegex = new(
+        @"^\s*#'\s*@method\s+(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[^\s]+))\s+(?:`(?<classBacktick>[^`]+)`|['""](?<classQuoted>[^'""]+)['""]|(?<class>[^\s]+))",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -336,6 +339,64 @@ internal static class RReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    public static void EmitRoxygenMethodReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = RoxygenMethodTagRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var generic = GetNamespaceDirectiveToken(
+            match,
+            "genericBacktick",
+            "genericQuoted",
+            "generic");
+        var @class = GetNamespaceDirectiveToken(
+            match,
+            "classBacktick",
+            "classQuoted",
+            "class");
+        if (generic == null || @class == null)
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            $"{generic.Value.Name}.{@class.Value.Name}",
+            generic.Value.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            generic.Value.Name,
+            generic.Value.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            @class.Value.Name,
+            @class.Value.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
     }
 
     public static void EmitBacktickCallReferences(
