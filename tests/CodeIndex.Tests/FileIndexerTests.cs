@@ -45,6 +45,7 @@ public class FileIndexerTests
     [InlineData("Customer.cls", "vb")]
     [InlineData("UserControl.ctl", "vb")]
     [InlineData("Form1.frm", "vb")]
+    [InlineData("SettingsPage.pag", "vb")]
     [InlineData("Macro.vba", "vb")]
     [InlineData("Module1.vb", "vb")]
     [InlineData("script.vbs", "vb")]

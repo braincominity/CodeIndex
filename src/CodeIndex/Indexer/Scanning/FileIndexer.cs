@@ -237,6 +237,7 @@ public class FileIndexer
         [".cls"]    = "vb",
         [".ctl"]    = "vb",
         [".frm"]    = "vb",
+        [".pag"]    = "vb",
         [".vba"]    = "vb",
         [".vb"]     = "vb",
         [".vbs"]    = "vb",
