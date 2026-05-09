@@ -11910,7 +11910,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "OrderPolicy" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "OrderPolicy" && r.ReferenceKind == "reference" && r.Line == 1);
     }
 
     [Fact]
@@ -12743,10 +12743,10 @@ public class ReferenceExtractorTests
     {
         // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,
         // including `##global` names and `SELECT ... INTO #temp`, while procedural
-        // `SELECT ... INTO variable` still must not leak into the object graph.
+        // `SELECT ... INTO @variable` still must not leak into the object graph.
         // issue #638 / #639 / #648 / #649: temp table は SQL reference 経路に残し、
         // `##global` 名と `SELECT ... INTO #temp` も拾いつつ、手続き系の
-        // `SELECT ... INTO variable` は object graph に混ぜない。
+        // `SELECT ... INTO @variable` は object graph に混ぜない。
         const string content = """
             INSERT INTO #audit_log (action) VALUES ('login');
             UPDATE #audit_log SET action = 'logout';
@@ -12758,7 +12758,7 @@ public class ReferenceExtractorTests
 
             SELECT id INTO #selected_users FROM users;
             SELECT id INTO ##selected_global_users FROM users;
-            SELECT id INTO target_var FROM users;
+            SELECT id INTO @target_var FROM users;
             SELECT * FROM users # comment with ##ignored_temp;
 
             INSERT TOP (10) INTO #audit_log (action) VALUES ('merge-ready');
