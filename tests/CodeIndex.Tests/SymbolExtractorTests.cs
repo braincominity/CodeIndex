@@ -14673,6 +14673,8 @@ public class SymbolExtractorTests
             type IVisitor =
                 abstract member Visit : unit -> unit
                 abstract Reset : unit -> unit
+                val Id : string
+                val mutable Count : int
 
             type ILogger = interface end
 
@@ -14716,6 +14718,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Reset");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Id");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isEven");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isOdd");
