@@ -4900,6 +4900,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterTableSwitchTargetReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_table_switch_targets.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int);
+            CREATE TABLE archive.OrdersArchive (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_table_switch_move.sql", "sql",
+            """
+            ALTER TABLE dbo.Orders SWITCH TO archive.OrdersArchive;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("archive.OrdersArchive", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_switch"]));
+        Assert.Equal("src/sql_alter_table_switch_move.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("archive.OrdersArchive", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_switch"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("archive.OrdersArchive", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_switch"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
