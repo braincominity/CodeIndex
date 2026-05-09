@@ -310,6 +310,7 @@ public class FileIndexer
     private static readonly (string Prefix, string Language)[] FileNamePrefixMap =
     [
         ("Dockerfile.",  "dockerfile"),
+        ("Dockerfile-",  "dockerfile"),
         ("Containerfile.", "dockerfile"),
         ("Makefile.",    "makefile"),
         ("GNUmakefile.", "makefile"),

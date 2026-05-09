@@ -84,6 +84,7 @@ public class FileIndexerTests
     [InlineData("api.Dockerfile", "dockerfile")]
     [InlineData("api.Containerfile", "dockerfile")]
     [InlineData(".containerfile", "dockerfile")]
+    [InlineData("Dockerfile-prod", "dockerfile")]
     [InlineData("Makefile", "makefile")]
     [InlineData("Justfile", "justfile")]
     [InlineData("CMakeLists.txt", "cmake")]
