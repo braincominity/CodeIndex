@@ -66,6 +66,7 @@ affected:
 - **C references now capture tagged `__builtin_va_arg` operands** — `__builtin_va_arg(args, struct node *)` now references the requested tag.
 - **C references now capture pointer-qualified `_t` return types** — `widget_t * const make_widget(void)` now references the returned typedef.
 - **C references now capture pointer-qualified tagged return types** — `struct node * const make_node(void)` now references the returned tag.
+- **C references now capture pointer-qualified `_t` parameter types** — `widget_t * restrict widget` now references the parameter typedef.
 
 ## 日本語
 
@@ -125,3 +126,4 @@ affected:
 - **C の参照抽出が tag 付き `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, struct node *)` から要求 tag への参照を生成します。
 - **C の参照抽出が pointer-qualified `_t` 戻り値型を捕捉するようになりました** — `widget_t * const make_widget(void)` から戻り値 typedef への参照を生成します。
 - **C の参照抽出が pointer-qualified tag 付き戻り値型を捕捉するようになりました** — `struct node * const make_node(void)` から戻り値 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` parameter 型を捕捉するようになりました** — `widget_t * restrict widget` から parameter typedef への参照を生成します。
