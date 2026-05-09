@@ -11355,6 +11355,7 @@ public class SymbolExtractorTests
               recursive subroutine normalize(v)
                 call normalize2(v) ! function phantom()
                 print *, "subroutine phantom"
+                entry normalize_restart(v)
               contains
                 subroutine normalize_inner()
                 end subroutine normalize_inner
@@ -11399,6 +11400,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_subroutine");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_restart");
 
         var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
         Assert.NotNull(mathUtilsImpl.BodyStartLine);
