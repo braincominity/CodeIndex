@@ -252,7 +252,13 @@ internal static class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex VbTypeKeywordRegex = new(
-        @"\b(?:As|New|Inherits|Implements|Of)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\b(?:As|New|Inherits|Implements)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericArgumentListRegex = new(
+        @"\(\s*Of\s+(?<list>[^)\r\n]+)\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericDeclarationOwnerRegex = new(
+        @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+\w+\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbNewTypeRegex = new(
         @"\bNew\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
@@ -3242,6 +3248,15 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
+        {
+            if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+                continue;
+
+            var group = match.Groups["list"];
+            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
         }
 
         foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
