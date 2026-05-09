@@ -10778,6 +10778,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesRaiseEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Event Changed As EventHandler
+
+                Public Sub Save()
+                    RaiseEvent Changed(Me, EventArgs.Empty)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Changed" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RaiseEvent" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

@@ -272,6 +272,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbAddHandlerRegex = new(
         @"\bAddHandler\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbRaiseEventRegex = new(
+        @"\bRaiseEvent\s+(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+(?<name>[A-Za-z_]\w*)",
@@ -3261,6 +3264,9 @@ internal static class LanguageReferenceExtractionSupport
 
         foreach (Match match in VbAddHandlerRegex.Matches(preparedLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+
+        foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
+            ReferenceExtractor.AddReference(references, seen, fileId, match, "call", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
     }
 
     private static void EmitFortranTypeReferences(
