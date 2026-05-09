@@ -1468,29 +1468,38 @@ public static partial class SymbolExtractor
         ],
         ["fsharp"] =
         [
-            new("function", new Regex(@"^\s*let\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
-            new("struct", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*let!?\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*use!?\s+(?<name>(?:``[^`]+``|\w+))\s*(?:=|:)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*and\s+(?<name>(?:``[^`]+``|\w+))\s+(?:``[^`]+``|\w+|\()", RegexOptions.Compiled), BodyStyle.None),
+            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None),
+            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None),
+            new("delegate", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*delegate\b", RegexOptions.Compiled), BodyStyle.None),
+            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?(?:\s+when\b[^=]+)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
             // Generic abbreviations such as `type Result<'T> = Choice<'T, string>` should not be
             // mistaken for union cases just because the right-hand side starts with a capitalized
             // type name.
             // `type Result<'T> = Choice<'T, string>` のような generic abbreviation は、
             // 右辺が大文字始まりの型名でも union case と誤認しない。
-            new("typealias", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))\s*<[^=]+?>\s*(?:when\b[^=]+)?\s*=\s*(?!(?:class|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("enum", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)(?:\s*<[^>]+>)?\s*=\s*(?:\|?\s*[A-Z][\w']*\b(?:\s*\|[^=].*)?)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*<[^=]+?>\s*(?:when\b[^=]+)?\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
+            new("enum", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*(?:\|?\s*[A-Z][\w']*\b(?:\s*\|[^=].*)?)", RegexOptions.Compiled), BodyStyle.Brace),
             // Simple aliases without generic parameters stay searchable as `typealias`.
             // generic 引数なしの単純な alias も `typealias` として検索可能にする。
-            new("typealias", new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!(?:class|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
-            new("struct",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>\w+)\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?(?:\s+when\b[^=]+)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("struct",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
             new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*type\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!\{)(?!\|)(?!class\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!\{)(?!\|)(?!class\b)(?!delegate\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
             new("namespace", new Regex(@"^\s*namespace\s+(?:(?:rec|global)\s+)*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>\w+)\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*open\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?:``[^`]+``|[\w.]+)\s*=\s*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>(?:``[^`]+``|\w+))\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?abstract\s+(?!member\b)(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:static\s+)?val\s+(?:mutable\s+)?(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?val\s+(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*open\s+(?:type\s+)?(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["vb"] =
         [

@@ -11038,6 +11038,275 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsBackwardPipelineCallee()
+    {
+        const string content = """
+            let run user =
+                printfn <| user.Name
+                printfn <| render user
+                log <|| ("user", user.Id)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "log" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsComputationExpressionBangCalls()
+    {
+        const string content = """
+            let workflow value =
+                task {
+                    do! run value
+                    return! finish value
+                    yield! produce value
+                }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "run" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "finish" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "produce" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsTryFinallyApplicationCalls()
+    {
+        const string content = """
+            let run value =
+                try load value
+                finally cleanup value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "load" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "cleanup" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsConditionApplicationCalls()
+    {
+        const string content = """
+            let run user cursor =
+                if validate user then printfn "valid"
+                if isReady then printfn "ready"
+                elif shouldRetry user then printfn "retry"
+                while hasNext cursor do printfn "next"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "shouldRetry" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "hasNext" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsMatchApplicationCalls()
+    {
+        const string content = """
+            let run value =
+                match parse value with
+                | Some parsed -> parsed
+                | None -> value
+
+            let inspect status =
+                match status with
+                | Ready -> true
+                | _ -> false
+
+            let workflow value =
+                task {
+                    match! fetch value with
+                    | Some parsed -> return parsed
+                    | None -> return value
+                }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "parse" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fetch" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "status" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsWhenGuardApplicationCalls()
+    {
+        const string content = """
+            let describe value =
+                match value with
+                | Some user when validate user -> user.Name
+                | Some user when isReady -> user.Name
+                | _ -> "unknown"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsAssertApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                assert validate user
+                assert isReady
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "assert" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "isReady" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsForRangeBoundaryApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                for i = 1 to endIndex user do
+                    printfn "%d" i
+                for i = startIndex user downto lowerBound user do
+                    printfn "%d" i
+                for item in items do
+                    printfn "%A" item
+                for i = 1 to maxIndex do
+                    printfn "%d" i
+
+            let inspect isReady =
+                if isReady then readyValue else fallbackValue
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "startIndex" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "endIndex" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "lowerBound" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "to" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "downto" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "items" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "maxIndex" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "readyValue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsLazyApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                let delayed = lazy compute user
+                let cached = lazy readyValue
+                delayed
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "compute" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "lazy" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "readyValue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsRaiseApplicationCalls()
+    {
+        const string content = """
+            let run user currentError =
+                do raise buildError user
+                raise currentError
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "buildError" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "raise" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "currentError" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsCastApplicationCalls()
+    {
+        const string content = """
+            let run user currentValue =
+                let boxed = upcast createWidget user
+                let typed = downcast currentValue
+                boxed, typed
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "createWidget" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "upcast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "downcast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "currentValue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsNewApplicationCalls()
+    {
+        const string content = """
+            let run user =
+                let customer = new Customer user
+                let order = new Sales.Order customer
+                customer, order
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "new" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsCompositionOperandCalls()
+    {
+        const string content = """
+            let workflow =
+                validate >> normalize >> persist
+
+            let loader =
+                Views.render << loadModel << hydrate
+
+            let shifted flags count =
+                flags >>> count
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "validate" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "normalize" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "loadModel" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "hydrate" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "flags" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """

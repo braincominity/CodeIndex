@@ -14750,6 +14750,7 @@ public class SymbolExtractorTests
             module MyApp.Domain
 
             open System
+            open type System.Math
 
             type UserId = int
             type User = { Name: string; Age: int }
@@ -14775,6 +14776,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
@@ -14800,18 +14802,28 @@ public class SymbolExtractorTests
             type UserId = int
             type OrderId = string
             type Names = string list
+            type public PublicId = int
             type Result<'T> = Choice<'T, string>
             type Pair<'T, 'U> = 'T * 'U
+            type rec Tree<'T> = Leaf | Node of 'T * Tree<'T>
+            type rec Workflow = Started | Finished
+            type public Visibility = Public | Internal
             """;
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Names");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "PublicId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Result");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Pair");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Tree");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Workflow");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Visibility");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Result");
         Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Pair");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Tree");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Workflow");
     }
 
     [Fact]
@@ -14820,35 +14832,95 @@ public class SymbolExtractorTests
         // F#: namespace rec, module private, member forms / F#: namespace rec、module private、member形
         var content = """
             namespace rec MyApp.Domain
+            module Json = System.Text.Json
+            module Helpers = ``Legacy Helpers``
+            module ``Domain Helpers``
+            open ``Domain Helpers``
 
             type UserId = int
             type OrderId = string
+            type ``User Record`` = { Name: string }
+            type ``Color Choice`` = Red | Blue
+            type ``Worker Type``() = class end
+            type Box<'T> = class end
+            type ConstrainedBox<'T when 'T : not struct> = class end
+            type Factory<'T>(value: 'T) = class end
+            type ConstrainedFactory<'T when 'T : not struct>(value: 'T) = class end
 
             type Person(name: string) =
                 member this.Name = name
+                member this.``display name`` = name
+                member val DisplayName = name with get, set
                 member _.Age = 0
                 static member Create(name: string) = Person(name)
                 override this.ToString() = this.Name
 
             type IVisitor =
                 abstract member Visit : unit -> unit
+                abstract Reset : unit -> unit
+                val Id : string
+                val mutable Count : int
+
+            type ILogger = interface end
+
+            type Coordinates = struct end
+
+            type Handler = delegate of string -> unit
 
             let validate user =
                 user.Age > 0
+
+            let rec isEven n = n = 0 || isOdd (n - 1)
+            and isOdd n = n <> 0 && isEven (n - 1)
+
+            let workflow user =
+                task {
+                    use client = createClient user
+                    let! loadedUser = loadUser user
+                    use! lease = acquireLease loadedUser
+                    return loadedUser
+                }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Text.Json");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Legacy Helpers");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Domain Helpers");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Domain Helpers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker Type");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ConstrainedBox");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Factory");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ConstrainedFactory");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User Record");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color Choice");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Coordinates");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "OrderId");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "ILogger");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Coordinates");
+        Assert.DoesNotContain(symbols, s => s.Kind == "typealias" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DisplayName");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Reset");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Id");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isEven");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "isOdd");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "client");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadedUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "lease");
     }
 
     [Fact]
@@ -14898,6 +14970,7 @@ public class SymbolExtractorTests
 
             type Color =
                 | Red
+                | [<Obsolete>] Amber
                 | Green
                 | Blue
 
@@ -14908,6 +14981,7 @@ public class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
         Assert.Contains(symbols, s => s.Name == "Red");
+        Assert.Contains(symbols, s => s.Name == "Amber");
         Assert.Contains(symbols, s => s.Name == "Green");
         Assert.Contains(symbols, s => s.Name == "Blue");
         Assert.Contains(symbols, s => s.Name == "Name");
