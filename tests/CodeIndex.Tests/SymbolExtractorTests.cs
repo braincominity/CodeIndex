@@ -14662,6 +14662,9 @@ public class SymbolExtractorTests
 
             type UserId = int
             type OrderId = string
+            type ``User Record`` = { Name: string }
+            type ``Color Choice`` = Red | Blue
+            type ``Worker Type``() = class end
 
             type Person(name: string) =
                 member this.Name = name
@@ -14704,7 +14707,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Text.Json");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Domain Helpers");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker Type");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ILogger");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User Record");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color Choice");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Coordinates");
         Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserId");
