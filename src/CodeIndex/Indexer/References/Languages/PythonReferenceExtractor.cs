@@ -78,6 +78,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex VariableAnnotationTypeRegex = new(
         @"^\s*(?:self\.)?\w+\s*:\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|#|$))",
         RegexOptions.Compiled);
+    private static readonly Regex VariableAnnotationExpressionRegex = new(
+        @"^\s*(?:self\.)?\w+\s*:\s*(?<type>[^=#]+)(?=\s*(?:=|#|$))",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -583,6 +586,29 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in VariableAnnotationExpressionRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typeGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                var nameIndex = typeGroup.Index + typeMatch.Groups["name"].Index;
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
+        }
+
         foreach (Match match in VariableAnnotationTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
