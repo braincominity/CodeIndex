@@ -323,6 +323,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranTypeRegex = new(
         @"\b(?:type|class)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranExtendsRegex = new(
+        @"\bextends\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranCallRegex = new(
         @"^\s*call\s+(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3693,6 +3696,12 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
 
         foreach (Match match in FortranTypeRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+        }
+
+        foreach (Match match in FortranExtendsRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");

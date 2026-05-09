@@ -192,6 +192,12 @@ public static partial class SymbolExtractor
             return true;
         }
 
+        if (IsFortranDerivedTypeStartLine(trimmed))
+        {
+            kind = "type";
+            return true;
+        }
+
         if (ContainsFortranWord(trimmed, "subroutine"))
         {
             kind = "subroutine";
@@ -205,6 +211,19 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool IsFortranDerivedTypeStartLine(string trimmedLine)
+    {
+        if (!StartsWithFortranWord(trimmedLine, "type"))
+            return false;
+
+        var remainder = trimmedLine["type".Length..].TrimStart();
+        if (remainder.Length == 0 || remainder.StartsWith('('))
+            return false;
+
+        return !StartsWithFortranWord(remainder, "is")
+            && !StartsWithFortranWord(remainder, "default");
     }
 
     private static bool IsFortranBlockEndLine(string trimmedLine, string blockKind)

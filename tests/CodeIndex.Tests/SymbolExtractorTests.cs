@@ -11336,6 +11336,12 @@ public class SymbolExtractorTests
                 end subroutine abstract_callback
               end interface
               implicit none
+              type :: point_t
+                integer :: x
+              end type point_t
+              type, extends(point_t) :: colored_point
+                integer :: color
+              end type colored_point
             contains
               integer(kind=4) &
               function split_value(value)
@@ -11401,6 +11407,18 @@ public class SymbolExtractorTests
         var demo = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "demo");
         Assert.NotNull(demo.BodyStartLine);
         Assert.NotNull(demo.BodyEndLine);
+
+        var point = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "point_t");
+        Assert.Equal("namespace", point.ContainerKind);
+        Assert.Equal("math_utils", point.ContainerName);
+        Assert.NotNull(point.BodyStartLine);
+        Assert.NotNull(point.BodyEndLine);
+
+        var coloredPoint = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "colored_point");
+        Assert.Equal("namespace", coloredPoint.ContainerKind);
+        Assert.Equal("math_utils", coloredPoint.ContainerName);
+        Assert.NotNull(coloredPoint.BodyStartLine);
+        Assert.NotNull(coloredPoint.BodyEndLine);
 
         var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Equal("namespace", normalize.ContainerKind);

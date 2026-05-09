@@ -11540,6 +11540,10 @@ public class ReferenceExtractorTests
         const string content = """
             module demo_mod
               use iso_c_binding
+              type :: RepositoryBase
+              end type RepositoryBase
+              type, extends(RepositoryBase) :: Repository
+              end type Repository
             contains
               subroutine run(repo)
                 type(Repository) :: repo
@@ -11554,6 +11558,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "fortran", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");

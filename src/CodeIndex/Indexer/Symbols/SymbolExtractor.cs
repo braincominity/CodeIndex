@@ -1256,6 +1256,8 @@ public static partial class SymbolExtractor
             new("namespace", new Regex(@"^\s*submodule\s*\(\s*[^)]*\)\s*(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Program units / プログラム本体
             new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Derived types / 派生型
+            new("class", new Regex(@"^\s*type(?!\s*\()\b(?:\s*,\s*(?:abstract|public|private|sequence|bind\s*\([^)]+\)|extends\s*\([^)]+\)))*\s*(?:::)?\s*(?!(?:is|default)\b)(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Procedure declarations in interfaces / interface 内の手続き宣言
