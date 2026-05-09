@@ -90,6 +90,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex TypeVarBoundTypeRegex = new(
         @"\b(?:(?:typing|typing_extensions)\.)?TypeVar\s*\([^)]*\bbound\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
+    private static readonly Regex TypeVarConstraintTypesRegex = new(
+        @"\b(?:(?:typing|typing_extensions)\.)?TypeVar\s*\(\s*[^,\n]+,\s*(?<types>[^)=]*,[^)=]*)\)",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -725,6 +728,39 @@ internal static class PythonReferenceExtractor
                 lineNumber,
                 container,
                 "python");
+        }
+    }
+
+    public static void EmitTypeVarConstraintReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
+        {
+            var typesGroup = match.Groups["types"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    typesGroup.Index + typeMatch.Groups["name"].Index,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
         }
     }
 }
