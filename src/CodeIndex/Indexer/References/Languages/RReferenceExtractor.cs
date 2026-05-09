@@ -47,6 +47,9 @@ internal static class RReferenceExtractor
     private static readonly Regex SourceFileReferenceStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex LoadAllReferenceRegex = new(
+        @"^\s*(?:(?:devtools|pkgload)::)load_all\s*\(\s*(?:path\s*=\s*)?['""](?<path>[^'""]+)['""]",
+        RegexOptions.Compiled);
     private static readonly Regex DataCallStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?data\s*\(",
         RegexOptions.Compiled);
@@ -522,6 +525,33 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = SourceFileReferenceRegex.Match(line);
+        if (!match.Success)
+            return;
+
+        var path = match.Groups["path"];
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            path.Value,
+            path.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+    }
+
+    public static void EmitLoadAllReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var line = StripRNamespaceDirectiveComment(originalLine);
+        var match = LoadAllReferenceRegex.Match(line);
         if (!match.Success)
             return;
 

@@ -14518,6 +14518,8 @@ public class ReferenceExtractorTests
                 source("R/helpers.R")
                 base::source(file = "R/models/fit.R", local = TRUE)
                 sys.source("R/bootstrap.R", envir = environment())
+                devtools::load_all("pkg")
+                pkgload::load_all(path = "localpkg")
             }
             """;
 
@@ -14534,6 +14536,14 @@ public class ReferenceExtractorTests
             && r.ContainerName == "load_helpers");
         Assert.Contains(references, r =>
             r.SymbolName == "R/bootstrap.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "pkg"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "localpkg"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "load_helpers");
         Assert.Contains(references, r =>

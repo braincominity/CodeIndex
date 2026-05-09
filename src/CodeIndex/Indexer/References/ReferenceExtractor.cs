@@ -2597,6 +2597,14 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitLoadAllReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 RReferenceExtractor.EmitDataCallReferences(
                     preparedLine,
                     originalLine,
