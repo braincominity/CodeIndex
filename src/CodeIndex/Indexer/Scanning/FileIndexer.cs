@@ -242,6 +242,7 @@ public class FileIndexer
         [".pag"]    = "vb",
         [".vba"]    = "vb",
         [".vb"]     = "vb",
+        [".vbhtml"] = "vb",
         [".vbs"]    = "vb",
         [".hs"]     = "haskell",
         [".lhs"]    = "haskell",

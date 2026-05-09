@@ -50,6 +50,7 @@ public class FileIndexerTests
     [InlineData("SettingsPage.pag", "vb")]
     [InlineData("Macro.vba", "vb")]
     [InlineData("Module1.vb", "vb")]
+    [InlineData("Index.vbhtml", "vb")]
     [InlineData("script.vbs", "vb")]
     [InlineData("index.html", "html")]
     [InlineData("legacy.htm", "html")]
