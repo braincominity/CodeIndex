@@ -13,7 +13,7 @@ internal static class PythonReferenceExtractor
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
         RegexOptions.Compiled);
     private static readonly Regex DecoratorCallRegex = new(
-        @"^\s*@(?<name>[_\p{L}]\w*)\s*\(",
+        @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*\(",
         RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(

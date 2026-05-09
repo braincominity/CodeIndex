@@ -90,12 +90,16 @@ public class ReferenceExtractorTests
             @pytest.fixture
             def fixture():
                 pass
+
+            @pytest.mark.parametrize("value", [1])
+            def parametrized_fixture(value):
+                pass
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Equal(5, references.Count(reference => reference.ReferenceKind == "decorator"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "bare_decorator"
             && reference.ReferenceKind == "decorator");
@@ -107,6 +111,9 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "decorator");
         Assert.Contains(references, reference =>
             reference.SymbolName == "pytest.fixture"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "pytest.mark.parametrize"
             && reference.ReferenceKind == "decorator");
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
