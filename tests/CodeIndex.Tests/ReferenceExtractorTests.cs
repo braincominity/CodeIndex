@@ -1901,6 +1901,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedParameters_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void visit(struct node *node, enum mode mode, union value *value) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum" or "union");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
