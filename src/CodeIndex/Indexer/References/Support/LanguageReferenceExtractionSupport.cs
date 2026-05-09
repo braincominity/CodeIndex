@@ -266,7 +266,7 @@ internal static class LanguageReferenceExtractionSupport
         @"^\s*(?<param>[A-Za-z_]\w*)\s+As\s+(?<constraint>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbNewTypeRegex = new(
-        @"\bNew\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\bNew\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbImplementsListRegex = new(
         @"\bImplements\s+(?<list>[^\r\n]+)",
@@ -3271,11 +3271,12 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
-            var name = LastQualifiedSegment(group.Value);
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
             if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var nameOffset = group.Value.LastIndexOf(name, StringComparison.Ordinal);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
             var nameIndex = group.Index + Math.Max(0, nameOffset);
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
@@ -4205,6 +4206,15 @@ internal static class LanguageReferenceExtractionSupport
     {
         var dot = value.LastIndexOf('.');
         return dot >= 0 && dot + 1 < value.Length ? value[(dot + 1)..] : value;
+    }
+
+    private static string NormalizeVbIdentifierSegment(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']')
+            return trimmed[1..^1];
+
+        return trimmed;
     }
 
     private static string LastPathSegment(string value)
