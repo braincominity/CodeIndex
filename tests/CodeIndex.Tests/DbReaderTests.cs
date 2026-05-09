@@ -5379,6 +5379,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropRuleReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_rule_target.sql", "sql",
+            """
+            CREATE RULE dbo.PositiveAmount
+            AS
+            @amount >= 0;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_rule_cleanup.sql", "sql",
+            """
+            DROP RULE dbo.PositiveAmount;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.PositiveAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_rule"]));
+        Assert.Equal("src/sql_drop_rule_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.PositiveAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_rule"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.PositiveAmount", lang: "sql", exact: true, pathPatterns: ["sql_drop_rule"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
