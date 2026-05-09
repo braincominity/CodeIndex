@@ -336,7 +336,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\bprocedure\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranCallRegex = new(
-        @"^\s*call\s+(?<name>[A-Za-z_]\w*)\b",
+        @"^\s*call\s+(?:(?:[A-Za-z_]\w*)\s*%\s*)*(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex PascalUsesRegex = new(

@@ -11556,6 +11556,7 @@ public class ReferenceExtractorTests
                 procedure(RepositoryCallback), pointer :: callback
                 value = prefix() // suffix()
                 call process(repo)
+                call repo%persist()
               end subroutine run
             end module demo_mod
             """;
@@ -11573,6 +11574,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "repo" && r.ReferenceKind == "call");
         Assert.Contains(references, r =>
             r.SymbolName == "process"
             && r.ReferenceKind == "call"
