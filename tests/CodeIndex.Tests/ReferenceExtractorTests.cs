@@ -1998,6 +1998,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedGenericAssociations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, struct node *: 1, enum mode: 2, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"

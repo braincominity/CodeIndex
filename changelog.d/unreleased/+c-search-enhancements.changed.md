@@ -33,6 +33,7 @@ affected:
 - **C references now capture `_t` `typeof` operands** — `typeof(widget_t)` and `__typeof__(message_t *)` now reference typedef names.
 - **C references now capture tagged `typeof` operands** — `typeof(struct node *)` now references the tag name.
 - **C references now capture `_t` `_Generic` associations** — `_Generic(value, widget_t: ...)` now references typedef association types.
+- **C references now capture tagged `_Generic` associations** — `_Generic(value, struct node *: ...)` now references tag association types.
 
 ## 日本語
 
@@ -59,3 +60,4 @@ affected:
 - **C の参照抽出が `_t` の `typeof` operand を捕捉するようになりました** — `typeof(widget_t)` と `__typeof__(message_t *)` から typedef 名への参照を生成します。
 - **C の参照抽出が tag 付き `typeof` operand を捕捉するようになりました** — `typeof(struct node *)` から tag 名への参照を生成します。
 - **C の参照抽出が `_t` の `_Generic` association を捕捉するようになりました** — `_Generic(value, widget_t: ...)` から typedef association 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Generic` association を捕捉するようになりました** — `_Generic(value, struct node *: ...)` から tag association 型への参照を生成します。
