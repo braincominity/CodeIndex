@@ -11557,6 +11557,12 @@ public class ReferenceExtractorTests
                 value = prefix() // suffix()
                 call process(repo)
                 call repo%persist()
+                select type (repo)
+                type is (RepositorySnapshot)
+                  call repo%persist()
+                class is (RepositoryView)
+                  call repo%persist()
+                end select
               end subroutine run
             end module demo_mod
             """;
@@ -11572,6 +11578,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositorySnapshot" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryView" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "persist" && r.ReferenceKind == "call");
