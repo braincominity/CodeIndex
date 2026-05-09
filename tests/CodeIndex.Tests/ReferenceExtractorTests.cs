@@ -1217,6 +1217,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS ASSIGN APPLID(CURRENT-APPLID) END-EXEC", "CURRENT-APPLID")]
     [InlineData("EXEC CICS ADDRESS COMMAREA(CUSTOMER-COMMAREA) END-EXEC", "CUSTOMER-COMMAREA")]
     [InlineData("EXEC CICS GETMAIN SET(CUSTOMER-PTR) FLENGTH(CUSTOMER-LENGTH) END-EXEC", "CUSTOMER-PTR")]
+    [InlineData("EXEC CICS FREEMAIN DATA(CUSTOMER-PTR) END-EXEC", "CUSTOMER-PTR")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
