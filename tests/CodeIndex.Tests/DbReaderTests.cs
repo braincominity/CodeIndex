@@ -4614,6 +4614,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_SelectIntoReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_select_into_target.sql", "sql",
+            """
+            CREATE TABLE dbo.OrderArchive (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_select_into_writer.sql", "sql",
+            """
+            SELECT Id INTO dbo.OrderArchive FROM dbo.Orders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.OrderArchive", lang: "sql", exact: true, pathPatterns: ["sql_select_into"]));
+        Assert.Equal("src/sql_select_into_writer.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.OrderArchive", lang: "sql", exact: true, pathPatterns: ["sql_select_into"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.OrderArchive", lang: "sql", exact: true, pathPatterns: ["sql_select_into"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

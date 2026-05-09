@@ -11402,6 +11402,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_SelectIntoCapturesNonTempTargetReference()
+    {
+        // T-SQL `SELECT ... INTO schema.Table` creates/writes a table. Non-temp targets should
+        // be searchable just like the existing temp-table path.
+        // T-SQL の `SELECT ... INTO schema.Table` は table 作成/書き込み。temp 以外の target も
+        // 既存の temp-table 経路と同様に検索できるべき。
+        const string content = """
+            SELECT Id, Total INTO dbo.OrderArchive FROM dbo.Orders;
+            SELECT * INTO [sales].[InvoiceArchive] FROM sales.Invoices;
+            SELECT * INTO OUTFILE 'orders.csv' FROM dbo.Orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderArchive" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceArchive" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OUTFILE" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

@@ -95,10 +95,10 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AccessMethodCallSuppressionRegex = new(
         $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SelectIntoTempTargetStatementRegex = new(
-        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{TempIdentifierPattern})",
+    private static readonly Regex SelectIntoTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex SelectIntoTempPrefixRegex = new(
+    private static readonly Regex SelectIntoTargetPrefixRegex = new(
         @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CreateTempTableRegex = new(
@@ -382,7 +382,7 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitSelectIntoTempReferences(
+        EmitSelectIntoTargetReferences(
             statement,
             statementStart,
             statementLineOffset,
@@ -599,7 +599,7 @@ internal static class SqlReferenceExtractor
         ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, referenceContainer);
     }
 
-    private static void EmitSelectIntoTempReferences(
+    private static void EmitSelectIntoTargetReferences(
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -612,7 +612,7 @@ internal static class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in SelectIntoTempTargetStatementRegex.Matches(statement))
+        foreach (Match match in SelectIntoTargetStatementRegex.Matches(statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -786,7 +786,7 @@ internal static class SqlReferenceExtractor
 
         return TargetReferenceRegex.IsMatch(statement)
             || TruncateTargetRegex.IsMatch(statement)
-            || SelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SelectIntoTargetStatementRegex.IsMatch(statement)
             || CreateTempTableRegex.IsMatch(statement)
             || CreateTempRoutineRegex.IsMatch(statement);
     }
@@ -799,7 +799,7 @@ internal static class SqlReferenceExtractor
         return CanStatementEstablishTempObject(statement)
             || TargetReferencePrefixRegex.IsMatch(statement)
             || FromListContinuationPrefixRegex.IsMatch(statement)
-            || SelectIntoTempPrefixRegex.IsMatch(statement)
+            || SelectIntoTargetPrefixRegex.IsMatch(statement)
             || DeleteUsingPrefixRegex.IsMatch(statement)
             || DeleteUsingListContinuationPrefixRegex.IsMatch(statement)
             || MergeUsingPrefixRegex.IsMatch(statement)
@@ -992,7 +992,7 @@ internal static class SqlReferenceExtractor
     {
         CollectTempObjectNamesFromMatches(TargetReferenceRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(SelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
     }
