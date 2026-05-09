@@ -8221,6 +8221,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppQualifiedRequiresConcepts_CaptureConceptAndArgumentReferences()
+    {
+        const string content = """
+            template <typename T>
+            requires std::derived_from<T, Base>
+            void Attach(T value) {}
+
+            template <typename T>
+            requires(std::same_as<T, ns::Result>)
+            void Save(T value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "derived_from" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "same_as" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "std" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
