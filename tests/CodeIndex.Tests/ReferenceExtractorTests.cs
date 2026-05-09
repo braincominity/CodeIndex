@@ -1205,6 +1205,29 @@ public class ReferenceExtractorTests
             && reference.ContainerName == "MAIN-SECTION");
     }
 
+    [Theory]
+    [InlineData("CANCEL \"SERVICE-PROGRAM\"", "SERVICE-PROGRAM")]
+    public void Extract_CobolLiteralTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
+    {
+        var content = $$"""
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. hello-world.
+            PROCEDURE DIVISION.
+            MAIN-SECTION SECTION.
+                {{statement}}
+                STOP RUN.
+            END PROGRAM hello-world.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+        var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == expectedSymbolName
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+    }
+
     [Fact]
     public void Extract_VueScriptSetup_DetectsJavaScriptTypeScriptCalls()
     {

@@ -10,6 +10,9 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolCallRegex = new(
         @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolCancelRegex = new(
+        @"^\s*CANCEL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolCopyRegex = new(
         @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -59,6 +62,7 @@ internal static class CobolReferenceExtractor
     private static readonly StatementPattern[] StatementPatterns =
     [
         new(CobolCallRegex, "call"),
+        new(CobolCancelRegex, "reference"),
         new(CobolCopyRegex, "reference"),
         new(CobolGotoRegex, "call"),
         new(CobolSetRegex, "reference"),
