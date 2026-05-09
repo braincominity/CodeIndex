@@ -1190,6 +1190,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC SQL OPEN CUSTOMER-CURSOR END-EXEC", "CUSTOMER-CURSOR")]
     [InlineData("EXEC SQL CLOSE CUSTOMER-CURSOR END-EXEC", "CUSTOMER-CURSOR")]
     [InlineData("EXEC SQL PREPARE CUSTOMER-STMT FROM :SQL-TEXT END-EXEC", "CUSTOMER-STMT")]
+    [InlineData("EXEC SQL EXECUTE CUSTOMER-STMT END-EXEC", "CUSTOMER-STMT")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
