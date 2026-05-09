@@ -41,6 +41,7 @@ affected:
 - **C references now capture `_t` function-pointer typedef returns** — `typedef widget_t (*factory_t)(void);` now references the return typedef.
 - **C references now capture tagged function-pointer typedef returns** — `typedef struct node *(*factory_t)(void);` now references the returned tag.
 - **C references now capture `_t` function-pointer declaration returns** — `widget_t (*factory)(void);` now references the return typedef.
+- **C references now capture tagged function-pointer declaration returns** — `struct node *(*factory)(void);` now references the returned tag.
 
 ## 日本語
 
@@ -75,3 +76,4 @@ affected:
 - **C の参照抽出が `_t` function-pointer typedef の戻り型を捕捉するようになりました** — `typedef widget_t (*factory_t)(void);` から戻り値 typedef への参照を生成します。
 - **C の参照抽出が tag 付き function-pointer typedef の戻り型を捕捉するようになりました** — `typedef struct node *(*factory_t)(void);` から戻り値 tag への参照を生成します。
 - **C の参照抽出が `_t` function-pointer 宣言の戻り型を捕捉するようになりました** — `widget_t (*factory)(void);` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が tag 付き function-pointer 宣言の戻り型を捕捉するようになりました** — `struct node *(*factory)(void);` から戻り値 tag への参照を生成します。
