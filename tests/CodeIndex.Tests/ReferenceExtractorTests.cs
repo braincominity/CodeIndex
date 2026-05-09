@@ -2434,6 +2434,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefBuiltinVaArgOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                consume(__builtin_va_arg(args, widget_t));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
     {
         const string content = """
