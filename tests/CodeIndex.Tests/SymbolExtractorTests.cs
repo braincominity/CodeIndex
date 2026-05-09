@@ -18537,6 +18537,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsShinyOutputRenderSymbols()
+    {
+        // Shiny output renderers define user-visible server endpoints.
+        // Shiny output renderer はユーザーに見える server endpoint を定義する。
+        const string content = """
+            output$summary_plot <- renderPlot({
+              plot(data)
+            })
+
+            output$table <- renderTable({
+              data
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "summary_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "table");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
