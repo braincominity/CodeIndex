@@ -42,6 +42,35 @@ public static partial class SymbolExtractor
             if (!inProcedureDivision)
                 continue;
 
+            var entryMatch = CobolEntryRegex.Match(line);
+            if (entryMatch.Success)
+            {
+                var entryName = CobolSymbolNameNormalizer.Normalize(entryMatch.Groups["name"].Value);
+                if (string.IsNullOrWhiteSpace(entryName))
+                    continue;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = entryName,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = entryMatch.Groups["name"].Index,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                        ContainerKind = programName != null ? "class" : null,
+                        ContainerName = programName,
+                        ContainerQualifiedName = programName,
+                    },
+                    line);
+                continue;
+            }
+
             var sectionMatch = CobolSectionHeaderRegex.Match(line);
             if (sectionMatch.Success)
             {

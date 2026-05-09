@@ -123,6 +123,9 @@ public static partial class SymbolExtractor
     private static readonly Regex CobolProcedureDivisionRegex = new(
         @"^\s*PROCEDURE\s+DIVISION\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolEntryRegex = new(
+        @"^\s*ENTRY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolSectionHeaderRegex = new(
         @"^\s{0,6}(?<name>[A-Z0-9][A-Z0-9-]*)\s+SECTION\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

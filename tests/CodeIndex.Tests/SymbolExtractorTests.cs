@@ -703,6 +703,7 @@ public class SymbolExtractorTests
             PROGRAM-ID. hello-world.
             PROCEDURE DIVISION.
             MAIN-SECTION SECTION.
+                ENTRY "ALT-ENTRY".
                 PERFORM HELPER-SECTION
                 PERFORM HELPER-PARA THRU EXIT-PARA
                 STOP RUN.
@@ -719,6 +720,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "cobol", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "HELLO-WORLD");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ALT-ENTRY");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "MAIN-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-SECTION");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "HELPER-PARA");
