@@ -18164,6 +18164,7 @@ public class SymbolExtractorTests
         var content = """
             Public Class NativeMethods
                 Private Declare Unicode Function GetWindowText Lib "user32" Alias "GetWindowTextW" () As Integer
+                Public Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
                 Friend Declare Auto Sub SendMessage Lib "user32" ()
             End Class
             """;
@@ -18171,6 +18172,9 @@ public class SymbolExtractorTests
 
         var function = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "GetWindowText");
         Assert.Equal("Private", function.Visibility);
+
+        var ptrSafe = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "GetTickCount");
+        Assert.Equal("Public", ptrSafe.Visibility);
 
         var sub = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "SendMessage");
         Assert.Equal("Friend", sub.Visibility);
