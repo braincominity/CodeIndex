@@ -117,6 +117,12 @@ public static partial class SymbolExtractor
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
+    private static readonly Regex RPacmanPackageLoaderStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex RPacmanPackageLoaderArgumentRegex = new(
+        @"(?:^|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))(?:['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
     private static readonly Regex CobolProgramIdLineRegex = new(
         @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -2078,6 +2084,8 @@ public static partial class SymbolExtractor
             }
             if (lang == "go")
                 TryAddGoLabelSymbol(fileId, line, i, symbols);
+            if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols))
+                continue;
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
@@ -3719,6 +3727,48 @@ public static partial class SymbolExtractor
     }
 
     private readonly record struct SameLineSignatureKey(int Line, int StartLine, string Signature);
+
+    private static bool TryAddRPacmanPackageLoaderSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var startMatch = RPacmanPackageLoaderStartRegex.Match(line);
+        if (!startMatch.Success)
+            return false;
+
+        var argsStart = startMatch.Index + startMatch.Length;
+        var args = line[argsStart..];
+        var added = false;
+        foreach (Match match in RPacmanPackageLoaderArgumentRegex.Matches(args))
+        {
+            var quotedNameGroup = match.Groups["quotedName"];
+            var nameGroup = quotedNameGroup.Success ? quotedNameGroup : match.Groups["name"];
+            if (!nameGroup.Success)
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = argsStart + nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+            added = true;
+        }
+
+        return added;
+    }
 
     private static bool TryGetSameLineSignatureKey(SymbolRecord symbol, out SameLineSignatureKey key)
     {

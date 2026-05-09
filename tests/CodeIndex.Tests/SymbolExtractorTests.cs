@@ -18464,6 +18464,7 @@ public class SymbolExtractorTests
             base::requireNamespace(package = "rlang")
             library(help = "stats")
             base::require(help = utils)
+            pacman::p_load(lubridate, "data.table", janitor, character.only = FALSE)
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
@@ -18476,6 +18477,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "rlang");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stats");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "utils");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "lubridate");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "data.table");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "janitor");
     }
 
     [Fact]
