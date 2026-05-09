@@ -1238,6 +1238,7 @@ public class ReferenceExtractorTests
     [Theory]
     [InlineData("EXEC SQL CALL CUSTOMER-PROC(:CUSTOMER-ID) END-EXEC", "CUSTOMER-PROC")]
     [InlineData("EXEC CICS LINK PROGRAM('CUSTOMER-SERVICE') END-EXEC", "CUSTOMER-SERVICE")]
+    [InlineData("EXEC CICS XCTL PROGRAM('NEXT-PROGRAM') END-EXEC", "NEXT-PROGRAM")]
     public void Extract_CobolExternalCallStatement_CapturesSearchableCall(string statement, string expectedSymbolName)
     {
         var content = $$"""
