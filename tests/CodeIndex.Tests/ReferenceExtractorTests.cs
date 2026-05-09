@@ -11706,6 +11706,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateFullTextIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE FULLTEXT INDEX ON dbo.Documents (Title) KEY INDEX PK_Documents;
+            CREATE FULLTEXT INDEX ON [content].[Articles] ([Body]) KEY INDEX [PK_Articles];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

@@ -100,6 +100,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateIndexOnTargetRegex = new(
         $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?(?:\s+(?:NONCLUSTERED\s+COLUMNSTORE|CLUSTERED|NONCLUSTERED|COLUMNSTORE|XML|SPATIAL))?\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateFullTextIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+FULLTEXT\s+INDEX\b\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterIndexOnTargetRegex = new(
         $@"(?<![\w$])ALTER\s+INDEX\b\s+(?:ALL|{QualifiedIdentifierNoCapturePattern})\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -441,6 +444,21 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             CreateIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateFullTextIndexOnTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
