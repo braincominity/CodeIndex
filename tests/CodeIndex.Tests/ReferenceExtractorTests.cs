@@ -11540,7 +11540,8 @@ public class ReferenceExtractorTests
         const string content = """
             module demo_mod
               include 'repository_kinds.inc'
-              use, intrinsic :: iso_c_binding, only: c_ptr, c_int
+              use, intrinsic :: iso_c_binding, only: c_ptr, c_int, c_char
+              use, intrinsic :: iso_fortran_env, only: real64
               type :: RepositoryBase
               end type RepositoryBase
               type, extends(RepositoryBase) :: Repository
@@ -11555,6 +11556,9 @@ public class ReferenceExtractorTests
                 type(Repository) :: repo
                 class(User), allocatable :: current
                 procedure(RepositoryCallback), pointer :: callback
+                integer(c_int) :: status_code
+                real(kind=real64) :: elapsed
+                character(kind=c_char, len=1) :: delimiter
                 value = prefix() // suffix()
                 call process(repo)
                 call repo%persist()
@@ -11576,6 +11580,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "c_ptr" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "iso_fortran_env" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference" && r.Context.Contains("integer(c_int)", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference" && r.Context.Contains("real(kind=real64)", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "c_char" && r.ReferenceKind == "type_reference" && r.Context.Contains("character(kind=c_char", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "RepositoryBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");

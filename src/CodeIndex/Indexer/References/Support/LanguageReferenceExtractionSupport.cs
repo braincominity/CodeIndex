@@ -344,6 +344,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranAllocateTypeSpecRegex = new(
         @"\ballocate\s*\(\s*(?<type>[A-Za-z_]\w*)\s*::",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranIntrinsicKeywordKindRegex = new(
+        @"\b(?:integer|real|complex|logical|character)\s*\([^)\r\n]*\bkind\s*=\s*(?<type>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranIntrinsicPositionalKindRegex = new(
+        @"\b(?:integer|real|complex|logical)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranCallRegex = new(
         @"^\s*call\s+(?:(?:[A-Za-z_]\w*)\s*%\s*)*(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3750,6 +3756,18 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in FortranAllocateTypeSpecRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+        }
+
+        foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+        }
+
+        foreach (Match match in FortranIntrinsicPositionalKindRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
