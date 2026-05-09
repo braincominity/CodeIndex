@@ -263,7 +263,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+" + VbIdentifierPattern + @"\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbGenericConstraintRegex = new(
-        @"^\s*(?<param>[A-Za-z_]\w*)\s+As\s+(?<constraint>.+)$",
+        @"^\s*(?<param>" + VbIdentifierPattern + @")\s+As\s+(?<constraint>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbNewTypeRegex = new(
         @"\bNew\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
@@ -4167,7 +4167,10 @@ internal static class LanguageReferenceExtractionSupport
             var segment = list.Substring(segmentStart, segmentLength);
             var match = VbGenericConstraintRegex.Match(segment);
             if (match.Success)
+            {
                 ignoredSegments.Add(match.Groups["param"].Value);
+                ignoredSegments.Add(NormalizeVbIdentifierSegment(match.Groups["param"].Value));
+            }
         }
 
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
