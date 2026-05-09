@@ -4989,6 +4989,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_CreateSpecialXmlIndexReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_create_special_xml_index_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Documents (Id int, Payload xml);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_create_special_xml_index_definition.sql", "sql",
+            """
+            CREATE PRIMARY XML INDEX IX_Documents_Xml ON dbo.Documents (Payload);
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_create_special_xml_index"]));
+        Assert.Equal("src/sql_create_special_xml_index_definition.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_create_special_xml_index"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_create_special_xml_index"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_AlterFullTextIndexReferencesResolveThroughSearch()
     {
         InsertIndexedFile("src/sql_alter_fulltext_index_target.sql", "sql",

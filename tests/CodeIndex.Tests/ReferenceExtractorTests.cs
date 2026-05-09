@@ -11722,6 +11722,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateSpecialXmlIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE PRIMARY XML INDEX IX_Documents_Xml ON dbo.Documents (Payload);
+            CREATE SELECTIVE XML INDEX IX_Articles_Xml ON [content].[Articles] ([Body]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Documents" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Articles" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_AlterFullTextIndexCapturesTableReference()
     {
         const string content = """
