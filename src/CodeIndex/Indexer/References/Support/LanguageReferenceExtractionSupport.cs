@@ -285,7 +285,7 @@ internal static class LanguageReferenceExtractionSupport
         @"(?:\bHandles|,)\s+(?:[A-Za-z_]\w*\.)*(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddHandlerRegex = new(
-        @"\bAddHandler\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
+        @"\bAddHandler\s+(?:[A-Za-z_]\w*\.)*(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbRemoveHandlerRegex = new(
         @"\bRemoveHandler\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*)",
