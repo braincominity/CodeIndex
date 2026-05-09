@@ -314,6 +314,7 @@ public class FileIndexer
         ("Dockerfile_",  "dockerfile"),
         ("Containerfile.", "dockerfile"),
         ("Containerfile-", "dockerfile"),
+        ("Containerfile_", "dockerfile"),
         ("Makefile.",    "makefile"),
         ("GNUmakefile.", "makefile"),
     ];

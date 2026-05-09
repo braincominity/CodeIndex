@@ -19,6 +19,7 @@ affected:
 - **Hyphen-suffixed Dockerfile names are detected** — files such as `Dockerfile-prod` now index as Dockerfile content.
 - **Hyphen-suffixed Containerfile names are detected** — files such as `Containerfile-prod` now index through the Dockerfile analyzer.
 - **Underscore-suffixed Dockerfile names are detected** — files such as `Dockerfile_prod` now index as Dockerfile content.
+- **Underscore-suffixed Containerfile names are detected** — files such as `Containerfile_prod` now index through the Dockerfile analyzer.
 
 ## 日本語
 
@@ -30,3 +31,4 @@ affected:
 - **ハイフン suffix の Dockerfile 名を検出するようになりました** — `Dockerfile-prod` のようなファイルも Dockerfile content として index されるようになりました。
 - **ハイフン suffix の Containerfile 名を検出するようになりました** — `Containerfile-prod` のようなファイルも Dockerfile analyzer で index されるようになりました。
 - **underscore suffix の Dockerfile 名を検出するようになりました** — `Dockerfile_prod` のようなファイルも Dockerfile content として index されるようになりました。
+- **underscore suffix の Containerfile 名を検出するようになりました** — `Containerfile_prod` のようなファイルも Dockerfile analyzer で index されるようになりました。
