@@ -14559,6 +14559,7 @@ public class ReferenceExtractorTests
             run <- function() {
                 data("iris", package = "datasets")
                 utils::data(list = "mtcars")
+                system.file("extdata", "sample.csv", package = "readr", mustWork = TRUE)
             }
             """;
 
@@ -14575,6 +14576,18 @@ public class ReferenceExtractorTests
             && r.ContainerName == "run");
         Assert.Contains(references, r =>
             r.SymbolName == "mtcars"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "extdata"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "sample.csv"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "readr"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "run");
     }

@@ -59,6 +59,12 @@ internal static class RReferenceExtractor
     private static readonly Regex DataCallPackageRegex = new(
         @"\bpackage\s*=\s*['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
+    private static readonly Regex SystemFileCallStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?system\.file\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex SystemFilePathPartRegex = new(
+        @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))['""](?<name>[^'""]+)['""]",
+        RegexOptions.Compiled);
     private static readonly Regex InstallPackagesCallStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?install\.packages\s*\(",
         RegexOptions.Compiled);
@@ -583,6 +589,52 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
         foreach (Match match in DataCallDatasetRegex.Matches(line))
+        {
+            var name = match.Groups["name"];
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name.Value,
+                name.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+
+        var packageMatch = DataCallPackageRegex.Match(line);
+        if (!packageMatch.Success)
+            return;
+
+        var package = packageMatch.Groups["name"];
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            package.Value,
+            package.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+    }
+
+    public static void EmitSystemFileReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (!SystemFileCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        var line = StripRNamespaceDirectiveComment(originalLine);
+        foreach (Match match in SystemFilePathPartRegex.Matches(line))
         {
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(
