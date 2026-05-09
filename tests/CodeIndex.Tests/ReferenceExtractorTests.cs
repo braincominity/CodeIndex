@@ -1183,6 +1183,7 @@ public class ReferenceExtractorTests
     [InlineData("RELEASE SORT-RECORD", "SORT-RECORD")]
     [InlineData("GENERATE SALES-REPORT", "SALES-REPORT")]
     [InlineData("INITIATE SALES-REPORT", "SALES-REPORT")]
+    [InlineData("TERMINATE SALES-REPORT", "SALES-REPORT")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
