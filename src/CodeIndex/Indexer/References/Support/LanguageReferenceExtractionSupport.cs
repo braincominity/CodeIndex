@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class LanguageReferenceExtractionSupport
 {
     private static readonly Regex CppIncludeRegex = new(
-        @"^(?:\s*#\s*(?:include|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)"")|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
+        @"^(?:\s*#\s*(?:include(?:_next)?|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)"")|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppBaseListRegex = new(
         @"^\s*(?:export\s+)?(?:(?:template|requires)\b[^{;]*\s+)*(?:class|struct)\s+[A-Za-z_]\w*(?:\s*final)?\s*:\s*(?<bases>[^{;]+)",
