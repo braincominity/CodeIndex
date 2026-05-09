@@ -1963,6 +1963,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CPointerQualifiedTaggedParameters_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void visit(struct node * const node) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
     public void Extract_CTypedefCompoundLiterals_CapturesLowercaseTypeReferences()
     {
         const string content = """
