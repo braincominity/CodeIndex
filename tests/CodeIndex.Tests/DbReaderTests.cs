@@ -4768,6 +4768,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_ForeignKeyReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_foreign_key_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Customers (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_foreign_key_source.sql", "sql",
+            """
+            ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id);
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Customers", lang: "sql", exact: true, pathPatterns: ["sql_foreign_key"]));
+        Assert.Equal("src/sql_foreign_key_source.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Customers", lang: "sql", exact: true, pathPatterns: ["sql_foreign_key"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Customers", lang: "sql", exact: true, pathPatterns: ["sql_foreign_key"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
