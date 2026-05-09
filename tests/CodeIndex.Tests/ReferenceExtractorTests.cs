@@ -2418,6 +2418,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedBuiltinOffsetofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long offset = __builtin_offsetof(struct node, next);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
     public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
     {
         const string content = """
