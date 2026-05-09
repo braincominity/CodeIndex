@@ -47,6 +47,8 @@ public class SymbolExtractorTests
             Coordinate = collections.namedtuple("Coordinate", "lat lon")
             DynamicUser = make_dataclass("DynamicUser", [("name", str)])
             DynamicOrder = dataclasses.make_dataclass("DynamicOrder", [("id", int)])
+            DEFAULT_TIMEOUT: Final[int] = 30
+            API_HOST: typing.Final = "example.invalid"
 
             def first[T](items: list[T]) -> T:
                 return items[0]
@@ -80,6 +82,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicOrder");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "API_HOST");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
