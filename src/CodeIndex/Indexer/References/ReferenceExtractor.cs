@@ -2374,6 +2374,19 @@ public static partial class ReferenceExtractor
                             symbol.Line == lineNumber
                             && string.Equals(symbol.Kind, "class", StringComparison.Ordinal)),
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitFunctionReturnReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    index => ResolveContainerForCall(index)
+                        ?? symbols.FirstOrDefault(symbol =>
+                            symbol.Line == lineNumber
+                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")
