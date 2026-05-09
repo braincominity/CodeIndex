@@ -95,9 +95,12 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "decorator"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "bare_decorator"
+            && reference.ReferenceKind == "decorator");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "parametrized"
             && reference.ReferenceKind == "decorator");
         Assert.Contains(references, reference =>
             reference.SymbolName == "staticmethod"

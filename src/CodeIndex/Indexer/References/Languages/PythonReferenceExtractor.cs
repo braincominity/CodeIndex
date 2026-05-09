@@ -12,6 +12,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex DecoratorRegex = new(
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*(?:#.*)?$",
         RegexOptions.Compiled);
+    private static readonly Regex DecoratorCallRegex = new(
+        @"^\s*@(?<name>[_\p{L}]\w*)\s*\(",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -24,6 +27,17 @@ internal static class PythonReferenceExtractor
         HashSet<string>? definitionNames,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+            if (definitionNames != null && definitionNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+        }
+
         foreach (Match match in DecoratorRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
