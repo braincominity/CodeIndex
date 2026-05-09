@@ -95,6 +95,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AccessMethodCallSuppressionRegex = new(
         $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?(?:\s+(?:NONCLUSTERED\s+COLUMNSTORE|CLUSTERED|NONCLUSTERED|COLUMNSTORE|XML|SPATIAL))?\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SelectIntoTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -395,6 +398,21 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
+        EmitMultiTargetReferences(
+            CreateIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
         EmitTargetReferences(
             statement,
             statementStart,
@@ -610,7 +628,8 @@ internal static class SqlReferenceExtractor
         HashSet<string> seen,
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int>? suppressedCallIndices = null)
     {
         foreach (Match match in SelectIntoTargetStatementRegex.Matches(statement))
         {
@@ -678,7 +697,8 @@ internal static class SqlReferenceExtractor
         HashSet<string> seen,
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int>? suppressedCallIndices = null)
     {
         foreach (Match match in matches)
         {
@@ -696,6 +716,8 @@ internal static class SqlReferenceExtractor
 
                 var container = resolveContainerForCall(capture.Index);
                 ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
+                if (suppressedCallIndices != null && IsFollowedByOpenParen(statement, capture.Index + capture.Length))
+                    suppressedCallIndices.Add(GetCallLikeSuppressionIndex(statement, capture.Index) + statementStart - lineOffset);
             }
         }
     }

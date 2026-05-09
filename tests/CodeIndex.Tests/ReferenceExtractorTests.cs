@@ -11442,6 +11442,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateIndexCapturesOnTableReference()
+    {
+        // `CREATE INDEX ... ON table` is a table usage. The access method after `USING` must stay
+        // suppressed while the indexed table becomes searchable.
+        // `CREATE INDEX ... ON table` は table 使用箇所。`USING` 後の access method は抑止しつつ、
+        // index 対象 table は検索可能にする。
+        const string content = """
+            CREATE INDEX IX_Orders_CreatedAt ON dbo.Orders (CreatedAt);
+            CREATE UNIQUE NONCLUSTERED INDEX IX_Invoices ON [sales].[Invoices] (Id);
+            CREATE INDEX idx_users_name ON users USING btree (name);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
