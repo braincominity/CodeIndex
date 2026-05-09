@@ -1208,6 +1208,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS READQ TS QUEUE('CUSTOMER-QUEUE') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-QUEUE")]
     [InlineData("EXEC CICS WRITEQ TS QUEUE('CUSTOMER-QUEUE') FROM(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-QUEUE")]
     [InlineData("EXEC CICS DELETEQ TS QUEUE('CUSTOMER-QUEUE') END-EXEC", "CUSTOMER-QUEUE")]
+    [InlineData("EXEC CICS READQ TD QUEUE('CUSTOMER-TD') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-TD")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
