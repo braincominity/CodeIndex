@@ -43,6 +43,7 @@ public class FileIndexerTests
     [InlineData("Script.fsx", "fsharp")]
     [InlineData("Module.bas", "vb")]
     [InlineData("Customer.cls", "vb")]
+    [InlineData("UserControl.ctl", "vb")]
     [InlineData("Form1.frm", "vb")]
     [InlineData("Macro.vba", "vb")]
     [InlineData("Module1.vb", "vb")]
