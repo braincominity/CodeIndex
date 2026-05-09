@@ -113,6 +113,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex ForeignKeyReferencesTargetRegex = new(
         $@"(?<![\w$])REFERENCES\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateSynonymForTargetRegex = new(
+        $@"(?<![\w$])CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\b\s+{QualifiedIdentifierNoCapturePattern}\s+FOR\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SelectIntoTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -498,6 +501,20 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName,
             suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateSynonymForTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
 
         EmitTargetReferences(
             statement,
