@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class DockerfileReferenceExtractor
 {
     private static readonly Regex StageReferenceRegex = new(
-        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>[A-Za-z0-9_.-]+)\s+AS\s+[A-Za-z0-9_.-]+\s*$",
+        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>[A-Za-z0-9_.-]+)\s+AS\s+[A-Za-z0-9_.-]+(?:\s+#.*)?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CopyFromReferenceRegex = new(

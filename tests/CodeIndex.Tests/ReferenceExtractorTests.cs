@@ -2115,6 +2115,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileFromStageReferences_AllowsInlineComments()
+    {
+        const string content = """
+            FROM node:20 AS builder
+
+            FROM builder AS runtime # reuse the build stage
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
