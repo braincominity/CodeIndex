@@ -1180,6 +1180,7 @@ public class ReferenceExtractorTests
 
     [Theory]
     [InlineData("RETURN SORT-WORK", "SORT-WORK")]
+    [InlineData("RELEASE SORT-RECORD", "SORT-RECORD")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
