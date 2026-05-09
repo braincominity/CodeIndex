@@ -1203,6 +1203,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS READNEXT FILE('CUSTOMER-FILE') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
     [InlineData("EXEC CICS READPREV FILE('CUSTOMER-FILE') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
     [InlineData("EXEC CICS RESETBR FILE('CUSTOMER-FILE') RIDFLD(CUSTOMER-KEY) END-EXEC", "CUSTOMER-FILE")]
+    [InlineData("EXEC CICS ENDBR FILE('CUSTOMER-FILE') END-EXEC", "CUSTOMER-FILE")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
