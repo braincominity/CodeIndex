@@ -5520,6 +5520,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropPartitionFunctionReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_partition_function_target.sql", "sql",
+            """
+            CREATE PARTITION FUNCTION pfOrders(int)
+            AS RANGE LEFT FOR VALUES (100);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_partition_function_cleanup.sql", "sql",
+            """
+            DROP PARTITION FUNCTION pfOrders;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_partition_function"]));
+        Assert.Equal("src/sql_drop_partition_function_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_partition_function"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_drop_partition_function"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

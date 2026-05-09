@@ -183,6 +183,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DropPartitionSchemeTargetRegex = new(
         $@"(?<![\w$])DROP\s+PARTITION\s+SCHEME\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropPartitionFunctionTargetRegex = new(
+        $@"(?<![\w$])DROP\s+PARTITION\s+FUNCTION\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -897,6 +900,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             DropPartitionSchemeTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropPartitionFunctionTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
