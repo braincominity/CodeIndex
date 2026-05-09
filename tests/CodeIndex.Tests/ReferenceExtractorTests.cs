@@ -1198,6 +1198,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS READ FILE('CUSTOMER-FILE') INTO(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
     [InlineData("EXEC CICS WRITE FILE('CUSTOMER-FILE') FROM(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
     [InlineData("EXEC CICS REWRITE FILE('CUSTOMER-FILE') FROM(CUSTOMER-RECORD) END-EXEC", "CUSTOMER-FILE")]
+    [InlineData("EXEC CICS DELETE FILE('CUSTOMER-FILE') RIDFLD(CUSTOMER-KEY) END-EXEC", "CUSTOMER-FILE")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
