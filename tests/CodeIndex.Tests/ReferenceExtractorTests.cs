@@ -11564,6 +11564,7 @@ public class ReferenceExtractorTests
                 character(kind=c_char, len=1) :: delimiter
                 common /repository_state/ status_code
                 namelist /repository_config/ delimiter
+                external legacy_hook, repository_probe
                 value = prefix() // suffix()
                 call process(repo)
                 call repo%persist()
@@ -11602,6 +11603,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "assign_repository_alt" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_state" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_config" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_probe" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");

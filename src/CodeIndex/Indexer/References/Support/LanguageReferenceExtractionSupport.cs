@@ -341,6 +341,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranSubmoduleParentRegex = new(
         @"^\s*submodule\s*\(\s*(?<parent>[A-Za-z_]\w*)(?:\s*:\s*(?<ancestor>[A-Za-z_]\w*))?\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranExternalRegex = new(
+        @"^\s*external(?:\s*::)?\s*(?<list>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranSimpleListNameRegex = new(
+        @"(?:^|,)\s*(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranTypeRegex = new(
         @"\b(?:type|class)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3767,6 +3773,17 @@ internal static class LanguageReferenceExtractionSupport
             var ancestor = submoduleMatch.Groups["ancestor"];
             if (ancestor.Success)
                 ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
+        }
+
+        var externalMatch = FortranExternalRegex.Match(preparedLine);
+        if (externalMatch.Success)
+        {
+            var list = externalMatch.Groups["list"];
+            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+            }
         }
 
         if (FortranProcedureBindingLineRegex.IsMatch(preparedLine))
