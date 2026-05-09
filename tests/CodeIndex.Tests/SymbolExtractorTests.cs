@@ -258,6 +258,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesAllAppendExportsFromInitModules()
+    {
+        var content = """
+            __all__ = []
+            __all__.append("dynamic_api")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("dynamic_api", exports);
+        Assert.Contains("package.subpkg.dynamic_api", exports);
+    }
+
+    [Fact]
     public void Extract_Python_IndexesQualifiedModuleAliasesFromInitModules()
     {
         var content = """
