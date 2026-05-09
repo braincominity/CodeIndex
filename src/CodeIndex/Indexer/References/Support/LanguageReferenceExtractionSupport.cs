@@ -326,6 +326,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranImportRegex = new(
         @"^\s*import(?:\s*,\s*only)?(?:\s*::|\s*:)?\s+(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranIncludeRegex = new(
+        @"^\s*include\s*['""](?<name>[^'""]+)['""]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranTypeRegex = new(
         @"\b(?:type|class)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -453,7 +456,7 @@ internal static class LanguageReferenceExtractionSupport
                 EmitVbTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 break;
             case "fortran":
-                EmitFortranTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
+                EmitFortranTypeReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
                 break;
             case "pascal":
                 EmitPascalTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, container);
@@ -3699,6 +3702,7 @@ internal static class LanguageReferenceExtractionSupport
 
     private static void EmitFortranTypeReferences(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -3717,6 +3721,9 @@ internal static class LanguageReferenceExtractionSupport
         var importMatch = FortranImportRegex.Match(preparedLine);
         if (importMatch.Success)
             EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+
+        foreach (Match match in FortranIncludeRegex.Matches(originalLine))
+            ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
 
         foreach (Match match in FortranTypeRegex.Matches(preparedLine))
         {

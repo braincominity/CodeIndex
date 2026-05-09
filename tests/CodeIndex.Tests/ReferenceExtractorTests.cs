@@ -11539,6 +11539,7 @@ public class ReferenceExtractorTests
     {
         const string content = """
             module demo_mod
+              include 'repository_kinds.inc'
               use, intrinsic :: iso_c_binding, only: c_ptr, c_int
               type :: RepositoryBase
               end type RepositoryBase
@@ -11571,6 +11572,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "fortran", content);
         var references = ReferenceExtractor.Extract(1, "fortran", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "repository_kinds.inc" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "c_ptr" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference");

@@ -6,6 +6,7 @@ internal static class FortranReferenceExtractor
 {
     public static void EmitTypePositionReferences(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -17,7 +18,7 @@ internal static class FortranReferenceExtractor
         LanguageReferenceExtractionSupport.EmitTypePositionReferences(
             "fortran",
             preparedLine,
-            preparedLine,
+            originalLine,
             references,
             seen,
             fileId,
