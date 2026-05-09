@@ -1113,7 +1113,7 @@ public class ReferenceExtractorTests
                 READ CUSTOMER-FILE
                 WRITE CUSTOMER-RECORD
                 SEARCH ALL CUSTOMER-TABLE
-                START CUSTOMER-FILE KEY IS >= CUSTOMER-KEY
+                START ORDER-FILE KEY IS >= ORDER-KEY
                 SET HAS-ITEM TO TRUE
                 MOVE SOURCE-VALUE TO DEST-VALUE
                 ADD AMOUNT TO TOTAL
@@ -1146,6 +1146,10 @@ public class ReferenceExtractorTests
             && reference.ContainerName == "MAIN-SECTION");
         Assert.Contains(references, reference =>
             reference.SymbolName == "CUSTOMER-TABLE"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ORDER-FILE"
             && reference.ReferenceKind == "reference"
             && reference.ContainerName == "MAIN-SECTION");
         Assert.Contains(references, reference =>
