@@ -307,6 +307,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbBareCallRegex = new(
         @"^\s*(?:Call\s+)?(?<name>" + VbQualifiedIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbBareMemberCallRegex = new(
+        @"^\s*\.\s*(?<name>" + VbIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+(?<name>[A-Za-z_]\w*)",
@@ -485,6 +488,7 @@ internal static class LanguageReferenceExtractionSupport
             case "vb":
                 EmitVisualBasicEscapedCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
                 EmitVisualBasicBareCallReferences(preparedLine, addCallLikeReference, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                EmitVisualBasicBareMemberCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 break;
         }
     }
@@ -3491,6 +3495,30 @@ internal static class LanguageReferenceExtractionSupport
         || name.Equals("Loop", StringComparison.OrdinalIgnoreCase)
         || name.Equals("ElseIf", StringComparison.OrdinalIgnoreCase)
         || name.Equals("Finally", StringComparison.OrdinalIgnoreCase);
+
+    private static void EmitVisualBasicBareMemberCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var match = VbBareMemberCallRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var group = match.Groups["name"];
+        var tail = match.Groups["tail"].Value.TrimStart();
+        if (tail.StartsWith('(') || tail.StartsWith('=') || tail.StartsWith(':') || tail.StartsWith("As ", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var rawName = group.Value;
+        var name = NormalizeVbIdentifierSegment(rawName);
+        var nameIndex = rawName.StartsWith('[') ? group.Index + 1 : group.Index;
+        ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+    }
 
     private static bool IsVisualBasicMemberImplementsClause(string line, int implementsIndex)
     {

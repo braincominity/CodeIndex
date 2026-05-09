@@ -10934,6 +10934,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesBareWithMemberCallStatements()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(service As Service)
+                    With service
+                        .Refresh currentUser
+                        .[Select]
+                    End With
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "With" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
     {
         const string content = """
