@@ -293,7 +293,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\bAddHandler\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbRemoveHandlerRegex = new(
-        @"\bRemoveHandler\s+(?:[A-Za-z_]\w*\.)*(?<name>[A-Za-z_]\w*)",
+        @"\bRemoveHandler\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbRaiseEventRegex = new(
         @"\bRaiseEvent\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
@@ -3348,7 +3348,14 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "unsubscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
 
         foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
         {

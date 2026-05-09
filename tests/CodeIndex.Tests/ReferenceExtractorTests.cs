@@ -10979,6 +10979,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedRemoveHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Unwire()
+                    RemoveHandler Me.Toolbar.Button.[Click], AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "unsubscribe");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesMultipleHandlesTargets()
     {
         const string content = """
