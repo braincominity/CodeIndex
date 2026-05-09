@@ -18478,11 +18478,16 @@ public class SymbolExtractorTests
             my_plot <- function(x) {
               x
             }
+
+            `print-model` = function(value) {
+              value
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "print-model");
     }
 
     [Fact]
