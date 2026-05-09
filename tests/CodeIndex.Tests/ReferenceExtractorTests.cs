@@ -14698,6 +14698,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsDollarMemberReferences()
+    {
+        const string content = """
+            run <- function(data, input) {
+                data$value
+                input$go
+                data$`has space`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "data$value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "input$go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "data$has space"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
     {
         const string content = """

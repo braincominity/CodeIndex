@@ -44,6 +44,9 @@ internal static class RReferenceExtractor
     private static readonly Regex SourceFileReferenceStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex DollarMemberReferenceRegex = new(
+        @"(?<![\w.])(?<receiver>[A-Za-z.][\w.]*)\$(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -343,6 +346,50 @@ internal static class RReferenceExtractor
             context,
             lineNumber,
             container);
+    }
+
+    public static void EmitDollarMemberReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        HashSet<string>? definitionNames)
+    {
+        foreach (Match match in DollarMemberReferenceRegex.Matches(preparedLine))
+        {
+            var receiver = match.Groups["receiver"].Value;
+            var backtickNameGroup = match.Groups["backtickName"];
+            var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
+            var name = nameGroup.Value;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                $"{receiver}${name}",
+                match.Groups["receiver"].Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+
+            if (definitionNames != null && definitionNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     private static IEnumerable<(string Name, int Index)> EnumerateNamespaceDirectiveNames(string value, int baseIndex)
