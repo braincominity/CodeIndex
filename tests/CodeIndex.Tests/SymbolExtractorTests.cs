@@ -18460,6 +18460,8 @@ public class SymbolExtractorTests
             require(dplyr)
             library(package = "stringr")
             require(package = tidyr)
+            base::library("readr")
+            base::requireNamespace(package = "rlang")
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
@@ -18468,6 +18470,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "dplyr");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stringr");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "tidyr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "readr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "rlang");
     }
 
     [Fact]
