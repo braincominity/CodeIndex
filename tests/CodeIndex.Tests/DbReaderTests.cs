@@ -5356,6 +5356,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropTypeReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_type_target.sql", "sql",
+            """
+            CREATE TYPE dbo.CustomerKey
+                FROM int NOT NULL;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_type_cleanup.sql", "sql",
+            """
+            DROP TYPE dbo.CustomerKey;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.CustomerKey", lang: "sql", exact: true, pathPatterns: ["sql_drop_type"]));
+        Assert.Equal("src/sql_drop_type_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.CustomerKey", lang: "sql", exact: true, pathPatterns: ["sql_drop_type"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.CustomerKey", lang: "sql", exact: true, pathPatterns: ["sql_drop_type"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
