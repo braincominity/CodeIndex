@@ -80,6 +80,7 @@ public class FileIndexerTests
     [InlineData("script.zsh", "shell")]
     [InlineData("script.fish", "shell")]
     [InlineData("Dockerfile", "dockerfile")]
+    [InlineData("api.Dockerfile", "dockerfile")]
     [InlineData("Makefile", "makefile")]
     [InlineData("Justfile", "justfile")]
     [InlineData("CMakeLists.txt", "cmake")]
