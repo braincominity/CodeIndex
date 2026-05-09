@@ -733,6 +733,7 @@ public static partial class SymbolExtractor
             // COBOL は brace ではなく program ID 単位で構成されるため、抽出は保守的に
             // program ひとつにつき 1 symbol に絞る。
             new("class", new Regex(@"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?(?:PROGRAM|CLASS)-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*METHOD-ID\.\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["javascript"] =
         [

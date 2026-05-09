@@ -751,6 +751,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolMethodId_DetectsFunctionSymbol()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            CLASS-ID. customer-service.
+            METHOD-ID. "load-customer".
+            PROCEDURE DIVISION.
+                DISPLAY "A".
+            END METHOD load-customer.
+            END CLASS customer-service.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "LOAD-CUSTOMER");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsTypeScriptSymbols()
     {
         const string content = """
