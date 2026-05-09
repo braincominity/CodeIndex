@@ -244,6 +244,8 @@ public class QueryCommandRunnerTests
     [InlineData("c++", "cpp")]
     [InlineData("f#", "fsharp")]
     [InlineData("vb.net", "vb")]
+    [InlineData("visual-basic", "vb")]
+    [InlineData("visual_basic", "vb")]
     [InlineData("py3", "python")]
     [InlineData("assembler", "assembly")]
     [InlineData("gas", "assembly")]
