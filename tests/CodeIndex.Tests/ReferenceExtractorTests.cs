@@ -11380,6 +11380,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_InsertWithoutIntoCapturesTargetReference()
+    {
+        // T-SQL permits `INSERT table ...` without `INTO`; the table is still the write target
+        // and should be searchable as a reference.
+        // T-SQL は `INTO` なしの `INSERT table ...` を許す。table は write target なので
+        // reference として検索できるべき。
+        const string content = """
+            INSERT dbo.AuditLog (Action) VALUES ('login');
+            INSERT TOP (10) [sales].[Orders] (Id) SELECT Id FROM staging.Orders;
+            INSERT OR REPLACE INTO sqlite_users (id) VALUES (1);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "AuditLog" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OR" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "REPLACE" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

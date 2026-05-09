@@ -4592,6 +4592,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_InsertWithoutIntoReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_insert_without_into_target.sql", "sql",
+            """
+            CREATE TABLE dbo.AuditLog (Action nvarchar(100));
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_insert_without_into_writer.sql", "sql",
+            """
+            INSERT dbo.AuditLog (Action) VALUES ('login');
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.AuditLog", lang: "sql", exact: true, pathPatterns: ["sql_insert_without_into"]));
+        Assert.Equal("src/sql_insert_without_into_writer.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.AuditLog", lang: "sql", exact: true, pathPatterns: ["sql_insert_without_into"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.AuditLog", lang: "sql", exact: true, pathPatterns: ["sql_insert_without_into"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
