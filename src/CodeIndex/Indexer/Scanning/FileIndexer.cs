@@ -262,6 +262,7 @@ public class FileIndexer
         [".zsh"]    = "shell",
         [".fish"]   = "shell",
         [".dockerfile"] = "dockerfile", // Suffix-style Dockerfile names such as app.Dockerfile / app.Dockerfile 形式
+        [".containerfile"] = "dockerfile", // Suffix-style Containerfile names such as app.Containerfile / app.Containerfile 形式
     };
 
     private static readonly (string Pattern, string Language)[] DisplayOnlyLanguageExtensions =
