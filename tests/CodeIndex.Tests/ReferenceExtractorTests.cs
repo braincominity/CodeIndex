@@ -1113,6 +1113,7 @@ public class ReferenceExtractorTests
                 READ CUSTOMER-FILE
                 WRITE CUSTOMER-RECORD
                 SEARCH ALL CUSTOMER-TABLE
+                START CUSTOMER-FILE KEY IS >= CUSTOMER-KEY
                 SET HAS-ITEM TO TRUE
                 MOVE SOURCE-VALUE TO DEST-VALUE
                 ADD AMOUNT TO TOTAL
