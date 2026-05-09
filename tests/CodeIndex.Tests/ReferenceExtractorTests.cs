@@ -2290,6 +2290,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedAlignofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long nodeAlign = _Alignof(struct node *);
+                unsigned long valueAlign = alignof(union value);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "union");
+    }
+
+    [Fact]
     public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
     {
         const string content = """
