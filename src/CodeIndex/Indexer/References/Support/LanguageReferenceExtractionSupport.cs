@@ -32,6 +32,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CppFactoryTemplateArgumentRegex = new(
         @"\b(?:std\s*::\s*)?(?:make_unique|make_shared|make_optional)\s*<(?<type>[^;{}<>]+(?:<[^;{}<>]+>)?[^;{}<>]*)>\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppTypeTraitTemplateArgumentRegex = new(
+        @"\b(?:std\s*::\s*)?(?:is_same|is_base_of|is_convertible|is_constructible|is_assignable|is_invocable)(?:_v)?\s*<(?<type>[^;{}<>]+(?:<[^;{}<>]+>)?[^;{}<>]*)>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppBraceConstructionRegex = new(
         @"(?:=\s*|return\s+|co_return\s+|throw\s+)(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Z_]\w*(?:\s*<[^;{}]+>)?)\s*\{",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -996,6 +999,12 @@ internal static class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["type"];
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+        }
+
+        foreach (Match match in CppTypeTraitTemplateArgumentRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);

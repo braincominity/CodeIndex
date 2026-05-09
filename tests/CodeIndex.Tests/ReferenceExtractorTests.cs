@@ -8144,6 +8144,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTypeTraits_CaptureTemplateArgumentTypeReferences()
+    {
+        const string content = """
+            static_assert(std::is_same_v<T, Widget>);
+            static_assert(is_base_of<Base, ns::Derived>::value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Derived" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
