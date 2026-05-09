@@ -5565,6 +5565,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropAssemblyReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_assembly_target.sql", "sql",
+            """
+            CREATE ASSEMBLY SalesAssembly
+            FROM 0x4D5A;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_assembly_cleanup.sql", "sql",
+            """
+            DROP ASSEMBLY SalesAssembly;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("SalesAssembly", lang: "sql", exact: true, pathPatterns: ["sql_drop_assembly"]));
+        Assert.Equal("src/sql_drop_assembly_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("SalesAssembly", lang: "sql", exact: true, pathPatterns: ["sql_drop_assembly"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("SalesAssembly", lang: "sql", exact: true, pathPatterns: ["sql_drop_assembly"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

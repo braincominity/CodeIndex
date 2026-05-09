@@ -189,6 +189,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DropXmlSchemaCollectionTargetRegex = new(
         $@"(?<![\w$])DROP\s+XML\s+SCHEMA\s+COLLECTION\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropAssemblyTargetRegex = new(
+        $@"(?<![\w$])DROP\s+ASSEMBLY\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -931,6 +934,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             DropXmlSchemaCollectionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropAssemblyTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
