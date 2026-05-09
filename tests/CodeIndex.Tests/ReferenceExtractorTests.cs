@@ -10971,6 +10971,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesGenericConstraintTypes()
+    {
+        const string content = """
+            Public Class Box(Of T As IDisposable)
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

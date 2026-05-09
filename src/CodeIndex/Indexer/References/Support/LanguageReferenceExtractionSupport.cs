@@ -260,6 +260,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbGenericDeclarationOwnerRegex = new(
         @"\b(?:Class|Structure|Interface|Delegate|Sub|Function)\s+\w+\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGenericConstraintRegex = new(
+        @"^\s*(?<param>[A-Za-z_]\w*)\s+As\s+(?<constraint>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbNewTypeRegex = new(
         @"\bNew\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3253,7 +3256,11 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
         {
             if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+            {
+                var constraintGroup = match.Groups["list"];
+                EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 continue;
+            }
 
             var group = match.Groups["list"];
             EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
@@ -4109,6 +4116,56 @@ internal static class LanguageReferenceExtractionSupport
             if (offset < 0)
                 offset = segmentStart;
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, name, listStart + offset, context, lineNumber, container, language);
+        }
+    }
+
+    private static void EmitVbGenericConstraintReferences(
+        string list,
+        int listStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var ignoredSegments = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "As", "Class", "New", "Structure",
+        };
+
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var match = VbGenericConstraintRegex.Match(segment);
+            if (match.Success)
+                ignoredSegments.Add(match.Groups["param"].Value);
+        }
+
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var match = VbGenericConstraintRegex.Match(segment);
+            if (!match.Success)
+                continue;
+
+            var constraintGroup = match.Groups["constraint"];
+            // The generic-list regex is shallow; skip nested constraints rather than emit type parameters as concrete types.
+            if (constraintGroup.Value.Contains("(Of", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var absoluteConstraintStart = listStart + segmentStart + constraintGroup.Index;
+            ReferenceExtractor.AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                constraintGroup.Value,
+                absoluteConstraintStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteConstraintStart),
+                "vb",
+                ignoredSegments);
         }
     }
 
