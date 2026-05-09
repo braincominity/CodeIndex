@@ -18263,6 +18263,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsEscapedNamespaceSegments()
+    {
+        var content = """
+            Namespace [My].App
+                Public Class Widget
+                End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "My.App"));
+        Assert.Equal(1, ns.StartLine);
+        Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "[My].App");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsEscapedTypeDeclarationNames()
     {
         var content = """
