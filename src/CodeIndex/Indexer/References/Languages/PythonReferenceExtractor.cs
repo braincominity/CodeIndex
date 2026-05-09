@@ -16,7 +16,7 @@ internal static class PythonReferenceExtractor
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*\(",
         RegexOptions.Compiled);
     private static readonly Regex BareRaiseTypeRegex = new(
-        @"^\s*raise\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*(?:#.*)?$",
+        @"^\s*raise\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?:\s+from\s+[_\p{L}]\w*)?\s*(?:#.*)?$",
         RegexOptions.Compiled);
     private static readonly Regex ExceptTypeRegex = new(
         @"^\s*except\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*(?:as\s+\w+)?\s*:",

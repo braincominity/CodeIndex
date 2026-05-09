@@ -138,6 +138,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonRaiseFrom_CapturesExceptionTypeReference()
+    {
+        const string content = """
+            def fail():
+                raise package.CustomError from exc
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CustomError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "fail");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "exc"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PythonExcept_CapturesExceptionTypeReference()
     {
         const string content = """
