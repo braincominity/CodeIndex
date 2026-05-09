@@ -5451,6 +5451,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropSecurityPolicyReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_security_policy_target.sql", "sql",
+            """
+            CREATE SECURITY POLICY dbo.CustomerFilter
+            ADD FILTER PREDICATE dbo.fn_filter(CustomerId) ON dbo.Customers;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_security_policy_cleanup.sql", "sql",
+            """
+            DROP SECURITY POLICY dbo.CustomerFilter;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_drop_security_policy"]));
+        Assert.Equal("src/sql_drop_security_policy_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_drop_security_policy"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.CustomerFilter", lang: "sql", exact: true, pathPatterns: ["sql_drop_security_policy"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
