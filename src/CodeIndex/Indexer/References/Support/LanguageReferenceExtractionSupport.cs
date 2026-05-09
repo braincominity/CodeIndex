@@ -24,7 +24,7 @@ internal static class LanguageReferenceExtractionSupport
         @"(?<![\w])\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)\s*(?:[A-Za-z_]\w*|\*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefSizeofTypeRegex = new(
-        @"\bsizeof\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)",
+        @"\bsizeof\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*)\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTaggedSizeofTypeRegex = new(
         @"\bsizeof\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",

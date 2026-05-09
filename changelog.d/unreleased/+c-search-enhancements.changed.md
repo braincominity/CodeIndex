@@ -51,6 +51,7 @@ affected:
 - **C references now capture `_t` `va_arg` operands** — `va_arg(args, widget_t)` now references the requested typedef.
 - **C references now capture tagged `va_arg` operands** — `va_arg(args, struct node *)` now references the requested tag.
 - **C references now capture tagged `sizeof` operands** — `sizeof(struct node *)` now references the measured tag.
+- **C references now capture pointer-qualified `_t` `sizeof` operands** — `sizeof(widget_t * const)` now references the measured typedef.
 
 ## 日本語
 
@@ -95,3 +96,4 @@ affected:
 - **C の参照抽出が `_t` `va_arg` operand を捕捉するようになりました** — `va_arg(args, widget_t)` から要求 typedef への参照を生成します。
 - **C の参照抽出が tag 付き `va_arg` operand を捕捉するようになりました** — `va_arg(args, struct node *)` から要求 tag への参照を生成します。
 - **C の参照抽出が tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node *)` から測定 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` `sizeof` operand を捕捉するようになりました** — `sizeof(widget_t * const)` から測定 typedef への参照を生成します。
