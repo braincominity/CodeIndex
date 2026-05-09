@@ -33,6 +33,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex IsInstanceTupleTypeRegex = new(
         @"\bisinstance\s*\(\s*[^,\n]+,\s*\((?<types>[^)]*)\)\s*\)",
         RegexOptions.Compiled);
+    private static readonly Regex IsSubclassTypeRegex = new(
+        @"\bissubclass\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -181,6 +184,35 @@ internal static class PythonReferenceExtractor
         }
 
         foreach (Match match in IsInstanceTypeRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddTypeReferenceSegments(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+    }
+
+    public static void EmitIsSubclassReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in IsSubclassTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
