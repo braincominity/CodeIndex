@@ -16,6 +16,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*=\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -217,31 +218,68 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                var slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
+                if (slotsMatch.Success)
+                {
+                    var slots = TryExpandPythonAllExportSymbolsFromValues(lines, i, slotsMatch.Groups["values"].Index);
+                    if (slots != null)
+                    {
+                        foreach (var slot in slots)
+                        {
+                            AddPythonClassPropertySymbol(
+                                fileId,
+                                lines,
+                                symbols,
+                                slot.Name,
+                                slot.LineIndex,
+                                slot.StartColumn);
+                        }
+                    }
+
+                    continue;
+                }
+
                 var match = PythonClassAnnotatedAttributeRegex.Match(line);
                 if (!match.Success)
                     match = PythonClassAssignedAttributeRegex.Match(line);
                 if (!match.Success)
                     continue;
 
-                var name = match.Groups["name"].Value;
-                AddSymbolRecord(
+                AddPythonClassPropertySymbol(
+                    fileId,
+                    lines,
                     symbols,
-                    cssSeenSymbols: null,
-                    i + 1,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "property",
-                        Name = name,
-                        Line = i + 1,
-                        StartLine = i + 1,
-                        StartColumn = match.Groups["name"].Index,
-                        EndLine = i + 1,
-                        Signature = trimmed,
-                    },
-                    line);
+                    match.Groups["name"].Value,
+                    i,
+                    match.Groups["name"].Index);
             }
         }
+    }
+
+    private static void AddPythonClassPropertySymbol(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        string name,
+        int lineIndex,
+        int startColumn)
+    {
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = lines[lineIndex].Trim(),
+            },
+            lines[lineIndex]);
     }
 
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
