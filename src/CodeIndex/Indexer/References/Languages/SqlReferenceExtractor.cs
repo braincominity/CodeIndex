@@ -156,6 +156,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DropFunctionTargetRegex = new(
         $@"(?<![\w$])DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropTriggerTargetRegex = new(
+        $@"(?<![\w$])DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*{QualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AlterSchemaTransferTargetRegex = new(
         $@"(?<![\w$])ALTER\s+SCHEMA\b\s+{QualifiedIdentifierNoCapturePattern}\s+TRANSFER\s+{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -744,6 +747,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             DropFunctionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropTriggerTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

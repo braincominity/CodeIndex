@@ -5307,6 +5307,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DropTriggerReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_drop_trigger_target.sql", "sql",
+            """
+            CREATE TRIGGER audit.OrdersAudit
+            ON dbo.Orders
+            AFTER INSERT
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_drop_trigger_cleanup.sql", "sql",
+            """
+            DROP TRIGGER audit.OrdersAudit;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_drop_trigger"]));
+        Assert.Equal("src/sql_drop_trigger_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_drop_trigger"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_drop_trigger"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
