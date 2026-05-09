@@ -31,10 +31,12 @@ cdidx mcp                        # Start MCP server for AI tools
 
 78 languages supported. 24 MCP tools. Incremental updates. Zero config.
 
-- **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, AI response details, and release workflow
-- **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
-- **Testing**: [TESTING_GUIDE.md](TESTING_GUIDE.md)
-- **License**: [FSL-1.1-ALv2](LICENSE); integration materials may be Apache-2.0 where marked
+| Topic | Link |
+|---|---|
+| Docs | [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, AI response details, and release workflow |
+| AI dev contract | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) |
+| Testing | [TESTING_GUIDE.md](TESTING_GUIDE.md) |
+| License | [FSL-1.1-ALv2](LICENSE); integration materials may be Apache-2.0 where marked |
 
 ## Why cdidx
 
@@ -1075,10 +1077,12 @@ cdidx mcp                        # AIツール向けMCPサーバー起動
 
 78言語対応。24 MCPツール。インクリメンタル更新。設定不要。
 
-- **ドキュメント**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) アーキテクチャ、AI応答の詳細、リリース手順
-- **AI開発規約**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md#自己改善ループ)
-- **テストガイド**: [TESTING_GUIDE.md](TESTING_GUIDE.md#テストガイド)
-- **ライセンス**: [FSL-1.1-ALv2](LICENSE)。統合向け資料は明示されていれば Apache-2.0 です
+| 項目 | リンク |
+|---|---|
+| ドキュメント | [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) アーキテクチャ、AI応答の詳細、リリース手順 |
+| AI開発規約 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md#自己改善ループ) |
+| テストガイド | [TESTING_GUIDE.md](TESTING_GUIDE.md#テストガイド) |
+| ライセンス | [FSL-1.1-ALv2](LICENSE)。統合向け資料は明示されていれば Apache-2.0 です |
 
 ## なぜ cdidx なのか
 

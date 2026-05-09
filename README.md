@@ -62,17 +62,14 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
 ## Documentation
 
-- [User Guide](USER_GUIDE.md): detailed installation, command examples,
-  options, supported languages, MCP setup, and troubleshooting.
-- [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md): install guidance for restricted
-  cloud agent sessions.
-- [Developer Guide](DEVELOPER_GUIDE.md): architecture, implementation notes, and
-  release workflow.
-- [Testing Guide](TESTING_GUIDE.md): test conventions and validation commands.
-- [Self-Improvement Contract](SELF_IMPROVEMENT.md): rules for agents improving
-  CodeIndex itself.
-- [Integration Policy](INTEGRATION_POLICY.md): permitted CLI, JSON, MCP, and
-  integration use.
+| Document | Contents |
+|---|---|
+| [User Guide](USER_GUIDE.md) | Detailed installation, command examples, options, supported languages, MCP setup, and troubleshooting. |
+| [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) | Install guidance for restricted cloud agent sessions. |
+| [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, implementation notes, and release workflow. |
+| [Testing Guide](TESTING_GUIDE.md) | Test conventions and validation commands. |
+| [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
+| [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
 
 ## License and Fair Source Use
 
@@ -147,15 +144,14 @@ cdidx mcp
 
 ## ドキュメント
 
-- [ユーザーガイド](USER_GUIDE.md#cdidx日本語): 詳細なインストール、コマンド例、オプション、
-  対応言語、MCP 設定、トラブルシュート。
-- [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md#日本語): 制限されたクラウド
-  エージェント環境でのインストール手順。
-- [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド): アーキテクチャ、実装メモ、リリース手順。
-- [テストガイド](TESTING_GUIDE.md#テストガイド): テスト規約と検証コマンド。
-- [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ): CodeIndex 自身を改善する
-  エージェント向けルール。
-- [統合ポリシー](INTEGRATION_POLICY.md): CLI、JSON、MCP、各種統合で許可される利用。
+| ドキュメント | 内容 |
+|---|---|
+| [ユーザーガイド](USER_GUIDE.md#cdidx日本語) | 詳細なインストール、コマンド例、オプション、対応言語、MCP 設定、トラブルシュート。 |
+| [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md#日本語) | 制限されたクラウドエージェント環境でのインストール手順。 |
+| [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド) | アーキテクチャ、実装メモ、リリース手順。 |
+| [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
+| [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
+| [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
 
 ## ライセンスと Fair Source の扱い
 
