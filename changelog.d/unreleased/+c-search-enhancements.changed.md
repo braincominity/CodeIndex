@@ -29,6 +29,7 @@ affected:
 - **C references now capture `_t` parameter types** — function parameters such as `widget_t *widget` now point back to typedef names.
 - **C references now capture tagged parameter types** — parameters such as `struct node *node` now produce type references for tag names.
 - **C references now capture `_t` compound literals** — literals such as `(widget_t){0}` now reference the typedef type.
+- **C references now capture tagged compound literals** — literals such as `(struct node){0}` now reference the tag name.
 
 ## 日本語
 
@@ -51,3 +52,4 @@ affected:
 - **C の参照抽出が `_t` parameter 型を捕捉するようになりました** — `widget_t *widget` のような関数 parameter から typedef 名へ戻れるようになりました。
 - **C の参照抽出が tag 付き parameter 型を捕捉するようになりました** — `struct node *node` のような parameter から tag 名の type reference を生成します。
 - **C の参照抽出が `_t` compound literal を捕捉するようになりました** — `(widget_t){0}` のような literal から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き compound literal を捕捉するようになりました** — `(struct node){0}` のような literal から tag 名への参照を生成します。
