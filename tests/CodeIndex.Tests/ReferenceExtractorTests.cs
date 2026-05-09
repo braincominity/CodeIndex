@@ -10690,6 +10690,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesCastTargetTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(raw As Object)
+                    Dim customer = DirectCast(raw, Customer)
+                    Dim widget = TryCast(raw, ViewModels.Widget)
+                    Dim order = CType(raw, Global.App.Order)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DirectCast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TryCast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CType" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """

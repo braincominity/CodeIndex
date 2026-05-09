@@ -251,7 +251,7 @@ public static partial class ReferenceExtractor
         ["vb"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "AddHandler", "AddressOf", "Alias", "And", "AndAlso", "As", "ByRef", "ByVal",
-            "Call", "Case", "Catch", "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
+            "Call", "Case", "Catch", "CType", "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
             "GetXMLNamespace", "Global", "Handles", "Inherits", "Implements", "Imports", "Me",
             "Module", "MustInherit", "MustOverride", "MyBase", "MyClass", "Namespace", "Narrowing",
             "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
