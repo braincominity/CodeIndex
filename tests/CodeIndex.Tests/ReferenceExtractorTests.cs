@@ -2308,6 +2308,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTypedefGnuAlignofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long align = __alignof__(widget_t *);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
     {
         const string content = """

@@ -30,7 +30,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\bsizeof\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefAlignofTypeRegex = new(
-        @"\b(?:_Alignof|alignof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)",
+        @"\b(?:_Alignof|alignof|__alignof__|__alignof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTaggedAlignofTypeRegex = new(
         @"\b(?:_Alignof|alignof)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
