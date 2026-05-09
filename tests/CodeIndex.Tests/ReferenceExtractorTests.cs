@@ -14851,6 +14851,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsRoxygenImportFromReferences()
+    {
+        const string content = """
+            #' Build a plot.
+            #' @importFrom dplyr filter select
+            #' @importMethodsFrom methods show
+            #' @importClassesFrom Matrix sparseMatrix
+            plot_model <- function(data) {
+                filter(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "select"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "methods::show"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Matrix::sparseMatrix"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """

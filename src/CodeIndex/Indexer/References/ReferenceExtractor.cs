@@ -1164,6 +1164,22 @@ public static partial class ReferenceExtractor
                 jvmInDelimitedDocComment = nextJvmDelimitedDocComment;
             }
 
+            if (language == "r")
+            {
+                var roxygenContext = originalLine.Trim();
+                if (roxygenContext.Length > 0)
+                {
+                    RReferenceExtractor.EmitRoxygenImportFromReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        roxygenContext,
+                        lineNumber,
+                        container: null);
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"

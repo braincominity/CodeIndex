@@ -53,6 +53,9 @@ internal static class RReferenceExtractor
     private static readonly Regex SlotMemberReferenceRegex = new(
         @"(?<![\w.])(?:(?:`(?<backtickReceiver>[^`]+)`)|(?<receiver>[A-Za-z.][\w.]*))@(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
         RegexOptions.Compiled);
+    private static readonly Regex RoxygenImportFromTagRegex = new(
+        @"^\s*#'\s*@(?:importFrom|importClassesFrom|importMethodsFrom)\s+(?<package>[\w.]+)\s+(?<names>.*)$",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -250,6 +253,46 @@ internal static class RReferenceExtractor
         var exportNamesGroup = exportMatch.Groups["names"];
         foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(exportNamesGroup.Value, exportNamesGroup.Index))
         {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameIndex,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitRoxygenImportFromReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = RoxygenImportFromTagRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var package = match.Groups["package"];
+        var namesGroup = match.Groups["names"];
+        foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(namesGroup.Value, namesGroup.Index))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                $"{package.Value}::{name}",
+                package.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
             ReferenceExtractor.AddReference(
                 references,
                 seen,
