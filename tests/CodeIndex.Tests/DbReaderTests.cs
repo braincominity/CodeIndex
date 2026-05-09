@@ -5668,6 +5668,36 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterTriggerReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_trigger_target.sql", "sql",
+            """
+            CREATE TRIGGER audit.OrdersAudit
+            ON dbo.Orders
+            AFTER INSERT
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_trigger_update.sql", "sql",
+            """
+            ALTER TRIGGER audit.OrdersAudit
+            ON dbo.Orders
+            AFTER INSERT
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_alter_trigger"]));
+        Assert.Equal("src/sql_alter_trigger_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_alter_trigger"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("audit.OrdersAudit", lang: "sql", exact: true, pathPatterns: ["sql_alter_trigger"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
