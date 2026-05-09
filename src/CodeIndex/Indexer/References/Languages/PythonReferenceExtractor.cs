@@ -21,6 +21,12 @@ internal static class PythonReferenceExtractor
     private static readonly Regex ExceptTypeRegex = new(
         @"^\s*except\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*(?:as\s+\w+)?\s*:",
         RegexOptions.Compiled);
+    private static readonly Regex ExceptTupleTypeRegex = new(
+        @"^\s*except\s*\((?<types>[^)]*)\)\s*(?:as\s+\w+)?\s*:",
+        RegexOptions.Compiled);
+    private static readonly Regex TypeNameRegex = new(
+        @"(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -95,6 +101,28 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
+        {
+            var typesGroup = match.Groups["types"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    typesGroup.Index + typeMatch.Groups["name"].Index,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
+        }
+
         foreach (Match match in ExceptTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;

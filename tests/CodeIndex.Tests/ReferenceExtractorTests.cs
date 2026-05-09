@@ -158,6 +158,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonExceptTuple_CapturesEachExceptionTypeReference()
+    {
+        const string content = """
+            def recover():
+                try:
+                    run()
+                except (TimeoutError, network.NetworkError) as exc:
+                    return exc
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "TimeoutError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "recover");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NetworkError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "recover");
+    }
+
+    [Fact]
     public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
     {
         // issue #258: Rust macro invocations need to surface as call-like references so
