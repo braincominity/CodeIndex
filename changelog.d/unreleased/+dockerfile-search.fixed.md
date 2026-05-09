@@ -26,6 +26,7 @@ affected:
 - **Dockerfile braced ARG/ENV uses become references** — `${NODE_VERSION}` now links back to the indexed `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol.
 - **Dockerfile defaulted braced variables become references** — `${NODE_VERSION:-20}` now links back to `NODE_VERSION` instead of being skipped.
 - **Dockerfile unbraced ARG/ENV uses become references** — `$APP_HOME` now links back to the indexed `ARG APP_HOME` / `ENV APP_HOME` property symbol.
+- **Escaped Dockerfile dollars stay literal** — `\$APP_HOME` no longer creates a false reference to `APP_HOME`.
 
 ## 日本語
 
@@ -43,3 +44,4 @@ affected:
 - **Dockerfile の braced ARG/ENV 利用を参照として扱うようになりました** — `${NODE_VERSION}` が index 済みの `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol に結びつくようになりました。
 - **Dockerfile の default 付き braced variable を参照として扱うようになりました** — `${NODE_VERSION:-20}` が skip されず `NODE_VERSION` に結びつくようになりました。
 - **Dockerfile の unbraced ARG/ENV 利用を参照として扱うようになりました** — `$APP_HOME` が index 済みの `ARG APP_HOME` / `ENV APP_HOME` property symbol に結びつくようになりました。
+- **escape された Dockerfile の dollar を literal として扱うようになりました** — `\$APP_HOME` が `APP_HOME` への誤参照を作らなくなりました。

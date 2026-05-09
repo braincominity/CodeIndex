@@ -18,7 +18,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex UnbracedVariableReferenceRegex = new(
-        @"(?<!\$)\$(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        @"(?<![\$\\])\$(?<name>[A-Za-z_][A-Za-z0-9_]*)",
         RegexOptions.Compiled);
 
     public static HashSet<string>? BuildStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
