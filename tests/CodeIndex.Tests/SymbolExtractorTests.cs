@@ -817,6 +817,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsConstexprConstants()
+    {
+        var content = """
+            inline constexpr int kMaxConnections = 8;
+            constexpr std::size_t BUFFER_SIZE = 4096;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "kMaxConnections" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BUFFER_SIZE" && s.ReturnType == "std::size_t");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsNamespaceLocalUsingAlias()
     {
         // C++: namespace-local using aliases / C++: 名前空間ローカル using エイリアス

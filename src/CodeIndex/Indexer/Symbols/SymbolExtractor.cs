@@ -1393,6 +1393,7 @@ public static partial class SymbolExtractor
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^(?:export\s+)?(?:(?:inline|static)\s+)*constexpr\s+(?<returnType>(?:[\w:<>~]+(?:\s*[*&])?\s+)+)(?<name>(?:[A-Z_]\w*|k[A-Z]\w*))\s*=", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("class",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
