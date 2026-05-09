@@ -14,6 +14,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -172,6 +173,70 @@ public static partial class SymbolExtractor
                         },
                         lines[export.LineIndex]);
                 }
+            }
+        }
+    }
+
+    private static void ExtractPythonClassAttributeSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols)
+    {
+        var classSymbols = symbols
+            .Where(static symbol => symbol.Kind == "class" && symbol.BodyStartLine.HasValue)
+            .ToList();
+
+        foreach (var classSymbol in classSymbols)
+        {
+            var classLineIndex = Math.Max(0, classSymbol.Line - 1);
+            var classIndent = CountIndent(lines[classLineIndex]);
+            int? memberIndent = null;
+            var bodyStartIndex = Math.Max(classSymbol.BodyStartLine!.Value - 1, classLineIndex + 1);
+            var bodyEndIndex = Math.Min(classSymbol.EndLine, lines.Length);
+
+            for (var i = bodyStartIndex; i < bodyEndIndex; i++)
+            {
+                var line = lines[i];
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('@'))
+                    continue;
+
+                var indent = CountIndent(line);
+                if (indent <= classIndent)
+                    break;
+                memberIndent ??= indent;
+                if (indent != memberIndent.Value)
+                    continue;
+
+                if (trimmed.StartsWith("def ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("async def ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("class ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("type ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var match = PythonClassAnnotatedAttributeRegex.Match(line);
+                if (!match.Success)
+                    continue;
+
+                var name = match.Groups["name"].Value;
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = name,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = match.Groups["name"].Index,
+                        EndLine = i + 1,
+                        Signature = trimmed,
+                    },
+                    line);
             }
         }
     }

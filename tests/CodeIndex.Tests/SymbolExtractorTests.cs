@@ -69,6 +69,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsAnnotatedClassAttributesAsProperties()
+    {
+        var content = """
+            class User:
+                name: str
+                age: int = 0
+
+                def hydrate(self) -> None:
+                    local_value: str = "ignored"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsDecoratedAndDunderMethods()
     {
         var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";

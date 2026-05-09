@@ -3559,6 +3559,8 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
+        if (lang == "python")
+            ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
