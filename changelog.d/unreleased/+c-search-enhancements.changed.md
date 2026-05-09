@@ -59,6 +59,7 @@ affected:
 - **C references now capture `_t` `typeof_unqual` operands** — `typeof_unqual(widget_t *)` now references the operand typedef.
 - **C references now capture tagged `typeof_unqual` operands** — `typeof_unqual(struct node *)` now references the operand tag.
 - **C references now capture `_t` `__builtin_types_compatible_p` operands** — both typedef type arguments now produce references.
+- **C references now capture tagged `__builtin_types_compatible_p` operands** — both tag type arguments now produce references.
 
 ## 日本語
 
@@ -111,3 +112,4 @@ affected:
 - **C の参照抽出が `_t` `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(widget_t *)` から operand typedef への参照を生成します。
 - **C の参照抽出が tag 付き `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(struct node *)` から operand tag への参照を生成します。
 - **C の参照抽出が `_t` `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの typedef 型引数から参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの tag 型引数から参照を生成します。
