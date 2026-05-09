@@ -5099,6 +5099,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterAuthorizationObjectReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_authorization_object_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_authorization_object_owner.sql", "sql",
+            """
+            ALTER AUTHORIZATION ON OBJECT::dbo.Orders TO app_owner;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_authorization_object"]));
+        Assert.Equal("src/sql_alter_authorization_object_owner.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_authorization_object"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_alter_authorization_object"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
