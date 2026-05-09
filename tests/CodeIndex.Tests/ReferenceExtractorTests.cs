@@ -8161,6 +8161,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppDynamicExceptionSpecifications_CaptureTypeReferences()
+    {
+        const string content = """
+            void Load() throw(Error, ns::Failure&);
+            void Run() { throw (error); }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "error" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
