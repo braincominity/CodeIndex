@@ -18471,6 +18471,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsSourceFileImports()
+    {
+        // R: source() loads another R file and should be searchable as an import.
+        // R: source() は別の R ファイルを読み込むため import として検索可能にする。
+        const string content = """
+            source("R/helpers.R")
+            source(file = "R/models/fit.R", local = TRUE)
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/helpers.R");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/models/fit.R");
+    }
+
+    [Fact]
     public void Extract_R_DetectsBacktickEscapedFunctionNames()
     {
         // Backtick-escaped names are valid R identifiers / バッククォート付きの名前は R の有効な識別子
