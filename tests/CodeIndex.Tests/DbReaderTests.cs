@@ -5636,6 +5636,38 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterFunctionReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_function_target.sql", "sql",
+            """
+            CREATE FUNCTION dbo.CalculateTax()
+            RETURNS int
+            AS
+            BEGIN
+                RETURN 1;
+            END;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_function_update.sql", "sql",
+            """
+            ALTER FUNCTION dbo.CalculateTax()
+            RETURNS int
+            AS
+            BEGIN
+                RETURN 2;
+            END;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.CalculateTax", lang: "sql", exact: true, pathPatterns: ["sql_alter_function"]));
+        Assert.Equal("src/sql_alter_function_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.CalculateTax", lang: "sql", exact: true, pathPatterns: ["sql_alter_function"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.CalculateTax", lang: "sql", exact: true, pathPatterns: ["sql_alter_function"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
