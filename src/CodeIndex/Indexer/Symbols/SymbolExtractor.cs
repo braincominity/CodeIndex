@@ -1481,7 +1481,7 @@ public static partial class SymbolExtractor
             // Simple aliases without generic parameters stay searchable as `typealias`.
             // generic 引数なしの単純な alias も `typealias` として検索可能にする。
             new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?(?:\s+when\b[^=]+)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
             new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None),
