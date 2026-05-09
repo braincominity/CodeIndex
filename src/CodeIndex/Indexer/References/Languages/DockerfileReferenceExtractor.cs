@@ -13,6 +13,10 @@ internal static class DockerfileReferenceExtractor
         @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_.-]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex RunMountFromReferenceRegex = new(
+        @"^\s*RUN\b.*?--mount=\S*\bfrom=(?<name>[A-Za-z0-9_.-]+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex BracedVariableReferenceRegex = new(
         @"(?<![\$\\])\$\{(?<name>[A-Za-z_][A-Za-z0-9_]*)(?::[-+?=][^}]*)?\}",
         RegexOptions.Compiled);
@@ -88,6 +92,24 @@ internal static class DockerfileReferenceExtractor
         }
 
         foreach (Match match in CopyFromReferenceRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (!stageNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in RunMountFromReferenceRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (!stageNames.Contains(name))
