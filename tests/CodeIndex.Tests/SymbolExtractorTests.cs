@@ -18549,11 +18549,16 @@ public class SymbolExtractorTests
             output$table <- renderTable({
               data
             })
+
+            output[["detail-plot"]] <- renderPlot({
+              plot(detail)
+            })
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "summary_plot");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "table");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "detail-plot");
     }
 
     [Fact]
