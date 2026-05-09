@@ -283,6 +283,9 @@ public class FileIndexer
         ["Podfile"]       = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
         ["Guardfile"]     = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
         ["Capfile"]       = "ruby",         // Capistrano deployment / Capistrano デプロイ
+        ["NAMESPACE"]     = "r",            // R package namespace directives / R パッケージ namespace ディレクティブ
+        [".Rprofile"]     = "r",            // R startup profile / R 起動プロファイル
+        ["Rprofile.site"] = "r",            // Site-wide R startup profile / サイト共通 R 起動プロファイル
         ["BUILD"]         = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
         ["BUILD.bazel"]   = "python",
         ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース

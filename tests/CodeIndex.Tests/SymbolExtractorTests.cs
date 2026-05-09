@@ -18484,7 +18484,7 @@ public class SymbolExtractorTests
     {
         // Ordinary assignment should not be detected as a function
         // 通常の代入は関数として検出されないこと
-        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)";
+        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)\nglobal <<- 42";
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "function");
@@ -18499,12 +18499,141 @@ public class SymbolExtractorTests
             library("ggplot2")
             requireNamespace("jsonlite", quietly = TRUE)
             require(dplyr)
+            library(package = "stringr")
+            require(package = tidyr)
+            base::library("readr")
+            base::requireNamespace(package = "rlang")
+            library(help = "stats")
+            base::require(help = utils)
+            pacman::p_load(lubridate, "data.table", janitor, character.only = FALSE) # , fakepkg
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ggplot2");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "jsonlite");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "dplyr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stringr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "tidyr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "readr");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "rlang");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stats");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "utils");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "lubridate");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "data.table");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "janitor");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "fakepkg");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsSourceFileImports()
+    {
+        // R: source() loads another R file and should be searchable as an import.
+        // R: source() は別の R ファイルを読み込むため import として検索可能にする。
+        const string content = """
+            source("R/helpers.R")
+            source(file = "R/models/fit.R", local = TRUE)
+            sys.source("R/bootstrap.R", envir = environment())
+            base::source("R/base_helpers.R")
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/helpers.R");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/models/fit.R");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/bootstrap.R");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "R/base_helpers.R");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsTestthatTestCases()
+    {
+        // R testthat cases are useful search units in package test suites.
+        // R の testthat case は package test suite で有用な検索単位。
+        const string content = """
+            test_that("filters missing rows", {
+              expect_equal(drop_missing(data), expected)
+            })
+
+            testthat::test_that("plots model output", {
+              expect_s3_class(plot_model(model), "ggplot")
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "filters missing rows");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plots model output");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsTestthatBddBlocks()
+    {
+        // testthat also exposes describe()/it() BDD-style test blocks.
+        // testthat には describe()/it() の BDD 形式 test block もある。
+        const string content = """
+            describe("model plotting", {
+              it("renders residuals", {
+                expect_s3_class(plot_residuals(model), "ggplot")
+              })
+            })
+
+            testthat::it("handles missing values", {
+              expect_true(all(is.na(clean(data))))
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "model plotting");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "renders residuals");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handles missing values");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsShinyOutputRenderSymbols()
+    {
+        // Shiny output renderers define user-visible server endpoints.
+        // Shiny output renderer はユーザーに見える server endpoint を定義する。
+        const string content = """
+            output$summary_plot <- renderPlot({
+              plot(data)
+            })
+
+            output$table <- renderTable({
+              data
+            })
+
+            output[["detail-plot"]] <- renderPlot({
+              plot(detail)
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "summary_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "table");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "detail-plot");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsShinyReactiveSymbols()
+    {
+        // Shiny reactive assignments are named server endpoints even though they are not function().
+        // Shiny reactive 代入は function() ではないが名前付き server endpoint。
+        const string content = """
+            filtered <- reactive({
+              data
+            })
+
+            selected = eventReactive(input$go, {
+              input$id
+            })
+
+            `refresh-cache` <- observeEvent(input$refresh, {
+              update_cache()
+            })
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "filtered");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "selected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "refresh-cache");
     }
 
     [Fact]
@@ -18519,11 +18648,98 @@ public class SymbolExtractorTests
             my_plot <- function(x) {
               x
             }
+
+            `print-model` = function(value) {
+              value
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "r", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "print-model");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsSuperassignmentFunctionDefinitions()
+    {
+        // R: superassignment can define functions in an enclosing environment.
+        // R: superassignment は外側の環境へ関数を定義できる。
+        const string content = """
+            register_handler <<- function(event) {
+              event
+            }
+
+            `plot-model` <<- function(data) {
+              data
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "register_handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsShorthandFunctionAssignments()
+    {
+        // R 4.1 shorthand functions use \(...) instead of function(...).
+        // R 4.1 の shorthand function は function(...) の代わりに \(...) を使う。
+        const string content = """
+            compact <- \(x) x + 1
+            `plot-model` = \(data) data
+            global <<- \(value) value
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compact");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "global");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsRightwardFunctionAssignments()
+    {
+        // R supports rightward assignment forms for function values.
+        // R は function 値の右代入形式もサポートする。
+        const string content = """
+            function(x) x + 1 -> increment
+            function(data) data ->> global_transform
+            \(value) value -> `plot-model`
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "increment");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "global_transform");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plot-model");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsAssignFunctionDefinitions()
+    {
+        // R: assign() can install a function under a string name.
+        // R: assign() は文字列名で function を配置できる。
+        const string content = """
+            assign("build_plot", function(data) {
+              data
+            })
+
+            assign(x = "format_model", value = function(model) {
+              model
+            })
+
+            assign("compact_plot", \(data) data)
+            assign(x = "label_model", value = \(model) model)
+
+            assign("not_a_function", 42)
+            """;
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "format_model");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compact_plot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "label_model");
+        Assert.DoesNotContain(symbols, s => s.Name == "not_a_function");
     }
 
     [Fact]
@@ -18551,6 +18767,8 @@ public class SymbolExtractorTests
 
             methods::setGeneric(f = "normalize", function(x) standardGeneric("normalize"))
 
+            methods::setGroupGeneric(name = "transformGroup")
+
             methods::setMethod(f = show, signature(object = "Person"), function(object) {
               object
             })
@@ -18572,6 +18790,7 @@ public class SymbolExtractorTests
         var state = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "state");
         Assert.Equal("active", state.Visibility);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "transformGroup");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }
 

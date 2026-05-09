@@ -117,6 +117,12 @@ public static partial class SymbolExtractor
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
+    private static readonly Regex RPacmanPackageLoaderStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex RPacmanPackageLoaderArgumentRegex = new(
+        @"(?:^|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))(?:['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
     private static readonly Regex CobolProgramIdLineRegex = new(
         @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?(?:PROGRAM|CLASS)-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -1553,17 +1559,29 @@ public static partial class SymbolExtractor
         ],
         ["r"] =
         [
-            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<-\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*assign\s*\(\s*(?:x\s*=\s*)?['""](?<name>[^'""]+)['""]\s*,\s*(?:value\s*=\s*)?(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*`(?<name>[^`]+)`", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?test_that\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:describe|it)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*output\$(?<name>[\w.]+)\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*output\s*\[\s*\[\s*['""](?<name>[^'""]+)['""]\s*\]\s*\]\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*(?:<<?-|=)\s*(?:reactive|eventReactive|observe|observeEvent)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*(?:<<?-|=)\s*(?:reactive|eventReactive|observe|observeEvent)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass|R6Class)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?setIs\s*\(.*?\b(?:class2|to)\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*inherit\s*=\s*(?:c\(\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[A-Z][\w.]*))", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setValidity\s*\(\s*(?:(?:Class|class|classes|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setGeneric\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setGeneric|setGroupGeneric)\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?<visibility>public|private|active)\s*=\s*list\(\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*(?:library|require|requireNamespace)\s*\(\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:library|require)\s*\(\s*help\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:library|require|requireNamespace)\s*\(\s*(?:(?:package|pkg)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(\s*(?:file\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["lua"] =
         [
@@ -2070,6 +2088,8 @@ public static partial class SymbolExtractor
             }
             if (lang == "go")
                 TryAddGoLabelSymbol(fileId, line, i, symbols);
+            if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols))
+                continue;
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
@@ -3711,6 +3731,95 @@ public static partial class SymbolExtractor
     }
 
     private readonly record struct SameLineSignatureKey(int Line, int StartLine, string Signature);
+
+    private static bool TryAddRPacmanPackageLoaderSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var codeLine = StripRCommentForPackageLoader(line);
+        var startMatch = RPacmanPackageLoaderStartRegex.Match(codeLine);
+        if (!startMatch.Success)
+            return false;
+
+        var argsStart = startMatch.Index + startMatch.Length;
+        var args = codeLine[argsStart..];
+        var added = false;
+        foreach (Match match in RPacmanPackageLoaderArgumentRegex.Matches(args))
+        {
+            var quotedNameGroup = match.Groups["quotedName"];
+            var nameGroup = quotedNameGroup.Success ? quotedNameGroup : match.Groups["name"];
+            if (!nameGroup.Success)
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = argsStart + nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+            added = true;
+        }
+
+        return added;
+    }
+
+    private static string StripRCommentForPackageLoader(string line)
+    {
+        var inBacktickIdentifier = false;
+        var quote = '\0';
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (inBacktickIdentifier)
+            {
+                if (ch == '`')
+                    inBacktickIdentifier = false;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inBacktickIdentifier = true;
+                continue;
+            }
+
+            if (ch is '"' or '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '#')
+                return line[..i];
+        }
+
+        return line;
+    }
 
     private static bool TryGetSameLineSignatureKey(SymbolRecord symbol, out SameLineSignatureKey key)
     {

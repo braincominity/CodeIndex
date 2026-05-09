@@ -14628,6 +14628,169 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsSourceFileReferences()
+    {
+        const string content = """
+            load_helpers <- function() {
+                source("R/helpers.R")
+                base::source(file = "R/models/fit.R", local = TRUE)
+                sys.source("R/bootstrap.R", envir = environment())
+                devtools::load_all("pkg")
+                pkgload::load_all(path = "localpkg")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/helpers.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/models/fit.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "R/bootstrap.R"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "pkg"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "localpkg"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "load_helpers");
+        Assert.Contains(references, r =>
+            r.SymbolName == "source"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "load_helpers");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsDataCallReferences()
+    {
+        const string content = """
+            run <- function() {
+                data("iris", package = "datasets")
+                utils::data(list = "mtcars")
+                system.file("extdata", "sample.csv", package = "readr", mustWork = TRUE)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "iris"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "datasets"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "mtcars"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "extdata"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "sample.csv"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "readr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsInstallPackagesReferences()
+    {
+        const string content = """
+            bootstrap <- function() {
+                install.packages("dplyr")
+                utils::install.packages(c("ggplot2", "data.table"), repos = "https://example.invalid")
+                renv::install("tibble")
+                pak::pkg_install(c("readr", "stringr"))
+                remotes::install_github("r-lib/cli", ref = "main")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "ggplot2"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "data.table"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "tibble"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "readr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "stringr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.Contains(references, r =>
+            r.SymbolName == "r-lib/cli"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "bootstrap");
+        Assert.DoesNotContain(references, r => r.SymbolName == "https://example.invalid");
+        Assert.DoesNotContain(references, r => r.SymbolName == "main");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsVignetteReferences()
+    {
+        const string content = """
+            docs <- function() {
+                vignette("dplyr")
+                utils::vignette("programming", package = "dplyr")
+                help("filter", package = "dplyr")
+                utils::example("lm")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "programming"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "filter"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "lm"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceReferenceOperators()
     {
         const string content = """
@@ -14679,6 +14842,362 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "reference");
         Assert.Contains(references, r =>
             r.SymbolName == "get"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsBacktickNamespaceReferenceOperators()
+    {
+        const string content = """
+            lookup <- function(df) {
+                magrittr::`%>%`
+                rlang:::`%||%`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "magrittr::%>%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%>%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "rlang:::%||%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsHashInsideBacktickNamespaceReferences()
+    {
+        const string content = """
+            lookup <- function() {
+                pkg::`a#b` # fake_call()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "pkg::a#b"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.Contains(references, r =>
+            r.SymbolName == "a#b"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "lookup");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_call");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsBacktickCallSites()
+    {
+        const string content = """
+            run <- function(data) {
+                `plot-model`(data)
+                `%||%`(data, list())
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "plot-model"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsInfixOperatorCallSites()
+    {
+        const string content = """
+            run <- function(data, fallback) {
+                data %>% transform()
+                fallback %||% list()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "%>%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "%||%"
+            && r.ReferenceKind == "call"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsDollarMemberReferences()
+    {
+        const string content = """
+            run <- function(data, input) {
+                data$value
+                input$go
+                data$`has space`
+                `reactive data`$value
+                `reactive data`$`has space`
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "data$value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "input$go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "data$has space"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "reactive data$value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "reactive data$has space"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsBracketMemberReferences()
+    {
+        const string content = """
+            run <- function(data, input) {
+                data[["value"]]
+                input[['go']]
+                `reactive data`[["has space"]]
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "data$value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "input$go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "go"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "reactive data$has space"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsSlotMemberReferences()
+    {
+        const string content = """
+            run <- function(model) {
+                model@coefficients
+                model@`fit value`
+                `model object`@metadata
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "model@coefficients"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "coefficients"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model@fit value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model object@metadata"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsNamespaceImportFromAndExportDirectives()
+    {
+        const string content = """
+            import(methods)
+            importFrom(dplyr, filter, select)
+            importClassesFrom(methods, Person)
+            importMethodsFrom(stats, predict)
+            S3method(print, model)
+            S3method("[", indexed, `[.indexed`)
+            useDynLib("mypkg", routine_a, `routine-b`, .registration = TRUE)
+            export(plot_model, `%.%`)
+            exportClasses(Person)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "dplyr::filter" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "dplyr::select" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "methods" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "methods::Person" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "stats::predict" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "print.model" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "print" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "[.indexed" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "[" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "indexed" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "mypkg" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "routine_a" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "routine-b" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "plot_model" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "%.%" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Person" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "import" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "importFrom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "S3method" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "useDynLib" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "export" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "exportClasses" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsRoxygenImportFromReferences()
+    {
+        const string content = """
+            #' Build a plot.
+            #' @importFrom dplyr filter select
+            #' @importMethodsFrom methods show
+            #' @importClassesFrom Matrix sparseMatrix
+            plot_model <- function(data) {
+                filter(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr::filter"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "select"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "methods::show"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Matrix::sparseMatrix"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsRoxygenImportReferences()
+    {
+        const string content = """
+            #' @import ggplot2 dplyr
+            plot_model <- function(data) {
+                ggplot(data)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "ggplot2"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsRoxygenMethodReferences()
+    {
+        const string content = """
+            #' @method print model
+            #' @method "[" indexed
+            print.model <- function(x, ...) {
+                x
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "print.model"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "print"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "model"
+            && r.ReferenceKind == "reference");
+        Assert.Contains(references, r =>
+            r.SymbolName == "[.indexed"
+            && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
+    {
+        const string content = """
+            `%>%` <- function(lhs, rhs) magrittr::`%>%`(lhs, rhs)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "magrittr::%>%"
+            && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "%>%"
             && r.ReferenceKind == "reference");
     }
 

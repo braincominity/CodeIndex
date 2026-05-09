@@ -229,6 +229,7 @@ public static partial class ReferenceExtractor
         {
             "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
             "invisible", "tryCatch", "withCallingHandlers", "requireNamespace", "next", "break", "repeat",
+            "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method", "useDynLib",
         },
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
@@ -1161,6 +1162,38 @@ public static partial class ReferenceExtractor
                 }
 
                 jvmInDelimitedDocComment = nextJvmDelimitedDocComment;
+            }
+
+            if (language == "r")
+            {
+                var roxygenContext = originalLine.Trim();
+                if (roxygenContext.Length > 0)
+                {
+                    RReferenceExtractor.EmitRoxygenImportFromReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        roxygenContext,
+                        lineNumber,
+                        container: null);
+                    RReferenceExtractor.EmitRoxygenImportReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        roxygenContext,
+                        lineNumber,
+                        container: null);
+                    RReferenceExtractor.EmitRoxygenMethodReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        roxygenContext,
+                        lineNumber,
+                        container: null);
+                }
             }
 
             if (string.IsNullOrWhiteSpace(preparedLine))
@@ -2520,6 +2553,141 @@ public static partial class ReferenceExtractor
             if (language == "r")
             {
                 RReferenceExtractor.EmitNamespaceReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
+                RReferenceExtractor.EmitNamespaceDirectiveReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitBacktickCallReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
+                RReferenceExtractor.EmitInfixOperatorCallReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
+                RReferenceExtractor.EmitSourceFileReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitLoadAllReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitDataCallReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitSystemFileReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitVignetteReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitHelpExampleReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitInstallPackagesReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitNamespacePackageInstallReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitGitHubPackageInstallReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitDollarMemberReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
+                RReferenceExtractor.EmitBracketMemberReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
+                RReferenceExtractor.EmitSlotMemberReferences(
                     preparedLine,
                     references,
                     seen,

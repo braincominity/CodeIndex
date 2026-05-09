@@ -1852,7 +1852,7 @@ public static partial class ReferenceExtractor
             result = MaskRustLifetimeTokens(result);
         if (lang != "cobol")
         {
-            var stringLiteralRegex = lang == "kotlin"
+            var stringLiteralRegex = lang is "kotlin" or "r"
                 ? NonBacktickStringLiteralRegex
                 : StringLiteralRegex;
             result = stringLiteralRegex.Replace(result, "\"\"");
@@ -1861,7 +1861,9 @@ public static partial class ReferenceExtractor
 
         if (UsesHashComments(lang))
         {
-            var hashIndex = result.IndexOf('#');
+            var hashIndex = lang == "r"
+                ? FindRHashCommentStart(result)
+                : result.IndexOf('#');
             if (hashIndex >= 0)
                 result = result[..hashIndex];
         }
@@ -1907,6 +1909,31 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static int FindRHashCommentStart(string line)
+    {
+        var inBacktickIdentifier = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (inBacktickIdentifier && ch == '\\' && i + 1 < line.Length)
+            {
+                i++;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inBacktickIdentifier = !inBacktickIdentifier;
+                continue;
+            }
+
+            if (ch == '#' && !inBacktickIdentifier)
+                return i;
+        }
+
+        return -1;
     }
 
     private static string MaskRustLifetimeTokens(string line)
