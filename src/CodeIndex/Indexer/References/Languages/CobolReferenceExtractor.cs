@@ -29,7 +29,7 @@ internal static class CobolReferenceExtractor
         @"^\s*SEARCH\s+(?:(?:ALL|FIRST)\s+)?(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolSimpleReferenceRegex = new(
-        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT|START|RETURN|RELEASE|GENERATE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT|START|RETURN|RELEASE|GENERATE|INITIATE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolMoveRegex = new(
         @"^\s*MOVE\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
