@@ -14844,6 +14844,8 @@ public class ReferenceExtractorTests
         const string content = """
             import(methods)
             importFrom(dplyr, filter, select)
+            importClassesFrom(methods, Person)
+            importMethodsFrom(stats, predict)
             S3method(print, model)
             S3method("[", indexed, `[.indexed`)
             useDynLib("mypkg", .registration = TRUE)
@@ -14859,6 +14861,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "dplyr::select" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "methods" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "methods::Person" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "stats::predict" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "print.model" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "print" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "model" && r.ReferenceKind == "reference");

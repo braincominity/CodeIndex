@@ -15,7 +15,7 @@ internal static class RReferenceExtractor
         @"^\s*import\s*\(\s*(?<package>[\w.]+)(?:\s*,|\s*\))",
         RegexOptions.Compiled);
     private static readonly Regex NamespaceImportFromDirectiveRegex = new(
-        @"^\s*importFrom\s*\(\s*(?<package>[\w.]+)\s*,(?<names>[^)]*)\)",
+        @"^\s*import(?:Classes|Methods)?From\s*\(\s*(?<package>[\w.]+)\s*,(?<names>[^)]*)\)",
         RegexOptions.Compiled);
     private static readonly Regex NamespaceExportDirectiveRegex = new(
         @"^\s*export(?:Classes|Methods)?\s*\(\s*(?<names>[^)]*)\)",
@@ -27,7 +27,7 @@ internal static class RReferenceExtractor
         @"^\s*useDynLib\s*\(\s*(?:`(?<packageBacktick>[^`]+)`|['""](?<packageQuoted>[^'""]+)['""]|(?<package>[\w.]+))",
         RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveStartRegex = new(
-        @"^\s*(?:import\s*\(|importFrom\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\(|useDynLib\s*\()",
+        @"^\s*(?:import\s*\(|import(?:Classes|Methods)?From\s*\(|export(?:Classes|Methods)?\s*\(|S3method\s*\(|useDynLib\s*\()",
         RegexOptions.Compiled);
     private static readonly Regex NamespaceDirectiveNameRegex = new(
         @"`(?<backtickName>[^`]+)`|(?<name>[A-Za-z.][\w.]*)",
