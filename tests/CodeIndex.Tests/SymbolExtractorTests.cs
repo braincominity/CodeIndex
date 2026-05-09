@@ -88,6 +88,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsAssignedClassAttributesAsProperties()
+    {
+        var content = """
+            class Settings:
+                DEFAULT_TIMEOUT = 30
+                endpoint = "https://example.invalid"
+
+                def configure(self) -> None:
+                    local_value = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT" && s.ContainerName == "Settings");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "endpoint" && s.ContainerName == "Settings");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsDecoratedAndDunderMethods()
     {
         var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";

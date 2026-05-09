@@ -15,6 +15,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -217,6 +218,8 @@ public static partial class SymbolExtractor
                 }
 
                 var match = PythonClassAnnotatedAttributeRegex.Match(line);
+                if (!match.Success)
+                    match = PythonClassAssignedAttributeRegex.Match(line);
                 if (!match.Success)
                     continue;
 
