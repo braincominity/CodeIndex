@@ -69,6 +69,7 @@ affected:
 - **C references now capture pointer-qualified `_t` parameter types** — `widget_t * restrict widget` now references the parameter typedef.
 - **C references now capture pointer-qualified tagged parameter types** — `struct node * const node` now references the parameter tag.
 - **C references now capture pointer-qualified `_t` `_Generic` associations** — `widget_t * const:` now references the association typedef.
+- **C references now capture pointer-qualified tagged `_Generic` associations** — `struct node * const:` now references the association tag.
 
 ## 日本語
 
@@ -131,3 +132,4 @@ affected:
 - **C の参照抽出が pointer-qualified `_t` parameter 型を捕捉するようになりました** — `widget_t * restrict widget` から parameter typedef への参照を生成します。
 - **C の参照抽出が pointer-qualified tag 付き parameter 型を捕捉するようになりました** — `struct node * const node` から parameter tag への参照を生成します。
 - **C の参照抽出が pointer-qualified `_t` `_Generic` association を捕捉するようになりました** — `widget_t * const:` から association typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き `_Generic` association を捕捉するようになりました** — `struct node * const:` から association tag への参照を生成します。

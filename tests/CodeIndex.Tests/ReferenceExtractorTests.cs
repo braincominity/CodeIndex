@@ -2090,6 +2090,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CPointerQualifiedTaggedGenericAssociations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, struct node * const: 1, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
     public void Extract_CTypedefAtomicTypeSpecifiers_CapturesLowercaseTypeReferences()
     {
         const string content = """
