@@ -14705,6 +14705,8 @@ public class ReferenceExtractorTests
                 data$value
                 input$go
                 data$`has space`
+                `reactive data`$value
+                `reactive data`$`has space`
             }
             """;
 
@@ -14729,6 +14731,14 @@ public class ReferenceExtractorTests
             && r.ContainerName == "run");
         Assert.Contains(references, r =>
             r.SymbolName == "data$has space"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "reactive data$value"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "reactive data$has space"
             && r.ReferenceKind == "reference"
             && r.ContainerName == "run");
     }

@@ -45,7 +45,7 @@ internal static class RReferenceExtractor
         @"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(",
         RegexOptions.Compiled);
     private static readonly Regex DollarMemberReferenceRegex = new(
-        @"(?<![\w.])(?<receiver>[A-Za-z.][\w.]*)\$(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
+        @"(?<![\w.])(?:(?:`(?<backtickReceiver>[^`]+)`)|(?<receiver>[A-Za-z.][\w.]*))\$(?:(?:`(?<backtickName>[^`]+)`)|(?<name>[A-Za-z.][\w.]*))",
         RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
@@ -360,7 +360,9 @@ internal static class RReferenceExtractor
     {
         foreach (Match match in DollarMemberReferenceRegex.Matches(preparedLine))
         {
-            var receiver = match.Groups["receiver"].Value;
+            var backtickReceiverGroup = match.Groups["backtickReceiver"];
+            var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
+            var receiver = receiverGroup.Value;
             var backtickNameGroup = match.Groups["backtickName"];
             var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];
             var name = nameGroup.Value;
@@ -370,7 +372,7 @@ internal static class RReferenceExtractor
                 seen,
                 fileId,
                 $"{receiver}${name}",
-                match.Groups["receiver"].Index,
+                receiverGroup.Index,
                 "reference",
                 context,
                 lineNumber,
