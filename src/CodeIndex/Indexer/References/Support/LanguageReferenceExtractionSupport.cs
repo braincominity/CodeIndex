@@ -286,6 +286,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbNameOfRegex = new(
         @"\bNameOf\s*\(\s*(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbGetXmlNamespaceRegex = new(
+        @"\bGetXmlNamespace\s*\(\s*(?<name>[A-Za-z_]\w*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
         @"\bAddressOf\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3344,6 +3347,12 @@ internal static class LanguageReferenceExtractionSupport
             var rawNameIndex = group.Index + Math.Max(0, nameOffset);
             var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
+
+        foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
         }
 
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))

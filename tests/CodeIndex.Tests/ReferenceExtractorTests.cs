@@ -10876,6 +10876,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesGetXmlNamespacePrefixes()
+    {
+        const string content = """
+            Imports <xmlns:svg = "urn:svg">
+
+            Public Class Controller
+                Public Sub Run()
+                    Dim ns = GetXmlNamespace(svg)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "svg");
+        Assert.Contains(references, r => r.SymbolName == "svg" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GetXmlNamespace" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesAddHandlerEventTargets()
     {
         const string content = """
