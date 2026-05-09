@@ -10910,6 +10910,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesBareSubCallStatements()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run()
+                    Save
+                    Me.Refresh currentUser
+                    [Select]
+                    Dim localValue As Integer
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Me" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dim" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
     {
         const string content = """

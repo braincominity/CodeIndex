@@ -304,6 +304,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbCallRegex = new(
         @"(?<![\w\]])(?<name>" + VbQualifiedIdentifierPattern + @")\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbBareCallRegex = new(
+        @"^\s*(?:Call\s+)?(?<name>" + VbQualifiedIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+(?<name>[A-Za-z_]\w*)",
@@ -481,6 +484,7 @@ internal static class LanguageReferenceExtractionSupport
                 break;
             case "vb":
                 EmitVisualBasicEscapedCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
+                EmitVisualBasicBareCallReferences(preparedLine, addCallLikeReference, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 break;
         }
     }
@@ -3417,6 +3421,76 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
     }
+
+    private static void EmitVisualBasicBareCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var match = VbBareCallRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var group = match.Groups["name"];
+        var tail = match.Groups["tail"].Value.TrimStart();
+        if (ShouldSkipVisualBasicBareCall(group.Value, tail))
+            return;
+
+        var rawName = LastQualifiedSegment(group.Value);
+        var name = NormalizeVbIdentifierSegment(rawName);
+        var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+        var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+        var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+        if (rawName.StartsWith('['))
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        else
+            addCallLikeReference(name, nameIndex);
+    }
+
+    private static bool ShouldSkipVisualBasicBareCall(string rawName, string tail)
+    {
+        if (tail.StartsWith('(') || tail.StartsWith('=') || tail.StartsWith(':'))
+            return true;
+        if (tail.StartsWith("As ", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var firstSegment = rawName;
+        var dotIndex = rawName.IndexOf('.');
+        if (dotIndex >= 0)
+            firstSegment = rawName[..dotIndex];
+        firstSegment = NormalizeVbIdentifierSegment(firstSegment);
+
+        return IsVisualBasicBareCallStatementHead(firstSegment);
+    }
+
+    private static bool IsVisualBasicBareCallStatementHead(string name) =>
+        name.Equals("Public", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Private", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Protected", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Friend", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Shared", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overrides", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overridable", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("NotOverridable", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("MustOverride", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Overloads", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Shadows", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Async", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Iterator", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Partial", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Declare", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Dim", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ReDim", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Const", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Let", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Loop", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("ElseIf", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Finally", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsVisualBasicMemberImplementsClause(string line, int implementsIndex)
     {
