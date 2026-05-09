@@ -296,7 +296,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\bRemoveHandler\s+(?:[A-Za-z_]\w*\.)*(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbRaiseEventRegex = new(
-        @"\bRaiseEvent\s+(?<name>[A-Za-z_]\w*)",
+        @"\bRaiseEvent\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
@@ -3341,7 +3341,14 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, match, "unsubscribe", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
 
         foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "call", context, lineNumber, resolveContainerForColumn(match.Groups["name"].Index));
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+        }
     }
 
     private static void EmitFortranTypeReferences(
