@@ -5055,6 +5055,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DeleteWithoutFromReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_delete_without_from_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Orders (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_delete_without_from_cleanup.sql", "sql",
+            """
+            DELETE dbo.Orders WHERE Id = 1;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_delete_without_from"]));
+        Assert.Equal("src/sql_delete_without_from_cleanup.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_delete_without_from"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Orders", lang: "sql", exact: true, pathPatterns: ["sql_delete_without_from"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

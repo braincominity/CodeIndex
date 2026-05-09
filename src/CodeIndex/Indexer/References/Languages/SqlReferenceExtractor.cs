@@ -32,6 +32,8 @@ internal static class SqlReferenceExtractor
         @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
     private const string QualifiedIdentifierPattern =
         @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
+    private const string QualifiedIdentifierWithQualifierPattern =
+        @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)+(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
     private const string SourceAliasTailPattern =
         @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + "))?";
     private const string SourceTableHintTailPattern =
@@ -69,6 +71,9 @@ internal static class SqlReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DeleteUsingSourceRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{QualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{QualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?)*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DeleteTargetWithoutFromRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+(?!FROM\b){QualifiedIdentifierWithQualifierPattern}(?=\s*(?:;|$)|\s+(?:FROM|WHERE|OUTPUT|OPTION|RETURNING)\b)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DeleteUsingPrefixRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
@@ -435,6 +440,20 @@ internal static class SqlReferenceExtractor
             fileId,
             establishedTempObjectNames,
             suppressedCallIndices,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DeleteTargetWithoutFromRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
             resolveContainerForCall,
             shouldIgnoreName);
 
