@@ -11852,6 +11852,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterSecurityPolicyCapturesPredicateTableReferences()
+    {
+        const string content = """
+            ALTER SECURITY POLICY sec.OrderPolicy
+                ADD FILTER PREDICATE sec.fn_tenant(TenantId) ON dbo.Orders,
+                ADD BLOCK PREDICATE sec.fn_tenant(TenantId) ON [sales].[Invoices] AFTER UPDATE;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "OrderPolicy" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
