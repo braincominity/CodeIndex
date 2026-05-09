@@ -11423,6 +11423,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_BulkInsertCapturesTargetReference()
+    {
+        // T-SQL `BULK INSERT` names the destination table before the file path; that table should
+        // be indexed as a write target.
+        // T-SQL の `BULK INSERT` は file path の前に destination table を置く。この table は
+        // write target として索引する。
+        const string content = """
+            BULK INSERT dbo.ImportQueue FROM 'queue.csv';
+            BULK INSERT [sales].[InvoiceImport] FROM 'invoices.csv';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ImportQueue" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceImport" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

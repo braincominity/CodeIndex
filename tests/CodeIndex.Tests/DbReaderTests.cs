@@ -4636,6 +4636,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_BulkInsertReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_bulk_insert_target.sql", "sql",
+            """
+            CREATE TABLE dbo.ImportQueue (Payload nvarchar(max));
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_bulk_insert_writer.sql", "sql",
+            """
+            BULK INSERT dbo.ImportQueue FROM 'queue.csv';
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.ImportQueue", lang: "sql", exact: true, pathPatterns: ["sql_bulk_insert"]));
+        Assert.Equal("src/sql_bulk_insert_writer.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.ImportQueue", lang: "sql", exact: true, pathPatterns: ["sql_bulk_insert"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.ImportQueue", lang: "sql", exact: true, pathPatterns: ["sql_bulk_insert"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

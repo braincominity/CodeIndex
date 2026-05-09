@@ -78,10 +78,10 @@ internal static class SqlReferenceExtractor
         @"(?<![\w$])FROM\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferencePrefixRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s*$",
+        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?|BULK\s+INSERT|UPDATE\b(?:\s+(?:{TopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+(?:INTO\s+|(?!OR\b|IGNORE\b|OVERWRITE\b|LOW_PRIORITY\b|DELAYED\b|HIGH_PRIORITY\b)){QualifiedIdentifierPattern}|UPDATE\b(?:\s+{TopTargetModifierPattern})\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{QualifiedIdentifierPattern}|MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierPattern}|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierPattern}|ALTER\s+TABLE\s+{QualifiedIdentifierPattern})",
+        $@"(?<![\w$])(?:INSERT(?:\s+{TopTargetModifierPattern})?\s+(?:INTO\s+|(?!OR\b|IGNORE\b|OVERWRITE\b|LOW_PRIORITY\b|DELAYED\b|HIGH_PRIORITY\b)){QualifiedIdentifierPattern}|BULK\s+INSERT\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+{TopTargetModifierPattern})\s+{QualifiedIdentifierPattern}|UPDATE\b(?:\s+ONLY\b)*\s+{QualifiedIdentifierPattern}|MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierPattern}|DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierPattern}|ALTER\s+TABLE\s+{QualifiedIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private static readonly Regex TruncateTargetRegex = new(
         $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern})*",
