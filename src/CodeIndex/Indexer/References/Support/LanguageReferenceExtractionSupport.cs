@@ -120,7 +120,7 @@ internal static class LanguageReferenceExtractionSupport
         @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\[",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefOffsetofTypeRegex = new(
-        @"\boffsetof\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*,",
+        @"\b(?:offsetof|__builtin_offsetof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*,",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTaggedOffsetofTypeRegex = new(
         @"\boffsetof\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?,",
