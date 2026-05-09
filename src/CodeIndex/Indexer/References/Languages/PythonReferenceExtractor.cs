@@ -63,6 +63,12 @@ internal static class PythonReferenceExtractor
     private static readonly Regex FunctionReturnTypeRegex = new(
         @"^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*->\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*:",
         RegexOptions.Compiled);
+    private static readonly Regex FunctionParameterListRegex = new(
+        @"^\s*(?:async\s+)?def\s+\w+\s*\((?<params>[^)]*)\)",
+        RegexOptions.Compiled);
+    private static readonly Regex DirectAnnotationTypeRegex = new(
+        @":\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|,|$))",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -474,6 +480,41 @@ internal static class PythonReferenceExtractor
                 lineNumber,
                 resolveContainerForReference(nameIndex) ?? container,
                 "python");
+        }
+    }
+
+    public static void EmitFunctionParameterReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<int, SymbolRecord?> resolveContainerForReference,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match functionMatch in FunctionParameterListRegex.Matches(preparedLine))
+        {
+            var paramsGroup = functionMatch.Groups["params"];
+            foreach (Match annotationMatch in DirectAnnotationTypeRegex.Matches(paramsGroup.Value))
+            {
+                var name = annotationMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                var nameIndex = paramsGroup.Index + annotationMatch.Groups["name"].Index;
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    context,
+                    lineNumber,
+                    resolveContainerForReference(nameIndex) ?? container,
+                    "python");
+            }
         }
     }
 }
