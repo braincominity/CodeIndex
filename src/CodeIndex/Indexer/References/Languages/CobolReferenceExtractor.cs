@@ -19,6 +19,9 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolExecSqlIncludeRegex = new(
         @"^\s*EXEC\s+SQL\s+INCLUDE\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecSqlCallRegex = new(
+        @"^\s*EXEC\s+SQL\s+CALL\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolGotoRegex = new(
         @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -71,6 +74,7 @@ internal static class CobolReferenceExtractor
         new(CobolCancelRegex, "reference"),
         new(CobolCopyRegex, "reference"),
         new(CobolExecSqlIncludeRegex, "reference"),
+        new(CobolExecSqlCallRegex, "call"),
         new(CobolGotoRegex, "call"),
         new(CobolUseAfterProcedureRegex, "reference"),
         new(CobolSetRegex, "reference"),
