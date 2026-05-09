@@ -311,6 +311,7 @@ public class FileIndexer
     [
         ("Dockerfile.",  "dockerfile"),
         ("Dockerfile-",  "dockerfile"),
+        ("Dockerfile_",  "dockerfile"),
         ("Containerfile.", "dockerfile"),
         ("Containerfile-", "dockerfile"),
         ("Makefile.",    "makefile"),

@@ -85,6 +85,7 @@ public class FileIndexerTests
     [InlineData("api.Containerfile", "dockerfile")]
     [InlineData(".containerfile", "dockerfile")]
     [InlineData("Dockerfile-prod", "dockerfile")]
+    [InlineData("Dockerfile_prod", "dockerfile")]
     [InlineData("Containerfile-prod", "dockerfile")]
     [InlineData("Makefile", "makefile")]
     [InlineData("Justfile", "justfile")]
