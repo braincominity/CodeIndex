@@ -254,7 +254,7 @@ public static partial class ReferenceExtractor
             "Call", "Case", "Catch", "CType", "DirectCast", "End", "Erase", "Exit", "Get", "GetType",
             "GetXMLNamespace", "Global", "Handles", "Inherits", "Implements", "Imports", "Me",
             "Module", "MustInherit", "MustOverride", "MyBase", "MyClass", "Namespace", "Narrowing",
-            "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
+            "NameOf", "New", "Next", "Not", "Nothing", "Of", "On", "Operator", "Option", "Or", "OrElse",
             "Overloads", "Overrides", "ParamArray", "Partial", "RaiseEvent", "ReadOnly",
             "RemoveHandler", "Resume", "Return", "Select", "Set", "Shadows", "Shared", "Static",
             "Step", "Stop", "SyncLock", "Then", "TryCast", "Using", "When", "Widening", "With",

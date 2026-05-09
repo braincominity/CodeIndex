@@ -283,6 +283,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbTypeOfRegex = new(
         @"\bTypeOf\b.+?\bIs(?:Not)?\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbNameOfRegex = new(
+        @"\bNameOf\s*\(\s*(?<name>" + VbQualifiedIdentifierPattern + @")",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
         @"\bAddressOf\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3316,6 +3319,17 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+        }
+
+        foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+        {
+            var group = match.Groups["name"];
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
 
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))

@@ -10811,6 +10811,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesNameOfTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(customer As Customer)
+                    Dim customerName = NameOf(Customer)
+                    Dim saveName = NameOf(Me.[Save])
+                    Dim keywordName = NameOf([Select])
+                End Sub
+
+                Private Sub [Save]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NameOf" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Save]" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesAddHandlerEventTargets()
     {
         const string content = """
