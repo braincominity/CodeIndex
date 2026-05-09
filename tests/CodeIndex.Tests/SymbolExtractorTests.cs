@@ -14681,6 +14681,12 @@ public class SymbolExtractorTests
 
             let validate user =
                 user.Age > 0
+
+            let workflow user =
+                task {
+                    let! loadedUser = loadUser user
+                    return loadedUser
+                }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
@@ -14704,6 +14710,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Visit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadedUser");
     }
 
     [Fact]
