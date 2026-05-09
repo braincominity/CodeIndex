@@ -18289,6 +18289,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsEscapedMemberDeclarationNames()
+    {
+        var content = """
+            Public Class EscapedMembers
+                Public Delegate Sub [Delegate]()
+                Public Sub [Select]()
+                End Sub
+
+                Public Property [Property] As Integer
+                Public Event [Event] As EventHandler
+                Public Const [Const] As Integer = 1
+                Private [Dim] As Integer
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Delegate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Select");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Property");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Event");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Const");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Dim");
+        Assert.DoesNotContain(symbols, s => s.Name == "[Select]");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsLeadingModifiersAndMemberKindsWithoutVisibility()
     {
         var content = """
