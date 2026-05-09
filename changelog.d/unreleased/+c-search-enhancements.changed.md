@@ -44,6 +44,7 @@ affected:
 - **C references now capture tagged function-pointer declaration returns** — `struct node *(*factory)(void);` now references the returned tag.
 - **C references now capture pointer-qualified `_t` declarations** — `widget_t * restrict current;` now references the declared typedef.
 - **C references now capture pointer-qualified tagged declarations** — `struct node * const next;` now references the declared tag.
+- **C references now capture `_t` pointer-to-array declarations** — `widget_t (*items)[4];` now references the array element typedef.
 
 ## 日本語
 
@@ -81,3 +82,4 @@ affected:
 - **C の参照抽出が tag 付き function-pointer 宣言の戻り型を捕捉するようになりました** — `struct node *(*factory)(void);` から戻り値 tag への参照を生成します。
 - **C の参照抽出が pointer-qualified `_t` 宣言を捕捉するようになりました** — `widget_t * restrict current;` から宣言 typedef への参照を生成します。
 - **C の参照抽出が pointer-qualified tag 付き宣言を捕捉するようになりました** — `struct node * const next;` から宣言 tag への参照を生成します。
+- **C の参照抽出が `_t` pointer-to-array 宣言を捕捉するようになりました** — `widget_t (*items)[4];` から配列要素 typedef への参照を生成します。
