@@ -2061,6 +2061,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedAlignasSpecifiers_CapturesTagTypeReferences()
+    {
+        const string content = """
+            _Alignas(struct node) unsigned char nodeStorage[64];
+            alignas(union value *) unsigned char valueStorage[64];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "union");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
