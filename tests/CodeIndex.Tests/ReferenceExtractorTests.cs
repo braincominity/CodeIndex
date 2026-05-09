@@ -10749,6 +10749,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsCastApplicationCalls()
+    {
+        const string content = """
+            let run user currentValue =
+                let boxed = upcast createWidget user
+                let typed = downcast currentValue
+                boxed, typed
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "createWidget" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "upcast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "downcast" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "currentValue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsMatchArmApplicationCalls()
     {
         const string content = """
