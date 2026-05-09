@@ -3294,6 +3294,8 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["list"];
             EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
+                EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
 
         var importsMatch = VbImportsListRegex.Match(preparedLine);
@@ -3414,6 +3416,71 @@ internal static class LanguageReferenceExtractionSupport
             var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
+    }
+
+    private static bool IsVisualBasicMemberImplementsClause(string line, int implementsIndex)
+    {
+        var head = line[..implementsIndex];
+        return head.Contains(')')
+            || head.Contains(" Property ", StringComparison.OrdinalIgnoreCase)
+            || head.TrimStart().StartsWith("Property ", StringComparison.OrdinalIgnoreCase)
+            || head.Contains(" Event ", StringComparison.OrdinalIgnoreCase)
+            || head.TrimStart().StartsWith("Event ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void EmitVisualBasicImplementsOwnerReferences(
+        string list,
+        int listStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var trimmed = segment.Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            var dotIndex = LastVisualBasicQualifierDot(trimmed);
+            if (dotIndex <= 0)
+                continue;
+
+            var owner = trimmed[..dotIndex].Trim();
+            if (owner.Length == 0)
+                continue;
+
+            var ownerOffset = segment.IndexOf(owner, StringComparison.Ordinal);
+            var ownerStart = listStart + segmentStart + Math.Max(0, ownerOffset);
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, owner, ownerStart, context, lineNumber, resolveContainerForColumn(ownerStart), "vb");
+        }
+    }
+
+    private static int LastVisualBasicQualifierDot(string value)
+    {
+        var inEscapedIdentifier = false;
+        for (var i = value.Length - 1; i >= 0; i--)
+        {
+            if (value[i] == ']')
+            {
+                inEscapedIdentifier = true;
+                continue;
+            }
+
+            if (value[i] == '[')
+            {
+                inEscapedIdentifier = false;
+                continue;
+            }
+
+            if (value[i] == '.' && !inEscapedIdentifier)
+                return i;
+        }
+
+        return -1;
     }
 
     private static bool ShouldSkipVisualBasicEscapedCall(

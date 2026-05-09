@@ -11124,6 +11124,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesMemberImplementsOwnerTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Save() Implements IController.Save
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IController" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesImportsTargets()
     {
         const string content = """
