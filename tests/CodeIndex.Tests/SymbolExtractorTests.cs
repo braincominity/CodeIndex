@@ -283,6 +283,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesCurrentPackageRelativeFromImports()
+    {
+        var content = """
+            from . import helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("helper", imports);
+        Assert.Contains("package.subpkg.helper", imports);
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
