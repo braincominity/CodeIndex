@@ -11547,7 +11547,7 @@ public class ReferenceExtractorTests
               type, extends(RepositoryBase) :: Repository
               contains
                 procedure :: persist => persist_impl
-                generic :: assignment(=) => assign_repository
+                generic :: assignment(=) => assign_repository, assign_repository_alt
               end type Repository
               abstract interface
                 subroutine create_repository()
@@ -11592,6 +11592,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "persist_impl" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "assign_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "assign_repository_alt" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
