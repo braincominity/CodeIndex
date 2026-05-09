@@ -251,8 +251,10 @@ internal static class LanguageReferenceExtractionSupport
         @"(?:^|,)\s*(?:(?:required|covariant|final)\s+)*(?<type>[A-Z]\w*(?:\s*<[^,)=]+>)?)\s+[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private const string VbIdentifierPattern = @"(?:\[[^\]\r\n]+\]|[A-Za-z_]\w*)";
+    private const string VbQualifiedIdentifierPattern = @"(?:Global\.)?(?:" + VbIdentifierPattern + @")(?:\.(?:" + VbIdentifierPattern + @"))*";
     private static readonly Regex VbTypeKeywordRegex = new(
-        @"\b(?:As|New|Inherits|Implements)\s+(?<type>(?:Global\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\b(?:As|New|Inherits|Implements)\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbGenericArgumentListRegex = new(
         @"\(\s*Of\s+(?<list>[^)\r\n]+)\)",

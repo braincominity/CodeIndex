@@ -10986,6 +10986,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedTypeNames()
+    {
+        const string content = """
+            Public Class Controller
+                Private value As [Class]
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """
