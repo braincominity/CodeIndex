@@ -1966,6 +1966,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CTaggedTypeofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void copy(void) {
+                void (*sink)(typeof(struct node *));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"
