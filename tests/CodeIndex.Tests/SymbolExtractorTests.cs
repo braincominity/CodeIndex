@@ -54,6 +54,8 @@ public class SymbolExtractorTests
             OrderPayload = typing.TypedDict("OrderPayload", {"id": int})
             Color = Enum("Color", "RED BLUE")
             Status = enum.Enum("Status", "OPEN CLOSED")
+            ErrorCode = IntEnum("ErrorCode", "NOT_FOUND INVALID")
+            Permission = enum.IntFlag("Permission", "READ WRITE")
             RuntimeUser = create_model("RuntimeUser", name=(str, ...))
             RuntimeOrder = pydantic.create_model("RuntimeOrder", id=(int, ...))
             DEFAULT_TIMEOUT: Final[int] = 30
@@ -98,6 +100,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OrderPayload");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ErrorCode");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Permission");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeOrder");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT");
