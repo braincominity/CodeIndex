@@ -11337,6 +11337,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterTableCapturesTargetReference()
+    {
+        // T-SQL schema changes are table usages too. Without an `ALTER TABLE` target edge,
+        // references/search miss migration-only changes to a table.
+        // T-SQL の schema 変更も table 使用箇所。`ALTER TABLE` target edge がないと、
+        // migration だけで触られる table を references/search が見落とす。
+        const string content = """
+            ALTER TABLE dbo.Orders ADD UpdatedAt datetime2 NULL;
+            ALTER TABLE [sales].[Invoices] NOCHECK CONSTRAINT FK_Invoices_Customers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Orders" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
