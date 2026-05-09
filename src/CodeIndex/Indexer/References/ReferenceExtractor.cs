@@ -2574,6 +2574,16 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     definitionNames);
+                RReferenceExtractor.EmitBracketMemberReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    definitionNames);
             }
         }
 
