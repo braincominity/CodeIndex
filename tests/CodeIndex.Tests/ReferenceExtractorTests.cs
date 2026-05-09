@@ -138,6 +138,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonExcept_CapturesExceptionTypeReference()
+    {
+        const string content = """
+            def recover():
+                try:
+                    run()
+                except CustomError as exc:
+                    return exc
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CustomError"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "recover");
+    }
+
+    [Fact]
     public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
     {
         // issue #258: Rust macro invocations need to surface as call-like references so
