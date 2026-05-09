@@ -18195,6 +18195,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsVisibleFieldsAsProperties()
+    {
+        var content = """
+            Public Class State
+                Private ReadOnly repo As Repository
+                Public Shared Count As Integer
+
+                Public Sub New()
+                    Dim localValue As Integer
+                End Sub
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var repo = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "repo");
+        Assert.Equal("Private", repo.Visibility);
+
+        var count = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Count");
+        Assert.Equal("Public", count.Visibility);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "localValue");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
     {
         var content = """
