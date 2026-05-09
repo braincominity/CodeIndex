@@ -2195,6 +2195,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IgnoresEscapedBracedVariables()
+    {
+        const string content = """
+            ARG APP_HOME=/app
+            RUN echo \${APP_HOME}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "APP_HOME");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)
