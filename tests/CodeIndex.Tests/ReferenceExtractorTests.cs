@@ -11785,6 +11785,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_OutputIntoCapturesTargetTableReference()
+    {
+        const string content = """
+            UPDATE dbo.Orders SET Status = 'Closed' OUTPUT inserted.Id INTO audit.OrderAudit (OrderId) WHERE Id = 1;
+            DELETE FROM [sales].[Invoices] OUTPUT deleted.Id INTO [audit].[InvoiceAudit] ([InvoiceId]);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderAudit" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceAudit" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "OrderAudit" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingCapturesSourceReferences()
     {
         // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the

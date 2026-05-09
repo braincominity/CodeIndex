@@ -75,6 +75,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex DeleteTargetWithoutFromRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+(?!FROM\b){QualifiedIdentifierWithQualifierPattern}(?=\s*(?:;|$)|\s+(?:FROM|WHERE|OUTPUT|OPTION|RETURNING)\b)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex OutputIntoTargetRegex = new(
+        $@"(?<![\w$])OUTPUT\b[\s\S]*?\bINTO\s+{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DeleteUsingPrefixRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{TopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -456,6 +459,21 @@ internal static class SqlReferenceExtractor
             fileId,
             resolveContainerForCall,
             shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            OutputIntoTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
 
         EmitSelectIntoTargetReferences(
             statement,
@@ -987,7 +1005,7 @@ internal static class SqlReferenceExtractor
             var container = resolveContainerForCall(nameGroup.Index);
             ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
             if (IsFollowedByOpenParen(statement, nameGroup.Index + nameGroup.Length))
-                suppressedCallIndices.Add(GetCallLikeSuppressionIndex(statement, nameGroup.Index) + statementStart - lineOffset);
+                AddCallLikeSuppressionIndices(suppressedCallIndices, statement, nameGroup.Index, statementStart, lineOffset);
         }
     }
 
@@ -1023,7 +1041,7 @@ internal static class SqlReferenceExtractor
                 var container = resolveContainerForCall(capture.Index);
                 ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
                 if (suppressedCallIndices != null && IsFollowedByOpenParen(statement, capture.Index + capture.Length))
-                    suppressedCallIndices.Add(GetCallLikeSuppressionIndex(statement, capture.Index) + statementStart - lineOffset);
+                    AddCallLikeSuppressionIndices(suppressedCallIndices, statement, capture.Index, statementStart, lineOffset);
             }
         }
     }
@@ -1070,6 +1088,87 @@ internal static class SqlReferenceExtractor
 
         return index;
     }
+
+    private static void AddCallLikeSuppressionIndices(
+        HashSet<int> suppressedCallIndices,
+        string line,
+        int leafIndex,
+        int statementStart,
+        int lineOffset)
+    {
+        var leafSuppressionIndex = GetCallLikeSuppressionIndex(line, leafIndex) + statementStart - lineOffset;
+        suppressedCallIndices.Add(leafSuppressionIndex);
+
+        var qualifiedStart = FindQualifiedIdentifierStart(line, leafIndex);
+        if (qualifiedStart == leafIndex)
+            return;
+
+        suppressedCallIndices.Add(GetCallLikeSuppressionIndex(line, qualifiedStart) + statementStart - lineOffset);
+    }
+
+    private static int FindQualifiedIdentifierStart(string line, int leafIndex)
+    {
+        var start = leafIndex;
+        while (start > 0)
+        {
+            var scan = start - 1;
+            while (scan >= 0 && char.IsWhiteSpace(line[scan]))
+                scan--;
+            if (scan < 0 || line[scan] != '.')
+                break;
+
+            scan--;
+            while (scan >= 0 && char.IsWhiteSpace(line[scan]))
+                scan--;
+            if (scan < 0)
+                break;
+
+            start = ScanIdentifierSegmentStart(line, scan);
+        }
+
+        return start;
+    }
+
+    private static int ScanIdentifierSegmentStart(string line, int index)
+    {
+        if (line[index] == ']')
+        {
+            index--;
+            while (index >= 0)
+            {
+                if (line[index] == '[')
+                    return index;
+                index--;
+            }
+
+            return 0;
+        }
+
+        if (line[index] is '"' or '`')
+        {
+            var quote = line[index--];
+            while (index >= 0)
+            {
+                if (line[index] == quote)
+                    return index;
+                index--;
+            }
+
+            return 0;
+        }
+
+        while (index >= 0 && IsIdentifierContinuationForReverseScan(line[index]))
+            index--;
+
+        return index + 1;
+    }
+
+    private static bool IsIdentifierContinuationForReverseScan(char ch)
+        => ch is '_' or '$' or '#'
+           || char.IsLetterOrDigit(ch)
+           || char.GetUnicodeCategory(ch) is System.Globalization.UnicodeCategory.NonSpacingMark
+               or System.Globalization.UnicodeCategory.SpacingCombiningMark
+               or System.Globalization.UnicodeCategory.ConnectorPunctuation;
 
     private static string CombineStatementPrefix(string prefix, string line, out int lineOffset)
     {
