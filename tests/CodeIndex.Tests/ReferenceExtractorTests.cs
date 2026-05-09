@@ -1219,6 +1219,7 @@ public class ReferenceExtractorTests
     [InlineData("EXEC CICS GETMAIN SET(CUSTOMER-PTR) FLENGTH(CUSTOMER-LENGTH) END-EXEC", "CUSTOMER-PTR")]
     [InlineData("EXEC CICS FREEMAIN DATA(CUSTOMER-PTR) END-EXEC", "CUSTOMER-PTR")]
     [InlineData("EXEC CICS RECEIVE INTO(CUSTOMER-INPUT) LENGTH(CUSTOMER-LENGTH) END-EXEC", "CUSTOMER-INPUT")]
+    [InlineData("EXEC CICS SEND FROM(CUSTOMER-OUTPUT) LENGTH(CUSTOMER-LENGTH) END-EXEC", "CUSTOMER-OUTPUT")]
     public void Extract_CobolSingleTargetStatement_CapturesSearchableReference(string statement, string expectedSymbolName)
     {
         var content = $$"""
