@@ -14414,10 +14414,11 @@ public class SymbolExtractorTests
     public void Extract_C_DetectsFunctionsAndStructs()
     {
         // C: functions, struct / C: 関数、構造体
-        var content = "typedef struct Config {\n    int value;\n};\nint main(int argc) {\n}";
+        var content = "typedef struct Config {\n    int value;\n};\nunion Packet {\n    int tag;\n};\nint main(int argc) {\n}";
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Packet");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
 
