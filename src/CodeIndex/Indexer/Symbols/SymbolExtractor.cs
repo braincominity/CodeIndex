@@ -1558,7 +1558,7 @@ public static partial class SymbolExtractor
             new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?setIs\s*\(.*?\b(?:class2|to)\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*inherit\s*=\s*(?:c\(\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[A-Z][\w.]*))", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setValidity\s*\(\s*(?:(?:Class|class|classes|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setGeneric\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setGeneric|setGroupGeneric)\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?<visibility>public|private|active)\s*=\s*list\(\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*(?:library|require|requireNamespace)\s*\(\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),

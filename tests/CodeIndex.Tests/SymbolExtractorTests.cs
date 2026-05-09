@@ -18558,6 +18558,8 @@ public class SymbolExtractorTests
 
             methods::setGeneric(f = "normalize", function(x) standardGeneric("normalize"))
 
+            methods::setGroupGeneric(name = "transformGroup")
+
             methods::setMethod(f = show, signature(object = "Person"), function(object) {
               object
             })
@@ -18579,6 +18581,7 @@ public class SymbolExtractorTests
         var state = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "state");
         Assert.Equal("active", state.Visibility);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "transformGroup");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "show");
     }
 
