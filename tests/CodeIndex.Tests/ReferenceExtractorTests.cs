@@ -2058,6 +2058,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CPointerQualifiedTypedefGenericAssociations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, widget_t * const: 1, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CTaggedGenericAssociations_CapturesTagTypeReferences()
     {
         const string content = """
