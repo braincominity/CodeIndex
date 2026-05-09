@@ -10838,6 +10838,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesMultipleImplementsTypes()
+    {
+        const string content = """
+            Public Class Controller
+                Implements IRequestHandler, IAuditable
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "IRequestHandler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IAuditable" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """
