@@ -106,6 +106,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterIndexOnTargetRegex = new(
         $@"(?<![\w$])ALTER\s+INDEX\b\s+(?:ALL|{QualifiedIdentifierNoCapturePattern})\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterFullTextIndexOnTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+FULLTEXT\s+INDEX\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DropIndexOnTargetRegex = new(
         $@"(?<![\w$])DROP\s+INDEX\b\s+(?:IF\s+EXISTS\s+)?{QualifiedIdentifierNoCapturePattern}\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -474,6 +477,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterFullTextIndexOnTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

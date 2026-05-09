@@ -4989,6 +4989,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterFullTextIndexReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_fulltext_index_target.sql", "sql",
+            """
+            CREATE TABLE dbo.Documents (Id int, Title nvarchar(200));
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_fulltext_index_maintenance.sql", "sql",
+            """
+            ALTER FULLTEXT INDEX ON dbo.Documents START FULL POPULATION;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_index"]));
+        Assert.Equal("src/sql_alter_fulltext_index_maintenance.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_index"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.Documents", lang: "sql", exact: true, pathPatterns: ["sql_alter_fulltext_index"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
