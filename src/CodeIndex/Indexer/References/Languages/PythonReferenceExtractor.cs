@@ -54,6 +54,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex SingleClassBaseTypeRegex = new(
         @"^\s*class\s+\w+\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)\s*:",
         RegexOptions.Compiled);
+    private static readonly Regex MultipleClassBaseTypesRegex = new(
+        @"^\s*class\s+\w+\s*\((?<types>[^=)]*,[^=)]*)\)\s*:",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -376,6 +379,29 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in MultipleClassBaseTypesRegex.Matches(preparedLine))
+        {
+            var typesGroup = match.Groups["types"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                var nameIndex = typesGroup.Index + typeMatch.Groups["name"].Index;
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    context,
+                    lineNumber,
+                    resolveContainerForReference(nameIndex) ?? container,
+                    "python");
+            }
+        }
+
         foreach (Match match in SingleClassBaseTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
