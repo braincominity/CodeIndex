@@ -36,6 +36,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex IsSubclassTypeRegex = new(
         @"\bissubclass\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)",
         RegexOptions.Compiled);
+    private static readonly Regex IsSubclassTupleTypeRegex = new(
+        @"\bissubclass\s*\(\s*[^,\n]+,\s*\((?<types>[^)]*)\)\s*\)",
+        RegexOptions.Compiled);
 
     public static void EmitDecoratorReferences(
         string preparedLine,
@@ -212,6 +215,28 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
+        {
+            var typesGroup = match.Groups["types"];
+            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            {
+                var name = typeMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    typesGroup.Index + typeMatch.Groups["name"].Index,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
+        }
+
         foreach (Match match in IsSubclassTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;

@@ -257,6 +257,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonIsSubclassTuple_CapturesEachCheckedTypeReference()
+    {
+        const string content = """
+            def accepts(cls):
+                return issubclass(cls, (services.Plugin, mixins.Audited))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Plugin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "accepts");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Audited"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "accepts");
+    }
+
+    [Fact]
     public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
     {
         // issue #258: Rust macro invocations need to surface as call-like references so
