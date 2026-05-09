@@ -11752,6 +11752,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateHashIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE NONCLUSTERED HASH INDEX IX_OrderCache_Id ON dbo.OrderCache (Id) WITH (BUCKET_COUNT = 1024);
+            CREATE UNIQUE NONCLUSTERED HASH INDEX [IX_InvoiceCache_Id] ON [memory].[InvoiceCache] ([Id]) WITH (BUCKET_COUNT = 2048);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "OrderCache" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceCache" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_AlterFullTextIndexCapturesTableReference()
     {
         const string content = """

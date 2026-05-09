@@ -5033,6 +5033,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_CreateHashIndexReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_create_hash_index_target.sql", "sql",
+            """
+            CREATE TABLE dbo.OrderCache (Id int NOT NULL);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_create_hash_index_definition.sql", "sql",
+            """
+            CREATE NONCLUSTERED HASH INDEX IX_OrderCache_Id
+            ON dbo.OrderCache (Id)
+            WITH (BUCKET_COUNT = 1024);
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.OrderCache", lang: "sql", exact: true, pathPatterns: ["sql_create_hash_index"]));
+        Assert.Equal("src/sql_create_hash_index_definition.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.OrderCache", lang: "sql", exact: true, pathPatterns: ["sql_create_hash_index"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.OrderCache", lang: "sql", exact: true, pathPatterns: ["sql_create_hash_index"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_AlterFullTextIndexReferencesResolveThroughSearch()
     {
         InsertIndexedFile("src/sql_alter_fulltext_index_target.sql", "sql",
