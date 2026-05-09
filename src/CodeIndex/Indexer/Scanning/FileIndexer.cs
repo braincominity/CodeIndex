@@ -276,6 +276,7 @@ public class FileIndexer
         ["Dockerfile"]    = "dockerfile",
         [".dockerfile"]   = "dockerfile",
         ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
+        [".containerfile"]= "dockerfile",
         ["Makefile"]      = "makefile",
         ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
         ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
