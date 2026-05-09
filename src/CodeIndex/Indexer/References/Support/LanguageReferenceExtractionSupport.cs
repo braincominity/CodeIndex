@@ -68,6 +68,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CTypedefTypeofUnqualTypeRegex = new(
         @"\b(?:typeof_unqual|__typeof_unqual__|__typeof_unqual)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedTypeofUnqualTypeRegex = new(
+        @"\b(?:typeof_unqual|__typeof_unqual__|__typeof_unqual)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CTypedefGenericAssociationTypeRegex = new(
         @"(?:_Generic\s*\([^,;{}]*,|,)\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*:",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1190,6 +1193,12 @@ internal static class LanguageReferenceExtractionSupport
             }
 
             foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);

@@ -57,6 +57,7 @@ affected:
 - **C references now capture `_t` GNU alignment operands** — `__alignof__(widget_t *)` now references the measured typedef.
 - **C references now capture tagged GNU alignment operands** — `__alignof__(struct node *)` now references the measured tag.
 - **C references now capture `_t` `typeof_unqual` operands** — `typeof_unqual(widget_t *)` now references the operand typedef.
+- **C references now capture tagged `typeof_unqual` operands** — `typeof_unqual(struct node *)` now references the operand tag.
 
 ## 日本語
 
@@ -107,3 +108,4 @@ affected:
 - **C の参照抽出が `_t` GNU alignment operand を捕捉するようになりました** — `__alignof__(widget_t *)` から測定 typedef への参照を生成します。
 - **C の参照抽出が tag 付き GNU alignment operand を捕捉するようになりました** — `__alignof__(struct node *)` から測定 tag への参照を生成します。
 - **C の参照抽出が `_t` `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(widget_t *)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(struct node *)` から operand tag への参照を生成します。
