@@ -381,6 +381,12 @@ public static partial class SymbolExtractor
             && !string.IsNullOrEmpty(pythonModulePrefix)
             && !string.IsNullOrEmpty(modulePart)
             && modulePart.All(static ch => ch == '.');
+        var currentPackageRelativeModulePart = treatAsFromImport
+            && !string.IsNullOrEmpty(pythonModulePrefix)
+            && modulePart?.StartsWith(".", StringComparison.Ordinal) == true
+            && !modulePart.StartsWith("..", StringComparison.Ordinal)
+                ? modulePart.TrimStart('.').TrimEnd('.')
+                : null;
         foreach (var rawSpec in importedNames.Split(','))
         {
             var spec = rawSpec.Trim();
@@ -439,6 +445,17 @@ public static partial class SymbolExtractor
                         line,
                         absoluteStartColumn,
                         $"{pythonModulePrefix}.{importedName}",
+                        entries,
+                        seenNames,
+                        ref searchStartColumn);
+                }
+
+                if (!string.IsNullOrEmpty(currentPackageRelativeModulePart))
+                {
+                    AddPythonImportEntry(
+                        line,
+                        absoluteStartColumn,
+                        $"{pythonModulePrefix}.{currentPackageRelativeModulePart}.{importedName}",
                         entries,
                         seenNames,
                         ref searchStartColumn);

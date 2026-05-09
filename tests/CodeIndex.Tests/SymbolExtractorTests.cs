@@ -297,6 +297,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesCurrentPackageRelativeModuleImports()
+    {
+        var content = """
+            from .tools import build
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("tools.build", imports);
+        Assert.Contains("package.subpkg.tools.build", imports);
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
