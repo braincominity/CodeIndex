@@ -49,6 +49,8 @@ internal static class SqlReferenceExtractor
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string MergeTargetHintPattern =
         @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
+    private const string DropStatisticsItemPattern =
+        @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
 
     private static readonly Regex ProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + ProcCallQualifierPattern + @"(?<name>" + ProcCallIdentifierPattern + @")",
@@ -124,6 +126,9 @@ internal static class SqlReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CreateStatisticsOnTargetRegex = new(
         $@"(?<![\w$])CREATE\s+STATISTICS\b\s+{QualifiedIdentifierNoCapturePattern}\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DropStatisticsTargetRegex = new(
+        $@"(?<![\w$])DROP\s+STATISTICS\s+{DropStatisticsItemPattern}(?:\s*,\s*{DropStatisticsItemPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SelectIntoTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?!OUTFILE\b|DUMPFILE\b){QualifiedIdentifierPattern}",
@@ -567,6 +572,20 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName,
             suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            DropStatisticsTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
 
         EmitTargetReferences(
             statement,
