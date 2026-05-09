@@ -1738,6 +1738,840 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CIncludeNext_CapturesHeaderReference()
+    {
+        const string content = """
+            #include_next <limits.h>
+            #include PROJECT_HEADER
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "limits.h" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "PROJECT_HEADER" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTypedefTags_SkipsTypeKeywords()
+    {
+        const string content = """
+            typedef struct node node_t;
+            typedef enum mode mode_t;
+            typedef union value value_t;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum" or "union");
+    }
+
+    [Fact]
+    public void Extract_CTypedefCasts_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void convert(void *raw) {
+                widget_t *widget = (widget_t *)raw;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTypedefSizeof_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void measure(void) {
+                unsigned long bytes = sizeof(widget_t);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTypedefAlignof_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void measure(void) {
+                unsigned long widgetAlign = _Alignof(widget_t);
+                unsigned long configAlign = alignof(config_t);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "config_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTypedefDeclarations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                widget_t *current;
+                const message_t message = {};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedDeclarations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                struct node *next;
+                enum mode mode;
+                union value value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum" or "union");
+    }
+
+    [Fact]
+    public void Extract_CTypedefFunctionReturns_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            static widget_t *make_widget(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedFunctionReturns_CapturesTagTypeReferences()
+    {
+        const string content = """
+            static struct node *make_node(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTypedefReturnTypes_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            widget_t * const make_widget(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTaggedReturnTypes_CapturesTagTypeReferences()
+    {
+        const string content = """
+            struct node * const make_node(void) {
+                return 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefParameters_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void visit(widget_t *widget, const message_t *message) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTypedefParameters_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void visit(widget_t * restrict widget) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedParameters_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void visit(struct node *node, enum mode mode, union value *value) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum" or "union");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTaggedParameters_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void visit(struct node * const node) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefCompoundLiterals_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void init(void) {
+                use((widget_t){0});
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedCompoundLiterals_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void init(void) {
+                use((struct node){0});
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefTypeofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void copy(widget_t value) {
+                typeof(widget_t) next = value;
+                __typeof__(message_t *) message = 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedTypeofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void copy(void) {
+                void (*sink)(typeof(struct node *));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefGenericAssociations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, widget_t: 1, message_t *: 2, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTypedefGenericAssociations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, widget_t * const: 1, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedGenericAssociations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, struct node *: 1, enum mode: 2, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "mode" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "enum");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTaggedGenericAssociations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            int choose(int value) {
+                return _Generic(value, struct node * const: 1, default: 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefAtomicTypeSpecifiers_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void init(void) {
+                _Atomic(widget_t) current;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedAtomicTypeSpecifiers_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void init(void) {
+                _Atomic(struct node *) current;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefAlignasSpecifiers_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            _Alignas(widget_t) unsigned char widgetStorage[64];
+            alignas(message_t *) unsigned char messageStorage[64];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedAlignasSpecifiers_CapturesTagTypeReferences()
+    {
+        const string content = """
+            _Alignas(struct node) unsigned char nodeStorage[64];
+            alignas(union value *) unsigned char valueStorage[64];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "union");
+    }
+
+    [Fact]
+    public void Extract_CTypedefFunctionPointerAliases_CapturesLowercaseReturnTypeReferences()
+    {
+        const string content = """
+            typedef widget_t (*widget_factory_t)(void);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedFunctionPointerAliases_CapturesTagReturnTypeReferences()
+    {
+        const string content = """
+            typedef struct node *(*node_factory_t)(void);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefFunctionPointerDeclarations_CapturesLowercaseReturnTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                widget_t (*factory)(void);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedFunctionPointerDeclarations_CapturesTagReturnTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                struct node *(*factory)(void);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTypedefDeclarations_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                widget_t * restrict current;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTaggedDeclarations_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                struct node * const next;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefPointerArrayDeclarations_CapturesLowercaseElementTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                widget_t (*items)[4];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedPointerArrayDeclarations_CapturesTagElementTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                struct node (*items)[4];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefOffsetofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long offset = offsetof(widget_t, field);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedOffsetofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long offset = offsetof(struct node, next);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefVaArgOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                consume(va_arg(args, widget_t));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedSizeofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long size = sizeof(struct node *);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTypedefSizeofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long size = sizeof(widget_t * const);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CPointerQualifiedTaggedSizeofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long size = sizeof(struct node * const);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTaggedAlignofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long nodeAlign = _Alignof(struct node *);
+                unsigned long valueAlign = alignof(union value);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "union");
+    }
+
+    [Fact]
+    public void Extract_CTypedefGnuAlignofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long align = __alignof__(widget_t *);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedGnuAlignofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long align = __alignof__(struct node *);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefTypeofUnqualOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                typeof_unqual(widget_t *) current;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedTypeofUnqualOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                typeof_unqual(struct node *) current;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefBuiltinTypesCompatibleOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            int same(void) {
+                return __builtin_types_compatible_p(widget_t *, message_t);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "message_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedBuiltinTypesCompatibleOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            int same(void) {
+                return __builtin_types_compatible_p(struct node *, union value);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName is "struct" or "union");
+    }
+
+    [Fact]
+    public void Extract_CTypedefBuiltinOffsetofOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long offset = __builtin_offsetof(widget_t, field);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedBuiltinOffsetofOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                unsigned long offset = __builtin_offsetof(struct node, next);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTypedefBuiltinVaArgOperands_CapturesLowercaseTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                consume(__builtin_va_arg(args, widget_t));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "widget_t" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CTaggedBuiltinVaArgOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                consume(__builtin_va_arg(args, struct node *));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
+    public void Extract_CTaggedVaArgOperands_CapturesTagTypeReferences()
+    {
+        const string content = """
+            void configure(void) {
+                consume(va_arg(args, struct node *));
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+        var references = ReferenceExtractor.Extract(1, "c", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "node" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "struct");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
     {
         const string content = """"

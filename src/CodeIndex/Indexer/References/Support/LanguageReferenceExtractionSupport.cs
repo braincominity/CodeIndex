@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class LanguageReferenceExtractionSupport
 {
     private static readonly Regex CppIncludeRegex = new(
-        @"^(?:\s*#\s*(?:include|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)"")|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
+        @"^(?:\s*#\s*(?:include(?:_next)?|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>[^\s]+))|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppBaseListRegex = new(
         @"^\s*(?:export\s+)?(?:(?:template|requires)\b[^{;]*\s+)*(?:class|struct)\s+[A-Za-z_]\w*(?:\s*final)?\s*:\s*(?<bases>[^{;]+)",
@@ -19,6 +19,117 @@ internal static class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppCStyleCastTypeRegex = new(
         @"(?<![\w])\(\s*(?<type>(?:(?:const|volatile|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}()]+>)?(?:\s*[*&])*)\s*\)\s*(?:[A-Za-z_]\w*|\*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefCastTypeRegex = new(
+        @"(?<![\w])\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)\s*(?:[A-Za-z_]\w*|\*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefSizeofTypeRegex = new(
+        @"\bsizeof\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedSizeofTypeRegex = new(
+        @"\bsizeof\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefAlignofTypeRegex = new(
+        @"\b(?:_Alignof|alignof|__alignof__|__alignof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t(?:\s*\*)*)\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedAlignofTypeRegex = new(
+        @"\b(?:_Alignof|alignof|__alignof__|__alignof)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*(?=[=,;\[])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*(?=[=,;\[])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefFunctionReturnTypeRegex = new(
+        @"^\s*(?:(?:static|extern|inline|const|volatile|restrict|_Atomic)\s+)*(?<type>[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedFunctionReturnTypeRegex = new(
+        @"^\s*(?:(?:static|extern|inline|const|volatile|restrict|_Atomic)\s+)*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefParameterTypeRegex = new(
+        @"(?:\(|,)\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedParameterTypeRegex = new(
+        @"(?:\(|,)\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefCompoundLiteralTypeRegex = new(
+        @"\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)\s*\{",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedCompoundLiteralTypeRegex = new(
+        @"\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)\s*\{",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefTypeofTypeRegex = new(
+        @"\b(?:typeof|__typeof__|__typeof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedTypeofTypeRegex = new(
+        @"\b(?:typeof|__typeof__|__typeof)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefTypeofUnqualTypeRegex = new(
+        @"\b(?:typeof_unqual|__typeof_unqual__|__typeof_unqual)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedTypeofUnqualTypeRegex = new(
+        @"\b(?:typeof_unqual|__typeof_unqual__|__typeof_unqual)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefBuiltinTypesCompatibleFirstTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*,",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefBuiltinTypesCompatibleSecondTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\([^,;{}]+,\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedBuiltinTypesCompatibleFirstTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?,",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedBuiltinTypesCompatibleSecondTypeRegex = new(
+        @"\b__builtin_types_compatible_p\s*\([^,;{}]+,\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefGenericAssociationTypeRegex = new(
+        @"(?:_Generic\s*\([^,;{}]*,|,)\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*\s*:",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedGenericAssociationTypeRegex = new(
+        @"(?:_Generic\s*\([^,;{}]*,|,)\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\s*\*(?:\s*(?:const|volatile|restrict|_Atomic))?)*\s*:",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefAtomicTypeRegex = new(
+        @"\b_Atomic\s*\(\s*(?<type>(?:(?:const|volatile|restrict)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedAtomicTypeRegex = new(
+        @"\b_Atomic\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefAlignasTypeRegex = new(
+        @"\b(?:_Alignas|alignas)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedAlignasTypeRegex = new(
+        @"\b(?:_Alignas|alignas)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefFunctionPointerAliasTypeRegex = new(
+        @"\btypedef\s+(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedFunctionPointerAliasTypeRegex = new(
+        @"\btypedef\s+(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefFunctionPointerDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedFunctionPointerDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefPointerArrayDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\[",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedPointerArrayDeclarationTypeRegex = new(
+        @"(?<![\w])(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\[",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefOffsetofTypeRegex = new(
+        @"\b(?:offsetof|__builtin_offsetof)\s*\(\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*,",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedOffsetofTypeRegex = new(
+        @"\b(?:offsetof|__builtin_offsetof)\s*\(\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?,",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTypedefVaArgTypeRegex = new(
+        @"\b(?:va_arg|__builtin_va_arg)\s*\(\s*[^,;{}]+,\s*(?<type>(?:(?:const|volatile|restrict|_Atomic)\s+)*[A-Za-z_]\w*_t\b)(?:\s*\*)*\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CTaggedVaArgTypeRegex = new(
+        @"\b(?:va_arg|__builtin_va_arg)\s*\(\s*[^,;{}]+,\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppTypeOperandOperatorRegex = new(
         @"\b(?:sizeof|alignof)\s*\(\s*(?<type>(?:(?:const|volatile|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}]+>)?(?:\s*[*&])*)\s*\)",
@@ -999,6 +1110,231 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+        }
+
+        if (language == "c")
+        {
+            foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedSizeofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefAlignofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedAlignofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefFunctionReturnTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedFunctionReturnTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefParameterTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedParameterTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefCompoundLiteralTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedCompoundLiteralTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefTypeofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedTypeofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefGenericAssociationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedGenericAssociationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefAtomicTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedAtomicTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefAlignasTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedAlignasTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefOffsetofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedOffsetofTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
+
+            foreach (Match match in CTaggedVaArgTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))

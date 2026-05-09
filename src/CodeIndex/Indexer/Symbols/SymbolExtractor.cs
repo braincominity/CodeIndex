@@ -96,7 +96,7 @@ public static partial class SymbolExtractor
     // GCC/Clang/MSVC の attribute specifier は戻り値型の前や、戻り値型トークンの途中に現れる。
     // それらを戻り値型マッチャーに含めて、よくある注釈付き C 関数も `symbols` / `search` に出るようにする。
     private const string CAttributeSpecifierTokenPattern =
-        @"(?:__attribute__\s*\(\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\)\s*|__declspec\s*\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\s*|_Noreturn\s+)";
+        @"(?:\[\[[^\r\n]*?\]\]\s*|__attribute__\s*\(\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\)\s*|__declspec\s*\((?:(?>[^()]+)|\((?<CAttributeDepth>)|\)(?<-CAttributeDepth>))*(?(CAttributeDepth)(?!))\)\s*|_Noreturn\s+)";
     private const string CFunctionReturnTypePattern =
         @"(?<returnType>(?:(?:\w+[\s*]+)|" + CAttributeSpecifierTokenPattern + @")+)";
     private const string CSharpTypeSegmentPattern =
@@ -1371,9 +1371,11 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*typedef\s+struct\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("union",    new Regex(@"^\s*typedef\s+union\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("union",    new Regex(@"^\s*(?:typedef\s+)?union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*typedef\s+enum\s+(?:\w+\s+)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
             new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*#include\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*#\s*(?:include(?:_next)?|import)\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cpp"] =
         [

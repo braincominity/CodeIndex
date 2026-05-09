@@ -14414,10 +14414,11 @@ public class SymbolExtractorTests
     public void Extract_C_DetectsFunctionsAndStructs()
     {
         // C: functions, struct / C: 関数、構造体
-        var content = "typedef struct Config {\n    int value;\n};\nint main(int argc) {\n}";
+        var content = "typedef struct Config {\n    int value;\n};\nunion Packet {\n    int tag;\n};\nint main(int argc) {\n}";
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Packet");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
 
@@ -14427,10 +14428,15 @@ public class SymbolExtractorTests
         var content = """
             typedef struct Node Node_t;
             typedef struct Payload* PayloadRef;
+            typedef union Value Value_t;
             typedef enum Mode Mode_t;
 
             struct Node {
                 int value;
+            };
+
+            union Value {
+                int number;
             };
 
             enum Mode {
@@ -14442,6 +14448,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node_t");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "PayloadRef");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value_t");
+        Assert.Contains(symbols, s => s.Kind == "union" && s.Name == "Value");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode_t");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
@@ -14461,6 +14469,10 @@ public class SymbolExtractorTests
             __declspec(dllexport) int exported(void) {
                 return 0;
             }
+
+            [[nodiscard]] int compute(void) {
+                return 1;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "c", content);
@@ -14468,6 +14480,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "die");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "exported");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute");
     }
 
     [Fact]
@@ -14553,6 +14566,9 @@ public class SymbolExtractorTests
         // C: include targets should be searchable by header name / C: include 先はヘッダー名で検索できるべき
         var content = """
             #include <stdio.h>
+            # include <stdlib.h>
+            #include_next <limits.h>
+            #import "legacy.h"
             #include "project/foo.h"
             #include HEADER_NAME
             """;
@@ -14560,6 +14576,9 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdio.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "stdlib.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "limits.h");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "legacy.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "project/foo.h");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HEADER_NAME");
     }

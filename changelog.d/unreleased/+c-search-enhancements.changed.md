@@ -1,0 +1,135 @@
+---
+category: changed
+affected:
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+---
+
+## English
+
+- **C search now indexes spaced include directives** — `# include <header.h>` forms now produce import symbols, so symbol/search navigation sees headers written with preprocessor whitespace.
+- **C search now indexes `#include_next` targets** — GNU-style next-header directives now produce import symbols alongside ordinary `#include` rows.
+- **C search now indexes `#import` headers** — import-style header directives now surface as import symbols for header navigation.
+- **C search now indexes union declarations** — named `union` definitions now produce `union` symbols alongside structs and enums.
+- **C search now indexes union typedef aliases** — forward `typedef union Name Alias;` declarations now provide searchable `union` symbols for alias names.
+- **C search now indexes bracket-attributed functions** — C23-style `[[nodiscard]] int f(...)` declarations now surface by function name.
+- **C references now capture `#include_next` headers** — next-header directives now appear in reference-oriented queries, not only symbol search.
+- **C references now capture macro include targets** — `#include PROJECT_HEADER` now produces a header reference for macro-based include wiring.
+- **C references now suppress type-keyword noise** — `struct`, `enum`, `union`, and qualifiers are filtered out of C type-reference rows so typedef edges point at real tag names.
+- **C references now capture `_t` cast types** — lowercase typedef casts such as `(widget_t *)raw` now produce type-reference rows.
+- **C references now capture `_t` `sizeof` operands** — `sizeof(widget_t)` now produces a type-reference row for typedef-based size checks.
+- **C references now capture `_t` alignment operands** — `_Alignof(widget_t)` and `alignof(config_t)` now surface typedef operands as type references.
+- **C references now capture `_t` declaration types** — local declarations such as `widget_t *current;` now point search results back to typedef names.
+- **C references now capture tagged declaration types** — declarations such as `struct node *next;` now produce type references for the tag name.
+- **C references now capture `_t` return types** — functions returning typedefs such as `widget_t *make_widget(void)` now reference the typedef name.
+- **C references now capture tagged return types** — functions returning `struct node *` now produce type references for the returned tag.
+- **C references now capture `_t` parameter types** — function parameters such as `widget_t *widget` now point back to typedef names.
+- **C references now capture tagged parameter types** — parameters such as `struct node *node` now produce type references for tag names.
+- **C references now capture `_t` compound literals** — literals such as `(widget_t){0}` now reference the typedef type.
+- **C references now capture tagged compound literals** — literals such as `(struct node){0}` now reference the tag name.
+- **C references now capture `_t` `typeof` operands** — `typeof(widget_t)` and `__typeof__(message_t *)` now reference typedef names.
+- **C references now capture tagged `typeof` operands** — `typeof(struct node *)` now references the tag name.
+- **C references now capture `_t` `_Generic` associations** — `_Generic(value, widget_t: ...)` now references typedef association types.
+- **C references now capture tagged `_Generic` associations** — `_Generic(value, struct node *: ...)` now references tag association types.
+- **C references now capture `_t` `_Atomic` type specifiers** — `_Atomic(widget_t)` now references the typedef type.
+- **C references now capture tagged `_Atomic` type specifiers** — `_Atomic(struct node *)` now references the tag type.
+- **C references now capture `_t` `_Alignas` specifiers** — `_Alignas(widget_t)` and `alignas(message_t *)` now reference typedef types.
+- **C references now capture tagged `_Alignas` specifiers** — `_Alignas(struct node)` and `alignas(union value *)` now reference tag types.
+- **C references now capture `_t` function-pointer typedef returns** — `typedef widget_t (*factory_t)(void);` now references the return typedef.
+- **C references now capture tagged function-pointer typedef returns** — `typedef struct node *(*factory_t)(void);` now references the returned tag.
+- **C references now capture `_t` function-pointer declaration returns** — `widget_t (*factory)(void);` now references the return typedef.
+- **C references now capture tagged function-pointer declaration returns** — `struct node *(*factory)(void);` now references the returned tag.
+- **C references now capture pointer-qualified `_t` declarations** — `widget_t * restrict current;` now references the declared typedef.
+- **C references now capture pointer-qualified tagged declarations** — `struct node * const next;` now references the declared tag.
+- **C references now capture `_t` pointer-to-array declarations** — `widget_t (*items)[4];` now references the array element typedef.
+- **C references now capture tagged pointer-to-array declarations** — `struct node (*items)[4];` now references the array element tag.
+- **C references now capture `_t` `offsetof` operands** — `offsetof(widget_t, field)` now references the operand typedef.
+- **C references now capture tagged `offsetof` operands** — `offsetof(struct node, next)` now references the operand tag.
+- **C references now capture `_t` `va_arg` operands** — `va_arg(args, widget_t)` now references the requested typedef.
+- **C references now capture tagged `va_arg` operands** — `va_arg(args, struct node *)` now references the requested tag.
+- **C references now capture tagged `sizeof` operands** — `sizeof(struct node *)` now references the measured tag.
+- **C references now capture pointer-qualified `_t` `sizeof` operands** — `sizeof(widget_t * const)` now references the measured typedef.
+- **C references now capture pointer-qualified tagged `sizeof` operands** — `sizeof(struct node * const)` now references the measured tag.
+- **C references now capture tagged alignment operands** — `_Alignof(struct node *)` and `alignof(union value)` now reference measured tags.
+- **C references now capture `_t` GNU alignment operands** — `__alignof__(widget_t *)` now references the measured typedef.
+- **C references now capture tagged GNU alignment operands** — `__alignof__(struct node *)` now references the measured tag.
+- **C references now capture `_t` `typeof_unqual` operands** — `typeof_unqual(widget_t *)` now references the operand typedef.
+- **C references now capture tagged `typeof_unqual` operands** — `typeof_unqual(struct node *)` now references the operand tag.
+- **C references now capture `_t` `__builtin_types_compatible_p` operands** — both typedef type arguments now produce references.
+- **C references now capture tagged `__builtin_types_compatible_p` operands** — both tag type arguments now produce references.
+- **C references now capture `_t` `__builtin_offsetof` operands** — `__builtin_offsetof(widget_t, field)` now references the operand typedef.
+- **C references now capture tagged `__builtin_offsetof` operands** — `__builtin_offsetof(struct node, next)` now references the operand tag.
+- **C references now capture `_t` `__builtin_va_arg` operands** — `__builtin_va_arg(args, widget_t)` now references the requested typedef.
+- **C references now capture tagged `__builtin_va_arg` operands** — `__builtin_va_arg(args, struct node *)` now references the requested tag.
+- **C references now capture pointer-qualified `_t` return types** — `widget_t * const make_widget(void)` now references the returned typedef.
+- **C references now capture pointer-qualified tagged return types** — `struct node * const make_node(void)` now references the returned tag.
+- **C references now capture pointer-qualified `_t` parameter types** — `widget_t * restrict widget` now references the parameter typedef.
+- **C references now capture pointer-qualified tagged parameter types** — `struct node * const node` now references the parameter tag.
+- **C references now capture pointer-qualified `_t` `_Generic` associations** — `widget_t * const:` now references the association typedef.
+- **C references now capture pointer-qualified tagged `_Generic` associations** — `struct node * const:` now references the association tag.
+
+## 日本語
+
+- **C 検索が空白付き include ディレクティブをインデックスするようになりました** — `# include <header.h>` 形式でも import シンボルを生成し、preprocessor 空白を使ったヘッダーも symbol/search navigation で見つかるようになりました。
+- **C 検索が `#include_next` の参照先をインデックスするようになりました** — GNU 風の next-header ディレクティブも通常の `#include` と同じように import シンボルを生成します。
+- **C 検索が `#import` ヘッダーをインデックスするようになりました** — import 形式のヘッダーディレクティブも import シンボルとして表面化し、ヘッダー移動に使えるようになりました。
+- **C 検索が union 宣言をインデックスするようになりました** — 名前付き `union` 定義も struct / enum と同じように `union` シンボルを生成します。
+- **C 検索が union typedef エイリアスをインデックスするようになりました** — forward `typedef union Name Alias;` 宣言でも alias 名の検索可能な `union` シンボルを生成します。
+- **C 検索が角括弧属性付き関数をインデックスするようになりました** — C23 形式の `[[nodiscard]] int f(...)` 宣言も関数名で表面化します。
+- **C の参照抽出が `#include_next` ヘッダーを捕捉するようになりました** — next-header ディレクティブが symbol search だけでなく参照系クエリにも出るようになりました。
+- **C の参照抽出が macro include の参照先を捕捉するようになりました** — `#include PROJECT_HEADER` でも macro ベースの include 配線をヘッダー参照として生成します。
+- **C の参照抽出が型キーワード由来のノイズを抑えるようになりました** — `struct` / `enum` / `union` や修飾子を C の type-reference 行から除外し、typedef edge が実際の tag 名を指すようにしました。
+- **C の参照抽出が `_t` cast 型を捕捉するようになりました** — `(widget_t *)raw` のような lowercase typedef cast でも type-reference 行を生成します。
+- **C の参照抽出が `_t` の `sizeof` operand を捕捉するようになりました** — `sizeof(widget_t)` でも typedef ベースの size check に対する type-reference 行を生成します。
+- **C の参照抽出が `_t` の alignment operand を捕捉するようになりました** — `_Alignof(widget_t)` と `alignof(config_t)` でも typedef operand を type reference として表面化します。
+- **C の参照抽出が `_t` 宣言型を捕捉するようになりました** — `widget_t *current;` のような local declaration から typedef 名へ search result が戻れるようになりました。
+- **C の参照抽出が tag 付き宣言型を捕捉するようになりました** — `struct node *next;` のような宣言から tag 名の type reference を生成します。
+- **C の参照抽出が `_t` 戻り値型を捕捉するようになりました** — `widget_t *make_widget(void)` のように typedef を返す関数から typedef 名への参照を生成します。
+- **C の参照抽出が tag 付き戻り値型を捕捉するようになりました** — `struct node *` を返す関数から戻り値 tag の type reference を生成します。
+- **C の参照抽出が `_t` parameter 型を捕捉するようになりました** — `widget_t *widget` のような関数 parameter から typedef 名へ戻れるようになりました。
+- **C の参照抽出が tag 付き parameter 型を捕捉するようになりました** — `struct node *node` のような parameter から tag 名の type reference を生成します。
+- **C の参照抽出が `_t` compound literal を捕捉するようになりました** — `(widget_t){0}` のような literal から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き compound literal を捕捉するようになりました** — `(struct node){0}` のような literal から tag 名への参照を生成します。
+- **C の参照抽出が `_t` の `typeof` operand を捕捉するようになりました** — `typeof(widget_t)` と `__typeof__(message_t *)` から typedef 名への参照を生成します。
+- **C の参照抽出が tag 付き `typeof` operand を捕捉するようになりました** — `typeof(struct node *)` から tag 名への参照を生成します。
+- **C の参照抽出が `_t` の `_Generic` association を捕捉するようになりました** — `_Generic(value, widget_t: ...)` から typedef association 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Generic` association を捕捉するようになりました** — `_Generic(value, struct node *: ...)` から tag association 型への参照を生成します。
+- **C の参照抽出が `_t` の `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(widget_t)` から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(struct node *)` から tag 型への参照を生成します。
+- **C の参照抽出が `_t` の `_Alignas` specifier を捕捉するようになりました** — `_Alignas(widget_t)` と `alignas(message_t *)` から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Alignas` specifier を捕捉するようになりました** — `_Alignas(struct node)` と `alignas(union value *)` から tag 型への参照を生成します。
+- **C の参照抽出が `_t` function-pointer typedef の戻り型を捕捉するようになりました** — `typedef widget_t (*factory_t)(void);` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が tag 付き function-pointer typedef の戻り型を捕捉するようになりました** — `typedef struct node *(*factory_t)(void);` から戻り値 tag への参照を生成します。
+- **C の参照抽出が `_t` function-pointer 宣言の戻り型を捕捉するようになりました** — `widget_t (*factory)(void);` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が tag 付き function-pointer 宣言の戻り型を捕捉するようになりました** — `struct node *(*factory)(void);` から戻り値 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` 宣言を捕捉するようになりました** — `widget_t * restrict current;` から宣言 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き宣言を捕捉するようになりました** — `struct node * const next;` から宣言 tag への参照を生成します。
+- **C の参照抽出が `_t` pointer-to-array 宣言を捕捉するようになりました** — `widget_t (*items)[4];` から配列要素 typedef への参照を生成します。
+- **C の参照抽出が tag 付き pointer-to-array 宣言を捕捉するようになりました** — `struct node (*items)[4];` から配列要素 tag への参照を生成します。
+- **C の参照抽出が `_t` `offsetof` operand を捕捉するようになりました** — `offsetof(widget_t, field)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `offsetof` operand を捕捉するようになりました** — `offsetof(struct node, next)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `va_arg` operand を捕捉するようになりました** — `va_arg(args, widget_t)` から要求 typedef への参照を生成します。
+- **C の参照抽出が tag 付き `va_arg` operand を捕捉するようになりました** — `va_arg(args, struct node *)` から要求 tag への参照を生成します。
+- **C の参照抽出が tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node *)` から測定 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` `sizeof` operand を捕捉するようになりました** — `sizeof(widget_t * const)` から測定 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node * const)` から測定 tag への参照を生成します。
+- **C の参照抽出が tag 付き alignment operand を捕捉するようになりました** — `_Alignof(struct node *)` と `alignof(union value)` から測定 tag への参照を生成します。
+- **C の参照抽出が `_t` GNU alignment operand を捕捉するようになりました** — `__alignof__(widget_t *)` から測定 typedef への参照を生成します。
+- **C の参照抽出が tag 付き GNU alignment operand を捕捉するようになりました** — `__alignof__(struct node *)` から測定 tag への参照を生成します。
+- **C の参照抽出が `_t` `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(widget_t *)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(struct node *)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの typedef 型引数から参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの tag 型引数から参照を生成します。
+- **C の参照抽出が `_t` `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(widget_t, field)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(struct node, next)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, widget_t)` から要求 typedef への参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, struct node *)` から要求 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` 戻り値型を捕捉するようになりました** — `widget_t * const make_widget(void)` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き戻り値型を捕捉するようになりました** — `struct node * const make_node(void)` から戻り値 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` parameter 型を捕捉するようになりました** — `widget_t * restrict widget` から parameter typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き parameter 型を捕捉するようになりました** — `struct node * const node` から parameter tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` `_Generic` association を捕捉するようになりました** — `widget_t * const:` から association typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き `_Generic` association を捕捉するようになりました** — `struct node * const:` から association tag への参照を生成します。
