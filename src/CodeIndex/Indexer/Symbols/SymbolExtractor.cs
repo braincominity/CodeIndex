@@ -118,7 +118,7 @@ public static partial class SymbolExtractor
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
     private static readonly Regex CobolProgramIdLineRegex = new(
-        @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        @"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?(?:PROGRAM|CLASS)-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolProcedureDivisionRegex = new(
         @"^\s*PROCEDURE\s+DIVISION\.\s*$",
@@ -133,7 +133,7 @@ public static partial class SymbolExtractor
         @"^\s{0,6}(?<name>[A-Z0-9][A-Z0-9-]*)\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolEndProgramRegex = new(
-        @"^\s*END\s+PROGRAM(?:\s+(?<name>[A-Z0-9][A-Z0-9-]*))?\.\s*$",
+        @"^\s*END\s+(?:PROGRAM|CLASS)(?:\s+(?<name>[A-Z0-9][A-Z0-9-]*))?\.\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex PhpGroupUseRegex = new(
         @"^\s*use\s+(?:(?<type>function|const)\s+)?(?<prefix>[\w\\]+\\)\{\s*(?<items>[^{}]+?)\s*\}\s*;",
@@ -732,7 +732,7 @@ public static partial class SymbolExtractor
             // Keep the extraction deliberately small and conservative: one symbol per program.
             // COBOL は brace ではなく program ID 単位で構成されるため、抽出は保守的に
             // program ひとつにつき 1 symbol に絞る。
-            new("class", new Regex(@"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?PROGRAM-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class", new Regex(@"^\s*(?:IDENTIFICATION\s+DIVISION\.\s*)?(?:PROGRAM|CLASS)-ID\.\s*(?<name>[A-Z0-9][A-Z0-9-]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["javascript"] =
         [

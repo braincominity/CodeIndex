@@ -730,6 +730,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolClassId_DetectsClassSymbolAndContainers()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            CLASS-ID. customer-service.
+            PROCEDURE DIVISION.
+            MAIN-SECTION SECTION.
+                DISPLAY "A".
+            END CLASS customer-service.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "CUSTOMER-SERVICE");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "MAIN-SECTION"
+            && symbol.ContainerName == "CUSTOMER-SERVICE");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsTypeScriptSymbols()
     {
         const string content = """
