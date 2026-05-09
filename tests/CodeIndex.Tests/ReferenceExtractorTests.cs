@@ -10956,6 +10956,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesCallByNameTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Run(target As Object)
+                    CallByName(target, "Save", CallType.Method)
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CallByName" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
     {
         const string content = """

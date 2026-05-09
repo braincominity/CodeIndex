@@ -310,6 +310,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex VbBareMemberCallRegex = new(
         @"^\s*\.\s*(?<name>" + VbIdentifierPattern + @")(?<tail>\s*(?:$|.*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VbCallByNameRegex = new(
+        @"\bCallByName\s*\([^,\r\n]+,\s*""(?<name>[^""\r\n]+)""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex FortranUseRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+(?<name>[A-Za-z_]\w*)",
@@ -486,6 +489,7 @@ internal static class LanguageReferenceExtractionSupport
                 EmitSmalltalkMessageReferences(preparedLine, addCallLikeReference, definitionNames);
                 break;
             case "vb":
+                EmitVisualBasicCallByNameReferences(originalLine, preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 EmitVisualBasicEscapedCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
                 EmitVisualBasicBareCallReferences(preparedLine, addCallLikeReference, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
                 EmitVisualBasicBareMemberCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -3454,6 +3458,44 @@ internal static class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         else
             addCallLikeReference(name, nameIndex);
+    }
+
+    private static void EmitVisualBasicCallByNameReferences(
+        string originalLine,
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in VbCallByNameRegex.Matches(originalLine))
+        {
+            if (match.Index >= preparedLine.Length || char.IsWhiteSpace(preparedLine[match.Index]))
+                continue;
+
+            var group = match.Groups["name"];
+            var name = group.Value.Trim();
+            if (!IsSimpleVisualBasicIdentifier(name))
+                continue;
+
+            ReferenceExtractor.AddReference(references, seen, fileId, name, group.Index, "call", context, lineNumber, resolveContainerForColumn(group.Index));
+        }
+    }
+
+    private static bool IsSimpleVisualBasicIdentifier(string value)
+    {
+        if (value.Length == 0 || !IsIdentifierStart(value[0]))
+            return false;
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (!IsSimpleIdentifierPart(value[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool ShouldSkipVisualBasicBareCall(string rawName, string tail)
