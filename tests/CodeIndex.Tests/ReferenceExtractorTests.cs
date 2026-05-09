@@ -8127,6 +8127,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppDecltypeBraceConstruction_CapturesTypeReferences()
+    {
+        const string content = """
+            using WidgetValue = decltype(Widget{});
+            using ResultValue = decltype(ns::Result{42});
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Result" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_GoDetailedReferences_CapturesImportsTypesAndCompositeLiterals()
     {
         const string content = """
