@@ -25,6 +25,9 @@ internal static class CobolReferenceExtractor
     private static readonly Regex CobolExecCicsProgramCallRegex = new(
         @"^\s*EXEC\s+CICS\s+(?:LINK|XCTL)\b.*?\bPROGRAM\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolExecCicsProgramReferenceRegex = new(
+        @"^\s*EXEC\s+CICS\s+(?:LOAD)\b.*?\bPROGRAM\s*\(\s*(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\s*\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolExecSqlSimpleReferenceRegex = new(
         @"^\s*EXEC\s+SQL\s+(?:FETCH|OPEN|CLOSE|PREPARE|EXECUTE)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -82,6 +85,7 @@ internal static class CobolReferenceExtractor
         new(CobolExecSqlIncludeRegex, "reference"),
         new(CobolExecSqlCallRegex, "call"),
         new(CobolExecCicsProgramCallRegex, "call"),
+        new(CobolExecCicsProgramReferenceRegex, "reference"),
         new(CobolExecSqlSimpleReferenceRegex, "reference"),
         new(CobolGotoRegex, "call"),
         new(CobolUseAfterProcedureRegex, "reference"),
