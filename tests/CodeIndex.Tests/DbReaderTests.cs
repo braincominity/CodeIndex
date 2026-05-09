@@ -5011,6 +5011,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_CreateClusteredColumnstoreIndexReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_create_clustered_columnstore_index_target.sql", "sql",
+            """
+            CREATE TABLE dbo.FactSales (Id int, Amount money);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_create_clustered_columnstore_index_definition.sql", "sql",
+            """
+            CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSales ON dbo.FactSales;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.FactSales", lang: "sql", exact: true, pathPatterns: ["sql_create_clustered_columnstore_index"]));
+        Assert.Equal("src/sql_create_clustered_columnstore_index_definition.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.FactSales", lang: "sql", exact: true, pathPatterns: ["sql_create_clustered_columnstore_index"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.FactSales", lang: "sql", exact: true, pathPatterns: ["sql_create_clustered_columnstore_index"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_AlterFullTextIndexReferencesResolveThroughSearch()
     {
         InsertIndexedFile("src/sql_alter_fulltext_index_target.sql", "sql",

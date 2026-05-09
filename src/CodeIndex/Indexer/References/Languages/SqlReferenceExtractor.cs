@@ -111,6 +111,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateSpecialXmlIndexOnTargetRegex = new(
         $@"(?<![\w$])CREATE\s+(?:PRIMARY\s+XML|SELECTIVE\s+XML)\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CreateClusteredColumnstoreIndexOnTargetRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+CLUSTERED\s+COLUMNSTORE\s+INDEX\b[\s\S]*?\bON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CreateFullTextIndexOnTargetRegex = new(
         $@"(?<![\w$])CREATE\s+FULLTEXT\s+INDEX\b\s+ON\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -604,6 +607,21 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             CreateSpecialXmlIndexOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            CreateClusteredColumnstoreIndexOnTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,

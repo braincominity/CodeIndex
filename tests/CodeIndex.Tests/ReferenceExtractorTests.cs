@@ -11737,6 +11737,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CreateClusteredColumnstoreIndexCapturesTableReference()
+    {
+        const string content = """
+            CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSales ON dbo.FactSales;
+            CREATE CLUSTERED COLUMNSTORE INDEX [CCI_InvoiceFacts] ON [warehouse].[InvoiceFacts];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "FactSales" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "InvoiceFacts" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_SQL_AlterFullTextIndexCapturesTableReference()
     {
         const string content = """
