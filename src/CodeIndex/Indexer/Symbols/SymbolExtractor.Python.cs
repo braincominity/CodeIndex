@@ -377,16 +377,9 @@ public static partial class SymbolExtractor
         var normalizedModulePart = treatAsFromImport
             ? modulePart?.Trim().TrimStart('.').TrimEnd('.')
             : null;
-        var isCurrentPackageRelativeImport = treatAsFromImport
-            && !string.IsNullOrEmpty(pythonModulePrefix)
-            && !string.IsNullOrEmpty(modulePart)
-            && modulePart.All(static ch => ch == '.');
-        var currentPackageRelativeModulePart = treatAsFromImport
-            && !string.IsNullOrEmpty(pythonModulePrefix)
-            && modulePart?.StartsWith(".", StringComparison.Ordinal) == true
-            && !modulePart.StartsWith("..", StringComparison.Ordinal)
-                ? modulePart.TrimStart('.').TrimEnd('.')
-                : null;
+        var relativeQualifiedModulePart = treatAsFromImport
+            ? ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix)
+            : null;
         foreach (var rawSpec in importedNames.Split(','))
         {
             var spec = rawSpec.Trim();
@@ -439,23 +432,12 @@ public static partial class SymbolExtractor
                         ref searchStartColumn);
                 }
 
-                if (isCurrentPackageRelativeImport)
+                if (!string.IsNullOrEmpty(relativeQualifiedModulePart))
                 {
                     AddPythonImportEntry(
                         line,
                         absoluteStartColumn,
-                        $"{pythonModulePrefix}.{importedName}",
-                        entries,
-                        seenNames,
-                        ref searchStartColumn);
-                }
-
-                if (!string.IsNullOrEmpty(currentPackageRelativeModulePart))
-                {
-                    AddPythonImportEntry(
-                        line,
-                        absoluteStartColumn,
-                        $"{pythonModulePrefix}.{currentPackageRelativeModulePart}.{importedName}",
+                        $"{relativeQualifiedModulePart}.{importedName}",
                         entries,
                         seenNames,
                         ref searchStartColumn);
@@ -482,6 +464,32 @@ public static partial class SymbolExtractor
                     ref searchStartColumn);
             }
         }
+    }
+
+    private static string? ResolvePythonRelativeFromImportModuleName(string? modulePart, string? pythonModulePrefix)
+    {
+        if (string.IsNullOrEmpty(modulePart)
+            || string.IsNullOrEmpty(pythonModulePrefix)
+            || !modulePart.StartsWith(".", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var leadingDots = 0;
+        while (leadingDots < modulePart.Length && modulePart[leadingDots] == '.')
+            leadingDots++;
+
+        var levelsToDrop = leadingDots - 1;
+        var packageParts = pythonModulePrefix.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (levelsToDrop >= packageParts.Length)
+            return null;
+
+        var basePartCount = packageParts.Length - levelsToDrop;
+        var resolved = string.Join('.', packageParts.Take(basePartCount));
+        var suffix = modulePart[leadingDots..].Trim('.');
+        return suffix.Length == 0
+            ? resolved
+            : $"{resolved}.{suffix}";
     }
 
     private static void AddPythonImportModuleEntry(

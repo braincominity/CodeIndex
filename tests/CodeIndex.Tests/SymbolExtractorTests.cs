@@ -311,6 +311,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesParentPackageRelativeModuleImports()
+    {
+        var content = """
+            from ..shared import helper
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("shared.helper", imports);
+        Assert.Contains("package.shared.helper", imports);
+    }
+
+    [Fact]
     public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
     {
         var content = """
