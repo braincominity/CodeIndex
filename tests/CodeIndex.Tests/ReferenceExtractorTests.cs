@@ -11088,6 +11088,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesImportsAliasesWithoutSpaces()
+    {
+        const string content = """
+            Imports CustomerAlias=App.Domain.Customer
+
+            Public Class Controller
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesNewTypeInstantiation()
     {
         const string content = """

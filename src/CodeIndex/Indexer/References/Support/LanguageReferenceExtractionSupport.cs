@@ -4139,10 +4139,26 @@ internal static class LanguageReferenceExtractionSupport
             var raw = list.Substring(segmentStart, segmentLength).Trim();
             if (raw.Length == 0)
                 continue;
+            var expressionStart = segmentStart + ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            if (language == "vb")
+            {
+                var equalsIndex = list.IndexOf('=', segmentStart, segmentLength);
+                if (equalsIndex >= 0)
+                {
+                    var rhsStart = equalsIndex + 1;
+                    var rhsLength = segmentStart + segmentLength - rhsStart;
+                    var rhsLeading = ReferenceExtractor.CountLeadingWhitespace(list, rhsStart, rhsLength);
+                    expressionStart = rhsStart + rhsLeading;
+                    raw = list.Substring(expressionStart, rhsLength - rhsLeading).TrimEnd();
+                    if (raw.Length == 0)
+                        continue;
+                }
+            }
+
             var name = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? raw;
-            var offset = list.IndexOf(name, segmentStart, StringComparison.Ordinal);
+            var offset = list.IndexOf(name, expressionStart, StringComparison.Ordinal);
             if (offset < 0)
-                offset = segmentStart;
+                offset = expressionStart;
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, name, listStart + offset, context, lineNumber, container, language);
         }
     }
