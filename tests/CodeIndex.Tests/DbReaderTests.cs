@@ -5189,6 +5189,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterTableSystemVersioningReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_table_system_versioning_target.sql", "sql",
+            """
+            CREATE TABLE history.OrdersHistory (Id int);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_table_system_versioning_enable.sql", "sql",
+            """
+            ALTER TABLE dbo.Orders
+                SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = history.OrdersHistory));
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("history.OrdersHistory", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_system_versioning"]));
+        Assert.Equal("src/sql_alter_table_system_versioning_enable.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("history.OrdersHistory", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_system_versioning"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("history.OrdersHistory", lang: "sql", exact: true, pathPatterns: ["sql_alter_table_system_versioning"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

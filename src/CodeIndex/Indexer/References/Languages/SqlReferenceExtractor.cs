@@ -150,6 +150,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex AlterTableSwitchTargetRegex = new(
         $@"(?<![\w$])ALTER\s+TABLE\s+{QualifiedIdentifierNoCapturePattern}\s+SWITCH\b[\s\S]*?\bTO\s+(?:(?:ONLY)\b\s+)?{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AlterTableSystemVersioningHistoryTargetRegex = new(
+        $@"(?<![\w$])ALTER\s+TABLE\s+{QualifiedIdentifierNoCapturePattern}[\s\S]*?\bSYSTEM_VERSIONING\s*=\s*ON\b[\s\S]*?\bHISTORY_TABLE\s*=\s*{QualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ObjectPermissionTargetRegex = new(
         $@"(?<![\w$])(?:GRANT|DENY|REVOKE)\b[\s\S]*?\bON\s+(?:OBJECT\s*::\s*)?(?![A-Z_]+\s*::){QualifiedIdentifierPattern}\s+(?:TO|FROM)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -701,6 +704,20 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterTableSwitchTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterTableSystemVersioningHistoryTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
