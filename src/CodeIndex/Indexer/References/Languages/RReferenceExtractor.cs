@@ -65,6 +65,12 @@ internal static class RReferenceExtractor
     private static readonly Regex SystemFilePathPartRegex = new(
         @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled);
+    private static readonly Regex VignetteCallStartRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?vignette\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex DocumentationTopicRegex = new(
+        @"(?:\(|,)\s*(?!(?:[A-Za-z.][\w.]*\s*=))['""](?<name>[^'""]+)['""]",
+        RegexOptions.Compiled);
     private static readonly Regex InstallPackagesCallStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?install\.packages\s*\(",
         RegexOptions.Compiled);
@@ -635,6 +641,75 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
         foreach (Match match in SystemFilePathPartRegex.Matches(line))
+        {
+            var name = match.Groups["name"];
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name.Value,
+                name.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+
+        var packageMatch = DataCallPackageRegex.Match(line);
+        if (!packageMatch.Success)
+            return;
+
+        var package = packageMatch.Groups["name"];
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            package.Value,
+            package.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+    }
+
+    public static void EmitVignetteReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        EmitDocumentationTopicReferences(
+            preparedLine,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            VignetteCallStartRegex);
+    }
+
+    private static void EmitDocumentationTopicReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Regex startRegex)
+    {
+        if (!startRegex.IsMatch(preparedLine))
+            return;
+
+        var line = StripRNamespaceDirectiveComment(originalLine);
+        foreach (Match match in DocumentationTopicRegex.Matches(line))
         {
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(

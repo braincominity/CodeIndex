@@ -2623,6 +2623,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitVignetteReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 RReferenceExtractor.EmitInstallPackagesReferences(
                     preparedLine,
                     originalLine,

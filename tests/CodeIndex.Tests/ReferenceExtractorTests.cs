@@ -14641,6 +14641,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsVignetteReferences()
+    {
+        const string content = """
+            docs <- function() {
+                vignette("dplyr")
+                utils::vignette("programming", package = "dplyr")
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "dplyr"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+        Assert.Contains(references, r =>
+            r.SymbolName == "programming"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "docs");
+    }
+
+    [Fact]
     public void Extract_R_DetectsNamespaceReferenceOperators()
     {
         const string content = """
