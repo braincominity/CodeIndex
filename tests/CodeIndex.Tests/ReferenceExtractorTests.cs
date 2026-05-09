@@ -10833,6 +10833,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesEscapedAddressOfTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Wire(button As Button)
+                    AddHandler button.Click, AddressOf [Select]
+                End Sub
+
+                Private Sub [Select]()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesQualifiedAddHandlerEventTargets()
     {
         const string content = """

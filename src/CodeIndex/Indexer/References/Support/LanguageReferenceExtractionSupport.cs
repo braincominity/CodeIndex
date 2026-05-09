@@ -284,7 +284,7 @@ internal static class LanguageReferenceExtractionSupport
         @"\bTypeOf\b.+?\bIs(?:Not)?\s+(?<type>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbAddressOfRegex = new(
-        @"\bAddressOf\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        @"\bAddressOf\s+(?<name>" + VbQualifiedIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VbHandlesTargetRegex = new(
         @"(?:\bHandles|,)\s+(?:[A-Za-z_]\w*\.)*(?<name>[A-Za-z_]\w*)",
@@ -3315,8 +3315,9 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
-            var name = LastQualifiedSegment(group.Value);
-            var nameOffset = group.Value.LastIndexOf(name, StringComparison.Ordinal);
+            var rawName = LastQualifiedSegment(group.Value);
+            var name = NormalizeVbIdentifierSegment(rawName);
+            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
             var nameIndex = group.Index + Math.Max(0, nameOffset);
             ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
         }
