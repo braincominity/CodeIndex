@@ -10798,6 +10798,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_VbDetailedReferences_CapturesRemoveHandlerEventTargets()
+    {
+        const string content = """
+            Public Class Controller
+                Public Sub Unwire(button As Button)
+                    RemoveHandler button.Click, AddressOf HandleClick
+                End Sub
+
+                Private Sub HandleClick()
+                End Sub
+            End Class
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RemoveHandler" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_FortranDetailedReferences_CapturesUseTypeClassAndCall()
     {
         const string content = """
