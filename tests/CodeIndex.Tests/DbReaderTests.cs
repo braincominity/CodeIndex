@@ -5766,6 +5766,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlterPartitionFunctionReferencesResolveThroughSearch()
+    {
+        InsertIndexedFile("src/sql_alter_partition_function_target.sql", "sql",
+            """
+            CREATE PARTITION FUNCTION pfOrders(int)
+            AS RANGE LEFT FOR VALUES (100);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_alter_partition_function_update.sql", "sql",
+            """
+            ALTER PARTITION FUNCTION pfOrders() SPLIT RANGE (200);
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_function"]));
+        Assert.Equal("src/sql_alter_partition_function_update.sql", reference.Path);
+        Assert.Equal(1, _reader.CountSearchReferences("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_function"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("pfOrders", lang: "sql", exact: true, pathPatterns: ["sql_alter_partition_function"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
