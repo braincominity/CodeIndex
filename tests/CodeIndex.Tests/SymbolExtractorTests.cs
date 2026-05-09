@@ -129,6 +129,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_AbstractPropertyDecoratorsAreProperties()
+    {
+        var content = """
+            import abc
+            from abc import abstractproperty
+
+            class Base:
+                @abstractproperty
+                def name(self) -> str:
+                    raise NotImplementedError
+
+                @abc.abstractproperty
+                def value(self) -> int:
+                    raise NotImplementedError
+            """;
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "value");
+    }
+
+    [Fact]
     public void Extract_Python_ExpandsImportAliasesAndImportedNames()
     {
         var content = """

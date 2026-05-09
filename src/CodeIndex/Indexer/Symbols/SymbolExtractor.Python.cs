@@ -39,8 +39,9 @@ public static partial class SymbolExtractor
             decorator = decorator[..parenIndex];
 
         decorator = decorator.Trim();
-        return decorator is "property" or "cached_property"
+        return decorator is "property" or "cached_property" or "abstractproperty"
             || decorator.EndsWith(".cached_property", StringComparison.Ordinal)
+            || decorator.EndsWith(".abstractproperty", StringComparison.Ordinal)
             || decorator.EndsWith(".setter", StringComparison.Ordinal)
             || decorator.EndsWith(".deleter", StringComparison.Ordinal);
     }
