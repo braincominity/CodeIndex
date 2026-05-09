@@ -10691,6 +10691,13 @@ public class ReferenceExtractorTests
                     printfn "%d" i
                 for i = startIndex user downto lowerBound user do
                     printfn "%d" i
+                for item in items do
+                    printfn "%A" item
+                for i = 1 to maxIndex do
+                    printfn "%d" i
+
+            let inspect isReady =
+                if isReady then readyValue else fallbackValue
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fsharp", content);
@@ -10701,6 +10708,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "lowerBound" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "to" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "downto" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "items" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "maxIndex" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "readyValue" && r.ReferenceKind == "call");
     }
 
     [Fact]

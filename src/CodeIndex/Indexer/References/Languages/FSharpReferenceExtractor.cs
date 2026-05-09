@@ -48,7 +48,7 @@ internal static class FSharpReferenceExtractor
         $@"(?:\b(?:then|do!?|else|in|to|downto|return!?|yield!?)\s+|->\s+|[=(,\[\{{;]\s*|^\s*)
             (?:(?:{IdentifierPattern})\s*\.\s*)*
             (?<name>{IdentifierPattern})\b
-            (?=\s+(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
+            (?=\s+(?!(?:do|else)\b)(?:{IdentifierPattern}|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|\(|\[|\{{|\d))",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     private static readonly Regex OperatorCallRegex = new(
