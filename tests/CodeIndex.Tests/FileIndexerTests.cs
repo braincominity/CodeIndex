@@ -44,6 +44,7 @@ public class FileIndexerTests
     [InlineData("Module.bas", "vb")]
     [InlineData("Customer.cls", "vb")]
     [InlineData("Form1.frm", "vb")]
+    [InlineData("Macro.vba", "vb")]
     [InlineData("Module1.vb", "vb")]
     [InlineData("script.vbs", "vb")]
     [InlineData("index.html", "html")]

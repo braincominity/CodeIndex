@@ -236,6 +236,7 @@ public class FileIndexer
         [".bas"]    = "vb",
         [".cls"]    = "vb",
         [".frm"]    = "vb",
+        [".vba"]    = "vb",
         [".vb"]     = "vb",
         [".vbs"]    = "vb",
         [".hs"]     = "haskell",
