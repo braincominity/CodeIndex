@@ -2463,6 +2463,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitAttrsFieldsReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    name => IsIgnoredCallName(language, name));
             }
 
             if (language == "r")
