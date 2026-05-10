@@ -4183,7 +4183,7 @@ public static partial class SymbolExtractor
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
-        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD", includeJsonForm: false);
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD", includeJsonForm: true);
 
     private static void AddDockerfileInstructionDestinationSymbol(
         long fileId,

@@ -59,6 +59,7 @@ affected:
 - **Dockerfile shell-form `COPY` destinations become symbols** — `COPY src /app` now indexes `/app` as the destination path.
 - **Dockerfile shell-form `ADD` destinations become symbols** — `ADD archive.tar.gz /opt/app` now indexes `/opt/app` as the destination path.
 - **Dockerfile JSON-array `COPY` destinations become symbols** — `COPY ["src", "/app"]` now indexes `/app` as the destination path.
+- **Dockerfile JSON-array `ADD` destinations become symbols** — `ADD ["src", "/opt/app"]` now indexes `/opt/app` as the destination path.
 
 ## 日本語
 
@@ -109,3 +110,4 @@ affected:
 - **Dockerfile shell form の `COPY` destination を symbol として扱うようになりました** — `COPY src /app` が destination path の `/app` を index するようになりました。
 - **Dockerfile shell form の `ADD` destination を symbol として扱うようになりました** — `ADD archive.tar.gz /opt/app` が destination path の `/opt/app` を index するようになりました。
 - **Dockerfile JSON array form の `COPY` destination を symbol として扱うようになりました** — `COPY ["src", "/app"]` が destination path の `/app` を index するようになりました。
+- **Dockerfile JSON array form の `ADD` destination を symbol として扱うようになりました** — `ADD ["src", "/opt/app"]` が destination path の `/opt/app` を index するようになりました。
