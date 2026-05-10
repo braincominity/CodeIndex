@@ -11,6 +11,824 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.21.0] - 2026-05-10
+
+#### Added
+
+- **C# partial constructors are now indexed as function symbols** — C# 14 `public partial Widget();` and `public partial Widget() { }` declarations now appear in `symbols`, `definition`, and `outline` results.
+- **Java sealed `permits` lists now emit graph references** — `sealed interface Shape permits Circle, Square` now records `Circle` and `Square` as `type_reference` edges so `references`, `deps`, and impact-style graph queries can see permitted subtype dependencies.
+- **JavaScript and TypeScript destructured named exports are now indexed** — `export const { foo, renamed: localName } = source` now emits export-surface `property` symbols for the actual binding names, including rest bindings and nested object/array binding names.
+- **JavaScript/TypeScript CommonJS default function exports are now searchable** — `module.exports = function () {}` and `module.exports = async () => {}` now add exported `default` `function` symbols, while `module.exports = class`, object literals, and plain values continue through their existing paths.
+- **JavaScript/TypeScript CommonJS `Object.defineProperties` exports are now searchable** — `Object.defineProperties(exports, { foo: ... })` and `Object.defineProperties(module.exports, { "bar-baz": ... })` now add exported `property` symbols for static descriptor keys while ignoring `__esModule` and dynamic computed keys.
+- **JavaScript/TypeScript CommonJS `Object.defineProperty` exports are now searchable** — `Object.defineProperty(exports, "foo", ...)` and `Object.defineProperty(module.exports, "bar", ...)` now add exported `property` symbols while the `__esModule` marker and non-export targets stay skipped.
+- **JavaScript/TypeScript CommonJS `Object.defineProperty` numeric export keys are now searchable** — `Object.defineProperty(exports, 404, ...)` and multiline `Object.defineProperty(module.exports, 500, ...)` calls now add exported `property` symbols for static numeric property keys while still ignoring `__esModule`.
+- **JavaScript/TypeScript CommonJS numeric bracket exports are now searchable** — `exports[404] = value` and `module.exports[500] = function () {}` now surface exported symbols named `404` / `500`, while dynamic bracket expressions remain ignored.
+- **JavaScript/TypeScript CommonJS `Object.assign` exports are now searchable** — `Object.assign(exports, { foo })` and `Object.assign(module.exports, { "bar-baz": value })` now add exported `property` symbols for static object keys while leaving dynamic computed keys ignored.
+- **JavaScript/TypeScript CommonJS require calls now expose module imports** — `const fs = require("node:fs")` and multiline `require("./helper")` calls now add `import` symbols for their source modules while method calls such as `loader.require(...)` and `require.resolve(...)` stay skipped.
+- **JavaScript/TypeScript default arrow exports are now searchable** — `export default () => value` and `export default async () => {}` now add exported `default` `function` symbols while default function, class, and object-literal exports stay on their existing extraction paths.
+- **JavaScript and TypeScript default-export functions are now indexed** — `export default function Name() {}` now emits a `function` symbol named `Name`, and anonymous default-export functions are indexed as the module `default` function surface.
+- **JavaScript/TypeScript dynamic import search now handles import options** — runtime calls such as `import("./data.json", { with: { type: "json" } })` and multiline assertion-style options now surface the module specifier as an `import` symbol.
+- **JavaScript/TypeScript exported object literals now index computed literal keys** — static computed keys such as `module.exports = { ["computed-api"]: handler, [500]: notFound }` and `export default { ["dash-key"]: handler }` now appear as exported `property` symbols while dynamic computed keys stay skipped.
+- **JavaScript/TypeScript exported object literals now index literal keys** — quoted and numeric keys such as `module.exports = { "x-api": handler, 404: notFound }` and `export default { "dash-key": value }` now appear as exported `property` symbols while computed keys stay skipped.
+- **JavaScript/TypeScript exported variable declarations are now searchable** — `export const foo = 1, bar = 2`, `export let`, `export var`, and TypeScript `export declare const` declarations now add exported `property` symbols for the public variable names without duplicating exported function bindings.
+- **JavaScript/TypeScript `import.meta.resolve` specifiers are now searchable** — static module specifiers passed to `import.meta.resolve("./feature.js")` are indexed as `import` symbols, including calls with a parent URL argument.
+- **JavaScript/TypeScript `importScripts()` dependencies are now searchable** — global `importScripts("./worker-a.js", "/worker-b.js")` calls now add one `import` symbol per static string or no-substitution template specifier while property-access calls and dynamic templates remain ignored.
+- **JavaScript/TypeScript local named export lists are now searchable** — `export { foo, local as publicName }` and TypeScript `export type { User }` now add exported `property` symbols even when the declaration and export list are separated.
+- **JavaScript and TypeScript multiline dynamic imports are now indexed** — runtime `import(\n  "./module"\n)` calls now emit `import` symbols for their module specifiers while strings, comments, and TypeScript `typeof import(...)` type queries stay excluded.
+- **JavaScript/TypeScript `new URL(..., import.meta.url)` references are now searchable** — static string and no-substitution template specifiers such as `new URL("./worker.js", import.meta.url)` now add `import` symbols while dynamic templates and non-`import.meta.url` bases remain ignored.
+- **JavaScript/TypeScript qualified Worker constructors are now searchable** — `new window.Worker("./worker.js")` and `new globalThis.SharedWorker("./shared-worker.js")` now add `import` symbols for static script specifiers alongside unqualified Worker constructors.
+- **JavaScript/TypeScript `require.resolve()` module references are now searchable** — static `require.resolve("./resolved")` calls now add `import` symbols for their module specifier while property-access calls such as `loader.require(...)` remain ignored.
+- **JavaScript/TypeScript `require.resolve()` calls with options are now searchable** — `require.resolve("./with-paths", { paths: [...] })` now keeps the static module specifier as an `import` symbol even when the call includes a trailing options argument.
+- **JavaScript/TypeScript direct Service Worker registrations are now searchable** — `navigator.serviceWorker.register("./sw.js")` and option-bearing direct registrations now add `import` symbols for static script specifiers while dynamic paths remain ignored.
+- **JavaScript/TypeScript static imports now surface source modules** — declarations such as `import React from "react"`, multiline `import { ... } from "vue"`, side-effect imports, and import-attributes forms now add the source module specifier as an `import` symbol.
+- **JavaScript/TypeScript string-literal export names are now searchable without quotes** — local and re-export lists such as `export { handler as "x-api" }` and `export { remote as "remote-key" } from "./remote"` now add exported `property` symbols named `x-api` / `remote-key`.
+- **JavaScript/TypeScript dynamic imports now index no-substitution template literals** — `` import(`./view.js`) `` now adds an `import` symbol for `./view.js`, while interpolated templates such as `` import(`./${name}.js`) `` stay skipped.
+- **JavaScript/TypeScript `window.navigator.serviceWorker.register()` references are now searchable** — `window.navigator.serviceWorker.register("./sw.js")` now adds `import` symbols for static script specifiers while broader global object variants remain ignored.
+- **JavaScript/TypeScript Worker constructor scripts are now searchable** — `new Worker("./worker.js")`, `new SharedWorker("./shared-worker.js", { type: "module" })`, and static template specifiers now add `import` symbols while dynamic templates, bare calls, and unrelated constructor names remain ignored.
+- **JavaScript/TypeScript Worklet module loads are now searchable** — `audioWorklet.addModule("./processor.js")`, `CSS.paintWorklet.addModule("./paint.js")`, and related direct Worklet `addModule` calls now add `import` symbols for static module specifiers while dynamic paths and arbitrary `worklet.addModule(...)` calls remain ignored.
+- **Common Lisp and Racket now have graph-aware search support** — `cdidx` now extracts Lisp definitions with comment-aware S-expression scanning and indexes Common Lisp / Racket call references for `references`, `callers`, `callees`, and `impact`.
+- **Perl search now indexes richer symbols and references** — Perl package declarations, imports, constants, attributed subroutines, module inheritance, constructor calls, and arrow method calls are now easier to navigate through symbols and references.
+
+#### Changed
+
+- **C search now indexes spaced include directives** — `# include <header.h>` forms now produce import symbols, so symbol/search navigation sees headers written with preprocessor whitespace.
+- **C search now indexes `#include_next` targets** — GNU-style next-header directives now produce import symbols alongside ordinary `#include` rows.
+- **C search now indexes `#import` headers** — import-style header directives now surface as import symbols for header navigation.
+- **C search now indexes union declarations** — named `union` definitions now produce `union` symbols alongside structs and enums.
+- **C search now indexes union typedef aliases** — forward `typedef union Name Alias;` declarations now provide searchable `union` symbols for alias names.
+- **C search now indexes bracket-attributed functions** — C23-style `[[nodiscard]] int f(...)` declarations now surface by function name.
+- **C references now capture `#include_next` headers** — next-header directives now appear in reference-oriented queries, not only symbol search.
+- **C references now capture macro include targets** — `#include PROJECT_HEADER` now produces a header reference for macro-based include wiring.
+- **C references now suppress type-keyword noise** — `struct`, `enum`, `union`, and qualifiers are filtered out of C type-reference rows so typedef edges point at real tag names.
+- **C references now capture `_t` cast types** — lowercase typedef casts such as `(widget_t *)raw` now produce type-reference rows.
+- **C references now capture `_t` `sizeof` operands** — `sizeof(widget_t)` now produces a type-reference row for typedef-based size checks.
+- **C references now capture `_t` alignment operands** — `_Alignof(widget_t)` and `alignof(config_t)` now surface typedef operands as type references.
+- **C references now capture `_t` declaration types** — local declarations such as `widget_t *current;` now point search results back to typedef names.
+- **C references now capture tagged declaration types** — declarations such as `struct node *next;` now produce type references for the tag name.
+- **C references now capture `_t` return types** — functions returning typedefs such as `widget_t *make_widget(void)` now reference the typedef name.
+- **C references now capture tagged return types** — functions returning `struct node *` now produce type references for the returned tag.
+- **C references now capture `_t` parameter types** — function parameters such as `widget_t *widget` now point back to typedef names.
+- **C references now capture tagged parameter types** — parameters such as `struct node *node` now produce type references for tag names.
+- **C references now capture `_t` compound literals** — literals such as `(widget_t){0}` now reference the typedef type.
+- **C references now capture tagged compound literals** — literals such as `(struct node){0}` now reference the tag name.
+- **C references now capture `_t` `typeof` operands** — `typeof(widget_t)` and `__typeof__(message_t *)` now reference typedef names.
+- **C references now capture tagged `typeof` operands** — `typeof(struct node *)` now references the tag name.
+- **C references now capture `_t` `_Generic` associations** — `_Generic(value, widget_t: ...)` now references typedef association types.
+- **C references now capture tagged `_Generic` associations** — `_Generic(value, struct node *: ...)` now references tag association types.
+- **C references now capture `_t` `_Atomic` type specifiers** — `_Atomic(widget_t)` now references the typedef type.
+- **C references now capture tagged `_Atomic` type specifiers** — `_Atomic(struct node *)` now references the tag type.
+- **C references now capture `_t` `_Alignas` specifiers** — `_Alignas(widget_t)` and `alignas(message_t *)` now reference typedef types.
+- **C references now capture tagged `_Alignas` specifiers** — `_Alignas(struct node)` and `alignas(union value *)` now reference tag types.
+- **C references now capture `_t` function-pointer typedef returns** — `typedef widget_t (*factory_t)(void);` now references the return typedef.
+- **C references now capture tagged function-pointer typedef returns** — `typedef struct node *(*factory_t)(void);` now references the returned tag.
+- **C references now capture `_t` function-pointer declaration returns** — `widget_t (*factory)(void);` now references the return typedef.
+- **C references now capture tagged function-pointer declaration returns** — `struct node *(*factory)(void);` now references the returned tag.
+- **C references now capture pointer-qualified `_t` declarations** — `widget_t * restrict current;` now references the declared typedef.
+- **C references now capture pointer-qualified tagged declarations** — `struct node * const next;` now references the declared tag.
+- **C references now capture `_t` pointer-to-array declarations** — `widget_t (*items)[4];` now references the array element typedef.
+- **C references now capture tagged pointer-to-array declarations** — `struct node (*items)[4];` now references the array element tag.
+- **C references now capture `_t` `offsetof` operands** — `offsetof(widget_t, field)` now references the operand typedef.
+- **C references now capture tagged `offsetof` operands** — `offsetof(struct node, next)` now references the operand tag.
+- **C references now capture `_t` `va_arg` operands** — `va_arg(args, widget_t)` now references the requested typedef.
+- **C references now capture tagged `va_arg` operands** — `va_arg(args, struct node *)` now references the requested tag.
+- **C references now capture tagged `sizeof` operands** — `sizeof(struct node *)` now references the measured tag.
+- **C references now capture pointer-qualified `_t` `sizeof` operands** — `sizeof(widget_t * const)` now references the measured typedef.
+- **C references now capture pointer-qualified tagged `sizeof` operands** — `sizeof(struct node * const)` now references the measured tag.
+- **C references now capture tagged alignment operands** — `_Alignof(struct node *)` and `alignof(union value)` now reference measured tags.
+- **C references now capture `_t` GNU alignment operands** — `__alignof__(widget_t *)` now references the measured typedef.
+- **C references now capture tagged GNU alignment operands** — `__alignof__(struct node *)` now references the measured tag.
+- **C references now capture `_t` `typeof_unqual` operands** — `typeof_unqual(widget_t *)` now references the operand typedef.
+- **C references now capture tagged `typeof_unqual` operands** — `typeof_unqual(struct node *)` now references the operand tag.
+- **C references now capture `_t` `__builtin_types_compatible_p` operands** — both typedef type arguments now produce references.
+- **C references now capture tagged `__builtin_types_compatible_p` operands** — both tag type arguments now produce references.
+- **C references now capture `_t` `__builtin_offsetof` operands** — `__builtin_offsetof(widget_t, field)` now references the operand typedef.
+- **C references now capture tagged `__builtin_offsetof` operands** — `__builtin_offsetof(struct node, next)` now references the operand tag.
+- **C references now capture `_t` `__builtin_va_arg` operands** — `__builtin_va_arg(args, widget_t)` now references the requested typedef.
+- **C references now capture tagged `__builtin_va_arg` operands** — `__builtin_va_arg(args, struct node *)` now references the requested tag.
+- **C references now capture pointer-qualified `_t` return types** — `widget_t * const make_widget(void)` now references the returned typedef.
+- **C references now capture pointer-qualified tagged return types** — `struct node * const make_node(void)` now references the returned tag.
+- **C references now capture pointer-qualified `_t` parameter types** — `widget_t * restrict widget` now references the parameter typedef.
+- **C references now capture pointer-qualified tagged parameter types** — `struct node * const node` now references the parameter tag.
+- **C references now capture pointer-qualified `_t` `_Generic` associations** — `widget_t * const:` now references the association typedef.
+- **C references now capture pointer-qualified tagged `_Generic` associations** — `struct node * const:` now references the association tag.
+- **Go generic function constraints are indexed as type references** — `func Decode[T WireMessage](...)` now surfaces `WireMessage` in reference search and inspect output.
+- **Go generic type constraints are indexed as type references** — `type Cache[T EntityConstraint] ...` now surfaces `EntityConstraint` in reference search and inspect output.
+- **Go method receiver types are indexed as type references** — `func (h *Handler) Serve(...)` now links `Handler` from reference search and inspect output.
+- **Go interface method signatures expose parameter and return types** — interface members such as `Handle(ctx Context) Response` now link `Context` and `Response`.
+- **Go multi-name value declarations expose their shared type** — declarations such as `var primary, secondary *Client` now link `Client`.
+- **Go embedded field types are indexed as type references** — embedded fields such as `*BaseStore` and `audit.Logger` now show up in reference search.
+- **Go builtin allocation type arguments are indexed as type references** — `make([]User, 0)` and `new(Client)` now link `User` and `Client` without turning `make` or `new` into calls.
+- **Go type assertions are indexed as type references** — `value.(User)` and `value.(*Admin)` now link the asserted types while ignoring the `.(type)` sentinel.
+- **Go function literal signatures expose parameter and return types** — callbacks such as `func(ctx Context) Result` now link `Context` and `Result`.
+- **Go generic call type arguments are indexed as type references** — call sites such as `Decode[User]()` and `Map[model.Event, Result]()` now link their concrete type arguments.
+- **Go function type declarations expose parameter and return types** — declarations such as `type Handler func(Request) Response` and `Callback func(Context) Result` now link their signature types.
+- **Go channel type declarations expose element types** — directional channel declarations such as `<-chan Event` and `chan<- Command` now link `Event` and `Command`.
+- **Go generic composite literals are indexed with their type arguments** — literals such as `Cache[Entry]{}` and `model.Set[Key, Value]{}` now link the instantiated type and concrete type arguments.
+- **Go map composite literals expose key and value types** — literals such as `map[Key]Value{}` and `map[model.Tenant]*Entry{}` now link both sides of the map type.
+- **Go parenthesized type conversions are indexed as type references** — idioms such as `(*Concrete)(nil)` and `(model.ID)(raw)` now link the converted type.
+- **Go method expressions expose receiver types** — expressions such as `Handler.Serve`, `(*Worker).Run`, and `model.User.String` now link the receiver type.
+- **Go generic instantiations without calls expose type arguments** — function values such as `Decode[User]` and `stream.Map[model.Event, Result]` now link their concrete type arguments.
+- **Go interface type sets expose union term types** — constraint terms such as `~CustomID | External` and `model.Token | ~Alias` now link custom type-set members.
+- **Go labels are indexed as navigation symbols** — labels such as `Retry:` now appear in symbol search and definition-oriented workflows.
+- **Go branch statements link to label symbols** — `goto Retry`, `break Retry`, and `continue Retry` now emit label references for graph workflows.
+- **Go type switch cases expose pointer and composite case types** — `case *Admin`, `case []Guest`, and `case map[Key]Value` now link their type case entries without indexing value-switch constants.
+- **Go slice and array composite literals expose element types** — literals such as `[]User{}`, `[3]*Widget{}`, and `[...]model.Event{}` now link their element types.
+- **Go composite type conversions are indexed as type references** — conversions such as `[]User(raw)`, `map[Key]Value(raw)`, and `chan Event(raw)` now link their target types.
+- **Go inline struct fields expose field types** — anonymous forms such as `struct{ ID UserID; Owner *User }{}` now link `UserID` and `User` without indexing field names.
+- **Go inline interface members expose signature types** — anonymous forms such as `interface{ Handle(Context) Result; io.Reader }` now link method parameter, return, and embedded interface types.
+- **Go multi-pointer parenthesized conversions expose converted types** — conversions such as `(**Node)(nil)` now link the underlying pointed-to type.
+- **Go parenthesized composite conversions expose converted types** — conversions such as `([]User)(raw)` and `(map[Key]Value)(raw)` now link their target types.
+- **Go generic method expressions expose receiver type arguments** — expressions such as `Repository[User].Find` and `(*Store[Entry]).Save` now link both receiver and type argument symbols.
+- **Go standalone type-set terms expose approximation types** — constraint terms such as `~[]Element` and `~map[Key]Value` now link their element, key, and value types.
+- **Go package declarations are indexed as namespace symbols** — `package demo` now appears in symbol search, outline, and definition-oriented workflows.
+- **Go multi-name struct fields expose their shared type** — fields such as `Primary, Secondary *Client` now link the shared field type without indexing field names.
+- **Go struct fields with spaced generic types expose all type segments** — fields such as `Owner Repository[Key, Value]` now link the generic type and each concrete argument.
+- **Go var/const declarations with spaced generic types expose all type segments** — declarations such as `var repo Repository[Key, Value]` now link the explicit generic type.
+- **Go type specs with spaced generic targets expose all type segments** — declarations such as `type Repo Repository[Key, Value]` now link the target type and arguments.
+- **Go top-level multi-name var declarations index every property symbol** — `var Primary, Secondary *Config` now exposes both names to symbol search and definition workflows.
+- **Go top-level multi-name const declarations index every property symbol** — `const PrimaryStatus, SecondaryStatus = 1, 2` now exposes both names to symbol search and definition workflows.
+- **Go method symbols are attributed to receiver type containers** — `func (h *Handler) ServeHTTP(...)` now appears under `Handler` in symbol-oriented workflows.
+- **Go generic receiver method containers tolerate spaced type parameters** — `func (s *Store[T, U]) Save(...)` now stays attributed to `Store`.
+- **Go unnamed generic receiver methods keep their type container** — `func (Store[T, U]) Snapshot()` now stays attributed to `Store`.
+- **Go local grouped value declarations no longer pollute package symbols** — function-local `var (...)` and `const (...)` blocks are not indexed as top-level properties.
+
+#### Fixed
+
+- **Catch-clause exception types are now indexed for C#, Java, and Kotlin** - `catch (IOException ex)`, Java multi-catch, and Kotlin `catch (ex: IOException)` now emit `type_reference` rows for the exception type without treating catch variables as types.
+- **COBOL `CANCEL` program targets are now searchable** — quoted and unquoted `CANCEL` targets now emit references to the external program name.
+- **COBOL CICS `ADDRESS COMMAREA` data areas are now searchable** — `EXEC CICS ADDRESS COMMAREA(...)` lines now emit references to the COMMAREA data area.
+- **COBOL CICS `ASSIGN APPLID` data areas are now searchable** — `EXEC CICS ASSIGN APPLID(...)` lines now emit references to the receiving data area.
+- **COBOL CICS `DELETE FILE` targets are now searchable** — `EXEC CICS DELETE FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `DELETEQ TS QUEUE` targets are now searchable** — `EXEC CICS DELETEQ TS QUEUE(...)` lines now emit references to queue names.
+- **COBOL CICS `DEQ RESOURCE` targets are now searchable** — `EXEC CICS DEQ RESOURCE(...)` lines now emit references to resource names.
+- **COBOL CICS `ENDBR FILE` targets are now searchable** — `EXEC CICS ENDBR FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `ENQ RESOURCE` targets are now searchable** — `EXEC CICS ENQ RESOURCE(...)` lines now emit references to resource names.
+- **COBOL CICS `FREEMAIN DATA` data areas are now searchable** — `EXEC CICS FREEMAIN DATA(...)` lines now emit references to freed data areas.
+- **COBOL CICS `GETMAIN SET` data areas are now searchable** — `EXEC CICS GETMAIN SET(...)` lines now emit references to pointer data areas.
+- **COBOL CICS `HANDLE CONDITION` handlers are now searchable** — `EXEC CICS HANDLE CONDITION ...` lines now emit calls to handler paragraphs.
+- **COBOL CICS `LINK PROGRAM` calls are now searchable** — `EXEC CICS LINK PROGRAM(...)` lines now emit call references to linked program names.
+- **COBOL CICS `LOAD PROGRAM` targets are now searchable** — `EXEC CICS LOAD PROGRAM(...)` lines now emit references to loaded program names.
+- **COBOL CICS `MAPSET` targets are now searchable** — `EXEC CICS SEND/RECEIVE ... MAPSET(...)` lines now emit references to BMS mapset names.
+- **COBOL CICS `READ FILE` targets are now searchable** — `EXEC CICS READ FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `READNEXT FILE` targets are now searchable** — `EXEC CICS READNEXT FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `READPREV FILE` targets are now searchable** — `EXEC CICS READPREV FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `READQ TD QUEUE` targets are now searchable** — `EXEC CICS READQ TD QUEUE(...)` lines now emit references to transient data queue names.
+- **COBOL CICS `READQ TS QUEUE` targets are now searchable** — `EXEC CICS READQ TS QUEUE(...)` lines now emit references to queue names.
+- **COBOL CICS `RECEIVE INTO` data areas are now searchable** — `EXEC CICS RECEIVE INTO(...)` lines now emit references to receive buffers.
+- **COBOL CICS `RECEIVE MAP` targets are now searchable** — `EXEC CICS RECEIVE MAP(...)` lines now emit references to BMS map names.
+- **COBOL CICS `RESETBR FILE` targets are now searchable** — `EXEC CICS RESETBR FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `RETURN TRANSID` targets are now searchable** — `EXEC CICS RETURN TRANSID(...)` lines now emit references to transaction ids.
+- **COBOL CICS `REWRITE FILE` targets are now searchable** — `EXEC CICS REWRITE FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `SEND FROM` data areas are now searchable** — `EXEC CICS SEND FROM(...)` lines now emit references to send buffers.
+- **COBOL CICS `SEND MAP` targets are now searchable** — `EXEC CICS SEND MAP(...)` lines now emit references to BMS map names.
+- **COBOL CICS `START TRANSID` targets are now searchable** — `EXEC CICS START TRANSID(...)` lines now emit references to transaction ids.
+- **COBOL CICS `STARTBR FILE` targets are now searchable** — `EXEC CICS STARTBR FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `UNLOCK FILE` targets are now searchable** — `EXEC CICS UNLOCK FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `WRITE FILE` targets are now searchable** — `EXEC CICS WRITE FILE(...)` lines now emit references to CICS file names.
+- **COBOL CICS `WRITEQ TD QUEUE` targets are now searchable** — `EXEC CICS WRITEQ TD QUEUE(...)` lines now emit references to transient data queue names.
+- **COBOL CICS `WRITEQ TS QUEUE` targets are now searchable** — `EXEC CICS WRITEQ TS QUEUE(...)` lines now emit references to queue names.
+- **COBOL CICS `XCTL PROGRAM` transfers are now searchable** — `EXEC CICS XCTL PROGRAM(...)` lines now emit call references to target program names.
+- **COBOL `CLASS-ID` blocks are now searchable as class symbols** — OO COBOL classes now populate class symbols and procedure containers, including `END CLASS` boundaries.
+- **COBOL `ENTRY` names are now searchable as symbols** — alternate entry points now appear as function symbols for `symbols`, `definition`, and `inspect` workflows.
+- **COBOL embedded SQL `CALL` targets are now searchable** — `EXEC SQL CALL procedure` lines now emit call references to the stored procedure name.
+- **COBOL embedded SQL `CLOSE` cursors are now searchable** — `EXEC SQL CLOSE cursor` lines now emit references to the cursor name.
+- **COBOL embedded SQL `EXECUTE` statements are now searchable** — `EXEC SQL EXECUTE statement` lines now emit references to the prepared statement name.
+- **COBOL embedded SQL `FETCH` cursors are now searchable** — `EXEC SQL FETCH cursor` lines now emit references to the cursor name.
+- **COBOL embedded SQL `INCLUDE` targets are now searchable** — `EXEC SQL INCLUDE name` lines now emit references to included copybooks or SQL declarations.
+- **COBOL embedded SQL `OPEN` cursors are now searchable** — `EXEC SQL OPEN cursor` lines now emit references to the cursor name.
+- **COBOL embedded SQL `PREPARE` statements are now searchable** — `EXEC SQL PREPARE statement` lines now emit references to the prepared statement name.
+- **COBOL `GENERATE` statements are now searchable** — `GENERATE report-name` lines now emit a reference to the generated report target.
+- **COBOL `INITIATE` statements are now searchable** — `INITIATE report-name` lines now emit a reference to the report writer target.
+- **COBOL `METHOD-ID` entries are now searchable as function symbols** — OO COBOL methods now appear in symbol-oriented search and inspection results.
+- **COBOL `RELEASE` statements are now searchable** — `RELEASE record-name` lines now emit a reference to the released sort or merge record.
+- **COBOL `RETURN` statements are now searchable** — `RETURN sort-file` lines now emit a reference to the returned sort or merge file.
+- **COBOL `START` statements are now searchable** — `START file-name` lines now emit a reference to the indexed file target, improving navigation through COBOL indexed-file access.
+- **COBOL `TERMINATE` statements are now searchable** — `TERMINATE report-name` lines now emit a reference to the report writer target.
+- **COBOL declarative `USE AFTER` file targets are now searchable** — `USE AFTER ... PROCEDURE ON file-name` lines now emit references to their handled file.
+- **C++ attribute-prefixed functions are searchable** — declarations such as `[[nodiscard]] int compute() {}` now index the function name instead of being skipped at the attribute prefix.
+- **C++ braced constructions are indexed as instantiations** — `auto x = Widget{}` and `return ns::Result{}` now expose the constructed type in reference queries.
+- **C++ C-style casts are indexed as type references** — casts such as `(Widget*)raw` and `(ns::Handle&)value` now expose their target types while primitive casts remain filtered.
+- **C++ compound requirement constraints are indexed as type references** — `requires` clauses with `{ expr } -> std::same_as<Result>` now expose both the concept and constrained result types.
+- **C++ constexpr constants are indexed** — Top-level `inline constexpr int kMaxConnections = ...` and uppercase `constexpr` constants now appear in symbol and definition searches.
+- **C++ coroutine braced returns are indexed as instantiations** — `co_return Result{}` now exposes the constructed coroutine result type in reference and instantiation queries.
+- **C++ `decltype(Type{})` operands are indexed as type references** — unevaluated constructions such as `decltype(Widget{})` now expose `Widget` without adding a false instantiation edge.
+- **C++ dynamic exception specifications are indexed as type references** — legacy signatures such as `void load() throw(Error, ns::Failure&)` now expose the listed exception types without treating parenthesized throw expressions as types.
+- **C++ explicit template instantiations are indexed as type references** — declarations such as `extern template class std::vector<Widget>;` now expose the instantiated template and argument types.
+- **Exported C++ type base lists are indexed** — `export class Child : public Base` now emits type references for inherited base types.
+- **Exported C++ enum declarations are indexed** — `export enum class Mode` and `export enum Status` now appear in symbol and definition searches.
+- **Exported C++ namespaces are indexed** — `export namespace api {}` and qualified exported namespaces now appear in symbol and definition searches with nested declarations scoped correctly.
+- **Exported C++ classes and structs are searchable** — module interface declarations such as `export class Api {}` and `export template <typename T> struct Box {}` now produce type symbols.
+- **C++ linkage-specified functions are searchable** — functions declared like `extern "C" int api() {}` now index the actual function name and return type.
+- **C++ standard factory template arguments are indexed** — `make_unique`, `make_shared`, and `make_optional` calls now expose their template type arguments as type references.
+- **C++ friend declarations are indexed as type references** — `friend class Inspector;`, `friend struct ns::Peer;`, and `friend enum class Status;` now expose the referenced types in reference queries.
+- **C++ `#import` directives are indexed as imports** — Objective-C++ style `#import <UIKit/UIKit.h>` and quoted imports now appear in symbol and import searches alongside `#include`.
+- **Indented C++ type declarations remain indexed** — namespace-scoped `class`, `struct`, and `union` declarations keep working after the exported/template declaration matcher improvements.
+- **C++20 module imports participate in references and dependency queries** — `import std;`, partition imports, and header-unit imports now emit type-reference rows like preprocessor includes.
+- **C++20 module imports are searchable as import symbols** — `import std;`, partition imports, and header-unit imports now appear in symbol results instead of only preprocessor includes being visible.
+- **C++ module partitions are searchable as namespace symbols** — `export module app.core:api;` now indexes the full partition-qualified module name.
+- **C++ named casts expose target type references** — `static_cast<Foo*>`, `dynamic_cast<Bar&>`, and related casts now add `type_reference` rows for their target types.
+- **Parenthesized C++ requires concepts are indexed as type references** — constraints such as `requires (Serializable<T>)` and `requires(ns::EntityLike<T>)` now expose the concept names in reference queries.
+- **C++ pointer-to-member types are indexed as type references** — declarations such as `int Widget::* field` and `void (ns::Handler::*callback)()` now expose the receiver type in reference queries.
+- **C++ qualified member receivers are indexed as type references** — `Widget::Create()` and `&Widget::Run` now expose `Widget` in reference queries without treating lowercase namespaces like `std` as types.
+- **Qualified C++ requires concepts are indexed as type references** — constraints such as `requires std::derived_from<T, Base>` now expose both the qualified concept and its type arguments.
+- **Qualified C++ template braced constructions expose type arguments** — `std::optional<Widget>{}` and `ns::Result<Success, Error>{}` now contribute their template arguments to reference search without indexing namespace qualifiers.
+- **C++ concept constraints are indexed as type references** — `requires Serializable<T>` and `concept Persistable = ns::EntityLike<T>` now expose the referenced concept names in reference queries.
+- **C++ `sizeof` and `alignof` type operands are indexed** — type operands such as `sizeof(Widget)` and `alignof(ns::Packet)` now produce `type_reference` rows.
+- **C++ template parameter default types are indexed** — Defaults such as `typename T = Widget` and `class Alloc = ns::Allocator<Widget>` now contribute their referenced types to search results.
+- **C++ template classes and structs declared on one line are searchable** — `template <typename T> class Box {}` and matching struct declarations now index their type symbols.
+- **C++ throw braced constructions are indexed as instantiations** — `throw Error{}` and `throw ns::Failure{}` now expose the thrown type in reference and instantiation queries.
+- **C++ trailing return types are indexed as type references** — `auto Make() -> Result` now exposes `Result` in reference queries while builtin return types stay filtered.
+- **C++ type trait template arguments are indexed as type references** — expressions such as `std::is_same_v<T, Widget>` and `is_base_of<Base, Derived>` now expose the participating types in reference queries.
+- **C++ typedef alias targets are indexed as type references** — `typedef ns::Handler* HandlerPtr;` now exposes the aliased target type in reference queries while still avoiding function-pointer typedefs.
+- **C++ `typeid(Type)` operands are indexed** — RTTI checks such as `typeid(Service)` now add type-reference rows for the named type.
+- **C++ unions are searchable as type symbols** — named `union` declarations, including exported and templated forms, now appear in symbol results.
+- **C++ using-alias targets are indexed as type references** — `using Ptr = std::unique_ptr<Service>;` now exposes the aliased target types in reference queries.
+- **C++ `using ns::Type;` declarations are indexed as imports** — direct using declarations now appear in symbol and definition searches with their enclosing scope.
+- **C++ `using enum` declarations are searchable** — `using enum ns::Color;` now indexes the introduced enum type as an import symbol.
+- **C++ `using typename` declarations are indexed as imports** — dependent declarations such as `using typename Base::value_type;` now appear in symbol and definition searches with their enclosing scope.
+- **C# anti-constraint keywords no longer become type references** - `where T : allows ref struct` now avoids `allows` / `ref` keyword noise while keeping real constraint types.
+- **C# generic constraint keywords no longer become type references** - `where T : unmanaged` and `where T : notnull` now avoid keyword noise while preserving real constraint types such as `IContract`.
+- **C# generic signatures no longer emit type-parameter self references** - declarations such as `class Demo<T> : Base<T>` and `T Pick<T>(T value)` now keep real types while suppressing generic parameter noise.
+- **C# generic type keywords no longer emit type-parameter self references** - single-line generic methods using `typeof(T)` or `nameof(T)` now suppress the generic parameter while keeping real type keyword targets searchable.
+- **C# generic type operators no longer emit type-parameter self references** - single-line generic methods such as `value is T` and `value as T` now suppress the generic parameter while preserving real `is`/`as` target types.
+- **C# compile-time type keyword references now include nested generic arguments** — `typeof(List<Payload>)`, `default(Dictionary<string, Payload>)`, and similar `nameof` / `sizeof` / `default` forms now emit `type_reference` rows for user types inside generic argument lists while still filtering C# built-in aliases.
+- **C# exact search now canonicalizes Unicode-escaped identifiers** — C# exact substring search now decodes `\uXXXX` and `\UXXXXXXXX` source escapes before applying existing `@identifier` and `global::` normalization, matching the escaped-identifier behavior already shared with Java and Kotlin.
+- **Dockerfile stage aliases can include hyphens** — Dockerfile symbol and stage-reference extraction now indexes common aliases such as `build-env` in `FROM ... AS build-env`, `FROM build-env AS ...`, and `COPY --from=build-env`.
+- **Suffix-style Dockerfile names are detected** — files named like `api.Dockerfile` or `worker.dockerfile` now index as `dockerfile` instead of falling into an unsupported extension bucket.
+- **Suffix-style Containerfile names are detected** — files named like `api.Containerfile` or `worker.containerfile` now index through the Dockerfile analyzer.
+- **Hidden `.dockerfile` files are detected** — extensionless hidden Dockerfile variants now index as Dockerfile content instead of falling through to shebang probing.
+- **Hidden `.containerfile` files are detected** — hidden Containerfile variants now use the Dockerfile indexing path.
+- **Hyphen-suffixed Dockerfile names are detected** — files such as `Dockerfile-prod` now index as Dockerfile content.
+- **Hyphen-suffixed Containerfile names are detected** — files such as `Containerfile-prod` now index through the Dockerfile analyzer.
+- **Underscore-suffixed Dockerfile names are detected** — files such as `Dockerfile_prod` now index as Dockerfile content.
+- **Underscore-suffixed Containerfile names are detected** — files such as `Containerfile_prod` now index through the Dockerfile analyzer.
+- **Dockerfile stage aliases can include dots** — aliases such as `build.env` now stay intact in stage symbols and `FROM` / `COPY --from` references.
+- **Commented `FROM` stage reuse lines keep references** — `FROM builder AS runtime # comment` now indexes the `builder` stage dependency.
+- **Dockerfile braced ARG/ENV uses become references** — `${NODE_VERSION}` now links back to the indexed `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol.
+- **Dockerfile defaulted braced variables become references** — `${NODE_VERSION:-20}` now links back to `NODE_VERSION` instead of being skipped.
+- **Dockerfile unbraced ARG/ENV uses become references** — `$APP_HOME` now links back to the indexed `ARG APP_HOME` / `ENV APP_HOME` property symbol.
+- **Dockerfile colonless defaulted variables become references** — `${NODE_VERSION-20}` now links back to `NODE_VERSION`.
+- **Escaped Dockerfile dollars stay literal** — `\$APP_HOME` no longer creates a false reference to `APP_HOME`.
+- **Escaped Dockerfile braced variables stay literal** — `\${APP_HOME}` no longer creates a false reference to `APP_HOME`.
+- **Dockerfile BuildKit mount stage dependencies are indexed** — `RUN --mount=type=bind,from=assets,...` now links to the `assets` stage.
+- **Tagged external `COPY --from` images are not mistaken for stages** — `COPY --from=builder:latest` no longer creates a false stage reference to `builder`.
+- **Multiple Dockerfile BuildKit mounts are indexed** — a single `RUN` with several `--mount=...,from=stage` flags now records each stage dependency.
+- **Digest external `COPY --from` images are not mistaken for stages** — `COPY --from=builder@sha256:...` no longer creates a false stage reference to `builder`.
+- **Dockerfile `ENV` key-value lists expose every key** — `ENV APP_HOME=/app NODE_ENV=production` now indexes both `APP_HOME` and `NODE_ENV` property symbols.
+- **Dockerfile `ENV` key scanning ignores quoted values** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` no longer emits a false `BAR` property.
+- **Dockerfile `LABEL` keys become symbols** — labels such as `org.opencontainers.image.title` now index as property symbols.
+- **Dockerfile `LABEL` key-value lists expose every key** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` now indexes both label keys.
+- **Legacy Dockerfile `LABEL key value` keys become symbols** — space-separated label declarations now expose their label key for search.
+- **Dockerfile `ONBUILD COPY --from` stage dependencies are indexed** — trigger instructions now link back to the referenced stage.
+- **Dockerfile `EXPOSE` ports become symbols** — `EXPOSE 8080/tcp` now indexes `8080/tcp` as a property symbol.
+- **Dockerfile multi-port `EXPOSE` lines expose every port** — `EXPOSE 80 443/tcp 53/udp` now indexes all listed ports.
+- **Quoted Dockerfile `COPY --from` stage names are indexed** — `COPY --from="builder"` now links back to the `builder` stage.
+- **Dockerfile `RUN --mount` text in shell strings stays ignored** — quoted command text no longer creates phantom stage references.
+- **Dockerfile `RUN --mount` stage references are limited to BuildKit options** — later shell command arguments named `--mount` no longer create phantom dependencies.
+- **Quoted Dockerfile `RUN --mount` stage names are indexed** — `RUN --mount=type=bind,from="assets"` now links back to the `assets` stage.
+- **Dockerfile `ONBUILD RUN --mount` stage dependencies are indexed** — trigger instructions now link mount `from=` stages.
+- **Dockerfile `USER` principals become symbols** — `USER appuser` now indexes `appuser` as a property symbol.
+- **Dockerfile `USER user:group` principals stay intact** — group-qualified users now index the full `user:group` value.
+- **Dockerfile `WORKDIR` paths become symbols** — `WORKDIR /app` now indexes `/app` as a property symbol.
+- **Dockerfile shell-form `VOLUME` paths become symbols** — `VOLUME /data` now indexes `/data` as a property symbol.
+- **Dockerfile multi-path `VOLUME` lines expose every path** — `VOLUME /data /cache` now indexes all listed shell-form paths.
+- **Dockerfile `VOLUME` inline comments stay out of symbols** — paths mentioned after `#` are no longer indexed as volumes.
+- **Dockerfile named-stage base images stay searchable** — `FROM node:20 AS build` now indexes both `build` and the `node:20` image while avoiding prior-stage aliases.
+- **Dockerfile JSON-array `VOLUME` paths become symbols** — `VOLUME ["/data", "/cache"]` now indexes each listed path.
+- **Dockerfile `STOPSIGNAL` values become symbols** — `STOPSIGNAL SIGTERM` now indexes `SIGTERM` as a property symbol.
+- **Dockerfile `SHELL` executables become symbols** — `SHELL ["/bin/bash", ...]` now indexes `/bin/bash` as a property symbol.
+- **Dockerfile shell-form `COPY` destinations become symbols** — `COPY src /app` now indexes `/app` as the destination path.
+- **Dockerfile shell-form `ADD` destinations become symbols** — `ADD archive.tar.gz /opt/app` now indexes `/opt/app` as the destination path.
+- **Dockerfile JSON-array `COPY` destinations become symbols** — `COPY ["src", "/app"]` now indexes `/app` as the destination path.
+- **Dockerfile JSON-array `ADD` destinations become symbols** — `ADD ["src", "/opt/app"]` now indexes `/opt/app` as the destination path.
+- **Dockerfile `ONBUILD COPY` destinations become symbols** — trigger-time copies now index their destination paths.
+- **Dockerfile `ONBUILD ADD` destinations become symbols** — trigger-time adds now index their destination paths.
+- **Fortran access lists now appear in reference search** — explicit `public :: name` and `private :: name` declarations index the listed module symbols.
+- **Fortran access statements without `::` now appear in reference search** — `public name` and `private name` are indexed the same way as `public :: name` and `private :: name`.
+- **Fortran `allocate` object lists now appear in reference search** — allocated objects in `allocate(Type :: object)` and `allocate(object, stat=...)` are indexed while keyword arguments are ignored.
+- **Fortran `allocate` source and mold arguments now appear in reference search** — simple names on the right-hand side of `source=` and `mold=` are indexed as references.
+- **Fortran typed `allocate` statements now record allocation type references** — `allocate(TypeName :: value)` now indexes `TypeName` as a type reference so dynamic allocation dependencies are searchable.
+- **Fortran allocation status arguments now appear in reference search** — `stat=` and `errmsg=` variables on `allocate` and `deallocate` statements are indexed as references.
+- **Fortran `associate` targets now appear in reference search** — selectors such as `associate (alias => target)` index the target name.
+- **Fortran attribute-only variable declarations now appear in symbol search** — declarations such as `allocatable :: work` and `pointer :: node` are indexed as properties.
+- **Fortran binding target lists are fully indexed** — generic/type-bound declarations such as `generic :: assignment(=) => assign_a, assign_b` now index every implementation target.
+- **Fortran type-bound binding targets now appear in reference search** — `procedure :: binding => implementation` and `generic :: assignment(=) => assign_impl` declarations index their implementation targets.
+- **Fortran blank common member names now appear in reference search** — declarations such as `common state, flag` index the listed blank common members.
+- **Named Fortran `block data` units are now searchable** — `block data constants_block` declarations are indexed as symbols with their body ranges.
+- **Fortran common block names now appear in reference search** — declarations such as `common /repository_state/ value` index the named common block.
+- **Fortran common block member names now appear in reference search** — declarations such as `common /state/ value, flag` index both the block and listed members.
+- **Fortran `common` block members now appear in symbol search** — member names in `common /block/ a, b` declarations are indexed as properties.
+- **Compact Fortran `import` statements now appear in reference search** — `import::Name` and `import, only:Name` are indexed like spaced interface import statements.
+- **Compact Fortran `use::module` statements now appear in reference search** — compact module imports, `only:` lists, and rename lists are indexed like spaced `use :: module` statements.
+- **Fortran multi-group `data` statements now appear fully in reference search** — declarations such as `data a /1/, b /2/` index each initialized object list.
+- **Fortran `data` object lists now appear in reference search** — declarations such as `data a, b /.../` index the initialized object names.
+- **Fortran `deallocate` object lists now appear in reference search** — targets in `deallocate(a, b, stat=...)` are indexed while keyword arguments are ignored.
+- **Fortran derived types are now searchable as definitions** — `type :: Name` and `type, extends(Base) :: Name` declarations are indexed as type definitions, and `extends(Base)` is recorded as a type reference for definition/reference search.
+- **Fortran `entry` procedures are now searchable** — `entry alternate_name(...)` declarations are indexed as function symbols.
+- **Fortran enumerators are now searchable** — `enumerator :: color_red = 1, color_blue = 2` declarations index each enumerator as a property symbol.
+- **Fortran `equivalence` lists now appear in reference search** — declarations such as `equivalence (a, b)` index each associated name.
+- **Fortran external procedure declarations now appear in reference search** — `external legacy_hook, repository_probe` declarations index each named external procedure.
+- **Fortran finalizer declarations without `::` now appear in reference search** — `final cleanup` is indexed the same way as `final :: cleanup`.
+- **Fortran finalizer declarations with compact `::` now appear in reference search** — `final::cleanup` is indexed the same way as spaced finalizer declarations.
+- **Fortran finalizer declarations now appear in reference search** — `final :: cleanup, destroy` declarations index each finalizer procedure.
+- **Fortran interface imports now appear in reference search** — `import :: Name` and `import, only: Name` statements now index imported names as type references for dependency lookups.
+- **Fortran `include` targets now appear in reference search** — quoted include paths such as `include 'constants.inc'` are indexed as references so included source dependencies can be found.
+- **Fortran intrinsic kind parameters now appear in reference search** — declarations such as `integer(c_int)` and `real(kind=real64)` index their named kind parameters as type references.
+- **Fortran intrinsic procedure declarations now appear in reference search** — `intrinsic sin, cos` declarations index each named intrinsic procedure.
+- **Fortran `module procedure` implementations now keep body ranges** — submodule implementations such as `module procedure normalize_impl ... end procedure` are indexed as function symbols with bodies.
+- **Fortran namelist member names now appear in reference search** — declarations such as `namelist /config/ value, status` index both the group and listed members.
+- **Fortran `namelist` members now appear in symbol search** — names in `namelist /group/ a, b` declarations are indexed as properties.
+- **Fortran namelist group names now appear in reference search** — declarations such as `namelist /repository_config/ value` index the named namelist group.
+- **Old-style Fortran `parameter (...)` constants are now searchable as symbols** — declarations such as `parameter (size = 4, limit = selected_int_kind(9))` index each constant.
+- **Old-style Fortran typed variable declarations are now searchable as symbols** — declarations such as `integer count, total` index each declared name without requiring `::`.
+- **Fortran `parameter` constants are now searchable** — typed declarations such as `integer, parameter :: max_rank = 8, default_rank = 2` index each parameter as a property symbol.
+- **Fortran pointer assignment targets now appear in reference search** — assignments such as `callback => resolver` index the target name while ignoring `null()` resets.
+- **Fortran `procedure(Interface)` declarations now record interface references** — procedure pointer and dummy procedure declarations now index the interface name as a type reference for dependency search.
+- **Fortran `save` declarations now appear in reference search** — named objects and common blocks in `save` statements are indexed as references.
+- **Fortran `select type` guards now appear in reference search** — `type is (Name)` and `class is (Name)` branches are indexed as type references so type-dispatch dependencies are discoverable.
+- **Fortran submodule parent dependencies now appear in reference search** — `submodule (parent:ancestor) child` declarations index the parent module and ancestor submodule names.
+- **Fortran type-bound `call object%method()` targets now resolve to the method** — explicit `call` statements with `%` receiver chains index the final procedure name instead of recording the receiver object as a phantom call.
+- **Fortran typed variable and component declarations are now searchable as symbols** — declarations such as `integer :: x` and `real :: a, b` index each declared name as a property symbol.
+- **Fortran `use only` aliases now appear in reference search** — imports such as `use mod, only: local_name => remote_name` index the local alias as well as the remote symbol.
+- **Fortran `use ... only:` imports now appear in reference search** — imported names listed after `only:` are indexed as type references alongside the module name, so dependency searches can find explicit Fortran imports.
+- **Fortran `use` rename lists without `only:` now appear in reference search** — `use module, local => remote` indexes both the local alias and remote symbol.
+- **Fortran `use ... only:` rename targets now appear in reference search** — `local => remote` imports index the remote symbol as well as the local alias.
+- **F# abstract member shorthand is now searchable** — declarations such as `abstract Reset : unit -> unit` are indexed as function symbols even when the `member` keyword is omitted.
+- **F# mutually recursive functions are now searchable** — `and isOdd n = ...` is indexed as a function symbol alongside the leading `let rec` definition.
+- **F# assertion predicate calls are now indexed** — `assert validate user` records `validate` as a call while suppressing the `assert` keyword itself.
+- **F# attributed union cases are now searchable** — union cases such as `| [<Obsolete>] Amber` are indexed by the case name.
+- **F# backticked member names are now searchable** — members such as `member this.``display name`` = ...` are normalized and indexed instead of being skipped by the member pattern.
+- **F# backticked module names are now searchable** — module declarations whose names are escaped with F# backticks are normalized and indexed as namespace symbols.
+- **F# backticked type names are now searchable across more type forms** — escaped record, union, class, interface, struct, and delegate names are normalized before indexing.
+- **F# module abbreviations can now index backticked targets** — module abbreviations targeting backticked modules record the normalized target module name.
+- **F# backticked open targets are now searchable** — open statements targeting backticked modules are indexed by the normalized module name.
+- **F# backward pipeline argument calls are now indexed** — `printfn <| render user` now exposes `render` as a call reference in addition to the left-hand pipeline callee.
+- **F# backward pipeline callees are now indexed** — calls such as `printfn <| value` and `<||` variants now expose the left-hand function as a call reference.
+- **F# block-boundary values no longer look like calls** — bare values before `do` or `else`, such as `for item in items do` and `then readyValue else`, are no longer indexed as call references.
+- **F# cast expression calls are now indexed by the inner function** — `upcast createWidget user` records `createWidget` as a call while suppressing the `upcast` and `downcast` keywords.
+- **F# chained function composition now indexes every operand** — expressions such as `validate >> normalize >> persist` record all composed functions.
+- **F# function composition operands are now indexed** — composed functions around `>>` and `<<` are recorded as call-like references.
+- **F# computation expression bang calls are now indexed** — parenless calls after `do!`, `return!`, and `yield!` now appear as call references.
+- **F# condition application calls are now indexed** — parenless calls at the start of `if`, `elif`, and `while` conditions now appear as call references.
+- **F# condition extraction avoids bare boolean values** — `if isReady then ...` no longer records `isReady` as a call while `if validate user then ...` remains indexed.
+- **F# constrained constructor-style classes are now indexed** — declarations such as `type Factory<'T when 'T : not struct>(value: 'T) = class end` remain searchable by class name.
+- **F# constrained generic classes are now indexed as classes** — declarations such as `type Box<'T when 'T : not struct> = class end` remain searchable by class name.
+- **F# delegate type declarations are now indexed as delegates** — `type Handler = delegate of ...` is searchable by the declared delegate name instead of being treated as an alias/import fallback.
+- **F# `for` range boundary calls are now indexed** — `to endIndex user` and `downto lowerBound user` record their boundary functions while suppressing the range keywords.
+- **F# generic class declarations are now searchable** — declarations such as `type Box<'T> = class end` and generic constructor forms are indexed as class symbols.
+- **F# inline interface declarations are now indexed as interfaces** — `type IFoo = interface ...` declarations are no longer surfaced as type aliases.
+- **F# lazy expression calls are now indexed** — `lazy compute user` records `compute` as a call while suppressing the `lazy` keyword and bare lazy values.
+- **F# `let!` bindings are now searchable** — computation expression bindings such as `let! loadedUser = ...` are indexed with the same lightweight symbol coverage as ordinary `let` bindings.
+- **F# match input application calls are now indexed** — `match parse value with` records `parse` as a call while plain `match status with` remains ignored.
+- **F# `match!` input calls are now indexed** — computation expression inputs such as `match! fetch value with` record `fetch` as a call.
+- **F# auto-properties are now searchable** — `member val DisplayName = ...` is indexed as a `property` symbol instead of being skipped by the regular member extractor.
+- **F# module abbreviations now expose their target namespace** — `module Json = System.Text.Json` keeps `Json` searchable while also indexing `System.Text.Json` as an import.
+- **F# constructor applications without parentheses are now indexed** — `new Customer user` records `Customer` as an instantiation target.
+- **F# `open type` imports now index the opened type** — `open type System.Math` is searchable as an import for `System.Math` instead of stopping at the contextual keyword.
+- **F# public type declarations are now searchable** — `type public PublicId = ...` and public union declarations are indexed by their declared type names.
+- **F# raise expression calls are now indexed** — `raise buildError user` records `buildError` as a call while suppressing the `raise` keyword and bare exception values.
+- **F# recursive type declarations are now searchable by type name** — `type rec Tree<'T> = ...` is indexed as a type symbol instead of being skipped by the top-level F# patterns.
+- **F# keyword struct declarations are now indexed as structs** — `type Coordinates = struct ...` is searchable as a `struct` symbol instead of falling through generic type patterns.
+- **F# `try`/`finally` application calls are now indexed** — parenless calls after `try` and `finally` now appear in call-reference results.
+- **F# `use` bindings are now searchable** — resource bindings such as `use client = ...` and `use! lease = ...` are indexed as lightweight symbols.
+- **F# `val` declarations are now searchable** — signature declarations such as `val Id : string` and `val mutable Count : int` are indexed as property symbols.
+- **F# pattern guard calls are now indexed** — `when validate user ->` records `validate` as a call while bare guard values remain ignored.
+- **C#, Java, and Kotlin generic invocation type arguments are now searchable as type references** — generic constructor/function calls such as `new List<Payload>()`, `Collections.<Result>emptyList()`, and `read<Result>()` now emit `type_reference` rows for their type arguments after the existing call/instantiate guards accept the invocation.
+- **Java annotated `instanceof` patterns now keep the tested type reference** — forms such as `value instanceof final @NonNull Payload payload` now emit `Payload` as a `type_reference` while keeping `NonNull` as annotation metadata.
+- **Java array constructor method references now point at the component type** - `Widget[]::new` and `demo.Widget[][]::new` are indexed as instantiations of `Widget` / `demo.Widget` instead of missing the edge or keeping array suffix noise.
+- **Java generic callable signatures no longer emit type-parameter self references** - signatures such as `<T extends Comparable<T>> T pick(T input)` now keep real bound types while suppressing `T` as type-reference noise.
+- **Java generic heritage clauses no longer emit type-parameter self references** - declarations such as `class Box<T> extends Base<T> implements Handler<T>` now keep `Base` / `Handler` while suppressing `T` noise.
+- **Java generic throws clauses no longer emit type-parameter self references** - `public <E extends Failure> void run() throws E` keeps the real bound type while suppressing the generic exception parameter.
+- **JavaScript/TypeScript dynamic import search no longer treats `.import()` methods as runtime imports** — property and private-method calls such as `client.import("./x")`, `client?.import("./x")`, and `this.#import("./x")` no longer create module `import` symbols.
+- **JavaScript/TypeScript static import signatures stay bounded when imported aliases use `with` or `assert`** — semicolonless declarations such as `import { with as alias } from "./module"` no longer confuse import-attributes detection while recording the source module.
+- **Java and Kotlin documentation links now emit searchable type references** — Javadoc links such as `{@link User#save()}` / `@see Helper` and KDoc links such as `[User.name]` now populate `type_reference` rows on the documented symbol, matching the existing C# XML-doc `cref` search behavior.
+- **JVM method references now accept generic owner types** - Java references such as `Box<String>::new` and `Box<String>::open` are indexed against `Box` / `open` instead of being missed or carrying generic suffix noise.
+- **Java and Kotlin method references now index owner types** — callable references such as `String::trim` and `User::name` now emit `type_reference` rows for their type-like owners while still avoiding lowercase receiver objects such as `xs::iterator`.
+- **Kotlin backticked annotations now emit canonical metadata references** - usages such as ``@`Fancy Name` `` and ``@`Fancy Name`("x")`` now record annotation references to `Fancy Name`.
+- **Kotlin backticked class literals now emit canonical type references** - `` `Display Name`::class `` now records `Display Name` as the referenced type, matching the declaration symbol name.
+- **Kotlin backticked constructor calls now emit canonical instantiation references** - `` `Display Name`() `` now records an `instantiate` edge to `Display Name`, matching the class declaration symbol.
+- **Kotlin backticked method-reference names now emit canonical call references** - ``User::`render name` `` now records the call as `render name`, matching the declaration symbol name.
+- **Kotlin backticked method-reference owners now emit canonical type references** - `` `Display Name`::render `` now records `Display Name` as the owner type dependency while still indexing the `render` call.
+- **Kotlin backticked declarations now use canonical symbol names** - declarations whose names are Kotlin keywords or contain spaces / punctuation are indexed without the source-only backticks, so exact-name definition search can find them by their canonical names.
+- **Kotlin backticked type references now use canonical names** - type positions such as ``val value: `Display Name` `` now emit `Display Name` as a `type_reference`, matching the canonical symbol name used for the declaration.
+- **Kotlin class literals now index their type target** — `User::class` and `User::class.java` now emit `type_reference` rows for `User`, matching C# `typeof(User)` and Java `User.class` behavior while avoiding raw `class` call noise.
+- **Kotlin secondary constructor delegation now resolves to the delegated type** — `constructor(...) : this(...)` now indexes a call to the enclosing class and `constructor(...) : super(...)` indexes a call to the superclass, while suppressing raw `constructor` / `this` / `super` keyword call noise to match the existing C# and Java constructor-chain behavior.
+- **Kotlin same-file constructor calls now index as instantiations** - `User()` and `Profile(...)` calls to classes defined in the same Kotlin file now emit `instantiate` references, aligning constructor search with C# and Java while keeping PascalCase functions and annotations out of instantiation results.
+- **Kotlin extension function receivers are now indexed as type references** — declarations such as `fun User.render()` and `fun Box<User>.unwrap()` now emit receiver type dependencies so `references User` can find extension functions that target that type.
+- **Kotlin extension property receivers are now indexed as type references** — declarations such as `val User.displayName: String` and `var Box<User>.selected: User` now emit receiver type dependencies for `references` and `impact`.
+- **Kotlin generic signatures no longer emit type-parameter self references** - signatures and bounds such as `input: T`, `T : Comparable<T>`, and `where T : Handler<T>` now keep the real referenced types while suppressing `T` as type-reference noise.
+- **Kotlin generic class literals no longer emit type-parameter self references** - `T::class` inside single-line generic functions now suppresses the generic parameter while real class literals such as `User::class` remain searchable.
+- **Kotlin generic parameter suppression now only uses declaration generic clauses** - type arguments such as `Box<User>` and `Producer<out Payload>` are no longer mistaken for generic parameter declarations.
+- **Kotlin generic type operators no longer emit type-parameter self references** - `value is T` and `value as T` inside generic functions now suppress the generic parameter while keeping real cast/test target types searchable.
+- **Kotlin type projection modifiers are no longer indexed as type references** - type positions such as `Producer<out Payload>` and `Consumer<in Payload>` now keep `Payload` as the dependency without adding `out` or `in` noise.
+- **Kotlin type-use annotations no longer appear as type references** — annotated type positions such as `val value: @Fancy Payload` now keep `Payload` as the `type_reference` dependency while leaving `Fancy` as metadata instead of a phantom type.
+- **Kotlin use-site annotations no longer leak into type references** - type positions such as `@field:Fancy Payload` now keep `Fancy` as annotation metadata while recording `Payload` as the type dependency.
+- **Perl class feature declarations are now searchable** - `class My::Widget { ... }` declarations are indexed as class symbols.
+- **Perl class fields are now searchable** - `field $name` declarations from the Perl class feature are indexed as property symbols.
+- **Perl lexical subroutines are now searchable** - `my sub name` and `state sub name` declarations are indexed as function symbols alongside ordinary `sub name` declarations.
+- **Perl `method` and `fun` declarations are now searchable** - Object::Pad-style `method name` and Function::Parameters-style `fun name` declarations are indexed as function symbols.
+- **Perl Moose/Moo attributes are now searchable** - `has name => ...` and `has '+name' => ...` declarations are indexed as property symbols.
+- **Perl Moose inheritance declarations now show up in reference search** - `extends 'Module'` and `with qw(Role ...)` declarations are indexed as type references.
+- **Perl package block declarations are now searchable** - `package My::Module { ... }` declarations are indexed as namespace symbols, matching the existing `package My::Module;` support.
+- **Perl package variables are now searchable** - `our $VERSION`, `our @EXPORT_OK`, and similar package variables are indexed as property symbols.
+- **Perl PSGI and CGI entrypoints are now detected as Perl** - `.psgi`, `.cgi`, and `.fcgi` files now receive Perl indexing, symbol extraction, and reference extraction instead of falling back to unknown text.
+- **Perl qualified function calls are now searchable by full name** - calls such as `My::Util::format(...)` now emit a `My::Util::format` call reference in addition to the leaf call.
+- **Perl qualified call search no longer drops calls after barewords ending in `sub`** - `call_sub My::Util::format(...)` still emits the qualified call while `sub My::Util::format(...)` definitions remain ignored as calls.
+- **Perl qualified subroutine definitions are now searchable** - `sub My::Module::name` declarations are indexed as function symbols using their full qualified names.
+- **Perl inheritance searches now recognize common `qw` delimiters** - `use parent` and `use base` now extract type references from `qw[...]`, `qw{...}`, `qw/.../`, and `qw<...>` lists in addition to `qw(...)`.
+- **Perl string `require` paths are now searchable as module references** - `require "Foo/Bar.pm"` is indexed as a `Foo::Bar` module reference.
+- **Perl role declarations are now searchable** - `role My::Renderable { ... }` declarations are indexed as interface symbols.
+- **PHP attributes now emit type references** — attribute classes such as `#[Route(...)]` and `#[\App\Http\Middleware\RequiresAuth]` now appear as `type_reference` entries without treating named arguments as types.
+- **PHP backed enum symbols now record their backing type** — declarations such as `enum Status: string` now keep `string` in symbol metadata, improving enum search results.
+- **PHP catch union types are now indexed** — `catch (\App\Exception\FirstException|SecondException $e)` now emits type references for each exception type.
+- **PHP `define()` constants are now searchable** — literal global constants declared with `define('NAME', ...)` or `define("NAME", ...)` now appear as symbols.
+- **PHP group `use` imports now emit type references** — grouped class imports such as `use App\Domain\{User, Team\Member};` now appear in reference search results, while grouped function and const imports stay excluded from type references.
+- **PHP inheritance clauses are now indexed as type references** — `extends` and `implements` targets now appear in reference results, including qualified and comma-separated interface names.
+- **PHP `instanceof` operands are now indexed as type references** — expressions such as `$value instanceof \App\Domain\UserService` now emit both qualified and short type-reference entries.
+- **PHP method symbols tolerate modifier order used in real code** — declarations such as `abstract protected function normalize()` and `final public static function make()` are now indexed as functions with visibility preserved.
+- **PHP mixed group imports now keep function and const entries out of type references** — `use App\{User, function make_user, const ROLE};` records `User` as a type reference without emitting function or const imports as types.
+- **PHP multiline constructor promotion is now searchable** — promoted properties declared on separate `__construct(` parameter lines now emit `property` symbols while ordinary parameters remain ignored.
+- **PHP parameter class types are now indexed** — typed parameters such as `Request $request` and `?User $user` now emit type references while builtin scalar types remain ignored.
+- **PHP constructor-promoted properties are now searchable** — same-line `__construct(public string $id, ...)` declarations now emit `property` symbols for promoted members without indexing ordinary parameters.
+- **PHP class properties are now searchable as symbols** — `public`, `protected`, `private`, and legacy `var` property declarations now appear as `property` symbols, so member-access references can navigate back to declarations.
+- **PHP property class types are now indexed** — property declarations such as `private User|Guest $owner` now emit type references for non-builtin property types.
+- **PHP return class types are now indexed** — return declarations such as `(): Response|JsonResponse` now emit type references for non-builtin result types.
+- **PHP same-line property lists keep every declared member searchable** — declarations such as `public string $first, $last;` now index the later properties too, while ignoring commas inside defaults and string literals.
+- **PHP static constants and enum cases now emit member references** — `Config::VERSION` and `Priority::Low` now index `VERSION` and `Low` as references while method calls such as `Config::rebuild()` remain calls only.
+- **PHP static property accesses now emit member references** — `Config::$cache` now indexes `cache` as a reference while preserving the existing class-side type reference.
+- **PHP trait-use adaptation blocks now emit type references** — `use A, B { ... }` now records the trait names before the adaptation block.
+- **PHP trait adaptation aliases now emit function symbols** — methods introduced with `Trait::method as aliasName;` are now searchable, while visibility-only adaptations are ignored.
+- **PHP typed class constants are now indexed by constant name** — declarations such as `public const string VERSION = ...` now emit `VERSION` with the declared type instead of being missed.
+- **PHP `use const` imports now emit references** — single, grouped, and mixed constant imports now add constant-name references without treating function imports as constants.
+- **PHP `use function` imports now emit references** — single, grouped, and mixed function imports now add function-name references, making imported functions discoverable by reference search without treating const imports as functions.
+- **PHP `use` type imports now emit type references** — class imports and trait-use lines now appear in reference results, while `use function` and `use const` stay excluded from type references.
+- **PHP variable-bound closures are now searchable** — assignments such as `$handler = function (...) {}` and `$mapper = fn (...) => ...` now emit function symbols named after the bound variable.
+- **PHPDoc `@extends` types now emit type references** — generic parent declarations, including `@phpstan-extends` and `@psalm-extends`, now contribute parent and type-argument references.
+- **PHPDoc `@implements` types now emit type references** — generic interface declarations, including PHPStan and Psalm variants, now contribute interface and type-argument references.
+- **PHPDoc imported type sources now emit type references** — `@phpstan-import-type` and `@psalm-import-type` `from` classes now appear in type reference search.
+- **PHPDoc imported type aliases now emit type symbols** — `@phpstan-import-type` and `@psalm-import-type` imports are now searchable, using the local `as` alias when present.
+- **PHPDoc `@method` symbols now accept composite return types** — nullable, union, intersection, and generic return type spellings no longer prevent dynamic method declarations from being indexed.
+- **PHPDoc `@method` parameter types now emit type references** — dynamic method parameter annotations now contribute non-builtin parameter types to reference search.
+- **PHPDoc `@method` return types now emit type references** — dynamic method declarations now contribute documented return types and generic arguments to reference search.
+- **PHPDoc `@method` declarations now emit function symbols** — dynamic methods documented on PHP classes are now searchable as function symbols, including optional return type metadata.
+- **PHPDoc `@mixin` types now emit type references** — dynamic mixin declarations now contribute referenced mixin types and generic arguments to search.
+- **PHPDoc `@param` types now emit type references** — docblock-only parameter types such as `@param \App\Models\User|Guest $actor` now participate in type reference search.
+- **PHPDoc parameter tag variants now emit type references** — `@phpstan-param`, `@psalm-param`, and `@param-out` are now indexed like regular `@param` tags.
+- **PHPDoc dynamic properties now emit property symbols** — `@property`, `@property-read`, and `@property-write` declarations are now searchable with their documented types.
+- **PHPDoc `@property` types now emit type references** — dynamic property declarations now contribute their documented property types and generic arguments to reference search.
+- **PHPDoc analyzer property tags now emit property symbols** — `@phpstan-property*` and `@psalm-property*` declarations are now indexed like regular `@property` tags.
+- **PHPDoc analyzer property tags now emit type references** — `@phpstan-property*` and `@psalm-property*` types are now indexed like regular `@property` tags.
+- **PHPDoc `@return` types now emit type references** — return types documented only in PHPDoc now participate in type reference search.
+- **PHPDoc analyzer return tags now emit type references** — `@phpstan-return` and `@psalm-return` are now indexed like regular `@return` tags.
+- **PHPDoc template bounds now emit type references** — `@template T of Foo` and `@template U as Bar` constraints now contribute referenced bound types to search.
+- **PHPDoc `@throws` types now emit type references** — documented exception types now appear in type reference search.
+- **PHPDoc type aliases now emit type symbols** — `@phpstan-type`, `@psalm-type`, and plain `@type` aliases are now searchable with their aliased expression.
+- **PHPDoc type alias targets now emit type references** — types mentioned inside `@phpstan-type`, `@psalm-type`, and `@type` alias expressions now participate in reference search.
+- **PHPDoc `@var` types now emit type references** — variable and property types documented with `@var` now appear in type reference search.
+- **PHPDoc analyzer var tags now emit type references** — `@phpstan-var` and `@psalm-var` are now indexed like regular `@var` tags.
+- **Python abstract properties are indexed as properties** — legacy `@abstractproperty` and qualified `@abc.abstractproperty` decorators now classify decorated methods as property symbols.
+- **Python `__all__.append` exports are indexed** — package `__init__.py` files that append literal names to `__all__` now expose those names as import symbols for exact symbol search.
+- **Python `__all__.extend` handles next-line values** — `__all__.extend(` followed by a literal list or tuple on the next line now indexes those exported names for exact symbol search.
+- **Python `__all__.extend` exports are indexed** — package `__init__.py` files that extend `__all__` with literal names now expose those names as import symbols for exact symbol search.
+- **Python annotated class attributes are indexed as properties** — class-body declarations such as `name: str` now appear in symbol search while method-local annotations stay excluded.
+- **Python class `__annotations__` dictionary keys are indexed as properties** — literal keys in class-body `__annotations__` assignments now appear in symbol search.
+- **Python `assert_type` calls emit expected type references** — `assert_type(value, models.User)` now records the expected type for reference search.
+- **Python assigned class attributes are indexed as properties** — class-body assignments such as `DEFAULT_TIMEOUT = 30` now appear in symbol search while method-local assignments stay excluded.
+- **Python `attrs.fields` calls emit target type references** — `attrs.fields(models.User)` and `attr.fields(models.User)` now record the inspected attrs model type for reference search.
+- **Python augmented `__slots__` fields are indexed as properties** — slot names added with `__slots__ += (...)` now appear as property symbols.
+- **Python bare `raise` statements emit type references** — `raise CustomError` now records `CustomError` as a `type_reference` so exception usage is searchable even without call parentheses.
+- **Python cached properties are indexed as properties** — `@cached_property` and qualified cached property decorators now classify the decorated `def` as a property symbol instead of a function.
+- **Python call-style decorators emit decorator references** — decorators such as `@parametrized(...)` now produce a `decorator` reference in addition to the ordinary call edge.
+- **Python `cast` calls emit target type references** — `cast(models.User, value)` now records `User` as a `type_reference` so type-narrowing casts are searchable from the target type.
+- **Python class bases emit type references** — `class UserView(views.BaseView):` now records `BaseView` as a `type_reference` so base-class usage is searchable from the base type.
+- **Python `contextlib.suppress` calls emit exception type references** — `contextlib.suppress(errors.NotFoundError)` now records the suppressed exception type for reference search.
+- **Python `create_model` assignments are indexed as classes** — dynamic model declarations such as `RuntimeUser = create_model(...)` now appear in symbol search.
+- **Python current-package re-exports gain qualified import symbols** — `from . import helper` inside `__init__.py` now indexes both `helper` and the package-qualified module name for exact symbol search.
+- **Python current-package module imports gain package-qualified symbols** — `from .tools import build` inside `__init__.py` now indexes `package.subpkg.tools.build` for exact symbol search.
+- **Python `dataclasses.fields` calls emit target type references** — `dataclasses.fields(models.User)` now records the inspected dataclass type for reference search.
+- **Python tuple `except` clauses emit type references** — handlers such as `except (TimeoutError, network.NetworkError):` now record each exception type for reference search.
+- **Python `except` clauses emit type references** — `except CustomError as exc:` now records `CustomError` as a `type_reference`, making exception handlers discoverable from the exception class.
+- **Python `Final` declarations are indexed** — module constants such as `DEFAULT_TIMEOUT: Final[int] = 30` now appear as property symbols in symbol search.
+- **Python functional enum declarations are indexed as classes** — assignments such as `Color = Enum(...)` and `Status = enum.Enum(...)` now appear in symbol search.
+- **Python functional enum variants are indexed as classes** — `IntEnum`, `Flag`, `IntFlag`, and `StrEnum` factory assignments now appear in symbol search.
+- **Python generic parameter annotations emit nested type references** — `def save(users: Sequence[models.User]):` now records `User` from inside the parameter annotation.
+- **Python generic return annotations emit nested type references** — `def load_many() -> list[models.User]:` now records `User` from inside the return annotation.
+- **Python generic variable annotations emit nested type references** — `users: Sequence[models.User] = []` now records `User` from inside the variable annotation.
+- **Python `get_type_hints` calls emit target type references** — `get_type_hints(models.User)` now records the inspected target for reference search.
+- **Python tuple `isinstance` checks emit type references** — `isinstance(value, (models.User, api.Admin))` now records each checked type for reference search.
+- **Python `isinstance` checks emit type references** — `isinstance(value, models.User)` now records the checked type so runtime type checks are searchable from the class.
+- **Python tuple `issubclass` checks emit type references** — `issubclass(cls, (services.Plugin, mixins.Audited))` now records each checked base type for reference search.
+- **Python `issubclass` checks emit type references** — `issubclass(cls, services.Plugin)` now records the checked base type for reference search.
+- **Python `make_dataclass` assignments are indexed as classes** — dynamic dataclass factories such as `DynamicUser = make_dataclass(...)` now appear as class symbols.
+- **Python `__match_args__` fields are indexed as properties** — literal names in class-body `__match_args__` assignments now appear as property symbols for symbol search.
+- **Python class metaclasses emit type references** — `class Model(metaclass=orm.ModelMeta):` now records the metaclass so metaclass usage is searchable.
+- **Python multiple class bases emit type references** — `class UserView(views.BaseView, mixins.AuditedMixin):` now records each base class for reference search.
+- **Python functional named tuples are indexed as classes** — assignments such as `Point = NamedTuple(...)` and `Coordinate = collections.namedtuple(...)` now appear as class symbols.
+- **Python `NewType` aliases are indexed** — aliases such as `UserId = NewType("UserId", int)` and `OrderId = typing.NewType(...)` now appear in symbol search.
+- **Python `NewType` calls emit underlying type references** — `NewType("UserId", models.User)` now records the wrapped type for reference search.
+- **Python parameter annotations emit type references** — `def save(user: models.User):` now records the parameter type for reference search.
+- **Python parent-relative imports gain package-qualified symbols** — `from ..shared import helper` inside package `__init__.py` now indexes the resolved package path, such as `package.shared.helper`, for exact symbol search.
+- **Python property accessors are indexed as properties** — `@name.setter` and `@name.deleter` methods now appear as property symbols instead of function symbols.
+- **Python `pydantic.TypeAdapter` calls emit target type references** — `pydantic.TypeAdapter(models.User)` now records the adapted model type for reference search.
+- **Python `pytest.raises` calls emit exception type references** — `pytest.raises(errors.ValidationError)` now records the expected exception type for reference search.
+- **Python qualified `typing.assert_type` calls emit expected type references** — `typing.assert_type(value, models.User)` now records the expected type for reference search.
+- **Python qualified call decorators keep their full decorator reference** — dotted decorators such as `@pytest.mark.parametrize(...)` now emit `pytest.mark.parametrize` as a `decorator` reference.
+- **Python qualified `typing.cast` calls emit target type references** — `typing.cast(models.User, value)` now records the cast target type for reference search.
+- **Python qualified `typing.get_type_hints` calls emit target type references** — `typing.get_type_hints(models.User)` now records the inspected target for reference search.
+- **Python `raise ... from ...` emits exception type references** — `raise package.CustomError from exc` now records the raised exception type even when exception chaining is present.
+- **Python relative import modules gain qualified symbols** — relative `from .tools import build` statements now index the resolved module name, such as `package.subpkg.tools`, in addition to imported members.
+- **Python return annotations emit type references** — `def load() -> models.User:` now records the return type for reference search.
+- **Python `__slots__` fields are indexed as properties** — literal slot names in class-body `__slots__` assignments now appear as property symbols instead of only indexing `__slots__` itself.
+- **Python type aliases emit target type references** — `UserAlias: TypeAlias = models.User` now records the aliased target type for reference search.
+- **Python type-parameter aliases are indexed** — `TypeVar`, `ParamSpec`, and `TypeVarTuple` assignments now appear in symbol search.
+- **Python `TypeAlias` declarations are indexed** — legacy aliases such as `JsonValue: TypeAlias = ...` and `Handler: typing.TypeAlias = ...` now appear in symbol search.
+- **Python functional `TypedDict` declarations are indexed as classes** — assignments such as `UserPayload = TypedDict(...)` and `OrderPayload = typing.TypedDict(...)` now appear in symbol search.
+- **Python `TypeVar` bounds emit type references** — `TypeVar("TUser", bound=models.User)` now records the bound type for reference search.
+- **Python `TypeVar` constraints emit type references** — `TypeVar("TAccount", models.User, models.Admin)` now records each constraint type for reference search.
+- **Python variable annotations emit type references** — `user: models.User = load_user()` now records the annotated type for reference search.
+- **R `assign()` function definitions now surface in symbol search** — clear definitions such as `assign("build_plot", function(...))` are indexed by the assigned function name.
+- **R named-argument `assign()` function definitions now surface in symbol search** — `assign(x = "format_model", value = function(...))` is indexed by the assigned function name.
+- **R `assign()` shorthand function definitions now surface in symbol search** — `assign("compact_plot", \(data) data)` is indexed by the assigned function name.
+- **R backtick-named function calls now appear in reference search** — calls such as `` `plot-model`(x) `` and `` `%||%`(x, y) `` are emitted as call references.
+- **R `$` references now handle backtick receiver names** — member accesses such as `` `reactive data`$value `` and `` `reactive data`$`has space` `` are indexed as qualified references.
+- **R backtick-named `=` function assignments now surface in symbol search** — definitions such as `` `plot-model` = function(...) `` are indexed like their `<-` equivalents.
+- **R namespace references now include backtick-quoted operator names** — `cdidx` records R namespace references such as `` pkg::`%>%` `` and `` pkg:::`%||%` `` as searchable references to both the qualified target and the operator leaf name.
+- **R `[[...]]` member accesses now surface in reference search** — string-keyed lookups such as `data[["value"]]` and `input[['go']]` are indexed as the same qualified references as `$` access.
+- **R `data()` calls now surface in reference search** — dataset names and `package =` values are indexed from calls such as `data("iris", package = "datasets")`.
+- **R `$` member accesses now surface in reference search** — expressions such as `input$go`, `data$value`, and backtick member names emit both qualified and leaf references.
+- **R `help()` and `example()` calls now surface in reference search** — documentation topics and `package =` values are indexed as references.
+- **R infix operator calls now appear in reference search** — operator functions such as `%>%` and `%||%` are emitted as call references when used in infix form.
+- **R GitHub package install calls now surface in reference search** — `remotes::install_github()` and `devtools::install_github()` repository specs are indexed while named options are ignored.
+- **R `install.packages()` calls now surface in reference search** — quoted package names, including vector entries, are indexed while named options such as `repos =` are ignored.
+- **R `library(help = ...)` calls now surface as package imports** — help-oriented `library()` / `require()` calls index the referenced package name for symbol search.
+- **R named package loader calls now surface as import symbols** — forms such as `library(package = "stringr")` and `require(package = tidyr)` are indexed by package name.
+- **R `load_all()` development loaders now surface in reference search** — `devtools::load_all()` and `pkgload::load_all()` path arguments are indexed as references.
+- **R `NAMESPACE` import/export directives now produce symbol references** — `importFrom(pkg, name)` records both `pkg::name` and `name`, while `export(...)`, `exportClasses(...)`, and `exportMethods(...)` record exported names without adding noisy directive calls.
+- **R package `NAMESPACE` files are now detected as R** — extensionless `NAMESPACE` files are indexed in the R language bucket so package export/import directives participate in scoped search.
+- **R NAMESPACE class and method imports now surface in reference search** — `importClassesFrom()` and `importMethodsFrom()` directives are indexed like `importFrom()` with package-qualified and leaf references.
+- **R `NAMESPACE` package imports now remain searchable** — `import(pkg)` directives emit a package reference while suppressing the directive helper call.
+- **R `renv::install()` and `pak::pkg_install()` calls now surface in reference search** — quoted package names and vector entries are indexed like `install.packages()`.
+- **R namespace-qualified package loader calls now surface as import symbols** — forms such as `base::library("readr")` and `base::requireNamespace(package = "rlang")` are indexed by package name.
+- **R namespace-qualified `source()` calls now surface as import symbols** — forms such as `base::source("R/helpers.R")` are indexed by sourced path.
+- **R `pacman::p_load()` import extraction now ignores trailing comments** — package-like text after `#` is no longer indexed as an import.
+- **R `pacman::p_load()` calls now surface as package imports** — multiple bare or quoted package arguments are indexed as import symbols.
+- **R startup profile files are now detected as R** — `.Rprofile` and `Rprofile.site` are indexed in the R language bucket so startup hooks and helper definitions are available to scoped search.
+- **R rightward function assignments now surface in symbol search** — definitions such as `function(x) x + 1 -> increment` and `\(x) x -> name` are indexed by the assigned function name.
+- **R roxygen `@import` tags now surface in reference search** — package-level roxygen imports such as `@import ggplot2 dplyr` are indexed as package references.
+- **R roxygen `@importFrom` tags now surface in reference search** — `@importFrom`, `@importMethodsFrom`, and `@importClassesFrom` comments emit package-qualified and leaf references.
+- **R roxygen `@method` tags now surface in reference search** — S3 method tags emit the synthesized method name plus generic and class references.
+- **R `NAMESPACE` S3 method directives now create searchable references** — `S3method(generic, class)` records the generated `generic.class` method name plus its generic and class parts, while suppressing the directive helper call.
+- **R `setGroupGeneric()` declarations now surface in symbol search** — group generic names are indexed alongside existing `setGeneric()` coverage.
+- **R Shiny bracket-style output renderers now surface in symbol search** — `output[["detail-plot"]] <- renderPlot(...)` is indexed by output id.
+- **R Shiny output renderers now surface in symbol search** — `output$plot <- renderPlot(...)` and related renderers are indexed by output id.
+- **R Shiny reactive assignments now surface in symbol search** — named `reactive()`, `eventReactive()`, `observe()`, and `observeEvent()` assignments are indexed by their binding name.
+- **R shorthand function assignments now surface in symbol search** — definitions such as `compact <- \(x) x + 1` are indexed like `function(...)` assignments.
+- **R S4 slot accesses now surface in reference search** — expressions such as `model@coefficients`, backtick slot names, and backtick receiver names emit qualified and leaf references.
+- **R `source()` call references are retained alongside sourced file paths** — dynamic `source(path_var)` usages remain searchable by call while static paths also appear as references.
+- **R `source()` file loads now surface as import symbols** — explicit file loads such as `source("R/helpers.R")` are indexed by the sourced path.
+- **R `source()` calls now record the sourced file path as a reference** — explicit source paths appear in reference search while the helper call itself is suppressed.
+- **R superassignment function definitions are now indexed** — `cdidx` recognizes `name <<- function(...)` and backtick-escaped variants as function symbols, so symbol search no longer misses functions assigned into enclosing environments.
+- **R `sys.source()` file loads now match `source()` search coverage** — sourced paths are indexed as import symbols and emitted as references.
+- **R `system.file()` calls now surface in reference search** — positional resource path segments and `package =` values are indexed as references.
+- **R testthat BDD blocks now surface in symbol search** — `describe()` and `it()` descriptions are indexed as searchable test symbols, including namespace-qualified calls.
+- **R `test_that()` cases now surface in symbol search** — testthat case descriptions are indexed as searchable test symbols, including namespace-qualified calls.
+- **R `NAMESPACE` native library directives now keep package references searchable** — `useDynLib(pkg, ...)` emits the package name as a reference while suppressing the directive helper call.
+- **R NAMESPACE `useDynLib()` routine names now surface in reference search** — native entries such as `routine_a` and backtick-escaped routine names are indexed alongside the package reference.
+- **R `vignette()` calls now surface in reference search** — vignette topics and `package =` values are indexed as references.
+- **Ruby alias declarations now index their endpoints** — `cdidx` records the names in `alias` and `alias_method` declarations so searches can connect alias definitions to the methods they expose.
+- **Ruby association `class_name` options now link to target classes** — `cdidx` indexes string class names from Rails-style `belongs_to`, `has_one`, and `has_many` declarations so association searches can find the actual model type.
+- **Ruby Rails `attribute` declarations now index attribute names** — `cdidx` records the first argument from `attribute :timezone` while ignoring type and option values.
+- **Ruby Rails `attribute` declarations now create property symbols** — `cdidx` indexes `attribute :timezone` as a searchable model property.
+- **Ruby `autoload` constants are now indexed as references** — `cdidx` records the constant argument from `autoload :Name, "path"` so lazy-loaded Ruby types are easier to find.
+- **Ruby superclass references are now indexed** — `cdidx` records the parent class in `class Child < Parent`, allowing searches for Ruby types to find inheritance usage.
+- **Ruby `Class.new` block assignments now create class symbols** — `cdidx` indexes declarations such as `User = Class.new(...) do` as classes so methods defined inside the block are searchable under the dynamic class.
+- **Ruby Rails `composed_of` declarations now link aggregate and class targets** — `cdidx` records the aggregate name and `class_name` target from `composed_of :address`.
+- **Ruby constant assignments are now indexed as property symbols** — `cdidx` records constants such as `MAX_RETRIES = 3`, making Ruby configuration and domain constants searchable through symbol queries.
+- **Ruby constant visibility declarations now link to constants** — `cdidx` indexes targets from `private_constant` and `public_constant` while suppressing keyword call noise.
+- **Ruby Rails `create_table` declarations now index table names** — `cdidx` records symbol and string table names passed to `create_table` while suppressing migration option keys.
+- **Ruby DSL option hashes no longer add noisy references** — `cdidx` stops command-target scanning at Ruby keyword options such as `dependent:` or `only:`, keeping Rails-style reference results focused on real targets.
+- **Ruby Rails `enum` declarations now create property symbols** — `cdidx` indexes `enum :status` as a searchable model property.
+- **Ruby FactoryBot factories now create searchable symbols** — `cdidx` indexes `factory :user do` definitions as function symbols with Ruby block ranges.
+- **Ruby `gem` declarations now index dependency names** — `cdidx` records the first string argument from `gem "name"` so Gemfile dependency searches can find package declarations without keyword noise.
+- **Ruby `load` paths are now indexed as references** — `cdidx` records the string path in `load "file.rb"` so dynamically loaded Ruby files are easier to find.
+- **Ruby `module_function` declarations now link to exported methods** — `cdidx` indexes method names passed to `module_function` while suppressing the keyword as call noise.
+- **Ruby Rails nested attribute declarations now index association names** — `cdidx` records associations passed to `accepts_nested_attributes_for` while stopping before option keys.
+- **Ruby operator method definitions are now indexed as functions** — `cdidx` records definitions such as `def []`, `def []=`, and `def <=>`, improving symbol navigation for Ruby value objects and collection APIs.
+- **Ruby `prepend` now links to the mixed-in module** — `cdidx` treats `prepend SomeModule` like `include` and `extend`, indexing the module argument while avoiding a noisy call edge for the keyword.
+- **Ruby qualified class and module names are now indexed fully** — `cdidx` records names such as `Admin::Billing::Invoice` instead of only the first namespace segment.
+- **Ruby Rails `enum` declarations now index attribute names** — `cdidx` records the attribute passed to `enum :status` while leaving enum values and options out of reference search.
+- **Ruby Rails route declarations now index resource names** — `cdidx` records names passed to `resources :articles` and `resource :profile` without indexing route option keys as references.
+- **Ruby Rake namespaces now create namespace symbols** — `cdidx` indexes `namespace :db do` blocks and attaches nested tasks to the namespace container.
+- **Ruby Rake task definitions are now indexed as functions** — `cdidx` records `task :build` and `task test: :environment` names, improving entrypoint search in Ruby/Rake projects.
+- **Ruby `refine` declarations now link to refined classes** — `cdidx` records targets from `refine String do` while suppressing the refinement keyword as call noise.
+- **Ruby `require` import symbols now omit surrounding quotes** — `cdidx` indexes `require "path"` and `require_relative 'path'` import names as `path`, improving symbol search matches.
+- **Ruby `require_relative` targets are now indexed as references** — `cdidx` now records the relative path argument from `require_relative "..."`, making Ruby local dependency searches more complete.
+- **Ruby `rescue` clauses now index exception types** — `cdidx` records exception constants in `rescue ErrorType` clauses so searches can find handlers for Ruby error classes.
+- **Ruby `rescue_from` declarations now index exception classes** — `cdidx` records exception targets from Rails-style `rescue_from` declarations while avoiding option-hash noise.
+- **Ruby RSpec `describe` blocks now link subject constants** — `cdidx` records constants passed to `describe User do` and `RSpec.describe User do` while suppressing the DSL keyword as call noise.
+- **Ruby RSpec `let` helpers now create property symbols** — `cdidx` indexes `let(:user) do` and `let!(:account) do` helper definitions with Ruby block ranges.
+- **Ruby RSpec shared examples now create function symbols** — `cdidx` indexes `shared_examples "auditable" do` blocks so reusable spec contracts are searchable.
+- **Ruby RSpec named subjects now create property symbols** — `cdidx` indexes `subject(:profile) do` helper definitions with Ruby block ranges.
+- **Ruby Rails `serialize` declarations now index serialized attribute names** — `cdidx` records `serialize :settings` without indexing serializer option keys or values.
+- **Ruby receiver-qualified singleton methods are now indexed by method name** — `cdidx` records `export!` from `def Admin::User.export!` instead of mistaking the receiver for the function symbol.
+- **Ruby Rails `store_accessor` declarations now create property symbols** — `cdidx` indexes generated accessors such as `theme` and `locale` from `store_accessor :settings, :theme, :locale`.
+- **Ruby `Struct.new` block assignments now create class symbols** — `cdidx` indexes declarations such as `Result = Struct.new(...) do` as classes and keeps methods defined inside the block under that dynamic container.
+- **Ruby `using` refinement targets are now indexed as references** — `cdidx` records the refinement module in `using SomeRefinement` without adding a noisy call edge for the keyword.
+- **Ruby visibility-modified method definitions are now indexed** — `cdidx` recognizes `private def`, `protected def`, and `public def` forms, including singleton methods.
+- **Rust `as` casts now index target types** — casts such as `value as User` and pointer casts record the real target type references for search and impact queries.
+- **Rust associated-call receivers now emit type references** — calls such as `User::new()` and `Vec::<User>::new()` now keep the receiver type visible to reference search.
+- **Rust associated type binding keys no longer appear as type references** — `Future<Output = User>` keeps the real `Future`/`User` dependencies without indexing `Output` as a target type.
+- **Rust associated type bounds are now indexed** — declarations such as `type Item: Display + Debug` now expose their bound types as references alongside any default target type.
+- **Rust associated values now emit receiver type references** — non-call paths such as `User::DEFAULT` and `Result::<User, Error>::Ok` index the receiver and turbofish types without treating the value name as a type.
+- **Rust attributes now surface as annotation references** — attribute heads such as `#[tokio::test]` and `#[serde(...)]` are now searchable without treating `derive(...)` as a runtime call.
+- **Rust `cfg_attr(..., derive(...))` traits are now indexed** — conditional derives now contribute the same trait type references as direct `derive` attributes.
+- **Rust closure signatures now emit type references** — typed closure parameters and explicit closure return types are indexed so closure-local dependencies participate in search and impact analysis.
+- **Rust `const` and `static` item types are now indexed as type references** — declarations such as `const GLOBAL: Arc<User>` and `static mut STATE: Option<State>` now contribute their annotated types to reference search and inspection workflows.
+- **Rust derive traits are now indexed as type references** — `#[derive(Debug, Clone, serde::Serialize)]` now exposes the derived trait names to reference search and inspection.
+- **Rust enum variant payload types are now indexed** — tuple and struct-style variants such as `Created(User)` and `Moved { from: Point }` now expose their payload types as references attached to the enum.
+- **Rust `extern crate` declarations now emit references** — crate names from `extern crate` items are recorded for reference search without treating aliases as types.
+- **Rust function-trait bound return types are now indexed** — `F: FnOnce() -> Result<User, Error>` and matching `where` clauses keep the `Result`/payload return dependencies visible.
+- **Rust generic default types are now indexed** — default type arguments such as `T = User` in generic parameter lists now emit type references.
+- **Rust glob imports now reference their parent module** — `use crate::prelude::*;` records `prelude` instead of dropping the import target at `*`.
+- **Rust higher-ranked trait bounds keep their real bound types visible** — lifetime binders such as `for<'a>` are masked without erasing `Fn`/payload types or emitting `for` as a type reference.
+- **Rust lifetime names no longer appear as type references** — lifetime markers such as `'a` are skipped while preserving the surrounding real types.
+- **Rust external module declarations now emit references** — semicolon-style `mod users;` declarations are searchable as module references.
+- **Rust path-qualified `impl` blocks now attach to the implementing type** — `impl crate::models::Widget {}` and trait impls for qualified targets now surface `Widget` instead of a path prefix as the searchable impl symbol.
+- **Rust fully-qualified associated calls now emit receiver and trait type references** — `<User as Service>::handle()` indexes both `User` and `Service`.
+- **Rust raw identifiers now normalize in type references** — type-position references such as `r#type` and `crate::r#type` are indexed under the usable symbol name instead of leaking a phantom `r` segment.
+- **Rust `Self` associated calls no longer create self type edges** — `Self::new()` and `Self { ... }` stop emitting `Self` as an external type reference or instantiation while concrete receivers remain indexed.
+- **Rust struct literals now emit instantiation references** — `User { ... }` and path-qualified struct literals are visible to reference and impact queries.
+- **Rust trait alias targets now emit type references** — dependencies in `trait Alias = Bound + Other;` declarations are indexed.
+- **Rust trait superbound function returns are now indexed** — `trait Handler: FnOnce() -> User` keeps `User` visible as a type reference.
+- **Rust tuple-style constructors now emit instantiation references** — `User(...)`, `Some(...)`, and `Ok(...)` are classified as construction edges instead of ordinary calls.
+- **Rust type aliases now index their target types** — aliases such as `type UserMap = HashMap<Key, User>` now expose the right-hand-side types as references for search, inspect, and dependency workflows.
+- **Rust type modifiers no longer appear as type references** — keywords such as `impl`, `dyn`, `const`, `mut`, and the `'static` lifetime are filtered from type-reference results while preserving the real surrounding types.
+- **Rust `use` imports now emit references** — imported target names from simple and grouped `use` statements are recorded as references without indexing aliases as types.
+- **SQL ALTER ASSEMBLY targets are indexed as references** — exact SQL reference search can now find assemblies mentioned by `ALTER ASSEMBLY`.
+- **SQL bare ALTER AUTHORIZATION object targets are indexed as references** — exact SQL reference search can now find objects mentioned by `ALTER AUTHORIZATION ON schema.object`.
+- **SQL ALTER AUTHORIZATION object targets are indexed as references** — exact SQL reference search can now find objects mentioned by `ALTER AUTHORIZATION ON OBJECT::...`.
+- **SQL ALTER FULLTEXT CATALOG targets are indexed as references** — exact SQL reference search can now find full-text catalogs mentioned by `ALTER FULLTEXT CATALOG`.
+- **SQL ALTER FULLTEXT INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned after `ALTER FULLTEXT INDEX ON`.
+- **SQL ALTER FUNCTION targets are indexed as references** — exact SQL reference search can now find functions mentioned by `ALTER FUNCTION`.
+- **T-SQL `ALTER INDEX ... ON` table targets are indexed as references** — exact SQL reference search can now find tables touched only by index rebuild or reorganize maintenance scripts.
+- **SQL ALTER PARTITION FUNCTION targets are indexed as references** — exact SQL reference search can now find partition functions mentioned by `ALTER PARTITION FUNCTION`.
+- **SQL ALTER PARTITION SCHEME targets are indexed as references** — exact SQL reference search can now find partition schemes mentioned by `ALTER PARTITION SCHEME`.
+- **SQL ALTER PROCEDURE targets are indexed as references** — exact SQL reference search can now find procedures mentioned by `ALTER PROCEDURE` or `ALTER PROC`.
+- **SQL ALTER SCHEMA transfer targets are indexed as references** — exact SQL reference search can now find objects moved by `ALTER SCHEMA ... TRANSFER`.
+- **SQL ALTER SECURITY POLICY names are indexed as references** — exact SQL reference search can now find security policies mentioned by `ALTER SECURITY POLICY`.
+- **SQL ALTER SECURITY POLICY predicate tables are indexed as references** — exact SQL reference search can now find tables added to row-level security policies.
+- **SQL ALTER SEQUENCE targets are indexed as references** — exact SQL reference search can now find sequences mentioned by `ALTER SEQUENCE`.
+- **SQL `ALTER TABLE` statements now surface table references** — `references` and exact SQL name matching can now find tables that are only touched by T-SQL schema migrations.
+- **SQL ALTER TABLE SWITCH targets are indexed as references** — exact SQL reference search can now find destination tables mentioned after `SWITCH TO`.
+- **SQL ALTER TRIGGER targets are indexed as references** — exact SQL reference search can now find triggers mentioned by `ALTER TRIGGER`.
+- **SQL ALTER VIEW targets are indexed as references** — exact SQL reference search can now find views mentioned by `ALTER VIEW`.
+- **SQL ALTER XML SCHEMA COLLECTION targets are indexed as references** — exact SQL reference search can now find XML schema collections mentioned by `ALTER XML SCHEMA COLLECTION`.
+- **SQL bare object permission targets are indexed as references** — exact SQL reference search can now find objects mentioned by `GRANT`, `DENY`, and `REVOKE` statements that use `ON schema.object`.
+- **T-SQL `BULK INSERT` destinations are indexed as table references** — exact SQL reference search can now find tables loaded through `BULK INSERT dbo.Table FROM ...`.
+- **SQL CREATE CLUSTERED COLUMNSTORE INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned by clustered columnstore index creation.
+- **SQL CREATE FULLTEXT INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned after `CREATE FULLTEXT INDEX ON`.
+- **SQL CREATE NONCLUSTERED HASH INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned by memory-optimized hash index creation.
+- **SQL `CREATE INDEX ... ON` table targets are indexed as references** — exact SQL reference search can now find tables used only by index definitions while continuing to suppress access-method names such as `btree`.
+- **SQL CREATE SECURITY POLICY predicate tables are indexed as references** — exact SQL reference search can now find tables mentioned after row-level security predicates.
+- **SQL CREATE PRIMARY/SELECTIVE XML INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned after special XML index creation.
+- **SQL CREATE STATISTICS table targets are indexed as references** — exact SQL reference search can now find tables mentioned after `CREATE STATISTICS ... ON`.
+- **SQL `CREATE TRIGGER ... ON` table targets are indexed as references** — exact SQL reference search can now find tables that are only touched by trigger definitions.
+- **SQL DELETE targets without FROM are indexed as references** — exact SQL reference search can now find qualified tables mentioned by `DELETE schema.table`.
+- **SQL DROP AGGREGATE targets are indexed as references** — exact SQL reference search can now find aggregates mentioned by `DROP AGGREGATE`.
+- **SQL DROP ASSEMBLY targets are indexed as references** — exact SQL reference search can now find assemblies mentioned by `DROP ASSEMBLY`.
+- **SQL DROP DEFAULT targets are indexed as references** — exact SQL reference search can now find defaults mentioned by `DROP DEFAULT`.
+- **SQL DROP FULLTEXT CATALOG targets are indexed as references** — exact SQL reference search can now find full-text catalogs mentioned by `DROP FULLTEXT CATALOG`.
+- **SQL DROP FULLTEXT INDEX table targets are indexed as references** — exact SQL reference search can now find tables mentioned after `DROP FULLTEXT INDEX ON`.
+- **SQL DROP FUNCTION targets are indexed as references** — exact SQL reference search can now find functions mentioned by `DROP FUNCTION`.
+- **SQL legacy DROP INDEX owning tables are indexed as references** — exact SQL reference search can now find tables mentioned by `DROP INDEX table.index`.
+- **T-SQL `DROP INDEX ... ON` table targets are indexed as references** — exact SQL reference search can now find tables touched only by SQL Server index cleanup scripts.
+- **SQL DROP PARTITION FUNCTION targets are indexed as references** — exact SQL reference search can now find partition functions mentioned by `DROP PARTITION FUNCTION`.
+- **SQL DROP PARTITION SCHEME targets are indexed as references** — exact SQL reference search can now find partition schemes mentioned by `DROP PARTITION SCHEME`.
+- **SQL DROP PROCEDURE targets are indexed as references** — exact SQL reference search can now find procedures mentioned by `DROP PROCEDURE` or `DROP PROC`.
+- **SQL DROP RULE targets are indexed as references** — exact SQL reference search can now find rules mentioned by `DROP RULE`.
+- **SQL DROP SECURITY POLICY targets are indexed as references** — exact SQL reference search can now find security policies mentioned by `DROP SECURITY POLICY`.
+- **SQL DROP SEQUENCE targets are indexed as references** — exact SQL reference search can now find sequences mentioned by `DROP SEQUENCE`.
+- **SQL DROP STATISTICS owning tables are indexed as references** — exact SQL reference search can now find tables mentioned by `DROP STATISTICS table.statistic`.
+- **SQL DROP SYNONYM targets are indexed as references** — exact SQL reference search can now find synonyms mentioned by `DROP SYNONYM`.
+- **SQL `DROP TABLE` statements now surface table references** — exact SQL reference search can now find teardown migrations that drop one or more T-SQL tables, including `IF EXISTS` forms.
+- **SQL DROP TRIGGER targets are indexed as references** — exact SQL reference search can now find triggers mentioned by `DROP TRIGGER`.
+- **SQL DROP TYPE targets are indexed as references** — exact SQL reference search can now find user-defined types mentioned by `DROP TYPE`.
+- **SQL DROP VIEW targets are indexed as references** — exact SQL reference search can now find views mentioned by `DROP VIEW`.
+- **SQL DROP XML SCHEMA COLLECTION targets are indexed as references** — exact SQL reference search can now find XML schema collections mentioned by `DROP XML SCHEMA COLLECTION`.
+- **SQL foreign-key `REFERENCES` targets are indexed as table references** — exact SQL reference search can now find tables that are only mentioned as foreign-key targets.
+- **T-SQL `INSERT` targets are indexed when `INTO` is omitted** — exact SQL reference search can now find write targets in SQL Server-style `INSERT dbo.Table (...)` statements.
+- **SQL object permission targets are indexed as references** — exact SQL reference search can now find objects mentioned by `GRANT`, `DENY`, and `REVOKE` statements that use `ON OBJECT::...`.
+- **SQL OUTPUT INTO targets are indexed as references** — exact SQL reference search can now find audit or capture tables mentioned by DML `OUTPUT ... INTO`.
+- **T-SQL `SELECT ... INTO` table targets are indexed beyond temp tables** — exact SQL reference search can now find non-temp tables created or written through `SELECT ... INTO dbo.Table`.
+- **SQL synonym base objects are indexed as references** — exact SQL reference search can now find objects that are only mentioned after `CREATE SYNONYM ... FOR`.
+- **SQL system-versioning history tables are indexed as references** — exact SQL reference search can now find tables mentioned by `HISTORY_TABLE = ...`.
+- **T-SQL trigger enable/disable statements now index their table targets** — exact SQL reference search can find tables touched only by `ENABLE TRIGGER ... ON` or `DISABLE TRIGGER ... ON` maintenance scripts.
+- **SQL UPDATE STATISTICS targets are indexed as references** — exact SQL reference search can now find tables mentioned by `UPDATE STATISTICS`.
+- **Swift access-modified imports are now indexed** — declarations such as `public import Logging` and `package import struct PackageKit.Token` now produce searchable import symbols with the same granular-import normalization as ordinary imports.
+- **Swift associatedtype constraints and defaults now index type references** — protocol declarations such as `associatedtype Item: Identifiable` and `associatedtype Cache = MemoryCache<Item>` now expose those dependencies to reference queries.
+- **Swift attribute generic arguments are now indexed as type references** — property wrappers and macros such as `@Relationship<UserViewModel>` now expose their generic model types without treating the attribute name itself as a type.
+- **Swift catch pattern roots are now indexed as type references** — `catch NetworkError.timeout` and similar clauses expose the error type without indexing the enum case name as a type.
+- **Swift closure literal signatures now index type references** — inline closures such as `{ (value: Input) -> Output in ... }` now expose their parameter and return types to `references` queries.
+- **Swift collection shorthand constructors now index contained types** — `[User]()` and `[String: Handler]()` expose `User` and `Handler` as type references while subscript calls such as `items[index]()` stay ignored.
+- **Swift extension targets now index as type references** — `extension Repository where ...` and `extension CacheStore: Protocol` declarations now expose the extended type to `references` queries.
+- **Swift function-type effects are no longer indexed as types** — `async`, `throws`, and `rethrows` are ignored in function type expressions while typed-throws errors and return types remain searchable.
+- **Swift function type return positions now stay searchable** — colon type positions such as `(Input) -> Output` now keep the return type in `type_reference` extraction instead of stopping at `->`.
+- **Swift generic invocation arguments are now indexed as type references** — calls like `decode<User>(data)` and `decode<Result<User, Failure>>(data)` expose their generic type arguments without indexing declaration parameters from `func decode<T>`.
+- **Swift generic static member expressions now index root and argument types** — `Result<User, Failure>.success(...)` exposes `Result`, `User`, and `Failure` without treating member `success` as a type.
+- **Swift generic trailing-closure calls now index type arguments** — expressions like `Task<User, Failure> { ... }` now expose `User` and `Failure` just like parenthesized generic calls.
+- **Swift granular imports now use searchable symbol names** — `import struct Foundation.URL`, `import enum Dispatch.DispatchQoS`, and `import func Darwin.C.printf` drop the import kind prefix from the indexed symbol name.
+- **Swift `#keyPath` roots are now indexed as type references** — `#keyPath(Person.name)` and nested paths such as `#keyPath(Person.address.street)` expose `Person` while leaving key-path member names out of type-reference results.
+- **Swift key path roots are now indexed as type references** — explicit roots such as `\User.name` and `\Order.customer.name` now surface their model types without treating property path segments as types.
+- **Swift macro generic arguments are now indexed as type references** — calls such as `#Predicate<User>` and `#Expression<Order, Score>` expose their generic model types without turning non-generic compiler checks into type references.
+- **Swift metatype suffixes no longer pollute type references** — `User.Type` and `Service.Protocol` now index the real target type without adding noisy `Type` or `Protocol` reference rows.
+- **Swift comma-separated enum cases are now indexed individually** — declarations such as `case badRequest, unauthorized, serverError(Int)` emit separate searchable symbols for every case on the line.
+- **Swift multiple raw-value enum cases are now indexed individually** — `case accepted = 202, gone = 410` now emits both `accepted` and `gone` symbols with their own raw values, including quoted string raw values that contain commas.
+- **Swift operator overload functions are now indexed as symbols** — declarations such as `static func +`, `static func ==`, and `prefix func !` now appear in symbol search instead of being skipped by identifier-only function matching.
+- **Swift same-type constraints now index right-hand type references** — `where Entity == User` and `where T.Output == Response` constraints now expose their concrete target types to `references` queries without adding phantom trailing-closure call edges.
+- **Swift `#selector` roots are now indexed as type references** — `#selector(ViewController.handleTap(_:))` and labeled forms such as `#selector(getter: ViewController.titleText)` expose `ViewController` without treating selector members as types.
+- **Swift `.self` metatype expressions now index their root types** — `User.self`, `Service.self`, and `[User].self` surface their concrete types while instance `user.self` remains ignored.
+- **Swift tuple and function type labels no longer appear as type references** — labels in shapes such as `(x: Coordinate, y: Coordinate)` are ignored while the actual element types remain indexed.
+- **Swift type-expression attributes are no longer indexed as types** — `@retroactive`, `@escaping`, and `@Sendable` in conformance and function-type positions are skipped while preserving the real referenced types.
+- **Swift opaque and existential type modifiers no longer pollute type references** — `some`, `any`, and `each` are now ignored as modifier keywords while the real referenced types remain indexed.
+- **Swift type parameter modifiers are no longer indexed as types** — `inout`, `isolated`, `consuming`, `sending`, and `borrowing` are ignored in type positions while keeping the real parameter types searchable.
+- **Swift typealias right-hand sides now index referenced types** — aliases such as `typealias Loader = (Request) -> Response` now expose the aliased input, output, and generic argument types to `references` queries.
+- **Swift typed throws now contribute type references** — `throws(ErrorType)` clauses are indexed as `type_reference` edges so `references` and impact-style queries can find dependencies on thrown error types.
+- **Swift variadic generic `repeat` is no longer indexed as a type** — `TuplePack<repeat each Element>` now preserves the real `Element` reference without emitting `repeat` or `each` as phantom type references.
+- **C# and Java Unicode-escaped declarations now index under canonical symbol names** - declarations whose identifiers use source-only Unicode escape syntax now appear in symbol and exact-name definition searches by their decoded names.
+- **VB `AddHandler` event targets now produce subscribe references** — event names in `AddHandler button.Click, ...` are indexed as `subscribe` edges even when no `Handles` clause is present.
+- Fixed Visual Basic `As New` reference extraction so the constructed type is indexed instead of `New`.
+- Fixed Visual Basic call reference extraction so bare Sub-call statements such as `Save` and `Me.Refresh user` are indexed.
+- Fixed Visual Basic call reference extraction so bare `With` member calls such as `.Refresh user` are indexed.
+- Fixed Visual Basic file detection so `.bas` modules are indexed as `vb` instead of being skipped.
+- Fixed Visual Basic `CallByName` reference extraction so the string target is indexed as the call instead of `CallByName` itself.
+- **VB cast target types are now indexed as references** — `DirectCast`, `TryCast`, and `CType` target types now produce `type_reference` rows so `references` and `impact` can find cast-only Visual Basic dependencies.
+- Fixed Visual Basic file detection so classic `.cls` class modules are indexed as `vb`.
+- **VB constants are now searchable as property symbols** — member-level `Const` declarations now appear in symbol search, including visibility metadata.
+- Fixed Visual Basic reference extraction so built-in conversion intrinsics such as `CInt` and `CStr` are not indexed as call references.
+- Added `.ctl` files to Visual Basic language detection so Classic VB user controls are included in VB searches.
+- **VB `Declare` members are now searchable** — external `Declare Sub` and `Declare Function` declarations, including `Auto`, `Ansi`, and `Unicode` forms, are indexed as function symbols.
+- Added `.dob` files to Visual Basic language detection so Classic VB ActiveX document sources are included in VB searches.
+- Added `.dsr` files to Visual Basic language detection so Classic VB designer/data report sources are included in VB searches.
+- Fixed Visual Basic `AddHandler` extraction so escaped event targets like `AddHandler button.[Click], ...` are indexed under their unescaped event names.
+- Fixed Visual Basic `AddressOf [Name]` extraction so escaped method targets are indexed as calls under their unescaped names.
+- Fixed Visual Basic call reference extraction so escaped calls like `[Select]()` and `Me.[Save]()` are indexed under their normal names.
+- Fixed Visual Basic cast target extraction so escaped target types like `DirectCast(raw, [Class])` are indexed under their unescaped names.
+- Fixed Visual Basic generic constraint extraction so escaped type parameters in declarations like `Of [T] As [Class]` do not leak as references while the constraint type is indexed.
+- Fixed Visual Basic generic declaration detection so escaped owner names like `Class [Box](Of T)` do not index type parameters as references.
+- Fixed Visual Basic `GetType([Type])` extraction so escaped target types are indexed under their unescaped names.
+- Fixed Visual Basic `Handles` extraction so escaped event targets like `Handles button.[Click]` are indexed under their unescaped event names.
+- Fixed Visual Basic member declaration indexing so escaped names like `Sub [Select]()` and `Property [Property]` are searchable under their unescaped names.
+- Fixed Visual Basic namespace indexing so escaped segments like `Namespace [My].App` are searchable as `My.App`.
+- Fixed Visual Basic `New [Type]()` extraction so escaped constructed types are indexed as `instantiate` references under their unescaped names.
+- Fixed Visual Basic `RaiseEvent [Name]` extraction so escaped event targets are indexed as calls under their unescaped names.
+- Fixed Visual Basic `RemoveHandler` extraction so escaped event targets like `RemoveHandler button.[Click], ...` are indexed under their unescaped event names.
+- Fixed Visual Basic type-reference extraction so escaped type names like `As [Class]` are indexed under their unescaped names.
+- Fixed Visual Basic type declaration indexing so escaped identifiers like `Class [Class]` are searchable under their unescaped names.
+- Fixed Visual Basic `TypeOf ... Is [Type]` extraction so escaped target types are indexed under their unescaped names.
+- **VB member fields are now searchable as property symbols** — visible fields such as `Private ReadOnly repo As Repository` and `Public Shared Count As Integer` now appear in symbol search without indexing local `Dim` variables.
+- Fixed Visual Basic file detection so classic `.frm` form files are indexed as `vb`.
+- Fixed Visual Basic generic declarations so constraint types such as `Of T As IDisposable` are indexed without treating the type parameter as a reference.
+- **VB generic type arguments are indexed without generic-parameter noise** — `Repository(Of Customer)` still emits `Customer`, while declarations like `Class Box(Of T)` no longer emit phantom `T` type references.
+- **VB `GetType` target types are now indexed** — `GetType(Customer)` and qualified forms now emit `type_reference` rows so reflection-only Visual Basic dependencies are searchable.
+- Added Visual Basic `GetXmlNamespace(prefix)` reference extraction so XML namespace import prefixes can be found from their use sites.
+- **VB `Implements` lists now index every interface type** — comma-separated declarations such as `Implements IRequestHandler, IAuditable` now emit `type_reference` rows for each implemented interface.
+- Fixed Visual Basic import alias reference extraction so `Imports Alias=Target.Type` indexes the target type without treating the alias as a type reference.
+- Fixed Visual Basic import alias indexing so `Imports Alias = Target.Type` is searchable by the alias name, including escaped aliases.
+- **VB `Imports` targets now emit type references** — comma-separated and alias imports now contribute dependency references for imported namespaces or types.
+- **VB iterator members are now searchable as functions** — `Iterator Function` and `Iterator Sub` declarations are indexed as function symbols instead of being skipped when searching Visual Basic code.
+- **Visual Basic language aliases now accept hyphen and underscore spellings** — `visual-basic` and `visual_basic` normalize to `vb` in CLI and database search paths.
+- Fixed Visual Basic member `Implements IFoo.Member` reference extraction so the implemented interface owner is indexed.
+- **VB `Handles` clauses now index every event target** — comma-separated targets such as `Handles button.Click, menu.Opened` now produce one `subscribe` reference per event without confusing parameter-list commas for events.
+- Fixed Visual Basic `NameOf(...)` reference extraction so the named target is indexed, including escaped target names, without treating `NameOf` itself as a call.
+- **VB object creation now emits instantiate references** — `New Customer()` and qualified constructor targets now appear as `instantiate` edges while anonymous `New With` objects stay ignored.
+- Fixed Visual Basic member indexing so `NotOverridable` methods and properties are searchable.
+- Added `.pag` files to Visual Basic language detection so Classic VB property pages are included in VB searches.
+- Fixed Visual Basic declaration indexing so `Declare PtrSafe Function` API declarations are searchable as functions.
+- Fixed Visual Basic `AddHandler` reference extraction so deeply qualified event targets index the final event name.
+- Fixed Visual Basic `Handles` reference extraction so deeply qualified event targets index the final event name.
+- Fixed Visual Basic `RemoveHandler` reference extraction so deeply qualified event targets index the final event name.
+- **VB `RaiseEvent` targets are now indexed** — event names in `RaiseEvent Changed(...)` now emit references so event publishers participate in `references`, `impact`, and graph queries.
+- **VB `RemoveHandler` event targets are now indexed** — event names in `RemoveHandler button.Click, ...` now emit `unsubscribe` references so event unwiring is searchable.
+- **VB `TypeOf ... Is` target types are now indexed** — type-test expressions now emit `type_reference` rows, including `IsNot` and qualified type names.
+- Added `.vba` files to Visual Basic language detection so VBA macro modules participate in VB searches.
+- Added `.vbhtml` files to Visual Basic language detection so VB Razor views are included in VB searches.
+- Fixed Visual Basic XML namespace import indexing so prefixes containing `-` or `.` remain searchable.
+- Fixed Visual Basic XML namespace imports so prefixes such as `Imports <xmlns:ui="...">` are searchable as `ui` import symbols.
+- **VBScript language aliases now map to Visual Basic search** — `vbs` and `vbscript` normalize to `vb`, matching the existing `.vbs` file-language detection.
+- **Avalonia binding paths are now indexed from XAML** — `{CompiledBinding ...}` and `{ReflectionBinding ...}` now emit searchable property symbols, matching the existing `{Binding ...}` path extraction for Avalonia XAML projects.
+- **XAML `ElementName` binding references are now indexed** — `{Binding ElementName=SearchBox, Path=Text}`, `<Binding ElementName="RootPanel" />`, and `<Binding.ElementName>DetailsList</Binding.ElementName>` now emit searchable property symbols, improving navigation from bindings back to named XAML elements.
+- **XAML object-element binding paths are now indexed** — `<Binding Path="ViewModel.FirstName" />` and `<Binding.Path>Profile.DisplayName</Binding.Path>` now emit searchable property symbols, improving navigation for MultiBinding and property-element XAML forms.
+- **XAML `x:Reference` targets are now indexed** — `{x:Reference RootPanel}`, `{x:Reference Name=NamedTarget}`, `<x:Reference Name="ObjectTarget" />`, and `<x:Reference.Name>PropertyTarget</x:Reference.Name>` now emit searchable property symbols, improving navigation between XAML references and named elements.
+- **XAML resource references are now indexed** — `{StaticResource PrimaryBrush}` and `{DynamicResource ResourceKey={x:Static local:Keys.AccentBrush}}` now emit searchable property symbols, improving navigation between resource declarations and resource consumers.
+- **XAML `TemplateBinding` properties are now indexed** — `{TemplateBinding Background}` and `{TemplateBinding Property=local:ButtonChrome.BorderBrush}` now emit searchable property symbols, improving ControlTemplate navigation in C#/XAML projects.
+- **XAML wrapped search attributes are now indexed** — `x:Name`, `x:Key`, and common event handler attributes split across lines are now emitted as searchable symbols, so C#/XAML code-behind lookups still find names such as `SaveButton` and `OnSaveClicked`.
+
+#### Documentation
+
+- **Japanese documentation links now stay in Japanese sections** — links from Japanese documentation sections to bilingual guides now include the appropriate Japanese-section anchors instead of opening the English top of the target document.
+- **README and USER_GUIDE documentation links now render as aligned tables** — the English and Japanese README documentation sections and USER_GUIDE quick-link blocks now use two-column tables instead of colon-separated bullet lists.
+- **USER_GUIDE language and status sections are easier to scan** — supported-language tables no longer break mid-table, and long status/language capability notes are split into focused bullets.
+
 ### [1.20.1] - 2026-05-06
 
 #### Fixed
@@ -1368,6 +2186,824 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.21.0] - 2026-05-10
+
+#### 追加
+
+- **C# の partial constructor を function シンボルとして索引するようになりました** — C# 14 の `public partial Widget();` や `public partial Widget() { }` 宣言が `symbols`、`definition`、`outline` の結果に現れるようになりました。
+- **Java sealed 型の `permits` リストを graph 参照として記録するようになりました** — `sealed interface Shape permits Circle, Square` が `Circle` と `Square` を `type_reference` edge として記録するため、`references`、`deps`、impact 系の graph query で許可サブタイプ依存を見られます。
+- **JavaScript / TypeScript の destructured named export を索引するようになりました** — `export const { foo, renamed: localName } = source` が、rest binding やネストした object / array binding 名を含め、実際の binding 名を export surface の `property` シンボルとして出すようになりました。
+- **JavaScript/TypeScript の CommonJS default function export を検索できるようになりました** — `module.exports = function () {}` や `module.exports = async () => {}` が exported `default` `function` シンボルを追加し、`module.exports = class`、object literal、通常値は既存の経路のまま扱われます。
+- **JavaScript/TypeScript の CommonJS `Object.defineProperties` export を検索できるようになりました** — `Object.defineProperties(exports, { foo: ... })` や `Object.defineProperties(module.exports, { "bar-baz": ... })` が静的な descriptor key を exported `property` シンボルとして追加し、`__esModule` と動的 computed key は無視します。
+- **JavaScript/TypeScript の CommonJS `Object.defineProperty` export を検索できるようになりました** — `Object.defineProperty(exports, "foo", ...)` や `Object.defineProperty(module.exports, "bar", ...)` が exported `property` シンボルを追加し、`__esModule` marker や export 以外の target は引き続きスキップされます。
+- **JavaScript/TypeScript の CommonJS `Object.defineProperty` numeric export key を検索できるようになりました** — `Object.defineProperty(exports, 404, ...)` や複数行の `Object.defineProperty(module.exports, 500, ...)` が静的な numeric property key を exported `property` シンボルとして追加し、`__esModule` は引き続き無視します。
+- **JavaScript/TypeScript の CommonJS numeric bracket export を検索できるようになりました** — `exports[404] = value` や `module.exports[500] = function () {}` が `404` / `500` という exported シンボルとして表面化し、dynamic bracket expression は引き続き無視します。
+- **JavaScript/TypeScript の CommonJS `Object.assign` export を検索できるようになりました** — `Object.assign(exports, { foo })` や `Object.assign(module.exports, { "bar-baz": value })` が静的な object key を exported `property` シンボルとして追加し、動的 computed key は引き続き無視します。
+- **JavaScript/TypeScript の CommonJS require 呼び出しが module import として出るようになりました** — `const fs = require("node:fs")` や複数行の `require("./helper")` が source module の `import` シンボルを追加し、`loader.require(...)` や `require.resolve(...)` のような method 呼び出しは引き続きスキップされます。
+- **JavaScript/TypeScript の default arrow export を検索できるようになりました** — `export default () => value` や `export default async () => {}` が exported `default` `function` シンボルを追加し、default function / class / object-literal export は既存の抽出経路のまま扱われます。
+- **JavaScript / TypeScript の default export 関数を索引するようになりました** — `export default function Name() {}` が `Name` の `function` シンボルを出し、無名の default export 関数もモジュールの `default` 関数面として索引されます。
+- **JavaScript/TypeScript の dynamic import 検索が import options に対応しました** — `import("./data.json", { with: { type: "json" } })` や複数行の assertion 形式 options を含む runtime 呼び出しでも、module specifier が `import` シンボルとして表面化します。
+- **JavaScript/TypeScript の exported object literal で computed literal key を索引するようになりました** — `module.exports = { ["computed-api"]: handler, [500]: notFound }` や `export default { ["dash-key"]: handler }` のような静的 computed key が exported `property` シンボルとして出る一方、動的 computed key は引き続きスキップされます。
+- **JavaScript/TypeScript の exported object literal で literal key を索引するようになりました** — `module.exports = { "x-api": handler, 404: notFound }` や `export default { "dash-key": value }` のような quoted / numeric key が exported `property` シンボルとして出る一方、computed key は引き続きスキップされます。
+- **JavaScript/TypeScript の exported variable declaration を検索できるようになりました** — `export const foo = 1, bar = 2`、`export let`、`export var`、TypeScript の `export declare const` が公開変数名を exported `property` シンボルとして追加し、export 済み関数束縛は重複させません。
+- **JavaScript/TypeScript の `import.meta.resolve` specifier を検索できるようになりました** — `import.meta.resolve("./feature.js")` に渡された静的な module specifier を、parent URL 引数付きの call を含めて `import` シンボルとして索引します。
+- **JavaScript/TypeScript の `importScripts()` dependency を検索できるようになりました** — global な `importScripts("./worker-a.js", "/worker-b.js")` call が静的 string / no-substitution template specifier ごとに `import` シンボルを追加し、property-access call と動的 template は引き続き無視します。
+- **JavaScript/TypeScript の local named export list を検索できるようになりました** — `export { foo, local as publicName }` や TypeScript の `export type { User }` が、宣言と export list が分かれていても exported `property` シンボルとして追加されます。
+- **JavaScript / TypeScript の複数行 dynamic import を索引するようになりました** — runtime の `import(\n  "./module"\n)` 呼び出しが module specifier の `import` シンボルを出すようになり、文字列、コメント、TypeScript の `typeof import(...)` type query は引き続き除外されます。
+- **JavaScript/TypeScript の `new URL(..., import.meta.url)` reference を検索できるようになりました** — `new URL("./worker.js", import.meta.url)` のような静的 string / no-substitution template specifier が `import` シンボルを追加し、動的 template と `import.meta.url` 以外の base は引き続き無視します。
+- **JavaScript/TypeScript の qualified Worker constructor を検索できるようになりました** — `new window.Worker("./worker.js")` と `new globalThis.SharedWorker("./shared-worker.js")` が、unqualified Worker constructor と同様に静的な script specifier の `import` シンボルを追加します。
+- **JavaScript/TypeScript の `require.resolve()` module reference を検索できるようになりました** — 静的な `require.resolve("./resolved")` call が module specifier の `import` シンボルを追加し、`loader.require(...)` のような property-access call は引き続き無視します。
+- **JavaScript/TypeScript の options 付き `require.resolve()` call を検索できるようになりました** — `require.resolve("./with-paths", { paths: [...] })` が trailing options 引数を含む場合でも、静的な module specifier を `import` シンボルとして保持します。
+- **JavaScript/TypeScript の direct Service Worker registration を検索できるようになりました** — `navigator.serviceWorker.register("./sw.js")` と options 付き direct registration が静的な script specifier の `import` シンボルを追加し、動的 path は引き続き無視します。
+- **JavaScript/TypeScript の静的 import が source module を表面化するようになりました** — `import React from "react"`、複数行の `import { ... } from "vue"`、side-effect import、import attributes 付き import が、source module specifier を `import` シンボルとして追加します。
+- **JavaScript/TypeScript の string-literal export 名を引用符なしで検索できるようになりました** — `export { handler as "x-api" }` や `export { remote as "remote-key" } from "./remote"` のような local / re-export list が、`x-api` / `remote-key` という exported `property` シンボルを追加します。
+- **JavaScript/TypeScript の dynamic import で no-substitution template literal を索引するようになりました** — `` import(`./view.js`) `` が `./view.js` の `import` シンボルを追加し、`` import(`./${name}.js`) `` のような interpolation 付き template は引き続きスキップされます。
+- **JavaScript/TypeScript の `window.navigator.serviceWorker.register()` reference を検索できるようになりました** — `window.navigator.serviceWorker.register("./sw.js")` が静的な script specifier の `import` シンボルを追加し、より広い global object variant は引き続き無視します。
+- **JavaScript/TypeScript の Worker constructor script を検索できるようになりました** — `new Worker("./worker.js")`、`new SharedWorker("./shared-worker.js", { type: "module" })`、静的 template specifier が `import` シンボルを追加し、動的 template、bare call、無関係な constructor 名は引き続き無視します。
+- **JavaScript/TypeScript の Worklet module load を検索できるようになりました** — `audioWorklet.addModule("./processor.js")`、`CSS.paintWorklet.addModule("./paint.js")`、関連する direct Worklet `addModule` call が静的な module specifier の `import` シンボルを追加し、動的 path と任意の `worklet.addModule(...)` call は引き続き無視します。
+- **Common Lisp と Racket が graph 対応検索に対応しました** — `cdidx` はコメントを考慮した S 式スキャンで Lisp 定義を抽出し、Common Lisp / Racket の呼び出し参照を `references` / `callers` / `callees` / `impact` 向けにインデックス化するようになりました。
+- **Perl 検索がより豊富なシンボルと参照をインデックスするようになりました** — Perl の package 宣言、import、constant、属性付き subroutine、モジュール継承、constructor 呼び出し、arrow method 呼び出しを symbols / references で辿りやすくしました。
+
+#### 変更
+
+- **C 検索が空白付き include ディレクティブをインデックスするようになりました** — `# include <header.h>` 形式でも import シンボルを生成し、preprocessor 空白を使ったヘッダーも symbol/search navigation で見つかるようになりました。
+- **C 検索が `#include_next` の参照先をインデックスするようになりました** — GNU 風の next-header ディレクティブも通常の `#include` と同じように import シンボルを生成します。
+- **C 検索が `#import` ヘッダーをインデックスするようになりました** — import 形式のヘッダーディレクティブも import シンボルとして表面化し、ヘッダー移動に使えるようになりました。
+- **C 検索が union 宣言をインデックスするようになりました** — 名前付き `union` 定義も struct / enum と同じように `union` シンボルを生成します。
+- **C 検索が union typedef エイリアスをインデックスするようになりました** — forward `typedef union Name Alias;` 宣言でも alias 名の検索可能な `union` シンボルを生成します。
+- **C 検索が角括弧属性付き関数をインデックスするようになりました** — C23 形式の `[[nodiscard]] int f(...)` 宣言も関数名で表面化します。
+- **C の参照抽出が `#include_next` ヘッダーを捕捉するようになりました** — next-header ディレクティブが symbol search だけでなく参照系クエリにも出るようになりました。
+- **C の参照抽出が macro include の参照先を捕捉するようになりました** — `#include PROJECT_HEADER` でも macro ベースの include 配線をヘッダー参照として生成します。
+- **C の参照抽出が型キーワード由来のノイズを抑えるようになりました** — `struct` / `enum` / `union` や修飾子を C の type-reference 行から除外し、typedef edge が実際の tag 名を指すようにしました。
+- **C の参照抽出が `_t` cast 型を捕捉するようになりました** — `(widget_t *)raw` のような lowercase typedef cast でも type-reference 行を生成します。
+- **C の参照抽出が `_t` の `sizeof` operand を捕捉するようになりました** — `sizeof(widget_t)` でも typedef ベースの size check に対する type-reference 行を生成します。
+- **C の参照抽出が `_t` の alignment operand を捕捉するようになりました** — `_Alignof(widget_t)` と `alignof(config_t)` でも typedef operand を type reference として表面化します。
+- **C の参照抽出が `_t` 宣言型を捕捉するようになりました** — `widget_t *current;` のような local declaration から typedef 名へ search result が戻れるようになりました。
+- **C の参照抽出が tag 付き宣言型を捕捉するようになりました** — `struct node *next;` のような宣言から tag 名の type reference を生成します。
+- **C の参照抽出が `_t` 戻り値型を捕捉するようになりました** — `widget_t *make_widget(void)` のように typedef を返す関数から typedef 名への参照を生成します。
+- **C の参照抽出が tag 付き戻り値型を捕捉するようになりました** — `struct node *` を返す関数から戻り値 tag の type reference を生成します。
+- **C の参照抽出が `_t` parameter 型を捕捉するようになりました** — `widget_t *widget` のような関数 parameter から typedef 名へ戻れるようになりました。
+- **C の参照抽出が tag 付き parameter 型を捕捉するようになりました** — `struct node *node` のような parameter から tag 名の type reference を生成します。
+- **C の参照抽出が `_t` compound literal を捕捉するようになりました** — `(widget_t){0}` のような literal から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き compound literal を捕捉するようになりました** — `(struct node){0}` のような literal から tag 名への参照を生成します。
+- **C の参照抽出が `_t` の `typeof` operand を捕捉するようになりました** — `typeof(widget_t)` と `__typeof__(message_t *)` から typedef 名への参照を生成します。
+- **C の参照抽出が tag 付き `typeof` operand を捕捉するようになりました** — `typeof(struct node *)` から tag 名への参照を生成します。
+- **C の参照抽出が `_t` の `_Generic` association を捕捉するようになりました** — `_Generic(value, widget_t: ...)` から typedef association 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Generic` association を捕捉するようになりました** — `_Generic(value, struct node *: ...)` から tag association 型への参照を生成します。
+- **C の参照抽出が `_t` の `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(widget_t)` から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Atomic` type specifier を捕捉するようになりました** — `_Atomic(struct node *)` から tag 型への参照を生成します。
+- **C の参照抽出が `_t` の `_Alignas` specifier を捕捉するようになりました** — `_Alignas(widget_t)` と `alignas(message_t *)` から typedef 型への参照を生成します。
+- **C の参照抽出が tag 付き `_Alignas` specifier を捕捉するようになりました** — `_Alignas(struct node)` と `alignas(union value *)` から tag 型への参照を生成します。
+- **C の参照抽出が `_t` function-pointer typedef の戻り型を捕捉するようになりました** — `typedef widget_t (*factory_t)(void);` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が tag 付き function-pointer typedef の戻り型を捕捉するようになりました** — `typedef struct node *(*factory_t)(void);` から戻り値 tag への参照を生成します。
+- **C の参照抽出が `_t` function-pointer 宣言の戻り型を捕捉するようになりました** — `widget_t (*factory)(void);` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が tag 付き function-pointer 宣言の戻り型を捕捉するようになりました** — `struct node *(*factory)(void);` から戻り値 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` 宣言を捕捉するようになりました** — `widget_t * restrict current;` から宣言 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き宣言を捕捉するようになりました** — `struct node * const next;` から宣言 tag への参照を生成します。
+- **C の参照抽出が `_t` pointer-to-array 宣言を捕捉するようになりました** — `widget_t (*items)[4];` から配列要素 typedef への参照を生成します。
+- **C の参照抽出が tag 付き pointer-to-array 宣言を捕捉するようになりました** — `struct node (*items)[4];` から配列要素 tag への参照を生成します。
+- **C の参照抽出が `_t` `offsetof` operand を捕捉するようになりました** — `offsetof(widget_t, field)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `offsetof` operand を捕捉するようになりました** — `offsetof(struct node, next)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `va_arg` operand を捕捉するようになりました** — `va_arg(args, widget_t)` から要求 typedef への参照を生成します。
+- **C の参照抽出が tag 付き `va_arg` operand を捕捉するようになりました** — `va_arg(args, struct node *)` から要求 tag への参照を生成します。
+- **C の参照抽出が tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node *)` から測定 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` `sizeof` operand を捕捉するようになりました** — `sizeof(widget_t * const)` から測定 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き `sizeof` operand を捕捉するようになりました** — `sizeof(struct node * const)` から測定 tag への参照を生成します。
+- **C の参照抽出が tag 付き alignment operand を捕捉するようになりました** — `_Alignof(struct node *)` と `alignof(union value)` から測定 tag への参照を生成します。
+- **C の参照抽出が `_t` GNU alignment operand を捕捉するようになりました** — `__alignof__(widget_t *)` から測定 typedef への参照を生成します。
+- **C の参照抽出が tag 付き GNU alignment operand を捕捉するようになりました** — `__alignof__(struct node *)` から測定 tag への参照を生成します。
+- **C の参照抽出が `_t` `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(widget_t *)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `typeof_unqual` operand を捕捉するようになりました** — `typeof_unqual(struct node *)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの typedef 型引数から参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_types_compatible_p` operand を捕捉するようになりました** — 2つの tag 型引数から参照を生成します。
+- **C の参照抽出が `_t` `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(widget_t, field)` から operand typedef への参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_offsetof` operand を捕捉するようになりました** — `__builtin_offsetof(struct node, next)` から operand tag への参照を生成します。
+- **C の参照抽出が `_t` `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, widget_t)` から要求 typedef への参照を生成します。
+- **C の参照抽出が tag 付き `__builtin_va_arg` operand を捕捉するようになりました** — `__builtin_va_arg(args, struct node *)` から要求 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` 戻り値型を捕捉するようになりました** — `widget_t * const make_widget(void)` から戻り値 typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き戻り値型を捕捉するようになりました** — `struct node * const make_node(void)` から戻り値 tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` parameter 型を捕捉するようになりました** — `widget_t * restrict widget` から parameter typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き parameter 型を捕捉するようになりました** — `struct node * const node` から parameter tag への参照を生成します。
+- **C の参照抽出が pointer-qualified `_t` `_Generic` association を捕捉するようになりました** — `widget_t * const:` から association typedef への参照を生成します。
+- **C の参照抽出が pointer-qualified tag 付き `_Generic` association を捕捉するようになりました** — `struct node * const:` から association tag への参照を生成します。
+- **Go の generic function 制約を型参照として索引するようになりました** — `func Decode[T WireMessage](...)` から `WireMessage` が reference search と inspect 出力に現れるようになりました。
+- **Go の generic type 制約を型参照として索引するようになりました** — `type Cache[T EntityConstraint] ...` から `EntityConstraint` が reference search と inspect 出力に現れるようになりました。
+- **Go method receiver の型を型参照として索引するようになりました** — `func (h *Handler) Serve(...)` から `Handler` が reference search と inspect 出力で辿れるようになりました。
+- **Go interface method signature の引数型と戻り値型を参照として出すようになりました** — `Handle(ctx Context) Response` のような interface member から `Context` と `Response` を辿れるようになりました。
+- **Go の複数名 value 宣言で共有される型を参照として出すようになりました** — `var primary, secondary *Client` のような宣言から `Client` を辿れるようになりました。
+- **Go の embedded field 型を型参照として索引するようになりました** — `*BaseStore` や `audit.Logger` のような embedded field が reference search に現れるようになりました。
+- **Go builtin allocation の型引数を型参照として索引するようになりました** — `make([]User, 0)` や `new(Client)` から `make` / `new` を call にせず `User` と `Client` を辿れるようになりました。
+- **Go type assertion を型参照として索引するようになりました** — `value.(User)` や `value.(*Admin)` から assertion 対象型を辿れるようにしつつ、`.(type)` sentinel は無視します。
+- **Go function literal signature の引数型と戻り値型を参照として出すようになりました** — `func(ctx Context) Result` のような callback から `Context` と `Result` を辿れるようになりました。
+- **Go generic call の型引数を型参照として索引するようになりました** — `Decode[User]()` や `Map[model.Event, Result]()` のような call site から具体型引数を辿れるようになりました。
+- **Go function type 宣言の引数型と戻り値型を参照として出すようになりました** — `type Handler func(Request) Response` や `Callback func(Context) Result` のような宣言から signature 内の型を辿れるようになりました。
+- **Go channel type 宣言の要素型を参照として出すようになりました** — `<-chan Event` や `chan<- Command` のような方向付き channel 宣言から `Event` と `Command` を辿れるようになりました。
+- **Go generic composite literal を型引数付きで索引するようになりました** — `Cache[Entry]{}` や `model.Set[Key, Value]{}` のような literal から生成型と具体型引数を辿れるようになりました。
+- **Go map composite literal の key/value 型を参照として出すようになりました** — `map[Key]Value{}` や `map[model.Tenant]*Entry{}` のような literal から map 型の両側を辿れるようになりました。
+- **Go の parenthesized type conversion を型参照として索引するようになりました** — `(*Concrete)(nil)` や `(model.ID)(raw)` のような idiom から変換対象型を辿れるようになりました。
+- **Go method expression の receiver 型を参照として出すようになりました** — `Handler.Serve`、`(*Worker).Run`、`model.User.String` のような expression から receiver 型を辿れるようになりました。
+- **Go の call しない generic instantiation でも型引数を参照として出すようになりました** — `Decode[User]` や `stream.Map[model.Event, Result]` のような関数値から具体型引数を辿れるようになりました。
+- **Go interface type set の union term 型を参照として出すようになりました** — `~CustomID | External` や `model.Token | ~Alias` のような constraint term から custom type-set member を辿れるようになりました。
+- **Go label を navigation symbol として索引するようになりました** — `Retry:` のような label が symbol search や definition 系 workflow に現れるようになりました。
+- **Go branch statement から label symbol へ参照を張るようになりました** — `goto Retry`、`break Retry`、`continue Retry` が graph workflow 用の label reference を出すようになりました。
+- **Go type switch case の pointer / composite 型を参照として出すようになりました** — `case *Admin`、`case []Guest`、`case map[Key]Value` が value switch の定数 case を索引せずに型 case entry を辿れるようになりました。
+- **Go slice / array composite literal の要素型を参照として出すようになりました** — `[]User{}`、`[3]*Widget{}`、`[...]model.Event{}` のような literal から要素型を辿れるようになりました。
+- **Go composite type conversion を型参照として索引するようになりました** — `[]User(raw)`、`map[Key]Value(raw)`、`chan Event(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go inline struct field の型を参照として出すようになりました** — `struct{ ID UserID; Owner *User }{}` のような anonymous form から field 名ではなく `UserID` と `User` を辿れるようになりました。
+- **Go inline interface member の signature 型を参照として出すようになりました** — `interface{ Handle(Context) Result; io.Reader }` のような anonymous form から method 引数、戻り値、embedded interface 型を辿れるようになりました。
+- **Go の multi-pointer parenthesized conversion で変換対象型を参照として出すようになりました** — `(**Node)(nil)` のような conversion から pointer の先の型を辿れるようになりました。
+- **Go の parenthesized composite conversion で変換対象型を参照として出すようになりました** — `([]User)(raw)` や `(map[Key]Value)(raw)` のような conversion から変換対象型を辿れるようになりました。
+- **Go generic method expression の receiver 型引数を参照として出すようになりました** — `Repository[User].Find` や `(*Store[Entry]).Save` のような expression から receiver と型引数の両方を辿れるようになりました。
+- **Go standalone type-set term の approximation 型を参照として出すようになりました** — `~[]Element` や `~map[Key]Value` のような constraint term から element、key、value 型を辿れるようになりました。
+- **Go package 宣言を namespace symbol として索引するようになりました** — `package demo` が symbol search、outline、definition 系 workflow に現れるようになりました。
+- **Go の複数名 struct field で共有される型を参照として出すようになりました** — `Primary, Secondary *Client` のような field から field 名を索引せずに共有型を辿れるようになりました。
+- **Go struct field のスペース入り generic 型を参照として出すようになりました** — `Owner Repository[Key, Value]` のような field から generic 型と各具体型引数を辿れるようになりました。
+- **Go var/const 宣言のスペース入り generic 型を参照として出すようになりました** — `var repo Repository[Key, Value]` のような宣言から明示された generic 型を辿れるようになりました。
+- **Go type spec のスペース入り generic target を参照として出すようになりました** — `type Repo Repository[Key, Value]` のような宣言から target 型と型引数を辿れるようになりました。
+- **Go top-level の複数名 var 宣言で全 property symbol を索引するようになりました** — `var Primary, Secondary *Config` から両方の名前を symbol search と definition workflow で辿れるようになりました。
+- **Go top-level の複数名 const 宣言で全 property symbol を索引するようになりました** — `const PrimaryStatus, SecondaryStatus = 1, 2` から両方の名前を symbol search と definition workflow で辿れるようになりました。
+- **Go method symbol を receiver 型 container に帰属させるようになりました** — `func (h *Handler) ServeHTTP(...)` が symbol 系 workflow で `Handler` 配下に現れるようになりました。
+- **Go generic receiver method の container がスペース入り型パラメータに対応しました** — `func (s *Store[T, U]) Save(...)` が `Store` 配下に帰属し続けるようになりました。
+- **Go unnamed generic receiver method が型 container を維持するようになりました** — `func (Store[T, U]) Snapshot()` が `Store` 配下に帰属し続けるようになりました。
+- **Go local grouped value 宣言が package symbol を汚さないようになりました** — 関数内の `var (...)` / `const (...)` block を top-level property として索引しないようになりました。
+
+#### 修正
+
+- **C# / Java / Kotlin の catch 節の例外型がインデックスされるようになりました** - `catch (IOException ex)`、Java multi-catch、Kotlin の `catch (ex: IOException)` が例外型への `type_reference` を出力し、catch 変数は型として扱わないようにしました。
+- **COBOL の `CANCEL` program target を検索可能にしました** — quoted / unquoted の `CANCEL` 対象が外部 program 名への参照を出すようになりました。
+- **COBOL CICS の `ADDRESS COMMAREA` data area を検索可能にしました** — `EXEC CICS ADDRESS COMMAREA(...)` 行が COMMAREA data area への参照を出すようになりました。
+- **COBOL CICS の `ASSIGN APPLID` data area を検索可能にしました** — `EXEC CICS ASSIGN APPLID(...)` 行が受け取り data area への参照を出すようになりました。
+- **COBOL CICS の `DELETE FILE` target を検索可能にしました** — `EXEC CICS DELETE FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `DELETEQ TS QUEUE` target を検索可能にしました** — `EXEC CICS DELETEQ TS QUEUE(...)` 行が queue 名への参照を出すようになりました。
+- **COBOL CICS の `DEQ RESOURCE` target を検索可能にしました** — `EXEC CICS DEQ RESOURCE(...)` 行が resource 名への参照を出すようになりました。
+- **COBOL CICS の `ENDBR FILE` target を検索可能にしました** — `EXEC CICS ENDBR FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `ENQ RESOURCE` target を検索可能にしました** — `EXEC CICS ENQ RESOURCE(...)` 行が resource 名への参照を出すようになりました。
+- **COBOL CICS の `FREEMAIN DATA` data area を検索可能にしました** — `EXEC CICS FREEMAIN DATA(...)` 行が解放対象 data area への参照を出すようになりました。
+- **COBOL CICS の `GETMAIN SET` data area を検索可能にしました** — `EXEC CICS GETMAIN SET(...)` 行が pointer data area への参照を出すようになりました。
+- **COBOL CICS の `HANDLE CONDITION` handler を検索可能にしました** — `EXEC CICS HANDLE CONDITION ...` 行が handler paragraph への call を出すようになりました。
+- **COBOL CICS の `LINK PROGRAM` call を検索可能にしました** — `EXEC CICS LINK PROGRAM(...)` 行が link 先 program 名への call 参照を出すようになりました。
+- **COBOL CICS の `LOAD PROGRAM` target を検索可能にしました** — `EXEC CICS LOAD PROGRAM(...)` 行が load 対象 program 名への参照を出すようになりました。
+- **COBOL CICS の `MAPSET` target を検索可能にしました** — `EXEC CICS SEND/RECEIVE ... MAPSET(...)` 行が BMS mapset 名への参照を出すようになりました。
+- **COBOL CICS の `READ FILE` target を検索可能にしました** — `EXEC CICS READ FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `READNEXT FILE` target を検索可能にしました** — `EXEC CICS READNEXT FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `READPREV FILE` target を検索可能にしました** — `EXEC CICS READPREV FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `READQ TD QUEUE` target を検索可能にしました** — `EXEC CICS READQ TD QUEUE(...)` 行が transient data queue 名への参照を出すようになりました。
+- **COBOL CICS の `READQ TS QUEUE` target を検索可能にしました** — `EXEC CICS READQ TS QUEUE(...)` 行が queue 名への参照を出すようになりました。
+- **COBOL CICS の `RECEIVE INTO` data area を検索可能にしました** — `EXEC CICS RECEIVE INTO(...)` 行が receive buffer への参照を出すようになりました。
+- **COBOL CICS の `RECEIVE MAP` target を検索可能にしました** — `EXEC CICS RECEIVE MAP(...)` 行が BMS map 名への参照を出すようになりました。
+- **COBOL CICS の `RESETBR FILE` target を検索可能にしました** — `EXEC CICS RESETBR FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `RETURN TRANSID` target を検索可能にしました** — `EXEC CICS RETURN TRANSID(...)` 行が transaction id への参照を出すようになりました。
+- **COBOL CICS の `REWRITE FILE` target を検索可能にしました** — `EXEC CICS REWRITE FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `SEND FROM` data area を検索可能にしました** — `EXEC CICS SEND FROM(...)` 行が send buffer への参照を出すようになりました。
+- **COBOL CICS の `SEND MAP` target を検索可能にしました** — `EXEC CICS SEND MAP(...)` 行が BMS map 名への参照を出すようになりました。
+- **COBOL CICS の `START TRANSID` target を検索可能にしました** — `EXEC CICS START TRANSID(...)` 行が transaction id への参照を出すようになりました。
+- **COBOL CICS の `STARTBR FILE` target を検索可能にしました** — `EXEC CICS STARTBR FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `UNLOCK FILE` target を検索可能にしました** — `EXEC CICS UNLOCK FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `WRITE FILE` target を検索可能にしました** — `EXEC CICS WRITE FILE(...)` 行が CICS file 名への参照を出すようになりました。
+- **COBOL CICS の `WRITEQ TD QUEUE` target を検索可能にしました** — `EXEC CICS WRITEQ TD QUEUE(...)` 行が transient data queue 名への参照を出すようになりました。
+- **COBOL CICS の `WRITEQ TS QUEUE` target を検索可能にしました** — `EXEC CICS WRITEQ TS QUEUE(...)` 行が queue 名への参照を出すようになりました。
+- **COBOL CICS の `XCTL PROGRAM` transfer を検索可能にしました** — `EXEC CICS XCTL PROGRAM(...)` 行が遷移先 program 名への call 参照を出すようになりました。
+- **COBOL の `CLASS-ID` block を class symbol として検索可能にしました** — OO COBOL class が class symbol と procedure container に反映され、`END CLASS` 境界も扱えるようになりました。
+- **COBOL の `ENTRY` 名を symbol として検索可能にしました** — alternate entry point が function symbol として出るようになり、`symbols` / `definition` / `inspect` で辿れるようになりました。
+- **COBOL embedded SQL の `CALL` target を検索可能にしました** — `EXEC SQL CALL procedure` 行が stored procedure 名への call 参照を出すようになりました。
+- **COBOL embedded SQL の `CLOSE` cursor を検索可能にしました** — `EXEC SQL CLOSE cursor` 行が cursor 名への参照を出すようになりました。
+- **COBOL embedded SQL の `EXECUTE` statement を検索可能にしました** — `EXEC SQL EXECUTE statement` 行が prepared statement 名への参照を出すようになりました。
+- **COBOL embedded SQL の `FETCH` cursor を検索可能にしました** — `EXEC SQL FETCH cursor` 行が cursor 名への参照を出すようになりました。
+- **COBOL embedded SQL の `INCLUDE` target を検索可能にしました** — `EXEC SQL INCLUDE name` 行が include 対象の copybook / SQL declaration への参照を出すようになりました。
+- **COBOL embedded SQL の `OPEN` cursor を検索可能にしました** — `EXEC SQL OPEN cursor` 行が cursor 名への参照を出すようになりました。
+- **COBOL embedded SQL の `PREPARE` statement を検索可能にしました** — `EXEC SQL PREPARE statement` 行が prepared statement 名への参照を出すようになりました。
+- **COBOL の `GENERATE` 文を検索可能にしました** — `GENERATE report-name` 行が生成対象の report への参照を出すようになりました。
+- **COBOL の `INITIATE` 文を検索可能にしました** — `INITIATE report-name` 行が Report Writer の対象 report への参照を出すようになりました。
+- **COBOL の `METHOD-ID` entry を function symbol として検索可能にしました** — OO COBOL method が symbol 検索や inspect 結果に出るようになりました。
+- **COBOL の `RELEASE` 文を検索可能にしました** — `RELEASE record-name` 行が release 対象の sort / merge record への参照を出すようになりました。
+- **COBOL の `RETURN` 文を検索可能にしました** — `RETURN sort-file` 行が return 対象の sort / merge file への参照を出すようになりました。
+- **COBOL の `START` 文を検索可能にしました** — `START file-name` 行が索引ファイル対象への参照を出すようになり、COBOL の indexed-file access をたどりやすくなりました。
+- **COBOL の `TERMINATE` 文を検索可能にしました** — `TERMINATE report-name` 行が Report Writer の対象 report への参照を出すようになりました。
+- **COBOL declarative の `USE AFTER` file target を検索可能にしました** — `USE AFTER ... PROCEDURE ON file-name` 行が処理対象 file への参照を出すようになりました。
+- **C++ attribute 前置き付き関数を検索できるようになりました** — `[[nodiscard]] int compute() {}` のような宣言で、attribute 前置きに阻まれず関数名を index します。
+- **C++ の braced construction を instantiation として index するようになりました** — `auto x = Widget{}` や `return ns::Result{}` が、構築される型を reference query に出します。
+- **C++ の C-style cast を type reference として index するようになりました** — `(Widget*)raw` や `(ns::Handle&)value` が変換先の型を出し、primitive cast は除外したままにします。
+- **C++ の compound requirement 制約を type reference として index するようになりました** — `{ expr } -> std::same_as<Result>` を含む `requires` 句が concept と制約結果型の両方を出します。
+- **C++ の constexpr 定数を index するようになりました** — top-level の `inline constexpr int kMaxConnections = ...` や大文字名の `constexpr` 定数が symbol / definition search に出るようになります。
+- **C++ coroutine の braced return を instantiate として index するようになりました** — `co_return Result{}` が構築する coroutine 戻り値型を reference / instantiation query に出します。
+- **C++ の `decltype(Type{})` operand を type reference として index するようになりました** — `decltype(Widget{})` のような未評価構築が、偽の instantiate edge を増やさずに `Widget` を出します。
+- **C++ の dynamic exception specification を type reference として index するようになりました** — `void load() throw(Error, ns::Failure&)` のような旧式signatureが列挙された例外型を出し、括弧付きthrow式は型扱いしません。
+- **C++ の explicit template instantiation を type reference として index するようになりました** — `extern template class std::vector<Widget>;` のような宣言が、instantiation対象templateと型引数を出します。
+- **export された C++ 型の base list を index するようになりました** — `export class Child : public Base` が継承先の型 reference を出します。
+- **export付き C++ enum 宣言を index するようになりました** — `export enum class Mode` や `export enum Status` が symbol / definition search に出ます。
+- **export付き C++ namespace を index するようになりました** — `export namespace api {}` や修飾付きexport namespaceが symbol / definition search に出て、内部宣言にも正しくscopeが付きます。
+- **export された C++ class / struct を検索できるようになりました** — `export class Api {}` や `export template <typename T> struct Box {}` のような module interface 宣言が型 symbol になります。
+- **linkage specification 付き C++ 関数を検索できるようになりました** — `extern "C" int api() {}` のような宣言で、実際の関数名と戻り値型を index します。
+- **C++ 標準ファクトリの template 型引数を index するようになりました** — `make_unique`、`make_shared`、`make_optional` 呼び出しが template 型引数を type reference として出します。
+- **C++ の friend 宣言を type reference として index するようになりました** — `friend class Inspector;`、`friend struct ns::Peer;`、`friend enum class Status;` が参照先の型を reference query に出します。
+- **C++ の `#import` directive を import として index するようになりました** — Objective-C++ 形式の `#import <UIKit/UIKit.h>` やquoted importが、`#include` と同じく symbol / import search に出ます。
+- **インデントされた C++ type declaration の index を維持しました** — export/template 宣言対応後も、namespace 内の `class`、`struct`、`union` 宣言を引き続き拾います。
+- **C++20 module import が references / dependency query に反映されるようになりました** — `import std;`、partition import、header-unit import が preprocessor include と同様に type-reference 行を出します。
+- **C++20 module import を import symbol として検索できるようになりました** — `import std;`、partition import、header-unit import が symbol 結果に出るようになり、preprocessor include だけが見える状態を解消しました。
+- **C++ module partition を namespace symbol として検索できるようになりました** — `export module app.core:api;` のような宣言で、partition を含む module 名全体を index します。
+- **C++ named cast の対象型を type reference として抽出するようになりました** — `static_cast<Foo*>`、`dynamic_cast<Bar&>` などの cast が対象型の `type_reference` 行を追加します。
+- **括弧付き C++ requires concept を type reference として index するようになりました** — `requires (Serializable<T>)` や `requires(ns::EntityLike<T>)` が concept 名を reference query に出します。
+- **C++ の pointer-to-member 型を type reference として index するようになりました** — `int Widget::* field` や `void (ns::Handler::*callback)()` が receiver 型を reference query に出します。
+- **C++ qualified member receiver を type reference として index するようになりました** — `Widget::Create()` や `&Widget::Run` が `Widget` を reference query に出し、`std` のような小文字 namespace は型扱いしません。
+- **修飾付き C++ requires concept を type reference として index するようになりました** — `requires std::derived_from<T, Base>` のような制約が、修飾付きconceptと型引数の両方を出します。
+- **修飾付き C++ template の braced construction で型引数を参照抽出するようになりました** — `std::optional<Widget>{}` や `ns::Result<Success, Error>{}` から、namespace 修飾子ではなく template 型引数を reference search に出します。
+- **C++ の concept 制約を type reference として index するようになりました** — `requires Serializable<T>` や `concept Persistable = ns::EntityLike<T>` が参照先の concept 名を reference query に出します。
+- **C++ の `sizeof` / `alignof` 型 operand を index するようになりました** — `sizeof(Widget)` や `alignof(ns::Packet)` が `type_reference` 行を出します。
+- **C++ template parameter の default type を index するようになりました** — `typename T = Widget` や `class Alloc = ns::Allocator<Widget>` の default type が reference search に出るようになります。
+- **1 行の C++ template class / struct 宣言を検索できるようになりました** — `template <typename T> class Box {}` などの型 symbol を index します。
+- **C++ の throw braced construction を instantiate として index するようになりました** — `throw Error{}` や `throw ns::Failure{}` が throw される型を reference / instantiation query に出します。
+- **C++ の trailing return type を type reference として index するようになりました** — `auto Make() -> Result` が `Result` を reference query に出し、組み込み戻り値型は除外したままにします。
+- **C++ の type trait template 引数を type reference として index するようになりました** — `std::is_same_v<T, Widget>` や `is_base_of<Base, Derived>` が関与する型を reference query に出します。
+- **C++ typedef alias の元型を type reference として index するようになりました** — `typedef ns::Handler* HandlerPtr;` が alias 元の型を reference query に出し、関数ポインタ typedef は引き続き避けます。
+- **C++ の `typeid(Type)` operand を index するようになりました** — `typeid(Service)` のような RTTI チェックが、対象型の type-reference 行を追加します。
+- **C++ union を型 symbol として検索できるようになりました** — 名前付き `union` 宣言が、export や template 付きの形も含めて symbol 結果に出ます。
+- **C++ using alias の右辺型を type reference として index するようになりました** — `using Ptr = std::unique_ptr<Service>;` が alias 先の型を reference query に出します。
+- **C++ の `using ns::Type;` 宣言を import として index するようになりました** — 直接using宣言が、囲むscope付きで symbol / definition search に出ます。
+- **C++ の `using enum` 宣言を検索できるようになりました** — `using enum ns::Color;` が導入対象の enum 型を import symbol として index します。
+- **C++ の `using typename` 宣言を import として index するようになりました** — `using typename Base::value_type;` のような依存宣言が、囲むscope付きで symbol / definition search に出ます。
+- **C# の anti-constraint keyword が型参照として混ざらないようになりました** - `where T : allows ref struct` で `allows` / `ref` の keyword ノイズを避けつつ、実際の制約型は維持します。
+- **C# の generic constraint keyword が型参照として混ざらないようになりました** - `where T : unmanaged` や `where T : notnull` では keyword ノイズを避けつつ、`IContract` のような実際の制約型は維持します。
+- **C# の generic signature が型パラメータ自身を型参照として出さないようになりました** - `class Demo<T> : Base<T>` や `T Pick<T>(T value)` では実際の型を残しつつ、generic parameter のノイズを抑制します。
+- **C# の generic type keyword が型パラメータ自身を型参照として出さないようになりました** - `typeof(T)` や `nameof(T)` を使う単一行 generic method では generic parameter を抑制し、実際の type keyword 対象型は検索可能なままにします。
+- **C# の generic type operator が型パラメータ自身を型参照として出さないようになりました** - `value is T` / `value as T` のような単一行 generic method では generic parameter を抑制し、実際の `is` / `as` 対象型は保持します。
+- **C# の compile-time type keyword 参照で nested generic 引数も検索できるようになりました** — `typeof(List<Payload>)` や `default(Dictionary<string, Payload>)`、同種の `nameof` / `sizeof` / `default` で、generic 引数内のユーザー定義型も `type_reference` として発行します。C# built-in alias は引き続き除外します。
+- **C# exact 検索が Unicode escape 付き識別子を正規化するようになりました** — C# の exact substring 検索は既存の `@identifier` / `global::` 正規化の前に `\uXXXX` と `\UXXXXXXXX` の source escape をデコードし、Java / Kotlin と共有している escaped identifier の検索挙動に揃えるようになりました。
+- **Dockerfile の stage alias でハイフンを扱えるようになりました** — Dockerfile の symbol 抽出と stage 参照抽出が、`FROM ... AS build-env`、`FROM build-env AS ...`、`COPY --from=build-env` のような一般的な alias を index するようになりました。
+- **suffix 型の Dockerfile 名を検出するようになりました** — `api.Dockerfile` や `worker.dockerfile` のようなファイルが unsupported extension ではなく `dockerfile` として index されるようになりました。
+- **suffix 型の Containerfile 名を検出するようになりました** — `api.Containerfile` や `worker.containerfile` のようなファイルも Dockerfile analyzer で index されるようになりました。
+- **hidden 形式の `.dockerfile` を検出するようになりました** — 拡張子を持たない hidden Dockerfile 変種も shebang 判定に落ちず、Dockerfile content として index されるようになりました。
+- **hidden 形式の `.containerfile` を検出するようになりました** — hidden Containerfile 変種も Dockerfile の index 経路を使うようになりました。
+- **ハイフン suffix の Dockerfile 名を検出するようになりました** — `Dockerfile-prod` のようなファイルも Dockerfile content として index されるようになりました。
+- **ハイフン suffix の Containerfile 名を検出するようになりました** — `Containerfile-prod` のようなファイルも Dockerfile analyzer で index されるようになりました。
+- **underscore suffix の Dockerfile 名を検出するようになりました** — `Dockerfile_prod` のようなファイルも Dockerfile content として index されるようになりました。
+- **underscore suffix の Containerfile 名を検出するようになりました** — `Containerfile_prod` のようなファイルも Dockerfile analyzer で index されるようになりました。
+- **Dockerfile の stage alias で dot を扱えるようになりました** — `build.env` のような alias が stage symbol と `FROM` / `COPY --from` 参照で欠けずに保持されるようになりました。
+- **コメント付きの `FROM` stage 再利用行でも参照を保持するようになりました** — `FROM builder AS runtime # comment` が `builder` stage dependency として index されるようになりました。
+- **Dockerfile の braced ARG/ENV 利用を参照として扱うようになりました** — `${NODE_VERSION}` が index 済みの `ARG NODE_VERSION` / `ENV NODE_VERSION` property symbol に結びつくようになりました。
+- **Dockerfile の default 付き braced variable を参照として扱うようになりました** — `${NODE_VERSION:-20}` が skip されず `NODE_VERSION` に結びつくようになりました。
+- **Dockerfile の unbraced ARG/ENV 利用を参照として扱うようになりました** — `$APP_HOME` が index 済みの `ARG APP_HOME` / `ENV APP_HOME` property symbol に結びつくようになりました。
+- **Dockerfile の colon なし default 付き variable を参照として扱うようになりました** — `${NODE_VERSION-20}` が `NODE_VERSION` に結びつくようになりました。
+- **escape された Dockerfile の dollar を literal として扱うようになりました** — `\$APP_HOME` が `APP_HOME` への誤参照を作らなくなりました。
+- **escape された Dockerfile の braced variable を literal として扱うようになりました** — `\${APP_HOME}` が `APP_HOME` への誤参照を作らなくなりました。
+- **Dockerfile BuildKit mount の stage dependency を index するようになりました** — `RUN --mount=type=bind,from=assets,...` が `assets` stage に結びつくようになりました。
+- **tag 付き外部 image の `COPY --from` を stage と誤認しなくなりました** — `COPY --from=builder:latest` が `builder` への偽 stage 参照を作らなくなりました。
+- **Dockerfile BuildKit mount が複数ある場合も index するようになりました** — 1 つの `RUN` に複数の `--mount=...,from=stage` がある場合、それぞれの stage dependency を記録します。
+- **digest 付き外部 image の `COPY --from` を stage と誤認しなくなりました** — `COPY --from=builder@sha256:...` が `builder` への偽 stage 参照を作らなくなりました。
+- **Dockerfile の `ENV` key-value list ですべての key を出すようになりました** — `ENV APP_HOME=/app NODE_ENV=production` が `APP_HOME` と `NODE_ENV` の両方を property symbol として index するようになりました。
+- **Dockerfile の `ENV` key scan が quoted value を無視するようになりました** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` が偽の `BAR` property を出さなくなりました。
+- **Dockerfile の `LABEL` key を symbol として扱うようになりました** — `org.opencontainers.image.title` のような label が property symbol として index されるようになりました。
+- **Dockerfile の `LABEL` key-value list ですべての key を出すようになりました** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` が両方の label key を index するようになりました。
+- **legacy Dockerfile `LABEL key value` の key を symbol として扱うようになりました** — 空白区切りの label 宣言でも検索用に label key を出すようになりました。
+- **Dockerfile `ONBUILD COPY --from` の stage dependency を index するようになりました** — trigger instruction も参照先 stage に結びつくようになりました。
+- **Dockerfile の `EXPOSE` port を symbol として扱うようになりました** — `EXPOSE 8080/tcp` が `8080/tcp` property symbol として index されるようになりました。
+- **Dockerfile の複数 port `EXPOSE` 行ですべての port を出すようになりました** — `EXPOSE 80 443/tcp 53/udp` が列挙されたすべての port を index するようになりました。
+- **quote 付き Dockerfile `COPY --from` の stage 名を index するようになりました** — `COPY --from="builder"` が `builder` stage に結びつくようになりました。
+- **Dockerfile `RUN --mount` のshell文字列内テキストは無視し続けるようにしました** — quote 付き command text から架空の stage reference を作らないようになりました。
+- **Dockerfile `RUN --mount` の stage reference を BuildKit option に限定しました** — 後続の shell command argument にある `--mount` から架空の dependency を作らないようになりました。
+- **quote 付き Dockerfile `RUN --mount` の stage 名を index するようになりました** — `RUN --mount=type=bind,from="assets"` が `assets` stage に結びつくようになりました。
+- **Dockerfile `ONBUILD RUN --mount` の stage dependency を index するようになりました** — trigger instruction の mount `from=` stage も結びつくようになりました。
+- **Dockerfile `USER` principal を symbol として扱うようになりました** — `USER appuser` が `appuser` property symbol として index されるようになりました。
+- **Dockerfile `USER user:group` principal を全体で保持するようになりました** — group 付き user が完全な `user:group` 値として index されるようになりました。
+- **Dockerfile `WORKDIR` path を symbol として扱うようになりました** — `WORKDIR /app` が `/app` property symbol として index されるようになりました。
+- **Dockerfile shell form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME /data` が `/data` property symbol として index されるようになりました。
+- **Dockerfile の複数 path `VOLUME` 行ですべての path を出すようになりました** — `VOLUME /data /cache` が列挙された shell form path をすべて index するようになりました。
+- **Dockerfile `VOLUME` の inline comment を symbol 対象から外しました** — `#` より後ろに書かれた path を volume として index しないようになりました。
+- **Dockerfile の名前付きstageでもbase imageを検索できるようになりました** — `FROM node:20 AS build` が `build` と `node:20` image の両方を index しつつ、既存stage aliasはbase image扱いしないようになりました。
+- **Dockerfile JSON array form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME ["/data", "/cache"]` が列挙された各pathを index するようになりました。
+- **Dockerfile `STOPSIGNAL` 値を symbol として扱うようになりました** — `STOPSIGNAL SIGTERM` が `SIGTERM` property symbol として index されるようになりました。
+- **Dockerfile `SHELL` executable を symbol として扱うようになりました** — `SHELL ["/bin/bash", ...]` が `/bin/bash` property symbol として index されるようになりました。
+- **Dockerfile shell form の `COPY` destination を symbol として扱うようになりました** — `COPY src /app` が destination path の `/app` を index するようになりました。
+- **Dockerfile shell form の `ADD` destination を symbol として扱うようになりました** — `ADD archive.tar.gz /opt/app` が destination path の `/opt/app` を index するようになりました。
+- **Dockerfile JSON array form の `COPY` destination を symbol として扱うようになりました** — `COPY ["src", "/app"]` が destination path の `/app` を index するようになりました。
+- **Dockerfile JSON array form の `ADD` destination を symbol として扱うようになりました** — `ADD ["src", "/opt/app"]` が destination path の `/opt/app` を index するようになりました。
+- **Dockerfile `ONBUILD COPY` destination を symbol として扱うようになりました** — trigger-time copy の destination path を index するようになりました。
+- **Dockerfile `ONBUILD ADD` destination を symbol として扱うようになりました** — trigger-time add の destination path を index するようになりました。
+- **Fortran の access list が参照検索に出るようになりました** — 明示的な `public :: name` / `private :: name` 宣言で、列挙された module symbol を索引します。
+- **`::` を省略した Fortran access 文が参照検索に出るようになりました** — `public name` と `private name` を `public :: name` / `private :: name` と同じように索引します。
+- **Fortran の `allocate` object list が参照検索に出るようになりました** — `allocate(Type :: object)` や `allocate(object, stat=...)` の確保対象を索引し、keyword 引数は除外します。
+- **Fortran の `allocate` source/mold 引数が参照検索に出るようになりました** — `source=` と `mold=` の右辺にある simple name を参照として索引します。
+- **Fortran の型付き `allocate` 文が確保型の参照を記録するようになりました** — `allocate(TypeName :: value)` の `TypeName` を型参照として索引し、動的確保の依存を検索できるようにしました。
+- **Fortran の allocation status 引数が参照検索に出るようになりました** — `allocate` / `deallocate` 文の `stat=` と `errmsg=` 変数を参照として索引します。
+- **Fortran の `associate` target が参照検索に出るようになりました** — `associate (alias => target)` のような selector で target 側の名前を索引します。
+- **Fortran の属性のみの変数宣言が symbol search に出るようになりました** — `allocatable :: work` や `pointer :: node` のような宣言を property として索引します。
+- **Fortran の binding target list をすべて索引するようになりました** — `generic :: assignment(=) => assign_a, assign_b` のような generic/type-bound 宣言で、すべての実装ターゲットを索引します。
+- **Fortran の type-bound binding target が参照検索に出るようになりました** — `procedure :: binding => implementation` や `generic :: assignment(=) => assign_impl` の宣言で、実装側ターゲットを索引します。
+- **Fortran の blank common member 名が参照検索に出るようになりました** — `common state, flag` のような宣言で列挙された blank common member を索引します。
+- **名前付き Fortran `block data` 単位が検索できるようになりました** — `block data constants_block` 宣言を本体範囲付きのシンボルとして索引します。
+- **Fortran の common block 名が参照検索に出るようになりました** — `common /repository_state/ value` のような宣言で、名前付き common block を索引します。
+- **Fortran の common block member 名が参照検索に出るようになりました** — `common /state/ value, flag` のような宣言で block 名だけでなく列挙された member も索引します。
+- **Fortran の `common` block member が symbol search に出るようになりました** — `common /block/ a, b` の member 名を property として索引します。
+- **compact な Fortran `import` 文が参照検索に出るようになりました** — `import::Name` と `import, only:Name` を空白ありの interface import と同じように索引します。
+- **compact な Fortran `use::module` 文が参照検索に出るようになりました** — 空白なしの module import、`only:` list、rename list を、空白ありの `use :: module` と同じように索引します。
+- **Fortran の複数 group `data` 文が参照検索にすべて出るようになりました** — `data a /1/, b /2/` のような宣言で、各初期化対象リストを索引します。
+- **Fortran の `data` object list が参照検索に出るようになりました** — `data a, b /.../` のような宣言で、初期化対象の名前を索引します。
+- **Fortran の `deallocate` object list が参照検索に出るようになりました** — `deallocate(a, b, stat=...)` の対象を索引し、keyword 引数は除外します。
+- **Fortran の派生型定義を検索できるようになりました** — `type :: Name` と `type, extends(Base) :: Name` の宣言を型定義として索引し、`extends(Base)` も definition/reference 検索用の型参照として記録します。
+- **Fortran の `entry` 手続きが検索できるようになりました** — `entry alternate_name(...)` 宣言を関数シンボルとして索引します。
+- **Fortran の enumerator が検索できるようになりました** — `enumerator :: color_red = 1, color_blue = 2` 宣言で、各 enumerator を property symbol として索引します。
+- **Fortran の `equivalence` list が参照検索に出るようになりました** — `equivalence (a, b)` のような宣言で、関連付けられた各名前を索引します。
+- **Fortran の external 手続き宣言が参照検索に出るようになりました** — `external legacy_hook, repository_probe` 宣言で、各 external 手続き名を索引します。
+- **`::` を省略した Fortran finalizer 宣言が参照検索に出るようになりました** — `final cleanup` を `final :: cleanup` と同じように索引します。
+- **空白なし `::` の Fortran finalizer 宣言が参照検索に出るようになりました** — `final::cleanup` を空白ありの finalizer 宣言と同じように索引します。
+- **Fortran の finalizer 宣言が参照検索に出るようになりました** — `final :: cleanup, destroy` 宣言で列挙された各 finalizer 手続きを索引します。
+- **Fortran interface の import が参照検索に出るようになりました** — `import :: Name` と `import, only: Name` の import 名を型参照として索引し、依存検索で辿れるようにしました。
+- **Fortran の `include` 対象が参照検索に出るようになりました** — `include 'constants.inc'` のような引用付き include path を参照として索引し、取り込み元ソースの依存を見つけられるようにしました。
+- **Fortran の intrinsic 型 kind パラメータが参照検索に出るようになりました** — `integer(c_int)` や `real(kind=real64)` のような宣言で、名前付き kind パラメータを型参照として索引します。
+- **Fortran の intrinsic 手続き宣言が参照検索に出るようになりました** — `intrinsic sin, cos` 宣言で、各 intrinsic 手続き名を索引します。
+- **Fortran の `module procedure` 実装が本体範囲付きで検索できるようになりました** — `module procedure normalize_impl ... end procedure` のような submodule 実装を、本体範囲付きの function symbol として索引します。
+- **Fortran の namelist member 名が参照検索に出るようになりました** — `namelist /config/ value, status` のような宣言で group 名だけでなく列挙された member も索引します。
+- **Fortran の `namelist` member が symbol search に出るようになりました** — `namelist /group/ a, b` の名前を property として索引します。
+- **Fortran の namelist group 名が参照検索に出るようになりました** — `namelist /repository_config/ value` のような宣言で、名前付き namelist group を索引します。
+- **旧形式の Fortran `parameter (...)` 定数が symbol として検索できるようになりました** — `parameter (size = 4, limit = selected_int_kind(9))` のような宣言で各定数を索引します。
+- **旧形式の Fortran 型付き変数宣言が symbol として検索できるようになりました** — `integer count, total` のような宣言で、`::` がなくても各名前を索引します。
+- **Fortran の `parameter` 定数が検索できるようになりました** — `integer, parameter :: max_rank = 8, default_rank = 2` のような型付き宣言で、各 parameter を property symbol として索引します。
+- **Fortran の pointer assignment target が参照検索に出るようになりました** — `callback => resolver` のような代入で target 名を索引し、`null()` への reset は除外します。
+- **Fortran の `procedure(Interface)` 宣言が interface 参照を記録するようになりました** — procedure pointer や dummy procedure の宣言で interface 名を型参照として索引し、依存検索で見つけられるようにしました。
+- **Fortran の `save` 宣言が参照検索に出るようになりました** — `save` 文の named object と common block を参照として索引します。
+- **Fortran の `select type` guard が参照検索に出るようになりました** — `type is (Name)` と `class is (Name)` の分岐を型参照として索引し、型分岐の依存を見つけられるようにしました。
+- **Fortran submodule の親依存が参照検索に出るようになりました** — `submodule (parent:ancestor) child` 宣言で、親 module と ancestor submodule 名を索引します。
+- **Fortran の type-bound `call object%method()` が method を指すようになりました** — `%` receiver chain 付きの明示 `call` 文では receiver object の phantom call ではなく、最後の procedure 名を索引します。
+- **Fortran の型付き変数・component 宣言が symbol として検索できるようになりました** — `integer :: x` や `real :: a, b` のような宣言で各名前を property symbol として索引します。
+- **Fortran の `use only` alias が参照検索に出るようになりました** — `use mod, only: local_name => remote_name` のような import で、remote symbol に加えて local alias も索引します。
+- **Fortran の `use ... only:` import が参照検索に出るようになりました** — `only:` の後に列挙された import 名を module 名と合わせて型参照として索引し、明示的な Fortran import を依存検索で見つけられるようにしました。
+- **`only:` なしの Fortran `use` rename list が参照検索に出るようになりました** — `use module, local => remote` で local alias と remote symbol の両方を索引します。
+- **Fortran の `use ... only:` rename 元が参照検索に出るようになりました** — `local => remote` 形式の import で、local alias だけでなく remote symbol も索引します。
+- **F# の abstract member 省略形が検索できるようになりました** — `member` を省いた `abstract Reset : unit -> unit` のような宣言を function symbol として索引します。
+- **F# の相互再帰関数が検索できるようになりました** — `and isOdd n = ...` を先頭の `let rec` 定義と同じく function symbol として索引します。
+- **F# assertion の述語呼び出しを索引するようになりました** — `assert validate user` で `validate` を call として記録し、`assert` キーワード自体は抑止します。
+- **F# の属性付き union case を検索できるようになりました** — `| [<Obsolete>] Amber` のようなケースを case 名で索引します。
+- **F# の backtick 付き member 名が検索できるようになりました** — `member this.``display name`` = ...` のようなmemberを正規化して索引します。
+- **F# の backtick 付き module 名が検索できるようになりました** — F# backtick でエスケープされた module 宣言名を正規化し、namespace symbol として索引します。
+- **F# の backtick 付き type 名がより多くの型形式で検索できるようになりました** — エスケープされたrecord / union / class / interface / struct / delegate名を正規化して索引します。
+- **F# の module abbreviation で backtick 付き target を索引するようになりました** — backtick 付き module を対象にする module abbreviation で、正規化した target module 名を記録します。
+- **F# の backtick 付き open target を検索できるようになりました** — backtick 付き module を対象にする open statement を、正規化した module 名で索引します。
+- **F# の backward pipeline 右辺の関数適用も索引するようになりました** — `printfn <| render user` で左辺の呼び出し先に加えて `render` も call reference として取得できます。
+- **F# の backward pipeline の呼び出し先を索引するようになりました** — `printfn <| value` や `<||` 系の左辺関数を call reference として取得できます。
+- **F# block 境界の単独値を call と誤認しなくなりました** — `for item in items do` や `then readyValue else` のように `do` / `else` の前にある単独値を call 参照として索引しません。
+- **F# cast expression の呼び出しを内側の関数名で索引するようになりました** — `upcast createWidget user` で `createWidget` を call として記録し、`upcast` / `downcast` キーワードは抑止します。
+- **F# の連鎖した関数合成で全operandを索引するようになりました** — `validate >> normalize >> persist` のような式で、合成対象の全関数を記録します。
+- **F# の関数合成 operand を索引するようになりました** — `>>` と `<<` の前後にある合成対象の関数を call-like reference として記録します。
+- **F# computation expression の bang call を索引するようになりました** — `do!`、`return!`、`yield!` の後にある括弧なし呼び出しを call reference として取得できます。
+- **F# 条件式先頭の関数適用を索引するようになりました** — `if`、`elif`、`while` 条件の先頭にある括弧なし呼び出しを call reference として取得できます。
+- **F# 条件抽出で単独の boolean 値を call と誤認しないようになりました** — `if isReady then ...` では `isReady` を call として記録せず、`if validate user then ...` は引き続き索引します。
+- **F# の制約付き constructor-style class を索引するようになりました** — `type Factory<'T when 'T : not struct>(value: 'T) = class end` のような宣言を class 名で検索できます。
+- **F# の制約付き generic class を class として索引するようになりました** — `type Box<'T when 'T : not struct> = class end` のような宣言を class 名で検索できます。
+- **F# の delegate type declaration が delegate として索引されるようになりました** — `type Handler = delegate of ...` を alias/import の fallback ではなく、宣言された delegate 名で検索できます。
+- **F# `for` range 境界の呼び出しを索引するようになりました** — `to endIndex user` や `downto lowerBound user` の境界関数を記録し、rangeキーワード自体は抑止します。
+- **F# の generic class 宣言が検索できるようになりました** — `type Box<'T> = class end` や generic constructor 形式を class symbol として索引します。
+- **F# の inline interface declaration が interface として索引されるようになりました** — `type IFoo = interface ...` 形式の declaration を typealias として出さないようにしました。
+- **F# lazy expression の呼び出しを索引するようになりました** — `lazy compute user` で `compute` を call として記録し、`lazy` キーワードと単独のlazy値は抑止します。
+- **F# の `let!` binding が検索できるようになりました** — `let! loadedUser = ...` のような computation expression binding を通常の `let` binding と同じ軽量symbolとして索引します。
+- **F# match 入力側の関数適用を索引するようになりました** — `match parse value with` では `parse` を call として記録し、単独値の `match status with` は無視します。
+- **F# の `match!` 入力側呼び出しを索引するようになりました** — computation expression の `match! fetch value with` で `fetch` を call として記録します。
+- **F# auto-property が検索できるようになりました** — `member val DisplayName = ...` を通常member抽出で除外したまま、`property` シンボルとして索引します。
+- **F# の module abbreviation が右辺の namespace も公開するようになりました** — `module Json = System.Text.Json` は `Json` を検索可能に保ちながら、`System.Text.Json` も import として索引します。
+- **F# の括弧なし constructor application を索引するようになりました** — `new Customer user` で `Customer` を instantiation target として記録します。
+- **F# の `open type` import が開いた型名で索引されるようになりました** — `open type System.Math` は文脈キーワードで止まらず、`System.Math` の import として検索できます。
+- **F# の public type declaration が検索可能になりました** — `type public PublicId = ...` や public union declaration を宣言された型名で索引します。
+- **F# raise expression の呼び出しを索引するようになりました** — `raise buildError user` で `buildError` を call として記録し、`raise` キーワードと単独の例外値は抑止します。
+- **F# の recursive type declaration が型名で検索できるようになりました** — `type rec Tree<'T> = ...` が上位の F# pattern でスキップされず、型シンボルとして索引されます。
+- **F# の keyword struct declaration が struct として索引されるようになりました** — `type Coordinates = struct ...` を汎用 type pattern に落とさず、`struct` シンボルとして検索できます。
+- **F# の `try` / `finally` 後の関数適用を索引するようになりました** — `try` や `finally` の直後にある括弧なし呼び出しを call reference として取得できます。
+- **F# の `use` binding が検索できるようになりました** — `use client = ...` や `use! lease = ...` のようなresource bindingを軽量symbolとして索引します。
+- **F# の `val` 宣言が検索できるようになりました** — `val Id : string` や `val mutable Count : int` のようなsignature宣言を property symbol として索引します。
+- **F# pattern guard の関数呼び出しを索引するようになりました** — `when validate user ->` では `validate` を call として記録し、単独のguard値は無視します。
+- **C# / Java / Kotlin の generic 呼び出し型引数を型参照として検索できるようになりました** — `new List<Payload>()`、`Collections.<Result>emptyList()`、`read<Result>()` のような generic constructor / function 呼び出しで、既存の call / instantiate guard が受理した呼び出しの型引数を `type_reference` として発行します。
+- **Java の annotation 付き `instanceof` pattern で検査対象型を拾えるようになりました** — `value instanceof final @NonNull Payload payload` のような形で、`Payload` を `type_reference` として発行し、`NonNull` は annotation metadata として扱います。
+- **Java の配列コンストラクタ method reference が要素型を指すようになりました** - `Widget[]::new` や `demo.Widget[][]::new` を、配列 suffix ノイズではなく `Widget` / `demo.Widget` の instantiate として索引化します。
+- **Java の generic callable signature が型パラメータ自身を型参照として出さないようになりました** - `<T extends Comparable<T>> T pick(T input)` のような signature では実際の制約型を残しつつ、`T` の type_reference ノイズを抑制します。
+- **Java の generic heritage 句が型パラメータ自身を型参照として出さないようになりました** - `class Box<T> extends Base<T> implements Handler<T>` では `Base` / `Handler` を残しつつ、`T` のノイズを抑制します。
+- **Java の generic throws 句が型パラメータ自身を型参照として出さないようになりました** - `public <E extends Failure> void run() throws E` では実際の bound 型を残しつつ、generic exception parameter のノイズを抑制します。
+- **JavaScript/TypeScript の dynamic import 検索が `.import()` メソッドを runtime import と扱わないようになりました** — `client.import("./x")`、`client?.import("./x")`、`this.#import("./x")` のような property / private method 呼び出しでは module の `import` シンボルを作らなくなりました。
+- **JavaScript/TypeScript の静的 import で `with` / `assert` を alias として import しても signature 範囲が伸びなくなりました** — `import { with as alias } from "./module"` のような semicolon なし宣言でも、source module 記録時に import attributes 判定と混同しなくなりました。
+- **Java / Kotlin のドキュメントリンクを型参照として検索できるようになりました** — `{@link User#save()}` / `@see Helper` のような Javadoc link と `[User.name]` のような KDoc link を、既存の C# XML-doc `cref` と同じく documented symbol 上の `type_reference` として発行します。
+- **JVM method reference が generic owner type を扱えるようになりました** - `Box<String>::new` や `Box<String>::open` のような Java 参照を見逃さず、generic suffix ノイズなしで `Box` / `open` に紐づけます。
+- **Java / Kotlin のメソッド参照で owner 型も検索できるようになりました** — `String::trim` や `User::name` のような callable reference で、型らしい owner を `type_reference` として発行します。一方で `xs::iterator` のような小文字 receiver object は除外します。
+- **Kotlin の backtick 付き annotation を canonical な metadata 参照として記録するようになりました** - ``@`Fancy Name` `` や ``@`Fancy Name`("x")`` で、`Fancy Name` への annotation 参照を記録します。
+- **Kotlin の backtick 付き class literal を canonical な型参照として記録するようになりました** - `` `Display Name`::class `` で、宣言側の symbol 名と同じ `Display Name` を参照型として記録します。
+- **Kotlin の backtick 付き constructor call を canonical な instantiate 参照として記録するようになりました** - `` `Display Name`() `` で、class 宣言の symbol 名と同じ `Display Name` への `instantiate` edge を記録します。
+- **Kotlin の backtick 付き method reference 名を canonical な call 参照として記録するようになりました** - ``User::`render name` `` で、宣言側の symbol 名と同じ `render name` を call として記録します。
+- **Kotlin の backtick 付き method reference owner を canonical な型参照として記録するようになりました** - `` `Display Name`::render `` で、`render` の call に加えて owner 型 `Display Name` を依存として記録します。
+- **Kotlin の backtick 付き宣言を canonical な symbol 名でインデックスするようになりました** - Kotlin keyword や空白 / 記号を含む名前の宣言を source-only な backtick なしで保持し、exact-name の definition 検索で canonical 名から見つけられるようにしました。
+- **Kotlin の backtick 付き型参照を canonical 名で発行するようになりました** - ``val value: `Display Name` `` のような型位置で、宣言側と同じ canonical symbol 名 `Display Name` を `type_reference` として記録します。
+- **Kotlin の class literal が対象型をインデックスするようになりました** — `User::class` と `User::class.java` が `User` への `type_reference` を出力し、C# の `typeof(User)` と Java の `User.class` と同じように検索できるようにしつつ、raw な `class` call ノイズは抑止します。
+- **Kotlin のセカンダリコンストラクタ委譲が委譲先の型へ解決されるようになりました** — `constructor(...) : this(...)` は外側クラスへの call、`constructor(...) : super(...)` は superclass への call としてインデックスされ、raw な `constructor` / `this` / `super` keyword call ノイズは抑止されるため、C# / Java の既存のコンストラクタ連鎖挙動と揃いました。
+- **Kotlin の同一ファイル constructor 呼び出しが instantiation としてインデックスされるようになりました** - 同じ Kotlin ファイル内で定義された class への `User()` や `Profile(...)` が `instantiate` 参照を出力し、C# / Java の constructor 検索に揃えつつ、PascalCase function や annotation は instantiation 結果に含めないようにしました。
+- **Kotlin の extension function receiver を型参照として索引化するようになりました** — `fun User.render()` や `fun Box<User>.unwrap()` のような宣言で receiver 型の依存を発行し、`references User` から対象型への拡張関数を見つけられます。
+- **Kotlin の extension property receiver を型参照として索引化するようになりました** — `val User.displayName: String` や `var Box<User>.selected: User` のような宣言で receiver 型の依存を発行し、`references` / `impact` で追跡できます。
+- **Kotlin の generic signature が型パラメータ自身を型参照として出さないようになりました** - `input: T`、`T : Comparable<T>`、`where T : Handler<T>` では実際の参照型を残しつつ、`T` の type_reference ノイズを抑制します。
+- **Kotlin の generic class literal が型パラメータ自身を型参照として出さないようになりました** - 単一行 generic function 内の `T::class` では generic parameter を抑制し、`User::class` のような実際の class literal は検索可能なままにします。
+- **Kotlin の generic parameter 抑制が宣言 generic 句だけを見るようになりました** - `Box<User>` や `Producer<out Payload>` のような型引数を generic parameter 宣言と誤認しないようにしました。
+- **Kotlin の generic type operator が型パラメータ自身を型参照として出さないようになりました** - generic function 内の `value is T` / `value as T` では generic parameter を抑制し、実際の cast/test 対象型は検索可能なままにします。
+- **Kotlin の type projection modifier が型参照として混ざらないようになりました** - `Producer<out Payload>` や `Consumer<in Payload>` の型位置で、`Payload` だけを依存として残し、`out` / `in` のノイズを追加しません。
+- **Kotlin の type-use annotation が型参照として混ざらないようになりました** — `val value: @Fancy Payload` のような型位置では、`Payload` を `type_reference` として残しつつ、`Fancy` は metadata として扱い phantom な型参照にしません。
+- **Kotlin の use-site annotation が型参照へ混ざらないようになりました** - `@field:Fancy Payload` のような型位置で、`Fancy` は annotation metadata として扱い、`Payload` を型依存として記録します。
+- **Perl の class feature 宣言を検索できるようになりました** - `class My::Widget { ... }` 宣言を class symbol としてインデックスします。
+- **Perl class field を検索できるようになりました** - Perl class feature の `field $name` 宣言を property symbol としてインデックスします。
+- **Perl の lexical subroutine を検索できるようになりました** - `my sub name` と `state sub name` 宣言を通常の `sub name` と同じく function symbol としてインデックスします。
+- **Perl の `method` / `fun` 宣言を検索できるようになりました** - Object::Pad 形式の `method name` と Function::Parameters 形式の `fun name` 宣言を function symbol としてインデックスします。
+- **Perl Moose/Moo の属性を検索できるようになりました** - `has name => ...` と `has '+name' => ...` 宣言を property symbol としてインデックスします。
+- **Perl Moose の継承宣言が参照検索に出るようになりました** - `extends 'Module'` と `with qw(Role ...)` 宣言を type reference としてインデックスします。
+- **Perl の package block 宣言を検索できるようになりました** - `package My::Module { ... }` 宣言を namespace symbol としてインデックスし、既存の `package My::Module;` 対応と揃えました。
+- **Perl の package 変数を検索できるようになりました** - `our $VERSION`、`our @EXPORT_OK` などの package 変数を property symbol としてインデックスします。
+- **Perl の PSGI / CGI エントリポイントを Perl として検出するようになりました** - `.psgi`、`.cgi`、`.fcgi` ファイルが unknown text ではなく Perl としてインデックス、symbol 抽出、reference 抽出されます。
+- **Perl の qualified function call を完全修飾名で検索できるようになりました** - `My::Util::format(...)` のような呼び出しで、leaf call に加えて `My::Util::format` の call reference も出力します。
+- **Perl の qualified call 検索が `sub` で終わる bareword 後の呼び出しを落とさなくなりました** - `call_sub My::Util::format(...)` は qualified call を出力し、`sub My::Util::format(...)` 定義は引き続き call として扱いません。
+- **Perl の qualified subroutine 定義を検索できるようになりました** - `sub My::Module::name` 宣言を完全修飾名の function symbol としてインデックスします。
+- **Perl の継承検索が一般的な `qw` 区切りに対応しました** - `use parent` と `use base` は従来の `qw(...)` に加えて、`qw[...]`、`qw{...}`、`qw/.../`、`qw<...>` のリストからも type reference を抽出します。
+- **Perl の文字列 `require` パスを module reference として検索できるようになりました** - `require "Foo/Bar.pm"` を `Foo::Bar` の module reference としてインデックスします。
+- **Perl の role 宣言を検索できるようになりました** - `role My::Renderable { ... }` 宣言を interface symbol としてインデックスします。
+- **PHP attributes を型参照として索引するようになりました** — `#[Route(...)]` や `#[\App\Http\Middleware\RequiresAuth]` のような attribute class を `type_reference` として出し、名前付き引数は型として扱いません。
+- **PHP backed enum シンボルが backing type を記録するようになりました** — `enum Status: string` のような宣言で `string` をシンボル metadata に保持し、enum 検索結果を改善します。
+- **PHP の catch union 型を索引するようになりました** — `catch (\App\Exception\FirstException|SecondException $e)` で各例外型を type reference として出します。
+- **PHP の `define()` 定数を検索できるようになりました** — `define('NAME', ...)` や `define("NAME", ...)` で宣言された literal なグローバル定数をシンボルとして出します。
+- **PHP のグループ `use` import を型参照として索引するようになりました** — `use App\Domain\{User, Team\Member};` のような grouped class import が reference 検索結果に出るようになり、grouped function / const import は引き続き type reference から除外します。
+- **PHP の継承句を型参照として索引するようになりました** — `extends` / `implements` の対象を、完全修飾名やカンマ区切り interface 名も含めて reference 結果へ出します。
+- **PHP の `instanceof` 右辺を型参照として索引するようになりました** — `$value instanceof \App\Domain\UserService` のような式で、完全修飾名と短い型名の両方を type reference として出します。
+- **PHP メソッドシンボルが実コードの修飾子順序に対応しました** — `abstract protected function normalize()` や `final public static function make()` のような宣言を、visibility を保った function として索引します。
+- **PHP の mixed group import で function / const 要素を型参照から除外するようになりました** — `use App\{User, function make_user, const ROLE};` は `User` だけを type reference として記録し、function / const import を型として出さなくなります。
+- **PHP の複数行 constructor promotion を検索できるようになりました** — `__construct(` の各パラメータ行に書かれた promoted property を `property` シンボルとして出し、通常パラメータは引き続き無視します。
+- **PHP の引数 class 型を索引するようになりました** — `Request $request` や `?User $user` のような型付き引数を type reference として出し、builtin scalar 型は無視します。
+- **PHP の constructor promotion プロパティを検索できるようになりました** — 同一行の `__construct(public string $id, ...)` 宣言から promotion されたメンバーを `property` シンボルとして出し、通常パラメータは索引しません。
+- **PHP のクラスプロパティをシンボルとして検索できるようになりました** — `public`、`protected`、`private`、旧式の `var` プロパティ宣言を `property` シンボルとして出すため、メンバーアクセス参照から宣言へ辿りやすくなりました。
+- **PHP のプロパティ class 型を索引するようになりました** — `private User|Guest $owner` のようなプロパティ宣言で、builtin ではないプロパティ型を type reference として出します。
+- **PHP の戻り値 class 型を索引するようになりました** — `(): Response|JsonResponse` のような戻り値宣言で、builtin ではない結果型を type reference として出します。
+- **PHP の同一行プロパティリストで全メンバーを検索可能にしました** — `public string $first, $last;` のような宣言で後続プロパティも索引し、初期値や文字列リテラル内のカンマは無視します。
+- **PHP の static 定数と enum case をメンバー参照として索引するようになりました** — `Config::VERSION` や `Priority::Low` で `VERSION` / `Low` を reference として出し、`Config::rebuild()` のようなメソッド呼び出しは call のままにします。
+- **PHP の static property access をメンバー参照として索引するようになりました** — `Config::$cache` で既存の class 側 type reference に加えて `cache` を reference として出します。
+- **PHP の trait-use adaptation block を型参照として索引するようになりました** — `use A, B { ... }` で adaptation block の前にある trait 名を記録します。
+- **PHP trait adaptation の alias を function シンボルとして索引するようになりました** — `Trait::method as aliasName;` で導入されるメソッドを検索可能にし、visibility 変更だけの adaptation は除外します。
+- **PHP の型付きクラス定数を定数名で索引するようになりました** — `public const string VERSION = ...` のような宣言を取り落とさず、宣言型付きの `VERSION` として出します。
+- **PHP の `use const` import を参照として索引するようになりました** — 単体、グループ、mixed group の const import が定数名の reference を追加し、function import を定数扱いしなくなります。
+- **PHP の `use function` import を参照として索引するようになりました** — 単体、グループ、mixed group の function import が関数名の reference を追加し、const import を関数扱いせずに reference 検索で見つけられるようになります。
+- **PHP の `use` 型 import を型参照として索引するようになりました** — class import と trait-use 行を reference 結果へ出し、`use function` / `use const` は type reference から除外します。
+- **PHP の変数束縛 closure を検索できるようになりました** — `$handler = function (...) {}` や `$mapper = fn (...) => ...` のような代入を、束縛先の変数名を持つ function シンボルとして出します。
+- **PHPDoc `@extends` の型を型参照として索引するようになりました** — `@phpstan-extends` / `@psalm-extends` を含む generic parent 宣言が、親型と型引数の reference を追加します。
+- **PHPDoc `@implements` の型を型参照として索引するようになりました** — PHPStan / Psalm 形式を含む generic interface 宣言が、interface 型と型引数の reference を追加します。
+- **PHPDoc import-type の参照元を型参照として索引するようになりました** — `@phpstan-import-type` / `@psalm-import-type` の `from` class が type reference 検索に出るようになります。
+- **PHPDoc import-type alias を type シンボルとして索引するようになりました** — `@phpstan-import-type` / `@psalm-import-type` import が検索可能になり、`as` alias がある場合はローカル alias 名を使います。
+- **PHPDoc `@method` シンボルが複合戻り値型を受け付けるようになりました** — nullable / union / intersection / generic の戻り値型表記で、動的メソッド宣言の索引が落ちなくなります。
+- **PHPDoc `@method` の引数型を型参照として索引するようになりました** — 動的メソッドの parameter annotation が、組み込み型以外の引数型 reference を検索へ追加します。
+- **PHPDoc `@method` の戻り値型を型参照として索引するようになりました** — 動的メソッド宣言が、記録された戻り値型と generic 引数の reference を検索へ追加します。
+- **PHPDoc `@method` 宣言を function シンボルとして索引するようになりました** — PHP クラスに docblock で記録された動的メソッドが、任意の戻り値型 metadata とともに function symbol として検索可能になります。
+- **PHPDoc `@mixin` の型を型参照として索引するようになりました** — dynamic mixin 宣言が、mixin 型と generic 引数の reference を検索へ追加します。
+- **PHPDoc `@param` の型を型参照として索引するようになりました** — `@param \App\Models\User|Guest $actor` のような docblock 専用の引数型が type reference 検索に反映されます。
+- **PHPDoc parameter tag variant を型参照として索引するようになりました** — `@phpstan-param` / `@psalm-param` / `@param-out` を通常の `@param` と同様に扱います。
+- **PHPDoc の動的プロパティを property シンボルとして索引するようになりました** — `@property` / `@property-read` / `@property-write` 宣言が、記録された型とともに検索可能になります。
+- **PHPDoc `@property` の型を型参照として索引するようになりました** — 動的プロパティ宣言が、記録されたプロパティ型と generic 引数の reference を検索へ追加します。
+- **PHPDoc analyzer property tag を property シンボルとして索引するようになりました** — `@phpstan-property*` / `@psalm-property*` 宣言を通常の `@property` と同様に扱います。
+- **PHPDoc analyzer property tag の型を型参照として索引するようになりました** — `@phpstan-property*` / `@psalm-property*` の型を通常の `@property` と同様に扱います。
+- **PHPDoc `@return` の型を型参照として索引するようになりました** — PHPDoc にだけ書かれた戻り値型が type reference 検索に反映されます。
+- **PHPDoc analyzer return tag を型参照として索引するようになりました** — `@phpstan-return` / `@psalm-return` を通常の `@return` と同様に扱います。
+- **PHPDoc template bound を型参照として索引するようになりました** — `@template T of Foo` / `@template U as Bar` の制約型が reference 検索に反映されます。
+- **PHPDoc `@throws` の型を型参照として索引するようになりました** — docblock に記録された例外型が type reference 検索に出るようになります。
+- **PHPDoc type alias を type シンボルとして索引するようになりました** — `@phpstan-type` / `@psalm-type` / 通常の `@type` alias が、alias 先の式とともに検索可能になります。
+- **PHPDoc type alias の alias 先を型参照として索引するようになりました** — `@phpstan-type` / `@psalm-type` / `@type` の alias 式に含まれる型が reference 検索に反映されます。
+- **PHPDoc `@var` の型を型参照として索引するようになりました** — `@var` で記録された変数・プロパティ型が type reference 検索に出るようになります。
+- **PHPDoc analyzer var tag を型参照として索引するようになりました** — `@phpstan-var` / `@psalm-var` を通常の `@var` と同様に扱います。
+- **Python の abstract property を property として index するようにしました** — legacy の `@abstractproperty` と修飾付き `@abc.abstractproperty` decorator が付いた method を property symbol として分類するようにしました。
+- **Python の `__all__.append` export を index するようにしました** — package の `__init__.py` が literal 名を `__all__` に append する場合も、exact symbol search 用の import symbol として公開名を index するようになりました。
+- **Python の `__all__.extend` が次行開始の値にも対応しました** — `__all__.extend(` の次行に literal list や tuple を置く形式でも、export 名を exact symbol search 用に index するようになりました。
+- **Python の `__all__.extend` export を index するようにしました** — package の `__init__.py` が literal 名で `__all__` を extend する場合も、exact symbol search 用の import symbol として公開名を index するようになりました。
+- **Python の型注釈付き class attribute を property として index するようにしました** — `name: str` のような class body 宣言が symbol search に出るようになり、method-local annotation は除外されたままです。
+- **Python class の `__annotations__` 辞書 key を property として index するようにしました** — class body の `__annotations__` 代入に含まれる literal key が symbol search に出るようになりました。
+- **Python の `assert_type` 呼び出しが期待型参照を出すようになりました** — `assert_type(value, models.User)` が期待型を参照検索に記録するようになりました。
+- **Python の代入形式 class attribute を property として index するようにしました** — `DEFAULT_TIMEOUT = 30` のような class body の代入が symbol search に出るようになり、method-local assignment は除外されたままです。
+- **Python の `attrs.fields` 呼び出しが対象型参照を出すようになりました** — `attrs.fields(models.User)` と `attr.fields(models.User)` が検査対象の attrs モデル型を参照検索に記録するようになりました。
+- **Python の augmented `__slots__` field を property として index するようにしました** — `__slots__ += (...)` で追加される slot 名も property symbol として出るようになりました。
+- **Python の括弧なし `raise` が型参照を出すようになりました** — `raise CustomError` が `CustomError` を `type_reference` として記録し、呼び出し括弧がない例外利用も検索できるようになりました。
+- **Python の cached property を property として index するようにしました** — `@cached_property` と修飾付き cached property decorator が付いた `def` を function ではなく property symbol として分類するようにしました。
+- **Python の呼び出し形 decorator が decorator reference を出すようになりました** — `@parametrized(...)` のような decorator が通常の call edge に加えて `decorator` reference も生成するようになりました。
+- **Python の `cast` 呼び出しが対象型参照を出すようになりました** — `cast(models.User, value)` が `User` を `type_reference` として記録し、型ナローイング用の cast を対象型から検索できるようになりました。
+- **Python の基底クラスが型参照を出すようになりました** — `class UserView(views.BaseView):` が `BaseView` を `type_reference` として記録し、基底型側から利用箇所を検索できるようになりました。
+- **Python の `contextlib.suppress` 呼び出しが例外型参照を出すようになりました** — `contextlib.suppress(errors.NotFoundError)` が握りつぶす例外型を参照検索に記録するようになりました。
+- **Python の `create_model` 代入を class として index するようにしました** — `RuntimeUser = create_model(...)` のような動的 model 宣言が symbol search に出るようになりました。
+- **Python の current-package re-export に修飾済み import symbol を追加しました** — `__init__.py` 内の `from . import helper` が `helper` と package-qualified module name の両方を index するようになり、exact symbol search で見つけやすくなりました。
+- **Python の current-package module import に package-qualified symbol を追加しました** — `__init__.py` 内の `from .tools import build` が exact symbol search 用に `package.subpkg.tools.build` を index するようになりました。
+- **Python の `dataclasses.fields` 呼び出しが対象型参照を出すようになりました** — `dataclasses.fields(models.User)` が検査対象の dataclass 型を参照検索に記録するようになりました。
+- **Python の tuple 形式 `except` 節が型参照を出すようになりました** — `except (TimeoutError, network.NetworkError):` のような複数例外ハンドラが各例外型を参照検索に記録するようになりました。
+- **Python の `except` 節が型参照を出すようになりました** — `except CustomError as exc:` が `CustomError` を `type_reference` として記録し、例外クラスから捕捉箇所を探せるようになりました。
+- **Python の `Final` 宣言を index するようにしました** — `DEFAULT_TIMEOUT: Final[int] = 30` のような module constant が property symbol として symbol search に出るようになりました。
+- **Python の functional enum 宣言を class として index するようにしました** — `Color = Enum(...)` や `Status = enum.Enum(...)` のような代入が symbol search に出るようになりました。
+- **Python の functional enum variant を class として index するようにしました** — `IntEnum`、`Flag`、`IntFlag`、`StrEnum` の factory 代入が symbol search に出るようになりました。
+- **Python の generic 引数型注釈が内側の型参照を出すようになりました** — `def save(users: Sequence[models.User]):` が引数注釈内の `User` を記録するようになりました。
+- **Python の generic 戻り値型注釈が内側の型参照を出すようになりました** — `def load_many() -> list[models.User]:` が戻り値注釈内の `User` を記録するようになりました。
+- **Python の generic 変数型注釈が内側の型参照を出すようになりました** — `users: Sequence[models.User] = []` が変数注釈内の `User` を記録するようになりました。
+- **Python の `get_type_hints` 呼び出しが対象型参照を出すようになりました** — `get_type_hints(models.User)` が検査対象を参照検索に記録するようになりました。
+- **Python の tuple 形式 `isinstance` が型参照を出すようになりました** — `isinstance(value, (models.User, api.Admin))` が確認対象の各型を参照検索に記録するようになりました。
+- **Python の `isinstance` チェックが型参照を出すようになりました** — `isinstance(value, models.User)` が確認対象の型を記録し、実行時型チェックをクラス側から検索できるようになりました。
+- **Python の tuple 形式 `issubclass` が型参照を出すようになりました** — `issubclass(cls, (services.Plugin, mixins.Audited))` が確認対象の各基底型を参照検索に記録するようになりました。
+- **Python の `issubclass` チェックが型参照を出すようになりました** — `issubclass(cls, services.Plugin)` が確認対象の基底型を参照検索に記録するようになりました。
+- **Python の `make_dataclass` 代入を class として index するようにしました** — `DynamicUser = make_dataclass(...)` のような動的 dataclass factory が class symbol として出るようになりました。
+- **Python の `__match_args__` field を property として index するようにしました** — class body の `__match_args__` 代入に含まれる literal 名が symbol search 用の property symbol として出るようになりました。
+- **Python の metaclass 指定が型参照を出すようになりました** — `class Model(metaclass=orm.ModelMeta):` が metaclass を記録し、メタクラスの利用箇所を検索できるようになりました。
+- **Python の複数基底クラスが型参照を出すようになりました** — `class UserView(views.BaseView, mixins.AuditedMixin):` が各基底クラスを参照検索に記録するようになりました。
+- **Python の functional named tuple を class として index するようにしました** — `Point = NamedTuple(...)` や `Coordinate = collections.namedtuple(...)` のような代入が class symbol として出るようになりました。
+- **Python の `NewType` alias を index するようにしました** — `UserId = NewType("UserId", int)` や `OrderId = typing.NewType(...)` のような alias が symbol search に出るようになりました。
+- **Python の `NewType` 呼び出しが元型参照を出すようになりました** — `NewType("UserId", models.User)` がラップ元の型を参照検索に記録するようになりました。
+- **Python の引数型注釈が型参照を出すようになりました** — `def save(user: models.User):` が引数型を参照検索に記録するようになりました。
+- **Python の parent-relative import に package-qualified symbol を追加しました** — package の `__init__.py` 内の `from ..shared import helper` が、`package.shared.helper` のような解決後の package path を exact symbol search 用に index するようになりました。
+- **Python の property accessor を property として index するようにしました** — `@name.setter` と `@name.deleter` の method が function ではなく property symbol として出るようになりました。
+- **Python の `pydantic.TypeAdapter` 呼び出しが対象型参照を出すようになりました** — `pydantic.TypeAdapter(models.User)` がアダプタ対象のモデル型を参照検索に記録するようになりました。
+- **Python の `pytest.raises` 呼び出しが例外型参照を出すようになりました** — `pytest.raises(errors.ValidationError)` が期待される例外型を参照検索に記録するようになりました。
+- **Python の qualified `typing.assert_type` 呼び出しが期待型参照を出すようになりました** — `typing.assert_type(value, models.User)` が期待型を参照検索に記録するようになりました。
+- **Python の修飾付き呼び出し形 decorator が完全名の decorator reference を保持するようになりました** — `@pytest.mark.parametrize(...)` のような dotted decorator が `pytest.mark.parametrize` を `decorator` reference として出すようになりました。
+- **Python の qualified `typing.cast` 呼び出しが対象型参照を出すようになりました** — `typing.cast(models.User, value)` が cast 対象の型を参照検索に記録するようになりました。
+- **Python の qualified `typing.get_type_hints` 呼び出しが対象型参照を出すようになりました** — `typing.get_type_hints(models.User)` が検査対象を参照検索に記録するようになりました。
+- **Python の `raise ... from ...` が例外型参照を出すようになりました** — `raise package.CustomError from exc` のような例外連鎖でも、送出する例外型を記録するようになりました。
+- **Python の relative import module に修飾済み symbol を追加しました** — `from .tools import build` のような relative import が、import された member に加えて `package.subpkg.tools` のような解決後の module 名も index するようになりました。
+- **Python の戻り値型注釈が型参照を出すようになりました** — `def load() -> models.User:` が戻り値型を参照検索に記録するようになりました。
+- **Python の `__slots__` field を property として index するようにしました** — class body の `__slots__` 代入に含まれる literal slot 名を property symbol として出し、`__slots__` 自体だけが index される状態を避けるようにしました。
+- **Python の型エイリアスが対象型参照を出すようになりました** — `UserAlias: TypeAlias = models.User` がエイリアス先の型を参照検索に記録するようになりました。
+- **Python の型パラメータ alias を index するようにしました** — `TypeVar`、`ParamSpec`、`TypeVarTuple` の代入が symbol search に出るようになりました。
+- **Python の `TypeAlias` 宣言を index するようにしました** — `JsonValue: TypeAlias = ...` や `Handler: typing.TypeAlias = ...` のような legacy alias が symbol search に出るようになりました。
+- **Python の functional `TypedDict` 宣言を class として index するようにしました** — `UserPayload = TypedDict(...)` や `OrderPayload = typing.TypedDict(...)` のような代入が symbol search に出るようになりました。
+- **Python の `TypeVar` bound が型参照を出すようになりました** — `TypeVar("TUser", bound=models.User)` がbound型を参照検索に記録するようになりました。
+- **Python の `TypeVar` 制約が型参照を出すようになりました** — `TypeVar("TAccount", models.User, models.Admin)` が各制約型を参照検索に記録するようになりました。
+- **Python の変数型注釈が型参照を出すようになりました** — `user: models.User = load_user()` が注釈された型を参照検索に記録するようになりました。
+- **R の `assign()` 関数定義がシンボル検索に出るようになりました** — `assign("build_plot", function(...))` のような明確な定義を、代入先の関数名で索引します。
+- **R の named argument 形式の `assign()` 関数定義がシンボル検索に出るようになりました** — `assign(x = "format_model", value = function(...))` を代入先の関数名で索引します。
+- **R の `assign()` shorthand function 定義がシンボル検索に出るようになりました** — `assign("compact_plot", \(data) data)` を代入先の関数名で索引します。
+- **R のバッククォート名付き関数呼び出しが参照検索に出るようになりました** — `` `plot-model`(x) `` や `` `%||%`(x, y) `` のような呼び出しを call 参照として記録します。
+- **R の `$` 参照がバッククォート付き receiver 名に対応しました** — `` `reactive data`$value `` や `` `reactive data`$`has space` `` を qualified reference として索引します。
+- **R のバッククォート名付き `=` 関数代入がシンボル検索に出るようになりました** — `` `plot-model` = function(...) `` のような定義を `<-` 形式と同じく索引します。
+- **R の namespace 参照で backtick 付き演算子名も拾うようになりました** — `cdidx` は `` pkg::`%>%` `` や `` pkg:::`%||%` `` のような R の namespace 参照を、修飾済みターゲットと演算子の leaf 名の両方に対する検索可能な参照として記録します。
+- **R の `[[...]]` member access が参照検索に出るようになりました** — `data[["value"]]` や `input[['go']]` のような文字列キー access を `$` と同じ qualified reference として索引します。
+- **R の `data()` 呼び出しが参照検索に出るようになりました** — `data("iris", package = "datasets")` のような呼び出しから dataset 名と `package =` 値を索引します。
+- **R の `$` member access が参照検索に出るようになりました** — `input$go`、`data$value`、バッククォート付き member 名から qualified / leaf の両方の参照を記録します。
+- **R の `help()` / `example()` 呼び出しが参照検索に出るようになりました** — documentation topic と `package =` 値を reference として索引します。
+- **R の infix operator 呼び出しが参照検索に出るようになりました** — `%>%` や `%||%` のような operator function を infix 形式で使った場合に call 参照として記録します。
+- **R の GitHub package install 呼び出しが参照検索に出るようになりました** — `remotes::install_github()` / `devtools::install_github()` の repository spec を索引し、named option は無視します。
+- **R の `install.packages()` 呼び出しが参照検索に出るようになりました** — quoted package 名や vector 内の entry を索引し、`repos =` のような named option は無視します。
+- **R の `library(help = ...)` 呼び出しが package import として出るようになりました** — help 表示用の `library()` / `require()` 呼び出しから参照先 package 名を symbol search に索引します。
+- **R の named package loader call が import シンボルとして出るようになりました** — `library(package = "stringr")` や `require(package = tidyr)` のような形式をパッケージ名で索引します。
+- **R の `load_all()` 開発用 loader が参照検索に出るようになりました** — `devtools::load_all()` / `pkgload::load_all()` の path 引数を reference として索引します。
+- **R の `NAMESPACE` import/export ディレクティブがシンボル参照を生成するようになりました** — `importFrom(pkg, name)` は `pkg::name` と `name` の両方を記録し、`export(...)` / `exportClasses(...)` / `exportMethods(...)` はノイズになるディレクティブ call を出さずに export 対象名を記録します。
+- **R パッケージの `NAMESPACE` ファイルを R として検出するようになりました** — 拡張子のない `NAMESPACE` ファイルを R 言語として index するため、package の export/import ディレクティブも scoped search の対象になります。
+- **R NAMESPACE の class / method import が参照検索に出るようになりました** — `importClassesFrom()` と `importMethodsFrom()` を `importFrom()` と同様に package-qualified / leaf reference として索引します。
+- **R の `NAMESPACE` パッケージ import が検索に残るようになりました** — `import(pkg)` ディレクティブは directive helper call を抑止しつつ、パッケージ参照を記録します。
+- **R の `renv::install()` / `pak::pkg_install()` 呼び出しが参照検索に出るようになりました** — quoted package 名や vector 内の entry を `install.packages()` と同様に索引します。
+- **R の namespace 修飾付き package loader call が import シンボルとして出るようになりました** — `base::library("readr")` や `base::requireNamespace(package = "rlang")` のような形式をパッケージ名で索引します。
+- **R の namespace 修飾付き `source()` 呼び出しが import シンボルとして出るようになりました** — `base::source("R/helpers.R")` のような形式を source 先パスで索引します。
+- **R の `pacman::p_load()` import 抽出が末尾コメントを無視するようになりました** — `#` 以降の package 風テキストを import として索引しません。
+- **R の `pacman::p_load()` 呼び出しが package import として出るようになりました** — 裸名または引用付きの複数 package 引数を import symbol として索引します。
+- **R の起動プロファイルファイルを R として検出するようになりました** — `.Rprofile` と `Rprofile.site` を R 言語として index するため、起動時 hook や helper 定義も scoped search の対象になります。
+- **R の右代入 function 定義がシンボル検索に出るようになりました** — `function(x) x + 1 -> increment` や `\(x) x -> name` のような定義を代入先の関数名で索引します。
+- **R の roxygen `@import` タグが参照検索に出るようになりました** — `@import ggplot2 dplyr` のような package-level import を package reference として索引します。
+- **R の roxygen `@importFrom` タグが参照検索に出るようになりました** — `@importFrom`、`@importMethodsFrom`、`@importClassesFrom` コメントから package-qualified / leaf の両方の参照を記録します。
+- **R の roxygen `@method` タグが参照検索に出るようになりました** — S3 method tag から合成 method 名、generic、class の参照を記録します。
+- **R の `NAMESPACE` S3 method ディレクティブが検索可能な参照を生成するようになりました** — `S3method(generic, class)` は生成される `generic.class` メソッド名と generic / class 部分を記録し、directive helper call は抑止します。
+- **R の `setGroupGeneric()` 宣言がシンボル検索に出るようになりました** — group generic 名を既存の `setGeneric()` 対応と同じく索引します。
+- **R Shiny の bracket 形式 output renderer がシンボル検索に出るようになりました** — `output[["detail-plot"]] <- renderPlot(...)` を output id で索引します。
+- **R Shiny の output renderer がシンボル検索に出るようになりました** — `output$plot <- renderPlot(...)` などの renderer を output id で索引します。
+- **R Shiny の reactive 代入がシンボル検索に出るようになりました** — `reactive()` / `eventReactive()` / `observe()` / `observeEvent()` の名前付き代入を binding 名で索引します。
+- **R の shorthand function 代入がシンボル検索に出るようになりました** — `compact <- \(x) x + 1` のような定義を `function(...)` 代入と同じく索引します。
+- **R の S4 slot access が参照検索に出るようになりました** — `model@coefficients`、バッククォート付き slot 名、バッククォート付き receiver 名から qualified / leaf の両方の参照を記録します。
+- **R の `source()` call 参照を source 先ファイルパスと併せて維持するようになりました** — `source(path_var)` のような動的な利用も call として検索でき、静的パスも参照として記録します。
+- **R の `source()` ファイル読み込みが import シンボルとして出るようになりました** — `source("R/helpers.R")` のような明示的な読み込みを source 先パスで索引します。
+- **R の `source()` 呼び出しが source 先ファイルパスを参照として記録するようになりました** — 明示された source 先パスを参照検索に出し、helper call 自体は抑止します。
+- **R の superassignment による関数定義も index されるようになりました** — `cdidx` は `name <<- function(...)` と backtick 付きの同種構文を関数シンボルとして認識するため、外側の環境へ代入された関数が symbol search から抜けなくなります。
+- **R の `sys.source()` ファイル読み込みが `source()` と同じ検索対象になりました** — source 先パスを import シンボルとして索引し、参照としても記録します。
+- **R の `system.file()` 呼び出しが参照検索に出るようになりました** — positional resource path segment と `package =` 値を reference として索引します。
+- **R の testthat BDD block がシンボル検索に出るようになりました** — `describe()` と `it()` の description を、namespace 修飾付き呼び出しも含めて検索可能なテストシンボルとして索引します。
+- **R の `test_that()` case がシンボル検索に出るようになりました** — testthat の case description を、namespace 修飾付き呼び出しも含めて検索可能なテストシンボルとして索引します。
+- **R の `NAMESPACE` ネイティブライブラリ directive がパッケージ参照を検索に残すようになりました** — `useDynLib(pkg, ...)` は directive helper call を抑止しつつ、パッケージ名を参照として記録します。
+- **R NAMESPACE の `useDynLib()` routine 名が参照検索に出るようになりました** — `routine_a` やバッククォート付き routine 名のような native entry を package reference とあわせて索引します。
+- **R の `vignette()` 呼び出しが参照検索に出るようになりました** — vignette topic と `package =` 値を reference として索引します。
+- **Ruby の alias 宣言が両端の名前を索引するようになりました** — `cdidx` は `alias` / `alias_method` 宣言内の名前を記録するため、alias 定義と公開されるメソッドを検索でつなげやすくなります。
+- **Ruby association の `class_name` option が対象クラスへリンクするようになりました** — `cdidx` は Rails 風の `belongs_to` / `has_one` / `has_many` 宣言にある文字列クラス名を索引するため、association 検索で実際のモデル型を見つけやすくなります。
+- **Ruby Rails の `attribute` 宣言が属性名を索引するようになりました** — `cdidx` は `attribute :timezone` の第一引数を記録し、型やoption値は参照に混ぜません。
+- **Ruby Rails の `attribute` 宣言がproperty symbolを作るようになりました** — `cdidx` は `attribute :timezone` を検索可能なmodel propertyとして索引します。
+- **Ruby の `autoload` 定数を参照として索引するようになりました** — `cdidx` は `autoload :Name, "path"` の定数引数を記録するため、遅延読み込みされる Ruby 型を見つけやすくなります。
+- **Ruby の親クラス参照を索引するようになりました** — `cdidx` は `class Child < Parent` の親クラスを記録するため、Ruby 型の検索で継承利用箇所を見つけられます。
+- **Ruby の `Class.new` ブロック代入がclass symbolを作るようになりました** — `cdidx` は `User = Class.new(...) do` のような宣言をclassとして索引し、ブロック内メソッドを動的クラス配下で検索できるようにします。
+- **Ruby Rails の `composed_of` 宣言がaggregate名とclass targetへリンクするようになりました** — `cdidx` は `composed_of :address` のaggregate名と `class_name` targetを記録します。
+- **Ruby の定数代入を property シンボルとして索引するようになりました** — `cdidx` は `MAX_RETRIES = 3` のような定数を記録するため、Ruby の設定値やドメイン定数をシンボル検索で見つけられます。
+- **Ruby の定数 visibility 宣言が定数へリンクするようになりました** — `cdidx` は `private_constant` / `public_constant` の対象を索引し、キーワード自体の call ノイズは抑えます。
+- **Ruby Rails の `create_table` 宣言がtable名を索引するようになりました** — `cdidx` は `create_table` に渡されたsymbol/stringのtable名を記録し、migration option keyは参照から除外します。
+- **Ruby DSL の option hash がノイズ参照を追加しないようになりました** — `cdidx` は `dependent:` や `only:` のような Ruby keyword option で command target の走査を止め、Rails 風 DSL の参照結果を実際の対象に絞ります。
+- **Ruby Rails の `enum` 宣言がproperty symbolを作るようになりました** — `cdidx` は `enum :status` を検索可能なmodel propertyとして索引します。
+- **Ruby FactoryBot のfactory定義が検索可能なsymbolを作るようになりました** — `cdidx` は `factory :user do` 定義をRubyブロック範囲付きのfunction symbolとして索引します。
+- **Ruby の `gem` 宣言が依存名を索引するようになりました** — `cdidx` は `gem "name"` の最初の文字列引数を記録するため、Gemfile の依存宣言をキーワードノイズなしで検索できます。
+- **Ruby の `load` パスを参照として索引するようになりました** — `cdidx` は `load "file.rb"` の文字列パスを記録するため、動的に読み込まれる Ruby ファイルを見つけやすくなります。
+- **Ruby の `module_function` 宣言が公開メソッドへリンクするようになりました** — `cdidx` は `module_function` に渡されたメソッド名を索引し、キーワード自体の call ノイズは抑えます。
+- **Ruby Rails のnested attribute宣言がassociation名を索引するようになりました** — `cdidx` は `accepts_nested_attributes_for` に渡されたassociationを記録し、option keyの手前で停止します。
+- **Ruby の operator method 定義を関数として索引するようになりました** — `cdidx` は `def []`、`def []=`、`def <=>` のような定義を記録し、Ruby の値オブジェクトや collection API のシンボル移動を改善します。
+- **Ruby の `prepend` が mixin 対象モジュールへリンクするようになりました** — `cdidx` は `prepend SomeModule` を `include` / `extend` と同様に扱い、キーワード自体のノイズになる call edge を避けつつモジュール引数を索引します。
+- **Ruby の修飾付き class / module 名を完全な名前で索引するようになりました** — `cdidx` は `Admin::Billing::Invoice` のような名前を先頭 namespace セグメントだけでなく完全な名前として記録します。
+- **Ruby Rails の `enum` 宣言が属性名を索引するようになりました** — `cdidx` は `enum :status` の属性名を記録し、enum値やオプションは参照検索に混ぜません。
+- **Ruby Rails の route 宣言がresource名を索引するようになりました** — `cdidx` は `resources :articles` や `resource :profile` の名前を記録し、routeオプションキーは参照として扱いません。
+- **Ruby Rake の namespace がnamespace symbolを作るようになりました** — `cdidx` は `namespace :db do` ブロックを索引し、内側のtaskをnamespace container配下に置きます。
+- **Ruby の Rake task 定義を関数として索引するようになりました** — `cdidx` は `task :build` や `task test: :environment` の名前を記録し、Ruby/Rake プロジェクトの入口検索を改善します。
+- **Ruby の `refine` 宣言が refinement 対象クラスへリンクするようになりました** — `cdidx` は `refine String do` の対象を索引し、キーワード自体の call ノイズは抑えます。
+- **Ruby の `require` import シンボルが周囲の引用符を除いて索引されるようになりました** — `cdidx` は `require "path"` / `require_relative 'path'` の import 名を `path` として記録し、シンボル検索で一致しやすくします。
+- **Ruby の `require_relative` 対象を参照として索引するようになりました** — `cdidx` は `require_relative "..."` の相対パス引数を記録するため、Ruby のローカル依存検索がより完全になります。
+- **Ruby の `rescue` 節が例外型を索引するようになりました** — `cdidx` は `rescue ErrorType` 節の例外定数を記録するため、Ruby のエラークラスを扱うハンドラを検索で見つけられます。
+- **Ruby の `rescue_from` 宣言が例外クラスを索引するようになりました** — `cdidx` は Rails 風 `rescue_from` 宣言の例外対象を記録し、option hash 由来のノイズは避けます。
+- **Ruby RSpec の `describe` ブロックが対象定数へリンクするようになりました** — `cdidx` は `describe User do` や `RSpec.describe User do` の定数引数を記録し、DSLキーワード自体の call ノイズは抑えます。
+- **Ruby RSpec の `let` helper がproperty symbolを作るようになりました** — `cdidx` は `let(:user) do` と `let!(:account) do` のhelper定義をRubyブロック範囲付きで索引します。
+- **Ruby RSpec のshared examplesがfunction symbolを作るようになりました** — `cdidx` は `shared_examples "auditable" do` ブロックを索引し、再利用されるspec契約を検索可能にします。
+- **Ruby RSpec の名前付きsubjectがproperty symbolを作るようになりました** — `cdidx` は `subject(:profile) do` のhelper定義をRubyブロック範囲付きで索引します。
+- **Ruby Rails の `serialize` 宣言がserialized属性名を索引するようになりました** — `cdidx` は `serialize :settings` を記録し、serializer option keyや値は参照に混ぜません。
+- **Ruby の receiver 付き singleton method をメソッド名で索引するようになりました** — `cdidx` は `def Admin::User.export!` から receiver ではなく `export!` を関数シンボルとして記録します。
+- **Ruby Rails の `store_accessor` 宣言がproperty symbolを作るようになりました** — `cdidx` は `store_accessor :settings, :theme, :locale` から生成される `theme` や `locale` accessorを索引します。
+- **Ruby の `Struct.new` ブロック代入がclass symbolを作るようになりました** — `cdidx` は `Result = Struct.new(...) do` のような宣言をclassとして索引し、ブロック内メソッドを動的container配下に保ちます。
+- **Ruby の `using` refinement 対象を参照として索引するようになりました** — `cdidx` は `using SomeRefinement` の refinement モジュールを記録し、キーワード自体のノイズになる call edge は追加しません。
+- **Ruby の visibility modifier 付きメソッド定義を索引するようになりました** — `cdidx` は singleton method を含む `private def`、`protected def`、`public def` 形式を認識します。
+- **Rust の `as` cast が変換先型を index するようになりました** — `value as User` や pointer cast で、検索・影響調査に使える実型参照を記録します。
+- **Rust の associated call receiver が type reference を出すようになりました** — `User::new()` や `Vec::<User>::new()` の receiver 型を参照検索で見つけられます。
+- **Rust associated type binding の key が type reference として出なくなりました** — `Future<Output = User>` では実依存の `Future`/`User` を残し、`Output` は対象型として索引しません。
+- **Rust の associated type bounds をインデックスするようになりました** — `type Item: Display + Debug` のような宣言で、default target 型に加えて bound 型も参照として辿れます。
+- **Rust associated value が receiver の type reference を出すようになりました** — `User::DEFAULT` や `Result::<User, Error>::Ok` で receiver と turbofish 型を索引し、値名自体は型として扱いません。
+- **Rust attribute を annotation reference として出すようになりました** — `#[tokio::test]` や `#[serde(...)]` のような attribute head を、`derive(...)` を runtime call と誤認せずに検索できます。
+- **Rust の `cfg_attr(..., derive(...))` trait を index するようになりました** — 条件付き derive でも、直接の `derive` 属性と同じ trait 型参照を記録します。
+- **Rust closure signature が type reference を出すようになりました** — 型付き closure 引数と明示的な戻り値型を索引し、closure 内の依存も検索と影響分析に反映します。
+- **Rust の `const` / `static` item の型を type reference としてインデックスするようになりました** — `const GLOBAL: Arc<User>` や `static mut STATE: Option<State>` のような宣言で、注釈された型を参照検索や inspect ワークフローから辿れます。
+- **Rust derive trait を type reference としてインデックスするようになりました** — `#[derive(Debug, Clone, serde::Serialize)]` の derive 対象 trait 名を reference search や inspect から辿れます。
+- **Rust enum variant の payload 型をインデックスするようになりました** — `Created(User)` や `Moved { from: Point }` のような tuple / struct 形式の variant で、payload 型を enum に紐づく参照として辿れます。
+- **Rust の `extern crate` 宣言が reference を出すようになりました** — `extern crate` item の crate 名を参照検索に記録し、alias は型として扱いません。
+- **Rust function-trait bound の戻り値型が索引されるようになりました** — `F: FnOnce() -> Result<User, Error>` や同等の `where` 句で `Result` と payload の戻り値依存を保持します。
+- **Rust generic default 型を index するようになりました** — generic parameter list の `T = User` のような default 型を type reference として記録します。
+- **Rust glob import が親 module を reference として出すようになりました** — `use crate::prelude::*;` で `*` に到達して捨てず、`prelude` を記録します。
+- **Rust の higher-ranked trait bound で実際の bound 型が残るようになりました** — `for<'a>` のような lifetime binder で `Fn` や payload 型を消さず、`for` も type reference として出さないようにしました。
+- **Rust lifetime 名が type reference として出ないようになりました** — `'a` などの lifetime marker を除外しつつ、周辺の実型は保持します。
+- **Rust の外部 module 宣言が reference を出すようになりました** — `mod users;` のような semicolon 付き宣言を module 参照として検索できます。
+- **Rust の path-qualified な `impl` block を実装対象の型へ紐づけるようになりました** — `impl crate::models::Widget {}` や修飾付き target の trait impl で、検索対象の impl シンボルが path prefix ではなく `Widget` になります。
+- **Rust fully-qualified associated call が receiver と trait の type reference を出すようになりました** — `<User as Service>::handle()` で `User` と `Service` の両方を索引します。
+- **Rust raw identifier を型参照でも正規化するようになりました** — `r#type` や `crate::r#type` のような型位置の参照を、phantom な `r` ではなく実際に検索できるシンボル名でインデックスします。
+- **Rust の `Self` associated call が自己 type edge を出さなくなりました** — `Self::new()` や `Self { ... }` は `Self` を外部 type reference / instantiate として出さず、具体型 receiver は従来通り索引します。
+- **Rust の struct literal が instantiate reference を出すようになりました** — `User { ... }` や path-qualified struct literal を参照・影響調査で見つけられます。
+- **Rust trait alias の右辺が type reference を出すようになりました** — `trait Alias = Bound + Other;` 宣言内の依存型を索引します。
+- **Rust trait superbound の function 戻り値型が索引されるようになりました** — `trait Handler: FnOnce() -> User` で `User` を type reference として保持します。
+- **Rust の tuple-style constructor が instantiate reference を出すようになりました** — `User(...)`、`Some(...)`、`Ok(...)` を通常 call ではなく構築エッジとして分類します。
+- **Rust の type alias が target 型をインデックスするようになりました** — `type UserMap = HashMap<Key, User>` のような alias で、右辺の型を search / inspect / dependency ワークフローから参照できます。
+- **Rust の型 modifier が type reference として出ないようになりました** — `impl`、`dyn`、`const`、`mut`、`'static` lifetime などのキーワードを型参照結果から除外しつつ、周辺の実型は保持します。
+- **Rust の `use` import が reference を出すようになりました** — simple/grouped `use` の import target 名を参照として記録し、alias は型として扱いません。
+- **SQL ALTER ASSEMBLY の target を reference として索引するようになりました** — `ALTER ASSEMBLY` で指定される assembly も、SQL の exact reference search で見つけられるようになりました。
+- **SQL bare ALTER AUTHORIZATION の object target を reference として索引するようになりました** — `ALTER AUTHORIZATION ON schema.object` で指定される object も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER AUTHORIZATION の object target を reference として索引するようになりました** — `ALTER AUTHORIZATION ON OBJECT::...` で指定される object も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER FULLTEXT CATALOG の target を reference として索引するようになりました** — `ALTER FULLTEXT CATALOG` で指定される full-text catalog も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER FULLTEXT INDEX の table target を reference として索引するようになりました** — `ALTER FULLTEXT INDEX ON` の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER FUNCTION の target を reference として索引するようになりました** — `ALTER FUNCTION` で指定される function も、SQL の exact reference search で見つけられるようになりました。
+- **T-SQL の `ALTER INDEX ... ON` table target を reference として索引するようになりました** — index rebuild / reorganize の maintenance script だけで触られる table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER PARTITION FUNCTION の target を reference として索引するようになりました** — `ALTER PARTITION FUNCTION` で指定される partition function も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER PARTITION SCHEME の target を reference として索引するようになりました** — `ALTER PARTITION SCHEME` で指定される partition scheme も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER PROCEDURE の target を reference として索引するようになりました** — `ALTER PROCEDURE` / `ALTER PROC` で指定される procedure も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER SCHEMA の transfer target を reference として索引するようになりました** — `ALTER SCHEMA ... TRANSFER` で移動される object も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER SECURITY POLICY の policy name を reference として索引するようになりました** — `ALTER SECURITY POLICY` で指定される security policy も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER SECURITY POLICY の predicate table を reference として索引するようになりました** — row-level security policy に追加される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER SEQUENCE の target を reference として索引するようになりました** — `ALTER SEQUENCE` で指定される sequence も、SQL の exact reference search で見つけられるようになりました。
+- **SQL の `ALTER TABLE` が table reference として出るようになりました** — T-SQL の schema migration だけで触られる table も、`references` や SQL exact name matching で見つけられるようになりました。
+- **SQL ALTER TABLE SWITCH の destination table を reference として索引するようになりました** — `SWITCH TO` の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER TRIGGER の target を reference として索引するようになりました** — `ALTER TRIGGER` で指定される trigger も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER VIEW の target を reference として索引するようになりました** — `ALTER VIEW` で指定される view も、SQL の exact reference search で見つけられるようになりました。
+- **SQL ALTER XML SCHEMA COLLECTION の target を reference として索引するようになりました** — `ALTER XML SCHEMA COLLECTION` で指定される XML schema collection も、SQL の exact reference search で見つけられるようになりました。
+- **SQL bare object permission の target を reference として索引するようになりました** — `ON schema.object` を使う `GRANT`、`DENY`、`REVOKE` statement の対象 object も、SQL の exact reference search で見つけられるようになりました。
+- **T-SQL の `BULK INSERT` destination を table reference として索引するようになりました** — `BULK INSERT dbo.Table FROM ...` でロードされる table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE CLUSTERED COLUMNSTORE INDEX の table target を reference として索引するようになりました** — clustered columnstore index 作成で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE FULLTEXT INDEX の table target を reference として索引するようになりました** — `CREATE FULLTEXT INDEX ON` の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE NONCLUSTERED HASH INDEX の table target を reference として索引するようになりました** — memory-optimized hash index 作成で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL の `CREATE INDEX ... ON` table target を reference として索引するようになりました** — `btree` のような access method 名は抑止したまま、index 定義だけで触られる table も SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE SECURITY POLICY の predicate table を reference として索引するようになりました** — row-level security predicate の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE PRIMARY/SELECTIVE XML INDEX の table target を reference として索引するようになりました** — special XML index 作成で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL CREATE STATISTICS の table target を reference として索引するようになりました** — `CREATE STATISTICS ... ON` の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL の `CREATE TRIGGER ... ON` table target を reference として索引するようになりました** — trigger 定義だけで触られる table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DELETE の FROM なし target を reference として索引するようになりました** — `DELETE schema.table` で指定される qualified table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP AGGREGATE の target を reference として索引するようになりました** — `DROP AGGREGATE` で指定される aggregate も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP ASSEMBLY の target を reference として索引するようになりました** — `DROP ASSEMBLY` で指定される assembly も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP DEFAULT の target を reference として索引するようになりました** — `DROP DEFAULT` で指定される default も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP FULLTEXT CATALOG の target を reference として索引するようになりました** — `DROP FULLTEXT CATALOG` で指定される full-text catalog も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP FULLTEXT INDEX の table target を reference として索引するようになりました** — `DROP FULLTEXT INDEX ON` の後に指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP FUNCTION の target を reference として索引するようになりました** — `DROP FUNCTION` で指定される function も、SQL の exact reference search で見つけられるようになりました。
+- **SQL legacy DROP INDEX の owning table を reference として索引するようになりました** — `DROP INDEX table.index` で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **T-SQL の `DROP INDEX ... ON` table target を reference として索引するようになりました** — SQL Server の index cleanup script だけで触られる table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP PARTITION FUNCTION の target を reference として索引するようになりました** — `DROP PARTITION FUNCTION` で指定される partition function も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP PARTITION SCHEME の target を reference として索引するようになりました** — `DROP PARTITION SCHEME` で指定される partition scheme も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP PROCEDURE の target を reference として索引するようになりました** — `DROP PROCEDURE` / `DROP PROC` で指定される procedure も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP RULE の target を reference として索引するようになりました** — `DROP RULE` で指定される rule も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP SECURITY POLICY の target を reference として索引するようになりました** — `DROP SECURITY POLICY` で指定される security policy も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP SEQUENCE の target を reference として索引するようになりました** — `DROP SEQUENCE` で指定される sequence も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP STATISTICS の owning table を reference として索引するようになりました** — `DROP STATISTICS table.statistic` で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP SYNONYM の target を reference として索引するようになりました** — `DROP SYNONYM` で指定される synonym も、SQL の exact reference search で見つけられるようになりました。
+- **SQL の `DROP TABLE` が table reference として出るようになりました** — `IF EXISTS` を含む T-SQL の単一または複数 table 削除 migration も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP TRIGGER の target を reference として索引するようになりました** — `DROP TRIGGER` で指定される trigger も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP TYPE の target を reference として索引するようになりました** — `DROP TYPE` で指定される user-defined type も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP VIEW の target を reference として索引するようになりました** — `DROP VIEW` で指定される view も、SQL の exact reference search で見つけられるようになりました。
+- **SQL DROP XML SCHEMA COLLECTION の target を reference として索引するようになりました** — `DROP XML SCHEMA COLLECTION` で指定される XML schema collection も、SQL の exact reference search で見つけられるようになりました。
+- **SQL foreign key の `REFERENCES` target を table reference として索引するようになりました** — foreign key の参照先としてだけ現れる table も、SQL の exact reference search で見つけられるようになりました。
+- **`INTO` を省略した T-SQL `INSERT` の target を索引するようになりました** — SQL Server 形式の `INSERT dbo.Table (...)` に出る write target も、SQL の exact reference search で見つけられるようになりました。
+- **SQL object permission の target を reference として索引するようになりました** — `ON OBJECT::...` を使う `GRANT`、`DENY`、`REVOKE` statement の対象 object も、SQL の exact reference search で見つけられるようになりました。
+- **SQL OUTPUT INTO の target を reference として索引するようになりました** — DML の `OUTPUT ... INTO` で指定される audit/capture table も、SQL の exact reference search で見つけられるようになりました。
+- **T-SQL の `SELECT ... INTO` table target を temp table 以外でも索引するようになりました** — `SELECT ... INTO dbo.Table` で作成または書き込まれる非 temp table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL synonym の base object を reference として索引するようになりました** — `CREATE SYNONYM ... FOR` の後にだけ現れる object も、SQL の exact reference search で見つけられるようになりました。
+- **SQL system-versioning の history table を reference として索引するようになりました** — `HISTORY_TABLE = ...` で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **T-SQL の trigger enable/disable 文で table target を索引するようになりました** — `ENABLE TRIGGER ... ON` / `DISABLE TRIGGER ... ON` の maintenance script だけで触られる table も、SQL の exact reference search で見つけられるようになりました。
+- **SQL UPDATE STATISTICS の target を reference として索引するようになりました** — `UPDATE STATISTICS` で指定される table も、SQL の exact reference search で見つけられるようになりました。
+- **Swift の access modifier 付き import を index するようにしました** — `public import Logging` や `package import struct PackageKit.Token` を通常の import と同じ granular import 正規化で検索可能な import シンボルにします。
+- **Swift の associatedtype 制約とデフォルト型が型参照として index されるようになりました** — `associatedtype Item: Identifiable` や `associatedtype Cache = MemoryCache<Item>` のような protocol 宣言で、それらの依存型を参照クエリから見つけられるようにしました。
+- **Swift 属性の generic 引数を型参照として index するようにしました** — `@Relationship<UserViewModel>` のような property wrapper や macro から generic のモデル型を拾い、属性名そのものは型として扱いません。
+- **Swift の catch パターン root を型参照として index するようにしました** — `catch NetworkError.timeout` などでエラー型を拾い、enum case 名は型として扱わないようにしました。
+- **Swift の closure literal signature が型参照として index されるようになりました** — `{ (value: Input) -> Output in ... }` のような inline closure で、parameter 型と戻り値型を `references` クエリから見つけられるようにしました。
+- **Swift の collection shorthand constructor 内の型を index するようにしました** — `[User]()` や `[String: Handler]()` から `User` / `Handler` を型参照として拾い、`items[index]()` のような subscript 呼び出しは除外します。
+- **Swift の extension 対象型が型参照として index されるようになりました** — `extension Repository where ...` や `extension CacheStore: Protocol` の宣言で、拡張対象の型を `references` クエリから見つけられるようにしました。
+- **Swift の関数型 effect を型として index しないようにしました** — 関数型式内の `async` / `throws` / `rethrows` を除外し、typed throws のエラー型や戻り値型は検索可能なままにします。
+- **Swift の function type の戻り値型が検索対象に残るようになりました** — `(Input) -> Output` のような colon 型位置で `->` によって抽出が途切れず、戻り値型も `type_reference` として記録されるようにしました。
+- **Swift generic 呼び出しの型引数を型参照として index するようにしました** — `decode<User>(data)` や `decode<Result<User, Failure>>(data)` の型引数を拾い、`func decode<T>` 側の宣言パラメータは型参照にしません。
+- **Swift の generic static member 式で root とgeneric引数を index するようにしました** — `Result<User, Failure>.success(...)` から `Result`、`User`、`Failure` を辿れる一方、member 名の `success` は型として扱いません。
+- **Swift generic trailing-closure 呼び出しの型引数を index するようにしました** — `Task<User, Failure> { ... }` のような式で、括弧付きgeneric呼び出しと同様に `User` / `Failure` を拾います。
+- **Swift の granular import を検索しやすいシンボル名に正規化しました** — `import struct Foundation.URL` / `import enum Dispatch.DispatchQoS` / `import func Darwin.C.printf` から import 種別 prefix を取り除いて index します。
+- **Swift の `#keyPath` root を型参照として index するようにしました** — `#keyPath(Person.name)` や `#keyPath(Person.address.street)` から `Person` を拾い、key-path member 名は型参照にしないようにしました。
+- **Swift key path の root を型参照として index するようにしました** — `\User.name` や `\Order.customer.name` の明示的な root 型を拾い、プロパティ経路の各セグメントは型として扱わないようにしました。
+- **Swift macro の generic 引数を型参照として index するようにしました** — `#Predicate<User>` や `#Expression<Order, Score>` のモデル型を見つけられるようにしつつ、generic ではないコンパイラチェックは型参照にしません。
+- **Swift の metatype suffix が型参照を汚さなくなりました** — `User.Type` や `Service.Protocol` で実際の対象型だけを index し、`Type` / `Protocol` というノイズ行を追加しないようにしました。
+- **Swift のカンマ区切り enum case を個別に index するようにしました** — `case badRequest, unauthorized, serverError(Int)` のような宣言で、同じ行の各 case を検索可能な別シンボルとして出力します。
+- **Swift の複数raw-value enum caseを個別に index するようにしました** — `case accepted = 202, gone = 410` から `accepted` と `gone` の両方を、それぞれのraw値付きで記録します。commaを含む quoted string raw値にも対応します。
+- **Swift の operator overload 関数をシンボルとして index するようにしました** — `static func +` / `static func ==` / `prefix func !` のような宣言を、識別子限定の関数マッチで取りこぼさず symbol search に出します。
+- **Swift の same-type 制約右辺が型参照として index されるようになりました** — `where Entity == User` や `where T.Output == Response` の制約で、phantom な trailing-closure call edge を追加せずに具体的な対象型を `references` クエリから見つけられるようにしました。
+- **Swift の `#selector` root を型参照として index するようにしました** — `#selector(ViewController.handleTap(_:))` や `#selector(getter: ViewController.titleText)` から `ViewController` を拾い、selector member は型として扱わないようにしました。
+- **Swift の `.self` metatype 式で root 型を index するようにしました** — `User.self` / `Service.self` / `[User].self` の具体型を拾い、instance の `user.self` は型参照として扱わないようにしました。
+- **Swift の tuple / function type ラベルが型参照として出なくなりました** — `(x: Coordinate, y: Coordinate)` のような形ではラベルを無視し、実際の要素型だけを index するようにしました。
+- **Swift の型式内属性を型として index しないようにしました** — conformance や関数型位置の `@retroactive` / `@escaping` / `@Sendable` を除外しつつ、実際に参照される型は保持します。
+- **Swift の opaque / existential 型修飾子が型参照を汚さなくなりました** — `some`、`any`、`each` は修飾子キーワードとして無視し、実際に参照される型だけを index するようにしました。
+- **Swift の型パラメータ修飾子を型として index しないようにしました** — `inout` / `isolated` / `consuming` / `sending` / `borrowing` を型位置から除外し、実際のパラメータ型は検索可能なままにします。
+- **Swift の typealias 右辺が参照型として index されるようになりました** — `typealias Loader = (Request) -> Response` のような alias で、入力型・出力型・generic 引数型を `references` クエリから見つけられるようにしました。
+- **Swift の typed throws が型参照として記録されるようになりました** — `throws(ErrorType)` 句を `type_reference` edge として index し、`references` や impact 系のクエリで thrown error type への依存を見つけられるようにしました。
+- **Swift variadic generic の `repeat` を型として index しないようにしました** — `TuplePack<repeat each Element>` で実際の `Element` 参照は残しつつ、`repeat` や `each` を phantom な型参照として出さないようにしました。
+- **C# / Java の Unicode escape 付き宣言を canonical な symbol 名でインデックスするようになりました** - source-only な Unicode escape 構文を使った識別子の宣言を decode 済みの名前で保持し、symbol 検索や exact-name definition 検索で見つけられるようにしました。
+- **VB の `AddHandler` event 対象が subscribe reference になるようにしました** — `Handles` 句がなくても `AddHandler button.Click, ...` の event 名を `subscribe` edge として索引します。
+- Visual Basic の `As New` 参照抽出で、`New` ではなく生成対象の型を索引するよう修正しました。
+- Visual Basic の呼び出し参照抽出で、`Save` や `Me.Refresh user` のような括弧なし Sub 呼び出し文を索引するよう修正しました。
+- Visual Basic の呼び出し参照抽出で、`.Refresh user` のような `With` 内の括弧なし member 呼び出しを索引するよう修正しました。
+- Visual Basic のファイル検出で、`.bas` モジュールをスキップせず `vb` として索引するよう修正しました。
+- Visual Basic の `CallByName` 参照抽出で、`CallByName` 自体ではなく文字列で指定された対象を call として索引するよう修正しました。
+- **VB の cast 先型を reference として索引するようにしました** — `DirectCast`、`TryCast`、`CType` の変換先型が `type_reference` になり、cast でしか現れない Visual Basic の依存関係も `references` / `impact` で見つけられます。
+- Visual Basic のファイル検出で、classic VB の `.cls` class module を `vb` として索引するよう修正しました。
+- **VB の定数を property シンボルとして検索できるようにしました** — メンバー `Const` 宣言が visibility metadata 付きで symbol search に表示されます。
+- Visual Basic の参照抽出で、`CInt` や `CStr` などの組み込み変換関数を call 参照として索引しないよう修正しました。
+- `.ctl` ファイルを Visual Basic の言語判定に追加し、Classic VB のユーザーコントロールが VB 検索対象に入るようにしました。
+- **VB の `Declare` メンバーを検索できるようにしました** — `Auto`、`Ansi`、`Unicode` を含む外部 `Declare Sub` / `Declare Function` 宣言を function シンボルとして索引します。
+- `.dob` ファイルを Visual Basic の言語判定に追加し、Classic VB の ActiveX Document ソースが VB 検索対象に入るようにしました。
+- `.dsr` ファイルを Visual Basic の言語判定に追加し、Classic VB のデザイナー/Data Report ソースが VB 検索対象に入るようにしました。
+- Visual Basic の `AddHandler` 抽出で、`AddHandler button.[Click], ...` のようなエスケープされたイベント対象を非エスケープ名で索引するよう修正しました。
+- Visual Basic の `AddressOf [Name]` 抽出で、エスケープされたメソッド対象を非エスケープ名の call 参照として索引するよう修正しました。
+- Visual Basic の呼び出し参照抽出で、`[Select]()` や `Me.[Save]()` のようなエスケープ呼び出しを通常名で索引できるよう修正しました。
+- Visual Basic のキャスト対象抽出で、`DirectCast(raw, [Class])` のようなエスケープ対象型を非エスケープ名で索引するよう修正しました。
+- Visual Basic のジェネリック制約抽出で、`Of [T] As [Class]` のような宣言のエスケープ型パラメーターを参照として漏らさず、制約型だけを索引するよう修正しました。
+- Visual Basic のジェネリック宣言判定で、`Class [Box](Of T)` のようなエスケープされた宣言名でも型パラメーターを参照として索引しないよう修正しました。
+- Visual Basic の `GetType([Type])` 抽出で、エスケープ対象型を非エスケープ名で索引するよう修正しました。
+- Visual Basic の `Handles` 抽出で、`Handles button.[Click]` のようなエスケープされたイベント対象を非エスケープ名で索引するよう修正しました。
+- Visual Basic のメンバー宣言索引で、`Sub [Select]()` や `Property [Property]` のようなエスケープ名を非エスケープ名で検索できるよう修正しました。
+- Visual Basic の名前空間索引で、`Namespace [My].App` のようなエスケープセグメントを `My.App` として検索できるよう修正しました。
+- Visual Basic の `New [Type]()` 抽出で、エスケープされた生成型を非エスケープ名の `instantiate` 参照として索引するよう修正しました。
+- Visual Basic の `RaiseEvent [Name]` 抽出で、エスケープされたイベント対象を非エスケープ名の call 参照として索引するよう修正しました。
+- Visual Basic の `RemoveHandler` 抽出で、`RemoveHandler button.[Click], ...` のようなエスケープされたイベント対象を非エスケープ名で索引するよう修正しました。
+- Visual Basic の型参照抽出で、`As [Class]` のようなエスケープ型名を非エスケープ名で索引するよう修正しました。
+- Visual Basic の型宣言索引で、`Class [Class]` のようなエスケープ識別子を非エスケープ名で検索できるよう修正しました。
+- Visual Basic の `TypeOf ... Is [Type]` 抽出で、エスケープ対象型を非エスケープ名で索引するよう修正しました。
+- **VB のメンバー field を property シンボルとして検索できるようにしました** — `Private ReadOnly repo As Repository` や `Public Shared Count As Integer` のような field が symbol search に表示され、local `Dim` 変数は索引しません。
+- Visual Basic のファイル検出で、classic VB の `.frm` フォームファイルを `vb` として索引するよう修正しました。
+- Visual Basic のジェネリック宣言で、`Of T As IDisposable` のような制約型を索引しつつ、型パラメーター自体は参照扱いしないよう修正しました。
+- **VB の generic 型引数を、型パラメータのノイズなしで索引するようにしました** — `Repository(Of Customer)` は引き続き `Customer` を出し、`Class Box(Of T)` のような宣言では phantom な `T` type reference を出しません。
+- **VB の `GetType` 対象型を索引するようにしました** — `GetType(Customer)` や修飾名の型が `type_reference` になり、reflection でしか現れない Visual Basic の依存関係も検索できます。
+- Visual Basic の `GetXmlNamespace(prefix)` 参照抽出を追加し、XML namespace import の prefix を利用箇所から検索できるようにしました。
+- **VB の `Implements` list で全 interface 型を索引するようにしました** — `Implements IRequestHandler, IAuditable` のような comma 区切り宣言が interface ごとに `type_reference` を出すようになりました。
+- Visual Basic の import alias 参照抽出で、`Imports Alias=Target.Type` の右辺型だけを索引し、alias 左辺を型参照扱いしないよう修正しました。
+- Visual Basic の import alias 索引で、`Imports Alias = Target.Type` を alias 名で検索できるよう修正しました。エスケープされた alias も対象です。
+- **VB の `Imports` 対象が type reference を出すようになりました** — comma 区切り import と alias import が、import 先 namespace / 型の依存 reference を生成します。
+- **VB の iterator メンバーを function として検索できるようにしました** — `Iterator Function` と `Iterator Sub` 宣言を Visual Basic コード検索で読み飛ばさず、function シンボルとして索引します。
+- **Visual Basic の language alias がハイフン・アンダースコア表記に対応しました** — CLI と database search 経路で `visual-basic` と `visual_basic` を `vb` に正規化します。
+- Visual Basic の member `Implements IFoo.Member` 参照抽出で、実装先 interface owner も索引するよう修正しました。
+- **VB の `Handles` 句で全 event 対象を索引するようにしました** — `Handles button.Click, menu.Opened` のような comma 区切り対象が event ごとに `subscribe` reference になり、引数リストの comma は event と誤認しません。
+- Visual Basic の `NameOf(...)` 参照抽出で、エスケープ名を含む対象名を索引し、`NameOf` 自体を呼び出し扱いしないよう修正しました。
+- **VB のオブジェクト生成が instantiate reference を出すようになりました** — `New Customer()` や修飾 constructor 対象が `instantiate` edge になり、匿名 `New With` オブジェクトは除外します。
+- Visual Basic の member 索引で、`NotOverridable` 付きの method と property を検索できるよう修正しました。
+- `.pag` ファイルを Visual Basic の言語判定に追加し、Classic VB のプロパティページが VB 検索対象に入るようにしました。
+- Visual Basic の宣言索引で、`Declare PtrSafe Function` の API 宣言を function として検索できるよう修正しました。
+- Visual Basic の `AddHandler` 参照抽出で、多段修飾されたイベント対象の末尾イベント名を索引するよう修正しました。
+- Visual Basic の `Handles` 参照抽出で、多段修飾されたイベント対象の末尾イベント名を索引するよう修正しました。
+- Visual Basic の `RemoveHandler` 参照抽出で、多段修飾されたイベント対象の末尾イベント名を索引するよう修正しました。
+- **VB の `RaiseEvent` 対象を索引するようにしました** — `RaiseEvent Changed(...)` の event 名が reference になり、event 発火側も `references`、`impact`、graph query で辿れるようになりました。
+- **VB の `RemoveHandler` event 対象を索引するようにしました** — `RemoveHandler button.Click, ...` の event 名が `unsubscribe` reference になり、event 解除側も検索できます。
+- **VB の `TypeOf ... Is` 対象型を索引するようにしました** — `IsNot` や修飾名を含む型テスト式が `type_reference` を出すようになりました。
+- `.vba` ファイルを Visual Basic の言語判定に追加し、VBA マクロモジュールが VB 検索対象に入るようにしました。
+- `.vbhtml` ファイルを Visual Basic の言語判定に追加し、VB Razor view が VB 検索対象に入るようにしました。
+- Visual Basic の XML 名前空間 import 索引で、`-` や `.` を含む prefix も検索できるよう修正しました。
+- Visual Basic の XML 名前空間 import で、`Imports <xmlns:ui="...">` のような prefix を `ui` import シンボルとして検索できるよう修正しました。
+- **VBScript の language alias が Visual Basic 検索へ対応しました** — `.vbs` の既存ファイル検出に合わせて、`vbs` と `vbscript` を `vb` に正規化します。
+- **Avalonia の Binding path も XAML からインデックスされるようになりました** — `{CompiledBinding ...}` と `{ReflectionBinding ...}` を検索可能な property シンボルとして出力し、Avalonia XAML プロジェクトでも既存の `{Binding ...}` と同じように path を検索できるようにしました。
+- **XAML の `ElementName` binding 参照もインデックスされるようになりました** — `{Binding ElementName=SearchBox, Path=Text}`、`<Binding ElementName="RootPanel" />`、`<Binding.ElementName>DetailsList</Binding.ElementName>` を検索可能な property シンボルとして出力し、binding から名前付き XAML 要素へたどりやすくしました。
+- **XAML の object-element binding path もインデックスされるようになりました** — `<Binding Path="ViewModel.FirstName" />` や `<Binding.Path>Profile.DisplayName</Binding.Path>` を検索可能な property シンボルとして出力し、MultiBinding や property-element 形式の XAML ナビゲーションを改善します。
+- **XAML の `x:Reference` 参照先もインデックスされるようになりました** — `{x:Reference RootPanel}`、`{x:Reference Name=NamedTarget}`、`<x:Reference Name="ObjectTarget" />`、`<x:Reference.Name>PropertyTarget</x:Reference.Name>` を検索可能な property シンボルとして出力し、XAML の参照と名前付き要素の間をたどりやすくしました。
+- **XAML のリソース参照もインデックスされるようになりました** — `{StaticResource PrimaryBrush}` や `{DynamicResource ResourceKey={x:Static local:Keys.AccentBrush}}` を検索可能な property シンボルとして出力し、リソース宣言と利用箇所の間をたどりやすくしました。
+- **XAML の `TemplateBinding` プロパティもインデックスされるようになりました** — `{TemplateBinding Background}` や `{TemplateBinding Property=local:ButtonChrome.BorderBrush}` を検索可能な property シンボルとして出力し、C#/XAML プロジェクトの ControlTemplate ナビゲーションを改善します。
+- **折り返された XAML 検索属性もインデックスされるようになりました** — 複数行に分割された `x:Name`、`x:Key`、一般的なイベントハンドラ属性を検索可能なシンボルとして出力し、`SaveButton` や `OnSaveClicked` のような C#/XAML コードビハインド名を引き続き見つけられるようにしました。
+
+#### ドキュメント
+
+- **日本語ドキュメント内のリンクが日本語セクションへ移動するようになりました** — 日本語セクションから二言語ガイドへ向かうリンクに日本語セクション用アンカーを付け、リンク先ドキュメントの英語トップへ飛ばないようにしました。
+- **README と USER_GUIDE のドキュメントリンクを揃った表にしました** — 英語版・日本語版 README のドキュメントセクションと USER_GUIDE のクイックリンクを、コロン区切りの箇条書きから 2 列テーブルへ変更しました。
+- **USER_GUIDE の対応言語と状態確認セクションを読みやすくしました** — 対応言語表が途中で崩れないようにし、長い status / 言語機能メモを焦点のある箇条書きへ整理しました。
+
 ### [1.20.1] - 2026-05-06
 
 #### 修正
@@ -2712,7 +4348,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.20.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.21.0...HEAD
+[1.21.0]: https://github.com/Widthdom/CodeIndex/compare/v1.20.1...v1.21.0
 [1.20.1]: https://github.com/Widthdom/CodeIndex/compare/v1.20.0...v1.20.1
 [1.20.0]: https://github.com/Widthdom/CodeIndex/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/Widthdom/CodeIndex/compare/v1.18.0...v1.19.0
