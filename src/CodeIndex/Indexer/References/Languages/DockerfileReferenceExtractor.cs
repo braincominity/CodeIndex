@@ -14,7 +14,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
-        @"(?:^|,)from=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
+        @"(?:^|,)from=[""']?(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b[""']?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex BracedVariableReferenceRegex = new(

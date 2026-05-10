@@ -44,6 +44,7 @@ affected:
 - **Quoted Dockerfile `COPY --from` stage names are indexed** — `COPY --from="builder"` now links back to the `builder` stage.
 - **Dockerfile `RUN --mount` text in shell strings stays ignored** — quoted command text no longer creates phantom stage references.
 - **Dockerfile `RUN --mount` stage references are limited to BuildKit options** — later shell command arguments named `--mount` no longer create phantom dependencies.
+- **Quoted Dockerfile `RUN --mount` stage names are indexed** — `RUN --mount=type=bind,from="assets"` now links back to the `assets` stage.
 
 ## 日本語
 
@@ -79,3 +80,4 @@ affected:
 - **quote 付き Dockerfile `COPY --from` の stage 名を index するようになりました** — `COPY --from="builder"` が `builder` stage に結びつくようになりました。
 - **Dockerfile `RUN --mount` のshell文字列内テキストは無視し続けるようにしました** — quote 付き command text から架空の stage reference を作らないようになりました。
 - **Dockerfile `RUN --mount` の stage reference を BuildKit option に限定しました** — 後続の shell command argument にある `--mount` から架空の dependency を作らないようになりました。
+- **quote 付き Dockerfile `RUN --mount` の stage 名を index するようになりました** — `RUN --mount=type=bind,from="assets"` が `assets` stage に結びつくようになりました。
