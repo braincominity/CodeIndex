@@ -4176,14 +4176,14 @@ public static partial class SymbolExtractor
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
-        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "COPY", includeJsonForm: true);
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "COPY", includeJsonForm: true, allowOnbuild: true);
 
     private static void AddDockerfileAddDestinationSymbol(
         long fileId,
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
-        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD", includeJsonForm: true);
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD", includeJsonForm: true, allowOnbuild: false);
 
     private static void AddDockerfileInstructionDestinationSymbol(
         long fileId,
@@ -4191,9 +4191,10 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols,
         string instruction,
-        bool includeJsonForm)
+        bool includeJsonForm,
+        bool allowOnbuild)
     {
-        if (!TryGetDockerfileInstructionBody(line, instruction, out var body))
+        if (!TryGetDockerfileInstructionBody(line, instruction, allowOnbuild, out var body))
             return;
 
         var destination = GetDockerfileShellFormDestination(body)
@@ -4218,9 +4219,17 @@ public static partial class SymbolExtractor
             line);
     }
 
-    private static bool TryGetDockerfileInstructionBody(string line, string instruction, out string body)
+    private static bool TryGetDockerfileInstructionBody(string line, string instruction, bool allowOnbuild, out string body)
     {
         var trimmed = line.TrimStart();
+        if (allowOnbuild
+            && trimmed.Length > "ONBUILD".Length
+            && trimmed.StartsWith("ONBUILD", StringComparison.OrdinalIgnoreCase)
+            && char.IsWhiteSpace(trimmed["ONBUILD".Length]))
+        {
+            trimmed = trimmed["ONBUILD".Length..].TrimStart();
+        }
+
         body = string.Empty;
         if (trimmed.Length <= instruction.Length
             || !trimmed.StartsWith(instruction, StringComparison.OrdinalIgnoreCase)

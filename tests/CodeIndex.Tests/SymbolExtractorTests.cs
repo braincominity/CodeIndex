@@ -20428,6 +20428,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsOnbuildCopyDestinationPathSymbols()
+    {
+        var content = "ONBUILD COPY /src/app /usr/local/bin/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/usr/local/bin/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/src/app");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
