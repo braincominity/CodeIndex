@@ -8,6 +8,9 @@ internal static class PerlReferenceExtractor
     private static readonly Regex ModuleReferenceRegex = new(
         @"^\s*(?:use|require)\s+(?<name>[\p{L}_][\w:]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RequiredModulePathRegex = new(
+        @"^\s*require\s+['""](?<path>[\p{L}_][\p{L}\p{Nd}_]*(?:/[\p{L}_][\p{L}\p{Nd}_]*)*\.pm)['""]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex BaseModuleReferenceRegex = new(
         @"^\s*use\s+(?:base|parent)\s+(?<args>.+?);?\s*$",
@@ -37,6 +40,7 @@ internal static class PerlReferenceExtractor
         Action<string, int> addCallLikeReference)
     {
         EmitModuleReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitRequiredModulePathReference(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitBaseModuleReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitMooseInheritanceReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitArrowCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall, addCallLikeReference);
@@ -75,6 +79,33 @@ internal static class PerlReferenceExtractor
             context,
             lineNumber,
             resolveContainerForCall(nameGroup.Index));
+    }
+
+    private static void EmitRequiredModulePathReference(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = RequiredModulePathRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var pathGroup = match.Groups["path"];
+        var moduleName = pathGroup.Value[..^3].Replace("/", "::", StringComparison.Ordinal);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            moduleName,
+            pathGroup.Index,
+            "reference",
+            context,
+            lineNumber,
+            resolveContainerForCall(pathGroup.Index));
     }
 
     private static void EmitBaseModuleReferences(

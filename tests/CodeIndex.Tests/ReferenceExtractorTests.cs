@@ -28375,6 +28375,7 @@ public class ReferenceExtractorTests
             package My::App;
 
             use My::Util;
+            require "My/Path/Loader.pm";
             use parent qw(My::Base My::Role);
             use parent qw[My::BracketBase My::BracketRole];
             use base qw{My::BraceBase My::BraceRole};
@@ -28398,6 +28399,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "My::Util" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "My::Path::Loader" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "My::Base" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Role" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::BracketBase" && r.ReferenceKind == "type_reference");
