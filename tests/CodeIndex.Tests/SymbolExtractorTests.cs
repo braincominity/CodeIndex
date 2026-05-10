@@ -12552,6 +12552,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsDocblockMethods()
+    {
+        var content = """
+            <?php
+            /**
+             * @method static Builder<User> whereEmail(string $email)
+             * @method refresh()
+             */
+            class UserQuery {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "whereEmail" && s.ReturnType == "Builder<User>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "refresh" && s.ReturnType == null);
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsDefineConstants()
     {
         var content = """

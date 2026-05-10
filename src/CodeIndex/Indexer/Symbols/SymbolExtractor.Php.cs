@@ -23,6 +23,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:(?<visibility>public|private|protected)\s+)(?:(?:readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex PhpDocblockMethodRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?:(?<returnType>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*(?:<[^>\r\n]+>)?|\$this|self|static)\s+)?(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -160,6 +164,39 @@ public static partial class SymbolExtractor
                     },
                     line);
             }
+        }
+    }
+
+    private static void ExtractPhpDocblockMethodSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var match = PhpDocblockMethodRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                    ReturnType = match.Groups["returnType"].Success
+                        ? match.Groups["returnType"].Value
+                        : null,
+                },
+                line);
         }
     }
 
