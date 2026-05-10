@@ -23128,6 +23128,8 @@ public class SymbolExtractorTests
                 FOURTH_LIMIT => 40,
                 "FIFTH_LIMIT" => 50,
             };
+            our $VERSION = '1.0';
+            our @EXPORT_OK = qw(render);
             has name => (is => 'ro');
             has '+id' => (default => 1);
 
@@ -23165,6 +23167,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "THIRD_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FOURTH_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIFTH_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "EXPORT_OK");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
