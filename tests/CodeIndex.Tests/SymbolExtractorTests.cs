@@ -20189,7 +20189,7 @@ public class SymbolExtractorTests
         // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app");
-        Assert.Equal(4, symbols.Count);
+        Assert.Equal(5, symbols.Count);
     }
 
     [Fact]
@@ -20380,6 +20380,17 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/bin/bash");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "-o");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsCopyDestinationPathSymbols()
+    {
+        var content = "COPY --from=builder /src/app /usr/local/bin/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/usr/local/bin/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/src/app");
         Assert.Single(symbols);
     }
 

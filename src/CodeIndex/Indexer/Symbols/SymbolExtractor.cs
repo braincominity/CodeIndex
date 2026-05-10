@@ -2110,6 +2110,7 @@ public static partial class SymbolExtractor
                 AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -4166,6 +4167,122 @@ public static partial class SymbolExtractor
         }
         catch (JsonException)
         {
+        }
+    }
+
+    private static void AddDockerfileCopyDestinationSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        if (!TryGetDockerfileInstructionBody(line, "COPY", out var body))
+            return;
+
+        var destination = GetDockerfileShellFormDestination(body);
+        if (destination is null or "." or "./")
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = destination,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+            },
+            line);
+    }
+
+    private static bool TryGetDockerfileInstructionBody(string line, string instruction, out string body)
+    {
+        var trimmed = line.TrimStart();
+        body = string.Empty;
+        if (trimmed.Length <= instruction.Length
+            || !trimmed.StartsWith(instruction, StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[instruction.Length]))
+        {
+            return false;
+        }
+
+        body = trimmed[instruction.Length..].TrimStart();
+        return true;
+    }
+
+    private static string? GetDockerfileShellFormDestination(string body)
+    {
+        var arguments = new List<string>();
+        foreach (var token in EnumerateDockerfileInstructionTokens(body))
+        {
+            if (token.StartsWith("--", StringComparison.Ordinal))
+                continue;
+            if (token.StartsWith("[", StringComparison.Ordinal))
+                return null;
+
+            arguments.Add(token);
+        }
+
+        return arguments.Count >= 2 ? arguments[^1] : null;
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileInstructionTokens(string body)
+    {
+        var index = 0;
+        while (index < body.Length)
+        {
+            while (index < body.Length && char.IsWhiteSpace(body[index]))
+                index++;
+            if (index >= body.Length || body[index] == '#')
+                yield break;
+
+            var token = new StringBuilder();
+            var quote = '\0';
+            while (index < body.Length)
+            {
+                var c = body[index];
+                if (quote != '\0')
+                {
+                    if (c == '\\' && index + 1 < body.Length)
+                    {
+                        token.Append(body[index + 1]);
+                        index += 2;
+                        continue;
+                    }
+
+                    if (c == quote)
+                    {
+                        quote = '\0';
+                        index++;
+                        continue;
+                    }
+
+                    token.Append(c);
+                    index++;
+                    continue;
+                }
+
+                if (c is '"' or '\'')
+                {
+                    quote = c;
+                    index++;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(c))
+                    break;
+
+                token.Append(c);
+                index++;
+            }
+
+            if (token.Length > 0)
+                yield return token.ToString();
         }
     }
 

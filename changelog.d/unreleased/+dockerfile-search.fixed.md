@@ -56,6 +56,7 @@ affected:
 - **Dockerfile JSON-array `VOLUME` paths become symbols** — `VOLUME ["/data", "/cache"]` now indexes each listed path.
 - **Dockerfile `STOPSIGNAL` values become symbols** — `STOPSIGNAL SIGTERM` now indexes `SIGTERM` as a property symbol.
 - **Dockerfile `SHELL` executables become symbols** — `SHELL ["/bin/bash", ...]` now indexes `/bin/bash` as a property symbol.
+- **Dockerfile shell-form `COPY` destinations become symbols** — `COPY src /app` now indexes `/app` as the destination path.
 
 ## 日本語
 
@@ -103,3 +104,4 @@ affected:
 - **Dockerfile JSON array form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME ["/data", "/cache"]` が列挙された各pathを index するようになりました。
 - **Dockerfile `STOPSIGNAL` 値を symbol として扱うようになりました** — `STOPSIGNAL SIGTERM` が `SIGTERM` property symbol として index されるようになりました。
 - **Dockerfile `SHELL` executable を symbol として扱うようになりました** — `SHELL ["/bin/bash", ...]` が `/bin/bash` property symbol として index されるようになりました。
+- **Dockerfile shell form の `COPY` destination を symbol として扱うようになりました** — `COPY src /app` が destination path の `/app` を index するようになりました。
