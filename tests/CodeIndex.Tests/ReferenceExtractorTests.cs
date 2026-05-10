@@ -9679,6 +9679,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpParameterTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            function handle(Request $request, ?User $user, string $name): Response {
+                return new Response();
+            }
+            function complex(Request|User $actor, Logger&Aware $logger): void {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Request" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Logger" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Aware" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "?User" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
