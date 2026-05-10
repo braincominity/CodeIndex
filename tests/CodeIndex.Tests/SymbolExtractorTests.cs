@@ -11338,6 +11338,7 @@ public class SymbolExtractorTests
               implicit none
               type :: point_t
                 integer :: x
+                real :: origin_x, origin_y
               end type point_t
               integer, parameter :: max_rank = 8, default_rank = 2
               parameter (legacy_rank = 4, legacy_limit = selected_int_kind(9))
@@ -11440,11 +11441,23 @@ public class SymbolExtractorTests
         Assert.NotNull(point.BodyStartLine);
         Assert.NotNull(point.BodyEndLine);
 
+        var pointX = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "x");
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("point_t", pointX.ContainerName);
+        Assert.Equal("integer", pointX.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "origin_x" && s.ReturnType == "real");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "origin_y" && s.ReturnType == "real");
+
         var coloredPoint = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "colored_point");
         Assert.Equal("namespace", coloredPoint.ContainerKind);
         Assert.Equal("math_utils", coloredPoint.ContainerName);
         Assert.NotNull(coloredPoint.BodyStartLine);
         Assert.NotNull(coloredPoint.BodyEndLine);
+
+        var color = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "color");
+        Assert.Equal("class", color.ContainerKind);
+        Assert.Equal("colored_point", color.ContainerName);
+        Assert.Equal("integer", color.ReturnType);
 
         var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Equal("namespace", normalize.ContainerKind);
