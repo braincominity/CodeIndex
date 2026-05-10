@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class PhpReferenceExtractor
 {
     private static readonly Regex StaticAccessRegex = new(
-        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::(?<member>[A-Za-z_]\w*)",
+        @"(?<![\w$\\])(?<name>(?:\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))::\$?(?<member>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex ObjectMemberAccessRegex = new(

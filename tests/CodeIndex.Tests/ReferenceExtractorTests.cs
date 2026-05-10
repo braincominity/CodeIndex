@@ -9509,6 +9509,7 @@ public class ReferenceExtractorTests
             function inspect(): void {
                 Config::rebuild();
                 Config::VERSION;
+                Config::$cache;
                 \App\Models\Config::class;
                 \App\Models\Config::rebuild();
                 Priority::Low;
@@ -9523,6 +9524,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.Column == 6);
         Assert.Contains(references, reference => reference.SymbolName == "Priority" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "VERSION" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "cache" && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference => reference.SymbolName == "Low" && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "rebuild" && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "class" && reference.ReferenceKind == "reference");
