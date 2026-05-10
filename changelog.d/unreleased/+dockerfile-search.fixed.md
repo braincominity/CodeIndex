@@ -48,6 +48,7 @@ affected:
 - **Dockerfile `ONBUILD RUN --mount` stage dependencies are indexed** — trigger instructions now link mount `from=` stages.
 - **Dockerfile `USER` principals become symbols** — `USER appuser` now indexes `appuser` as a property symbol.
 - **Dockerfile `USER user:group` principals stay intact** — group-qualified users now index the full `user:group` value.
+- **Dockerfile `WORKDIR` paths become symbols** — `WORKDIR /app` now indexes `/app` as a property symbol.
 
 ## 日本語
 
@@ -87,3 +88,4 @@ affected:
 - **Dockerfile `ONBUILD RUN --mount` の stage dependency を index するようになりました** — trigger instruction の mount `from=` stage も結びつくようになりました。
 - **Dockerfile `USER` principal を symbol として扱うようになりました** — `USER appuser` が `appuser` property symbol として index されるようになりました。
 - **Dockerfile `USER user:group` principal を全体で保持するようになりました** — group 付き user が完全な `user:group` 値として index されるようになりました。
+- **Dockerfile `WORKDIR` path を symbol として扱うようになりました** — `WORKDIR /app` が `/app` property symbol として index されるようになりました。

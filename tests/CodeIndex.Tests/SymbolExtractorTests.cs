@@ -20189,7 +20189,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
         // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
-        Assert.Equal(2, symbols.Count);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app");
+        Assert.Equal(3, symbols.Count);
     }
 
     [Fact]
@@ -20305,6 +20306,16 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "appuser:appgroup");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "appuser");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsWorkdirSymbols()
+    {
+        var content = "WORKDIR /app/service\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app/service");
         Assert.Single(symbols);
     }
 
