@@ -2098,6 +2098,7 @@ public static partial class SymbolExtractor
             {
                 AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
+                AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -3904,6 +3905,70 @@ public static partial class SymbolExtractor
         }
 
         return true;
+    }
+
+    private static void AddDockerfileAdditionalExposeSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length <= 6
+            || !trimmed.StartsWith("EXPOSE", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[6]))
+        {
+            return;
+        }
+
+        var first = true;
+        foreach (var token in trimmed[6..].Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+
+            if (!IsDockerfileExposePort(token))
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = token,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
+    }
+
+    private static bool IsDockerfileExposePort(string token)
+    {
+        var slash = token.IndexOf('/');
+        var port = slash >= 0 ? token[..slash] : token;
+        if (port.Length == 0)
+            return false;
+        foreach (var ch in port)
+        {
+            if (!char.IsAsciiDigit(ch))
+                return false;
+        }
+
+        if (slash < 0)
+            return true;
+
+        var protocol = token[(slash + 1)..];
+        return protocol.Equals("tcp", StringComparison.OrdinalIgnoreCase)
+            || protocol.Equals("udp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(

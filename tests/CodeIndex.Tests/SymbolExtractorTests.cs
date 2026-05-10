@@ -20276,6 +20276,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsMultipleExposePortSymbols()
+    {
+        var content = "EXPOSE 80 443/tcp 53/udp\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "80");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "443/tcp");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "53/udp");
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
