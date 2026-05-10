@@ -1274,6 +1274,8 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*(?:(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*,\s*)*(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*(?:::)?\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Common block members / common block メンバー
             new("property", new Regex(@"^\s*common\s+(?:/\s*[A-Za-z_]\w*\s*/\s*)?(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Namelist members / namelist メンバー
+            new("property", new Regex(@"^\s*namelist\s+/\s*[A-Za-z_]\w*\s*/\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Entry points / entry 手続き

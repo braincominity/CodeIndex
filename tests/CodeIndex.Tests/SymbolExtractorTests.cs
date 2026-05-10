@@ -11346,6 +11346,7 @@ public class SymbolExtractorTests
               allocatable :: workspace, scratch
               pointer :: shared_point
               common /work_area/ common_status, common_flag
+              namelist /config_area/ config_status, config_flag
               type, extends(point_t) :: colored_point
                 integer :: color
               end type colored_point
@@ -11430,6 +11431,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "shared_point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "common_status");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "common_flag");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config_status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config_flag");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_restart");
