@@ -2111,6 +2111,7 @@ public static partial class SymbolExtractor
                 AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileAddDestinationSymbol(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -4175,8 +4176,23 @@ public static partial class SymbolExtractor
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "COPY");
+
+    private static void AddDockerfileAddDestinationSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD");
+
+    private static void AddDockerfileInstructionDestinationSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols,
+        string instruction)
     {
-        if (!TryGetDockerfileInstructionBody(line, "COPY", out var body))
+        if (!TryGetDockerfileInstructionBody(line, instruction, out var body))
             return;
 
         var destination = GetDockerfileShellFormDestination(body);
