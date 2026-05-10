@@ -1647,6 +1647,7 @@ public static partial class ReferenceExtractor
             {
                 DockerfileReferenceExtractor.EmitStageReferences(
                     preparedLine,
+                    originalLine,
                     context,
                     lineNumber,
                     references,

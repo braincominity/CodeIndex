@@ -10,7 +10,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CopyFromReferenceRegex = new(
-        @"^\s*(?:ONBUILD\s+)?(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
+        @"^\s*(?:ONBUILD\s+)?(?:COPY|ADD)\b.*?--from=[""']?(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b[""']?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
@@ -61,6 +61,7 @@ internal static class DockerfileReferenceExtractor
 
     public static void EmitStageReferences(
         string preparedLine,
+        string originalLine,
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
@@ -72,7 +73,7 @@ internal static class DockerfileReferenceExtractor
         if (stageNames == null || stageNames.Count == 0)
             return;
 
-        var fromMatch = StageReferenceRegex.Match(preparedLine);
+        var fromMatch = StageReferenceRegex.Match(originalLine);
         if (fromMatch.Success)
         {
             var name = fromMatch.Groups["name"].Value;
@@ -91,7 +92,7 @@ internal static class DockerfileReferenceExtractor
             }
         }
 
-        foreach (Match match in CopyFromReferenceRegex.Matches(preparedLine))
+        foreach (Match match in CopyFromReferenceRegex.Matches(originalLine))
         {
             var name = match.Groups["name"].Value;
             if (!stageNames.Contains(name))
@@ -112,7 +113,7 @@ internal static class DockerfileReferenceExtractor
         if (!preparedLine.TrimStart().StartsWith("RUN", StringComparison.OrdinalIgnoreCase))
             return;
 
-        foreach (Match match in RunMountFromReferenceRegex.Matches(preparedLine))
+        foreach (Match match in RunMountFromReferenceRegex.Matches(originalLine))
         {
             var name = match.Groups["name"].Value;
             if (!stageNames.Contains(name))
