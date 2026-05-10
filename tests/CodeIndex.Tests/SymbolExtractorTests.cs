@@ -11371,6 +11371,10 @@ public class SymbolExtractorTests
 
             submodule (math_utils) math_utils_impl
             contains
+              module procedure normalize_impl
+                print *, "normalize"
+              end procedure normalize_impl
+
               module subroutine expand(v)
               end subroutine expand
             end submodule math_utils_impl
@@ -11453,6 +11457,12 @@ public class SymbolExtractorTests
         var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
         Assert.Equal("namespace", expand.ContainerKind);
         Assert.Equal("math_utils_impl", expand.ContainerName);
+
+        var normalizeImpl = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_impl");
+        Assert.Equal("namespace", normalizeImpl.ContainerKind);
+        Assert.Equal("math_utils_impl", normalizeImpl.ContainerName);
+        Assert.NotNull(normalizeImpl.BodyStartLine);
+        Assert.NotNull(normalizeImpl.BodyEndLine);
 
         var normalize2 = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize2");
         Assert.Equal("namespace", normalize2.ContainerKind);
