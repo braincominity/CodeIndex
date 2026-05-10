@@ -1264,6 +1264,8 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*enumerator(?:\s*::)?\s*(?<name>[A-Za-z_]\w*)(?<enumTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Parameter constants / parameter 定数
             new("property", new Regex(@"^\s*(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\))\s*,[^:\r\n]*\bparameter\b[^:\r\n]*::\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Old-style parameter constants / 旧形式 parameter 定数
+            new("property", new Regex(@"^\s*parameter\s*\(\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)\)\s*(?:!.*)?$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Entry points / entry 手続き

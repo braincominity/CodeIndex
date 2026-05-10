@@ -11340,6 +11340,7 @@ public class SymbolExtractorTests
                 integer :: x
               end type point_t
               integer, parameter :: max_rank = 8, default_rank = 2
+              parameter (legacy_rank = 4, legacy_limit = selected_int_kind(9))
               type, extends(point_t) :: colored_point
                 integer :: color
               end type colored_point
@@ -11415,6 +11416,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "color_blue");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "max_rank");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default_rank");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_rank");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_limit");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_restart");
