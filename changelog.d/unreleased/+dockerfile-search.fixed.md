@@ -49,6 +49,7 @@ affected:
 - **Dockerfile `USER` principals become symbols** — `USER appuser` now indexes `appuser` as a property symbol.
 - **Dockerfile `USER user:group` principals stay intact** — group-qualified users now index the full `user:group` value.
 - **Dockerfile `WORKDIR` paths become symbols** — `WORKDIR /app` now indexes `/app` as a property symbol.
+- **Dockerfile shell-form `VOLUME` paths become symbols** — `VOLUME /data` now indexes `/data` as a property symbol.
 
 ## 日本語
 
@@ -89,3 +90,4 @@ affected:
 - **Dockerfile `USER` principal を symbol として扱うようになりました** — `USER appuser` が `appuser` property symbol として index されるようになりました。
 - **Dockerfile `USER user:group` principal を全体で保持するようになりました** — group 付き user が完全な `user:group` 値として index されるようになりました。
 - **Dockerfile `WORKDIR` path を symbol として扱うようになりました** — `WORKDIR /app` が `/app` property symbol として index されるようになりました。
+- **Dockerfile shell form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME /data` が `/data` property symbol として index されるようになりました。
