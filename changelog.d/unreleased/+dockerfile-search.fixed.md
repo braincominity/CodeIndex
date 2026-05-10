@@ -54,6 +54,7 @@ affected:
 - **Dockerfile `VOLUME` inline comments stay out of symbols** — paths mentioned after `#` are no longer indexed as volumes.
 - **Dockerfile named-stage base images stay searchable** — `FROM node:20 AS build` now indexes both `build` and the `node:20` image while avoiding prior-stage aliases.
 - **Dockerfile JSON-array `VOLUME` paths become symbols** — `VOLUME ["/data", "/cache"]` now indexes each listed path.
+- **Dockerfile `STOPSIGNAL` values become symbols** — `STOPSIGNAL SIGTERM` now indexes `SIGTERM` as a property symbol.
 
 ## 日本語
 
@@ -99,3 +100,4 @@ affected:
 - **Dockerfile `VOLUME` の inline comment を symbol 対象から外しました** — `#` より後ろに書かれた path を volume として index しないようになりました。
 - **Dockerfile の名前付きstageでもbase imageを検索できるようになりました** — `FROM node:20 AS build` が `build` と `node:20` image の両方を index しつつ、既存stage aliasはbase image扱いしないようになりました。
 - **Dockerfile JSON array form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME ["/data", "/cache"]` が列挙された各pathを index するようになりました。
+- **Dockerfile `STOPSIGNAL` 値を symbol として扱うようになりました** — `STOPSIGNAL SIGTERM` が `SIGTERM` property symbol として index されるようになりました。
