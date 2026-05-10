@@ -45,8 +45,20 @@ internal static class PhpReferenceExtractor
         @"^\s*use\s+(?!(?:function|const)\b)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?(?:\s*,\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex UseFunctionRegex = new(
+        @"^\s*use\s+function\s+(?<imports>.+?)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex UseFunctionItemRegex = new(
+        @"(?:^|,)\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex GroupUseTypeRegex = new(
         @"^\s*use\s+(?!(?:function|const)\b)(?<prefix>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\\\{\s*(?<items>[^{}]+?)\s*\}\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex GroupUseFunctionRegex = new(
+        @"^\s*use\s+function\s+(?<prefix>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\\\{\s*(?<items>[^{}]+?)\s*\}\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex GroupUseTypeItemRegex = new(
@@ -376,6 +388,50 @@ internal static class PhpReferenceExtractor
         }
     }
 
+    public static void EmitUseFunctionReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var groupFunctionMatch = GroupUseFunctionRegex.Match(preparedLine);
+        if (groupFunctionMatch.Success)
+        {
+            EmitGroupUseFunctionReferences(groupFunctionMatch, references, seen, fileId, context, lineNumber, container, requireFunctionKind: false);
+            return;
+        }
+
+        var groupMatch = GroupUseTypeRegex.Match(preparedLine);
+        if (groupMatch.Success)
+        {
+            EmitGroupUseFunctionReferences(groupMatch, references, seen, fileId, context, lineNumber, container, requireFunctionKind: true);
+            return;
+        }
+
+        var match = UseFunctionRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var importsGroup = match.Groups["imports"];
+        foreach (Match itemMatch in UseFunctionItemRegex.Matches(importsGroup.Value))
+        {
+            var itemGroup = itemMatch.Groups["name"];
+            AddPhpReferenceFromName(
+                itemGroup.Value,
+                importsGroup.Index + itemGroup.Index,
+                "reference",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
     private static void EmitGroupUseTypeReferences(
         Match groupMatch,
         List<ReferenceRecord> references,
@@ -408,6 +464,52 @@ internal static class PhpReferenceExtractor
             AddPhpTypeReferenceFromName(
                 prefix + "\\" + trimmedItemName,
                 prefixGroup.Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container,
+                shortNameIndex);
+        }
+    }
+
+    private static void EmitGroupUseFunctionReferences(
+        Match groupMatch,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        bool requireFunctionKind)
+    {
+        var prefixGroup = groupMatch.Groups["prefix"];
+        var prefix = prefixGroup.Value.TrimEnd('\\');
+        if (prefix.Length == 0)
+            return;
+
+        var itemsGroup = groupMatch.Groups["items"];
+        foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
+        {
+            var isFunctionImport = itemMatch.Groups["kind"].Success
+                && itemMatch.Groups["kind"].Value.Equals("function", StringComparison.OrdinalIgnoreCase);
+            if (requireFunctionKind != isFunctionImport)
+                continue;
+
+            var itemGroup = itemMatch.Groups["name"];
+            var rawItemName = itemGroup.Value;
+            var trimmedItemName = rawItemName.TrimStart('\\');
+            if (trimmedItemName.Length == 0)
+                continue;
+
+            var leadingBackslashCount = rawItemName.Length - trimmedItemName.Length;
+            var itemShortNameStart = trimmedItemName.LastIndexOf('\\') + 1;
+            var shortNameIndex = itemsGroup.Index + itemGroup.Index + leadingBackslashCount + itemShortNameStart;
+            AddPhpReferenceFromName(
+                prefix + "\\" + trimmedItemName,
+                prefixGroup.Index,
+                "reference",
                 references,
                 seen,
                 fileId,
@@ -458,6 +560,29 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container,
         int? shortNameIndexOverride = null)
+        => AddPhpReferenceFromName(
+            rawName,
+            nameIndex,
+            "type_reference",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container,
+            shortNameIndexOverride);
+
+    private static void AddPhpReferenceFromName(
+        string rawName,
+        int nameIndex,
+        string referenceKind,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        int? shortNameIndexOverride = null)
     {
         var trimmedName = rawName.TrimStart('\\');
         if (trimmedName.Length == 0)
@@ -473,7 +598,7 @@ internal static class PhpReferenceExtractor
                 fileId,
                 trimmedName,
                 qualifiedNameIndex,
-                "type_reference",
+                referenceKind,
                 context,
                 lineNumber,
                 container);
@@ -490,7 +615,7 @@ internal static class PhpReferenceExtractor
             fileId,
             shortName,
             shortNameIndexOverride ?? qualifiedNameIndex + shortNameStart,
-            "type_reference",
+            referenceKind,
             context,
             lineNumber,
             container);

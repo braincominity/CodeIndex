@@ -9795,6 +9795,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpUseFunctionImports_EmitReferences()
+    {
+        const string content = """
+            <?php
+            use function App\Text\slugify as slug;
+            use function App\Text\{title_case, trim_name as trimName};
+            use App\Mixed\{User, function make_profile, const DEFAULT_PROFILE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\slugify" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "slugify" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\title_case" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "title_case" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\trim_name" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "trim_name" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\make_profile" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "make_profile" && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
