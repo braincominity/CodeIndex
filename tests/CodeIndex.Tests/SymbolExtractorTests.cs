@@ -20330,6 +20330,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsMultipleVolumePathSymbols()
+    {
+        var content = "VOLUME /var/lib/app /var/cache/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/cache/app");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """

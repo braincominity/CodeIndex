@@ -2102,6 +2102,7 @@ public static partial class SymbolExtractor
                 AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
+                AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -3973,6 +3974,59 @@ public static partial class SymbolExtractor
         return protocol.Equals("tcp", StringComparison.OrdinalIgnoreCase)
             || protocol.Equals("udp", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static void AddDockerfileAdditionalVolumeSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length <= 6
+            || !trimmed.StartsWith("VOLUME", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[6]))
+        {
+            return;
+        }
+
+        var body = trimmed[6..].TrimStart();
+        if (body.StartsWith("[", StringComparison.Ordinal))
+            return;
+
+        var first = true;
+        foreach (var token in body.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+
+            if (!IsDockerfileVolumePath(token))
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = token,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
+    }
+
+    private static bool IsDockerfileVolumePath(string token)
+        => token.Length > 0
+           && token[0] != '#'
+           && token[0] != '[';
 
     private static bool TryAddRPacmanPackageLoaderSymbols(
         long fileId,
