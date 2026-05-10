@@ -20439,6 +20439,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsOnbuildAddDestinationPathSymbols()
+    {
+        var content = "ONBUILD ADD archive.tar.gz /opt/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/opt/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "archive.tar.gz");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """

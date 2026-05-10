@@ -61,6 +61,7 @@ affected:
 - **Dockerfile JSON-array `COPY` destinations become symbols** — `COPY ["src", "/app"]` now indexes `/app` as the destination path.
 - **Dockerfile JSON-array `ADD` destinations become symbols** — `ADD ["src", "/opt/app"]` now indexes `/opt/app` as the destination path.
 - **Dockerfile `ONBUILD COPY` destinations become symbols** — trigger-time copies now index their destination paths.
+- **Dockerfile `ONBUILD ADD` destinations become symbols** — trigger-time adds now index their destination paths.
 
 ## 日本語
 
@@ -113,3 +114,4 @@ affected:
 - **Dockerfile JSON array form の `COPY` destination を symbol として扱うようになりました** — `COPY ["src", "/app"]` が destination path の `/app` を index するようになりました。
 - **Dockerfile JSON array form の `ADD` destination を symbol として扱うようになりました** — `ADD ["src", "/opt/app"]` が destination path の `/opt/app` を index するようになりました。
 - **Dockerfile `ONBUILD COPY` destination を symbol として扱うようになりました** — trigger-time copy の destination path を index するようになりました。
+- **Dockerfile `ONBUILD ADD` destination を symbol として扱うようになりました** — trigger-time add の destination path を index するようになりました。
