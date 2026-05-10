@@ -12445,6 +12445,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsAdditionalSameLineClassProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public string $firstName, $lastName;
+                protected $flags = ['a', 'b'], $state;
+                private $literal = ", $notAProperty", $real;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "firstName" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "lastName" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flags" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "state" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "notAProperty");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";

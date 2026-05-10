@@ -3714,6 +3714,8 @@ public static partial class SymbolExtractor
             ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpAdditionalPropertySymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
