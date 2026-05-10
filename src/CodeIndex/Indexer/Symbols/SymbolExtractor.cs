@@ -1465,15 +1465,22 @@ public static partial class SymbolExtractor
         ],
         ["php"] =
         [
+            // Variable-bound closures / 変数に束縛されたクロージャ
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?fn\s*\(", RegexOptions.Compiled), BodyStyle.None),
             // Const declaration / 定数宣言
+            new("function", new Regex(@"^\s*define\s*\(\s*['""](?<name>[A-Za-z_]\w*)['""]\s*,", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?(?:(?:static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Class property declarations / クラスプロパティ宣言
+            new("property", new Regex(@"^\s*(?:(?<visibility>public|private|protected|var)\s+)(?:(?:static|readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:(?:(?<visibility>public|private|protected)|static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class with expanded modifiers: abstract, final, readonly (PHP 8.2+)
             // 拡張修飾子対応: abstract, final, readonly (PHP 8.2+)
             new("class",    new Regex(@"^\s*(?:(?:abstract|final|readonly)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("trait", new Regex(@"^\s*trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)(?:\s*:\s*(?<returnType>[A-Za-z_\\][\w\\]*))?", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("property", new Regex(@"^\s*case\s+(?<name>\w+)(?:\s*=\s*(?<returnType>[^;]+?))?\s*;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
             // Namespace / 名前空間
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace),
@@ -3723,6 +3730,20 @@ public static partial class SymbolExtractor
             ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpAdditionalPropertySymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpPromotedConstructorProperties(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockMethodSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockPropertySymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpTraitAliasSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);

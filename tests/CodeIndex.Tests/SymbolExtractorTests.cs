@@ -12371,9 +12371,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "OrderStatus");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Priority");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Priority" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Active" && s.ContainerName == "Status" && s.ReturnType == "'active'");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pending" && s.ContainerName == "Status" && s.ReturnType == "'pending'");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Draft" && s.ContainerName == "OrderStatus" && s.ReturnType == null);
@@ -12418,6 +12418,259 @@ public class SymbolExtractorTests
         Assert.Contains(imports, s => s.Name == "legacy.php");
         Assert.DoesNotContain(imports, s => s.Name.Contains("__DIR__", StringComparison.Ordinal));
         Assert.DoesNotContain(imports, s => s.Name.Contains("$variable", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsClassProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public string $name;
+                protected static ?Profile $profile = null;
+                var $legacy;
+
+                public function rename(string $name): void {
+                    $local = $name;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsAdditionalSameLineClassProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public string $firstName, $lastName;
+                protected $flags = ['a', 'b'], $state;
+                private $literal = ", $notAProperty", $real;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "firstName" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "lastName" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flags" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "state" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "notAProperty");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsSameLinePromotedConstructorProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public function __construct(public string $id, private readonly ?Profile $profile, string $local = 'x,y') {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+
+        var profile = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "profile");
+        var profileLine = content.Split('\n')[profile.Line - 1];
+        Assert.NotNull(profile.StartColumn);
+        Assert.Equal('p', profileLine[profile.StartColumn.Value]);
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsMultilinePromotedConstructorProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public function __construct(
+                    // public string $commented,
+                    /* private string $blockCommented, */
+                    public string $id,
+                    private readonly ?Profile $profile,
+                    string $local = 'x,y',
+                ) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "blockCommented");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsMethodsWithModifiersBeforeVisibility()
+    {
+        var content = """
+            <?php
+            abstract class BaseService {
+                abstract protected function normalize();
+                final public static function make(): self {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize" && s.Visibility == "protected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "make" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsVariableBoundClosures()
+    {
+        var content = """
+            <?php
+            $handler = function (Request $request) {
+                return $request;
+            };
+            $mapper = fn (User $user) => $user->id;
+            $staticFactory = static function () {
+                return new User();
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "mapper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "staticFactory");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsDocblockMethods()
+    {
+        var content = """
+            <?php
+            /**
+             * @method static Builder<User> whereEmail(string $email)
+             * @method ?User findByEmail(string $email)
+             * @method User|Guest resolveActor(int $id)
+             * @method refresh()
+             */
+            class UserQuery {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "whereEmail" && s.ReturnType == "Builder<User>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "findByEmail" && s.ReturnType == "?User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "resolveActor" && s.ReturnType == "User|Guest");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "refresh" && s.ReturnType == null);
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsDocblockProperties()
+    {
+        var content = """
+            <?php
+            /**
+             * @property \App\Models\User $owner
+             * @property-read Collection<User> $items
+             * @property-write ?string $status
+             * @phpstan-property-read Money $balance
+             */
+            class UserPresenter {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "owner" && s.ReturnType == "\\App\\Models\\User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "items" && s.ReturnType == "Collection<User>");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "status" && s.ReturnType == "?string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "balance" && s.ReturnType == "Money");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsTraitAliasMethods()
+    {
+        var content = """
+            <?php
+            class User {
+                use Timestampable {
+                    Timestampable::touch as touchTimestamp;
+                    touch as private;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "touchTimestamp");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsDocblockTypeAliases()
+    {
+        var content = """
+            <?php
+            /**
+             * @phpstan-type UserShape array{id:int,name:string}
+             * @psalm-type EmailAddress non-empty-string
+             * @phpstan-import-type RemoteShape from \App\Types\RemoteSource as LocalShape
+             * @psalm-import-type ExternalShape from \App\Types\ExternalSource
+             */
+            class UserTypes {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "UserShape" && s.ReturnType == "array{id:int,name:string}");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "EmailAddress" && s.ReturnType == "non-empty-string");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "LocalShape" && s.ReturnType == "\\App\\Types\\RemoteSource");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "ExternalShape" && s.ReturnType == "\\App\\Types\\ExternalSource");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsDefineConstants()
+    {
+        var content = """
+            <?php
+            define('APP_ENV', 'testing');
+            define("FEATURE_FLAG", true);
+            DEFINE('UPPER_DEFINE', true);
+            define($dynamic, true);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "APP_ENV");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FEATURE_FLAG");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UPPER_DEFINE");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "dynamic");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsTypedClassConstants()
+    {
+        var content = """
+            <?php
+            class Config {
+                public const string VERSION = '1.0';
+                protected const int|float LIMIT = 10;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LIMIT" && s.ReturnType == "int|float" && s.Visibility == "protected");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "string");
     }
 
     [Fact]

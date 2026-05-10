@@ -9509,6 +9509,7 @@ public class ReferenceExtractorTests
             function inspect(): void {
                 Config::rebuild();
                 Config::VERSION;
+                Config::$cache;
                 \App\Models\Config::class;
                 \App\Models\Config::rebuild();
                 Priority::Low;
@@ -9522,6 +9523,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "Config" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.Column == 6);
         Assert.Contains(references, reference => reference.SymbolName == "Priority" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "VERSION" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "cache" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Low" && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "rebuild" && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "class" && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "self" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "static" && reference.ReferenceKind == "type_reference");
     }
@@ -9581,6 +9587,530 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Eval");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "empty");
         Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_PhpAttributes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            #[Route('/users', methods: ['GET'])]
+            #[\App\Http\Middleware\RequiresAuth]
+            class UserController {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Route" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "RequiresAuth" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\Middleware\\RequiresAuth" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "methods" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpInstanceof_EmitsTypeReferences()
+    {
+        const string content = """
+            <?php
+            function accepts($value): bool {
+                return $value instanceof \App\Domain\UserService
+                    || $value instanceof LocalHandler;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "LocalHandler" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "instanceof" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PhpCatchUnionTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            try {
+                risky();
+            } catch (\App\Exception\FirstException|SecondException $exception) {
+                recover($exception);
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Exception\\FirstException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "FirstException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "SecondException" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "catch" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PhpReturnTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            function handle(): Response|JsonResponse {
+                return new JsonResponse();
+            }
+            function maybe(): ?Response {
+                return null;
+            }
+            function scalar(): string {
+                return 'ok';
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Response" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "JsonResponse" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "?Response" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpParameterTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            function handle(Request $request, ?User $user, string $name): Response {
+                return new Response();
+            }
+            function complex(Request|User $actor, Logger&Aware $logger): void {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Request" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Logger" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Aware" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "?User" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpPropertyTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            class Profile {
+                private User|Guest $owner;
+                protected static ?Logger $logger;
+                public string $name;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Guest" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Logger" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpInheritanceTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            class UserController extends \App\Http\BaseController implements Responsable, Middleware {}
+            interface JsonResponsable extends Responsable {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\BaseController" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "BaseController" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Responsable" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Middleware" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpUseTypeImports_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            use App\Service\UserService as Service;
+            use function App\Service\make_user;
+            use const App\Service\USER_ROLE;
+            class Consumer {
+                use Auditable, SoftDeletes;
+                use Timestampable, Blameable {
+                    Timestampable::touch insteadof Blameable;
+                }
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Service\\UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Auditable" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "SoftDeletes" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Timestampable" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Blameable" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "make_user" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "USER_ROLE" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpGroupUseTypeImports_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            use App\Domain\{User, Team\Member as TeamMember};
+            use App\Mixed\{Profile, function make_profile, const DEFAULT_PROFILE};
+            use function App\Domain\{make_user};
+            use const App\Domain\{USER_ROLE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\Team\\Member" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Member" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\Profile" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Profile" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "make_profile" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "make_user" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "USER_ROLE" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpUseFunctionImports_EmitReferences()
+    {
+        const string content = """
+            <?php
+            use function App\Text\slugify as slug;
+            use function App\Text\{title_case, trim_name as trimName};
+            use App\Mixed\{User, function make_profile, const DEFAULT_PROFILE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\slugify" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "slugify" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\title_case" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "title_case" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Text\\trim_name" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "trim_name" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\make_profile" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "make_profile" && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_PhpUseConstImports_EmitReferences()
+    {
+        const string content = """
+            <?php
+            use const App\Config\DEFAULT_ROLE as ROLE;
+            use const App\Config\{APP_NAME, TIMEOUT as TIMEOUT_LIMIT};
+            use App\Mixed\{User, function make_profile, const DEFAULT_PROFILE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\DEFAULT_ROLE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "DEFAULT_ROLE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\APP_NAME" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "APP_NAME" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\TIMEOUT" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "TIMEOUT" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockParamTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @param \App\Models\User|Guest|null $actor
+             * @param Collection<User>[] $users
+             * @phpstan-param \App\DTO\UserInput $input
+             * @param-out HydratedUser $actor
+             */
+            function handle($actor, $users): void {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Models\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Guest" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Collection" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\DTO\\UserInput" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserInput" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "HydratedUser" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockReturnTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @return \App\Http\Response|JsonPayload|null
+             * @psalm-return \App\Http\StreamedResponse
+             */
+            function respond() {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\Response" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Response" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "JsonPayload" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\StreamedResponse" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "StreamedResponse" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockVarTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /** @var \App\Cache\Store<CacheItem>|null $store */
+            /** @phpstan-var \App\Cache\TaggedStore $tagged */
+            $store = resolve_store();
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Cache\\Store" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Store" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "CacheItem" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Cache\\TaggedStore" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "TaggedStore" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockThrowsTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @throws \App\Exceptions\DomainException|RuntimeFailure
+             */
+            function execute(): void {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Exceptions\\DomainException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "DomainException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "RuntimeFailure" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockExtendsTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @phpstan-extends \App\Repository\BaseRepository<UserModel>
+             */
+            final class UserRepository extends BaseRepository {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Repository\\BaseRepository" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "BaseRepository" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserModel" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockImplementsTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @psalm-implements \App\Contracts\Handler<InputMessage>
+             */
+            final class MessageHandler implements Handler {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Contracts\\Handler" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Handler" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "InputMessage" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockMixinTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @mixin \App\Eloquent\Builder<UserModel>
+             */
+            final class User {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Eloquent\\Builder" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Builder" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserModel" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockPropertyTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @property-read \App\Models\User $owner
+             * @property Collection<Invoice> $invoices
+             * @psalm-property-write Money $balance
+             */
+            final class Account {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Models\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Collection" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Invoice" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Money" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockMethodReturnTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @method static Builder<UserModel>|null whereEmail(string $email)
+             * @method refresh()
+             */
+            final class UserQuery {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Builder" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserModel" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "refresh" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockMethodParameterTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @method Result process(InputMessage|array $message, ?Context $context)
+             */
+            final class Processor {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "InputMessage" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Context" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "array" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "message" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockTemplateBounds_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @template-covariant T of \App\Contracts\Entity
+             * @template U as BaseModel
+             */
+            final class Repository {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Contracts\\Entity" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Entity" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "BaseModel" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockTypeAliasTargets_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @phpstan-type UserShape array{owner:\App\Models\User,invoice:Invoice}
+             * @phpstan-import-type RemoteShape from \App\Types\RemoteSource
+             */
+            final class Shapes {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Models\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Invoice" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Types\\RemoteSource" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "RemoteSource" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "array" && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
