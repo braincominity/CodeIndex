@@ -4176,26 +4176,28 @@ public static partial class SymbolExtractor
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
-        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "COPY");
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "COPY", includeJsonForm: true);
 
     private static void AddDockerfileAddDestinationSymbol(
         long fileId,
         string line,
         int lineNumber,
         List<SymbolRecord> symbols)
-        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD");
+        => AddDockerfileInstructionDestinationSymbol(fileId, line, lineNumber, symbols, "ADD", includeJsonForm: false);
 
     private static void AddDockerfileInstructionDestinationSymbol(
         long fileId,
         string line,
         int lineNumber,
         List<SymbolRecord> symbols,
-        string instruction)
+        string instruction,
+        bool includeJsonForm)
     {
         if (!TryGetDockerfileInstructionBody(line, instruction, out var body))
             return;
 
-        var destination = GetDockerfileShellFormDestination(body);
+        var destination = GetDockerfileShellFormDestination(body)
+            ?? (includeJsonForm ? GetDockerfileJsonFormDestination(body) : null);
         if (destination is null or "." or "./")
             return;
 
@@ -4245,6 +4247,54 @@ public static partial class SymbolExtractor
         }
 
         return arguments.Count >= 2 ? arguments[^1] : null;
+    }
+
+    private static string? GetDockerfileJsonFormDestination(string body)
+    {
+        var jsonStart = SkipDockerfileInstructionOptions(body);
+        if (jsonStart >= body.Length || body[jsonStart] != '[')
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body[jsonStart..]);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            string? last = null;
+            var count = 0;
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                    return null;
+
+                last = item.GetString();
+                count++;
+            }
+
+            return count >= 2 ? last : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static int SkipDockerfileInstructionOptions(string body)
+    {
+        var index = 0;
+        while (index < body.Length)
+        {
+            while (index < body.Length && char.IsWhiteSpace(body[index]))
+                index++;
+
+            if (index + 2 > body.Length || body[index] != '-' || body[index + 1] != '-')
+                return index;
+
+            index = ScanDockerfileInstructionToken(body, index);
+        }
+
+        return index;
     }
 
     private static IEnumerable<string> EnumerateDockerfileInstructionTokens(string body)
@@ -4300,6 +4350,43 @@ public static partial class SymbolExtractor
             if (token.Length > 0)
                 yield return token.ToString();
         }
+    }
+
+    private static int ScanDockerfileInstructionToken(string body, int index)
+    {
+        var quote = '\0';
+        while (index < body.Length)
+        {
+            var c = body[index];
+            if (quote != '\0')
+            {
+                if (c == '\\' && index + 1 < body.Length)
+                {
+                    index += 2;
+                    continue;
+                }
+
+                if (c == quote)
+                    quote = '\0';
+
+                index++;
+                continue;
+            }
+
+            if (c is '"' or '\'')
+            {
+                quote = c;
+                index++;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+                break;
+
+            index++;
+        }
+
+        return index;
     }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(

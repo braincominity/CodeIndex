@@ -20406,6 +20406,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsJsonCopyDestinationPathSymbols()
+    {
+        var content = "COPY --chmod=0644 [\"package.json\", \"/app/package.json\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app/package.json");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "package.json");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
