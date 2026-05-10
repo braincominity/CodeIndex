@@ -12571,6 +12571,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsTypedClassConstants()
+    {
+        var content = """
+            <?php
+            class Config {
+                public const string VERSION = '1.0';
+                protected const int|float LIMIT = 10;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LIMIT" && s.ReturnType == "int|float" && s.Visibility == "protected");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "string");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
