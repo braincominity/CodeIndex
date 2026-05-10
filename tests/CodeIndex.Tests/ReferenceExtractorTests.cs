@@ -28449,4 +28449,23 @@ public class ReferenceExtractorTests
             r.SymbolName == "My::Util::format"
             && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesQualifiedCallAfterBarewordEndingInSub()
+    {
+        const string content = """
+            sub render {
+                call_sub My::Util::format($value);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "My::Util::format"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+    }
 }
