@@ -3822,7 +3822,7 @@ internal static class LanguageReferenceExtractionSupport
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
-        if (isFortranNamelistLine)
+        if (isFortranCommonLine || isFortranNamelistLine)
         {
             foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
             {
