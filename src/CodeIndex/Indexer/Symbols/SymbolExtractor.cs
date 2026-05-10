@@ -2109,6 +2109,7 @@ public static partial class SymbolExtractor
                 AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -4113,6 +4114,59 @@ public static partial class SymbolExtractor
                 Signature = line.Trim(),
             },
             line);
+    }
+
+    private static void AddDockerfileShellSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length <= 5
+            || !trimmed.StartsWith("SHELL", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[5]))
+        {
+            return;
+        }
+
+        var body = trimmed[5..].TrimStart();
+        if (!body.StartsWith("[", StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return;
+
+            var first = document.RootElement.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind != JsonValueKind.String)
+                return;
+
+            var name = first.GetString();
+            if (string.IsNullOrWhiteSpace(name))
+                return;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
+        catch (JsonException)
+        {
+        }
     }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(

@@ -20373,6 +20373,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsShellExecutableSymbols()
+    {
+        var content = "SHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/bin/bash");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "-o");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
