@@ -10096,6 +10096,7 @@ public class ReferenceExtractorTests
             <?php
             /**
              * @phpstan-type UserShape array{owner:\App\Models\User,invoice:Invoice}
+             * @phpstan-import-type RemoteShape from \App\Types\RemoteSource
              */
             final class Shapes {}
             ?>
@@ -10107,6 +10108,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "App\\Models\\User" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Invoice" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Types\\RemoteSource" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "RemoteSource" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "array" && reference.ReferenceKind == "type_reference");
     }
 
