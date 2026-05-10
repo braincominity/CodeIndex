@@ -12594,6 +12594,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsTraitAliasMethods()
+    {
+        var content = """
+            <?php
+            class User {
+                use Timestampable {
+                    Timestampable::touch as touchTimestamp;
+                    touch as private;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "touchTimestamp");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsDefineConstants()
     {
         var content = """

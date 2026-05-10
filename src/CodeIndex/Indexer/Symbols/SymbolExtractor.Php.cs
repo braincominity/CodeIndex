@@ -31,6 +31,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@property(?:-read|-write)?\s+(?<returnType>[^\s]+)\s+\$(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpTraitAliasRegex = new(
+        @"^\s*(?:[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*::)?[A-Za-z_]\w*\s+as\s+(?:(?:public|protected|private)\s+)?(?<name>(?!public\b|protected\b|private\b)[A-Za-z_]\w*)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -230,6 +234,36 @@ public static partial class SymbolExtractor
                     EndLine = lineNumber,
                     Signature = line.Trim(),
                     ReturnType = match.Groups["returnType"].Value,
+                },
+                line);
+        }
+    }
+
+    private static void ExtractPhpTraitAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var match = PhpTraitAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
                 },
                 line);
         }
