@@ -323,6 +323,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranUseOnlyRegex = new(
         @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+[A-Za-z_]\w*\s*,\s*only\s*:\s*(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranUseRenameListRegex = new(
+        @"^\s*use(?:\s*,\s*(?:intrinsic|non_intrinsic))?(?:\s*::)?\s+[A-Za-z_]\w*\s*,\s*(?!only\s*:)(?<list>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranUseAliasRegex = new(
         @"(?:^|,)\s*(?<alias>[A-Za-z_]\w*)\s*=>\s*[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -3768,6 +3771,23 @@ internal static class LanguageReferenceExtractionSupport
             EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
 
             var list = useOnlyMatch.Groups["list"];
+            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+            {
+                var group = match.Groups["alias"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+            }
+
+            foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+            {
+                var group = match.Groups["target"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+            }
+        }
+
+        var useRenameMatch = FortranUseRenameListRegex.Match(preparedLine);
+        if (useRenameMatch.Success)
+        {
+            var list = useRenameMatch.Groups["list"];
             foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
             {
                 var group = match.Groups["alias"];
