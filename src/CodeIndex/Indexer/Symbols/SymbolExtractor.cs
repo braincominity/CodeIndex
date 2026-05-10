@@ -1454,6 +1454,9 @@ public static partial class SymbolExtractor
         ],
         ["php"] =
         [
+            // Variable-bound closures / 変数に束縛されたクロージャ
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?fn\s*\(", RegexOptions.Compiled), BodyStyle.None),
             // Const declaration / 定数宣言
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Class property declarations / クラスプロパティ宣言

@@ -12531,6 +12531,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsVariableBoundClosures()
+    {
+        var content = """
+            <?php
+            $handler = function (Request $request) {
+                return $request;
+            };
+            $mapper = fn (User $user) => $user->id;
+            $staticFactory = static function () {
+                return new User();
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "mapper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "staticFactory");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
