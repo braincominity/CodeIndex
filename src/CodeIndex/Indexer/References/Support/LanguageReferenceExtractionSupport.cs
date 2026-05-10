@@ -413,6 +413,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranPointerAssignmentRegex = new(
         @"^\s*(?:[A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)*)\s*=>\s*(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranAssociateLineRegex = new(
+        @"^\s*associate\s*\((?<list>.+)\)\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranAssociateTargetRegex = new(
+        @"(?:^|,)\s*[A-Za-z_]\w*\s*=>\s*(?<name>[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranCallRegex = new(
         @"^\s*call\s+(?:(?:[A-Za-z_]\w*)\s*%\s*)*(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3956,6 +3962,17 @@ internal static class LanguageReferenceExtractionSupport
             var group = pointerAssignmentMatch.Groups["name"];
             if (!group.Value.Equals("null", StringComparison.OrdinalIgnoreCase))
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "reference", context, lineNumber, container);
+        }
+
+        var associateMatch = FortranAssociateLineRegex.Match(preparedLine);
+        if (associateMatch.Success)
+        {
+            var list = associateMatch.Groups["list"];
+            foreach (Match match in FortranAssociateTargetRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+            }
         }
 
         foreach (Match match in FortranTypeRegex.Matches(preparedLine))
