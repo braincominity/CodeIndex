@@ -2191,6 +2191,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileCopyFromReferences_IndexOnbuildStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            ONBUILD COPY --from=builder /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_DockerfileFromStageReferences_AllowsInlineComments()
     {
         const string content = """

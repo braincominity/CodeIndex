@@ -10,7 +10,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CopyFromReferenceRegex = new(
-        @"^\s*(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
+        @"^\s*(?:ONBUILD\s+)?(?:COPY|ADD)\b.*?--from=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
