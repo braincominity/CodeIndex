@@ -17,6 +17,10 @@ internal static class PhpReferenceExtractor
         @"(?:#\[\s*|,\s*)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\b(?=\s*(?:\(|,|\]))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex InstanceofRegex = new(
+        @"\binstanceof\s+(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public static void EmitAttributeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -145,12 +149,81 @@ internal static class PhpReferenceExtractor
         }
     }
 
+    public static void EmitInstanceofReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in InstanceofRegex.Matches(preparedLine))
+        {
+            AddPhpTypeReferenceFromQualifiedName(
+                match.Groups["name"],
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
     private static bool IsPhpCallAfterStaticMember(string line, int index)
     {
         while (index < line.Length && char.IsWhiteSpace(line[index]))
             index++;
 
         return index < line.Length && line[index] == '(';
+    }
+
+    private static void AddPhpTypeReferenceFromQualifiedName(
+        Group nameGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var rawName = nameGroup.Value;
+        var trimmedName = rawName.TrimStart('\\');
+        if (trimmedName.Length == 0)
+            return;
+
+        var leadingBackslashCount = rawName.Length - trimmedName.Length;
+        var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
+        if (trimmedName.Contains('\\', StringComparison.Ordinal))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                trimmedName,
+                qualifiedNameIndex,
+                "type_reference",
+                context,
+                lineNumber,
+                container);
+        }
+
+        var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
+        var shortName = trimmedName[shortNameStart..];
+        if (shortName.Length == 0)
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            shortName,
+            qualifiedNameIndex + shortNameStart,
+            "type_reference",
+            context,
+            lineNumber,
+            container);
     }
 
     public static void EmitObjectMemberAccessReferences(

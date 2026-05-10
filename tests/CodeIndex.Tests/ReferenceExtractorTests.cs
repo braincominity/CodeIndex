@@ -9610,6 +9610,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpInstanceof_EmitsTypeReferences()
+    {
+        const string content = """
+            <?php
+            function accepts($value): bool {
+                return $value instanceof \App\Domain\UserService
+                    || $value instanceof LocalHandler;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserService" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "LocalHandler" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "instanceof" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
