@@ -23145,4 +23145,21 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIFTH_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesPackageBlockNamespaces()
+    {
+        var content = """
+            package My::Block {
+                sub render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "My::Block");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
 }

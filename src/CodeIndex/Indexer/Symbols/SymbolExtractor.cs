@@ -1401,6 +1401,7 @@ public static partial class SymbolExtractor
         ["perl"] =
         [
             // Perl package declarations / Perl の package 宣言
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Perl constants are compile-time subroutines, so expose them as functions for navigation.
             // Perl constant はコンパイル時 subroutine なので、ナビゲーション用に function として出す。
