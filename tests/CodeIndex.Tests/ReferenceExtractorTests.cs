@@ -9773,6 +9773,7 @@ public class ReferenceExtractorTests
         const string content = """
             <?php
             use App\Domain\{User, Team\Member as TeamMember};
+            use App\Mixed\{Profile, function make_profile, const DEFAULT_PROFILE};
             use function App\Domain\{make_user};
             use const App\Domain\{USER_ROLE};
             ?>
@@ -9785,6 +9786,10 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\Team\\Member" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Member" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\Profile" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Profile" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "make_profile" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "make_user" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "USER_ROLE" && reference.ReferenceKind == "type_reference");
     }

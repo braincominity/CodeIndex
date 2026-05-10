@@ -50,7 +50,7 @@ internal static class PhpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex GroupUseTypeItemRegex = new(
-        @"(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?",
+        @"(?:^|,)\s*(?:(?<kind>function|const)\s+)?(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
@@ -393,6 +393,9 @@ internal static class PhpReferenceExtractor
         var itemsGroup = groupMatch.Groups["items"];
         foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
         {
+            if (itemMatch.Groups["kind"].Success)
+                continue;
+
             var itemGroup = itemMatch.Groups["name"];
             var rawItemName = itemGroup.Value;
             var trimmedItemName = rawItemName.TrimStart('\\');
