@@ -401,6 +401,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranAllocateTypeSpecRegex = new(
         @"\ballocate\s*\(\s*(?<type>[A-Za-z_]\w*)\s*::",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranDeallocateListRegex = new(
+        @"^\s*deallocate\s*\((?<list>.*)\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranIntrinsicKeywordKindRegex = new(
         @"\b(?:integer|real|complex|logical|character)\s*\([^)\r\n]*\bkind\s*=\s*(?<type>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -4027,6 +4030,30 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+        }
+
+        var deallocateListMatch = FortranDeallocateListRegex.Match(preparedLine);
+        if (deallocateListMatch.Success)
+        {
+            var list = deallocateListMatch.Groups["list"];
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list.Value))
+            {
+                var segment = list.Value.Substring(segmentStart, segmentLength);
+                if (segment.Contains('=', StringComparison.Ordinal))
+                    continue;
+
+                var leading = 0;
+                while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                    leading++;
+                if (leading >= segment.Length || !IsIdentifierStart(segment[leading]))
+                    continue;
+
+                var end = leading + 1;
+                while (end < segment.Length && IsSimpleIdentifierPart(segment[end]))
+                    end++;
+
+                ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], list.Index + segmentStart + leading, "reference", context, lineNumber, container);
+            }
         }
 
         foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
