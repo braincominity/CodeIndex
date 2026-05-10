@@ -47,6 +47,7 @@ affected:
 - **Quoted Dockerfile `RUN --mount` stage names are indexed** — `RUN --mount=type=bind,from="assets"` now links back to the `assets` stage.
 - **Dockerfile `ONBUILD RUN --mount` stage dependencies are indexed** — trigger instructions now link mount `from=` stages.
 - **Dockerfile `USER` principals become symbols** — `USER appuser` now indexes `appuser` as a property symbol.
+- **Dockerfile `USER user:group` principals stay intact** — group-qualified users now index the full `user:group` value.
 
 ## 日本語
 
@@ -85,3 +86,4 @@ affected:
 - **quote 付き Dockerfile `RUN --mount` の stage 名を index するようになりました** — `RUN --mount=type=bind,from="assets"` が `assets` stage に結びつくようになりました。
 - **Dockerfile `ONBUILD RUN --mount` の stage dependency を index するようになりました** — trigger instruction の mount `from=` stage も結びつくようになりました。
 - **Dockerfile `USER` principal を symbol として扱うようになりました** — `USER appuser` が `appuser` property symbol として index されるようになりました。
+- **Dockerfile `USER user:group` principal を全体で保持するようになりました** — group 付き user が完全な `user:group` 値として index されるようになりました。
