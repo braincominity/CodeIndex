@@ -23132,6 +23132,14 @@ public class SymbolExtractorTests
             sub render : prototype($) {
                 return DEFAULT_LIMIT;
             }
+
+            my sub local_helper {
+                return SECOND_LIMIT;
+            }
+
+            state sub cached_helper {
+                return THIRD_LIMIT;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "perl", content);
@@ -23144,6 +23152,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FOURTH_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIFTH_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "local_helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cached_helper");
     }
 
     [Fact]
