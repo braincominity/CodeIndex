@@ -23195,4 +23195,21 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "My::Block");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesClassFeatureDeclarations()
+    {
+        var content = """
+            class My::Widget {
+                method render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "My::Widget");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
 }
