@@ -12421,6 +12421,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsClassProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public string $name;
+                protected static ?Profile $profile = null;
+                var $legacy;
+
+                public function rename(string $name): void {
+                    $local = $name;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ReturnType == "string" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile" && s.ContainerName == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy" && s.ContainerName == "User");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";

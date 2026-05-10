@@ -1456,6 +1456,8 @@ public static partial class SymbolExtractor
         [
             // Const declaration / 定数宣言
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // Class property declarations / クラスプロパティ宣言
+            new("property", new Regex(@"^\s*(?:(?<visibility>public|private|protected|var)\s+)(?:(?:static|readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?(?:(?:static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class with expanded modifiers: abstract, final, readonly (PHP 8.2+)
             // 拡張修飾子対応: abstract, final, readonly (PHP 8.2+)
