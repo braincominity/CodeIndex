@@ -53,6 +53,14 @@ internal static class PhpReferenceExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?<types>[^\s()]+)\s+[A-Za-z_]\w*\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex DocblockMethodParameterListRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?:[^\s()]+\s+)?[A-Za-z_]\w*\s*\((?<params>[^)]*)\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DocblockMethodParameterTypeRegex = new(
+        @"(?:^|,)\s*(?<types>[^\s,]+)\s+\$[A-Za-z_]\w*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex DocblockTypeNameRegex = new(
         @"(?<![-\w\\])\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\[\])?(?![-\w\\])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -281,6 +289,35 @@ internal static class PhpReferenceExtractor
             lineNumber,
             container);
 
+    public static void EmitDocblockMethodParameterTypeReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = DocblockMethodParameterListRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var paramsGroup = match.Groups["params"];
+        foreach (Match parameterMatch in DocblockMethodParameterTypeRegex.Matches(paramsGroup.Value))
+        {
+            var typesGroup = parameterMatch.Groups["types"];
+            EmitDocblockTypeGroupReferences(
+                typesGroup.Value,
+                paramsGroup.Index + typesGroup.Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
     private static void EmitDocblockTypeReferences(
         Regex tagRegex,
         string originalLine,
@@ -296,7 +333,28 @@ internal static class PhpReferenceExtractor
             return;
 
         var typesGroup = match.Groups["types"];
-        foreach (Match typeMatch in DocblockTypeNameRegex.Matches(typesGroup.Value))
+        EmitDocblockTypeGroupReferences(
+            typesGroup.Value,
+            typesGroup.Index,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+    }
+
+    private static void EmitDocblockTypeGroupReferences(
+        string typeExpression,
+        int typeExpressionIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match typeMatch in DocblockTypeNameRegex.Matches(typeExpression))
         {
             var nameGroup = typeMatch.Groups["name"];
             if (IsPhpBuiltinTypeName(nameGroup.Value))
@@ -304,7 +362,7 @@ internal static class PhpReferenceExtractor
 
             AddPhpTypeReferenceFromName(
                 nameGroup.Value,
-                typesGroup.Index + nameGroup.Index,
+                typeExpressionIndex + nameGroup.Index,
                 references,
                 seen,
                 fileId,

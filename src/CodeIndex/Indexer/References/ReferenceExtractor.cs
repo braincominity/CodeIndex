@@ -1354,6 +1354,14 @@ public static partial class ReferenceExtractor
                         docblockContext,
                         lineNumber,
                         FindInnermostContainer(containerCandidates, lineNumber));
+                    PhpReferenceExtractor.EmitDocblockMethodParameterTypeReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        docblockContext,
+                        lineNumber,
+                        FindInnermostContainer(containerCandidates, lineNumber));
                 }
             }
 
