@@ -41,6 +41,10 @@ internal static class PhpReferenceExtractor
         @"\b(?:extends|implements)\s+(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*,\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex UseTypeRegex = new(
+        @"^\s*use\s+(?!(?:function|const)\b)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?(?:\s*,\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never",
@@ -328,6 +332,32 @@ internal static class PhpReferenceExtractor
                     lineNumber,
                     container);
             }
+        }
+    }
+
+    public static void EmitUseTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = UseTypeRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        foreach (Capture capture in match.Groups["name"].Captures)
+        {
+            AddPhpTypeReferenceFromQualifiedName(
+                capture,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
         }
     }
 
