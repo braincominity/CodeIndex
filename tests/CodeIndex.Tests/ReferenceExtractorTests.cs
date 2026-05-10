@@ -2173,6 +2173,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexOnbuildStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            ONBUILD RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_DockerfileRunMountReferences_IgnoresQuotedShellText()
     {
         const string content = """

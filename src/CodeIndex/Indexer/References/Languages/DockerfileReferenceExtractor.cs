@@ -174,6 +174,11 @@ internal static class DockerfileReferenceExtractor
     private static bool TryGetRunOptionsStart(string line, out int index)
     {
         index = SkipWhitespace(line, 0);
+        if (StartsWithKeyword(line, index, "ONBUILD"))
+        {
+            index = SkipWhitespace(line, index + "ONBUILD".Length);
+        }
+
         if (!StartsWith(line, index, "RUN"))
             return false;
 
@@ -234,6 +239,10 @@ internal static class DockerfileReferenceExtractor
         => index >= 0
            && index + value.Length <= text.Length
            && string.Compare(text, index, value, 0, value.Length, StringComparison.OrdinalIgnoreCase) == 0;
+
+    private static bool StartsWithKeyword(string text, int index, string value)
+        => StartsWith(text, index, value)
+           && (index + value.Length >= text.Length || char.IsWhiteSpace(text[index + value.Length]));
 
     public static void EmitVariableReferences(
         string preparedLine,
