@@ -12514,6 +12514,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsMethodsWithModifiersBeforeVisibility()
+    {
+        var content = """
+            <?php
+            abstract class BaseService {
+                abstract protected function normalize();
+                final public static function make(): self {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize" && s.Visibility == "protected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "make" && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
