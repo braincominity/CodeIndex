@@ -1409,6 +1409,8 @@ public static partial class SymbolExtractor
             // Perl module imports / Perl の module import
             new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Moose/Moo attributes / Moose/Moo の属性
+            new("property", new Regex(@"^\s*has\s+(?<quote>['""]?)\+?(?<name>" + PerlIdentifierPattern + @")\k<quote>\s*=>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Perl subroutines / Perl の subroutine
             new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
