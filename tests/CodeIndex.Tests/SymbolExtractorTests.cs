@@ -12495,6 +12495,8 @@ public class SymbolExtractorTests
             <?php
             class User {
                 public function __construct(
+                    // public string $commented,
+                    /* private string $blockCommented, */
                     public string $id,
                     private readonly ?Profile $profile,
                     string $local = 'x,y',
@@ -12507,6 +12509,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "blockCommented");
     }
 
     [Fact]

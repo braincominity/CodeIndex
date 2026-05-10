@@ -20,7 +20,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex PhpPromotedPropertyParameterRegex = new(
-        @"(?:(?<visibility>public|private|protected)\s+)(?:(?:readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
+        @"^\s*(?:(?<visibility>public|private|protected)\s+)(?:(?:readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
