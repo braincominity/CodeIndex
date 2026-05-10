@@ -21,6 +21,10 @@ internal static class PhpReferenceExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@param\s+(?<types>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex DocblockReturnTypeRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@return\s+(?<types>\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex DocblockTypeNameRegex = new(
         @"(?<![-\w\\])\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\[\])?(?![-\w\\])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -95,8 +99,45 @@ internal static class PhpReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container)
+        => EmitDocblockTypeReferences(
+            DocblockParamTypeRegex,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+    public static void EmitDocblockReturnTypeReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+        => EmitDocblockTypeReferences(
+            DocblockReturnTypeRegex,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+    private static void EmitDocblockTypeReferences(
+        Regex tagRegex,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
     {
-        var match = DocblockParamTypeRegex.Match(originalLine);
+        var match = tagRegex.Match(originalLine);
         if (!match.Success)
             return;
 

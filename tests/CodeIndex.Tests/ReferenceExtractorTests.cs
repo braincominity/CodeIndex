@@ -9866,6 +9866,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockReturnTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @return \App\Http\Response|JsonPayload|null
+             */
+            function respond() {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\Response" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Response" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "JsonPayload" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
