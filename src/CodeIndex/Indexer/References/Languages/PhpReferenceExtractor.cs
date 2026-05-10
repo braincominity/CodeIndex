@@ -37,6 +37,10 @@ internal static class PhpReferenceExtractor
         @"^\s*(?:public|private|protected|var)\s+(?:(?:static|readonly)\s+)*\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*[|&]\s*\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s+\$[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex InheritanceTypeRegex = new(
+        @"\b(?:extends|implements)\s+(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*,\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never",
@@ -290,6 +294,31 @@ internal static class PhpReferenceExtractor
                 if (IsPhpBuiltinTypeName(capture.Value))
                     continue;
 
+                AddPhpTypeReferenceFromQualifiedName(
+                    capture,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+    }
+
+    public static void EmitInheritanceTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in InheritanceTypeRegex.Matches(preparedLine))
+        {
+            foreach (Capture capture in match.Groups["name"].Captures)
+            {
                 AddPhpTypeReferenceFromQualifiedName(
                     capture,
                     references,

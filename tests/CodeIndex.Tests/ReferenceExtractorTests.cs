@@ -9724,6 +9724,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpInheritanceTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            class UserController extends \App\Http\BaseController implements Responsable, Middleware {}
+            interface JsonResponsable extends Responsable {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\BaseController" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "BaseController" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Responsable" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Middleware" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
