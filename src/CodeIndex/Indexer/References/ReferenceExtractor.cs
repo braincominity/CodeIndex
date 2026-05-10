@@ -1878,6 +1878,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container);
 
+                PhpReferenceExtractor.EmitReturnTypeReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+
                 PhpReferenceExtractor.EmitObjectMemberAccessReferences(
                     preparedLine,
                     references,

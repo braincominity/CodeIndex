@@ -25,6 +25,16 @@ internal static class PhpReferenceExtractor
         @"\bcatch\s*\(\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*\|\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s+\$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex ReturnTypeRegex = new(
+        @"\)\s*:\s*\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*\|\s*\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never",
+        "null", "object", "self", "static", "string", "true", "void",
+    };
+
     public static void EmitAttributeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -200,6 +210,34 @@ internal static class PhpReferenceExtractor
         }
     }
 
+    public static void EmitReturnTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ReturnTypeRegex.Matches(preparedLine))
+        {
+            foreach (Capture capture in match.Groups["name"].Captures)
+            {
+                if (IsPhpBuiltinTypeName(capture.Value))
+                    continue;
+
+                AddPhpTypeReferenceFromQualifiedName(
+                    capture,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+    }
+
     private static bool IsPhpCallAfterStaticMember(string line, int index)
     {
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -207,6 +245,10 @@ internal static class PhpReferenceExtractor
 
         return index < line.Length && line[index] == '(';
     }
+
+    private static bool IsPhpBuiltinTypeName(string name)
+        => !name.Contains('\\', StringComparison.Ordinal)
+           && BuiltinTypeNames.Contains(name.TrimStart('\\'));
 
     private static void AddPhpTypeReferenceFromQualifiedName(
         Capture nameGroup,
