@@ -9631,6 +9631,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpCatchUnionTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            try {
+                risky();
+            } catch (\App\Exception\FirstException|SecondException $exception) {
+                recover($exception);
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Exception\\FirstException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "FirstException" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "SecondException" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "catch" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";

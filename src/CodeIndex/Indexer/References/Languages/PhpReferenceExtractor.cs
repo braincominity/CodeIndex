@@ -21,6 +21,10 @@ internal static class PhpReferenceExtractor
         @"\binstanceof\s+(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex CatchTypeRegex = new(
+        @"\bcatch\s*\(\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s*\|\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s+\$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public static void EmitAttributeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -171,6 +175,31 @@ internal static class PhpReferenceExtractor
         }
     }
 
+    public static void EmitCatchTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CatchTypeRegex.Matches(preparedLine))
+        {
+            foreach (Capture capture in match.Groups["name"].Captures)
+            {
+                AddPhpTypeReferenceFromQualifiedName(
+                    capture,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+    }
+
     private static bool IsPhpCallAfterStaticMember(string line, int index)
     {
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -180,7 +209,7 @@ internal static class PhpReferenceExtractor
     }
 
     private static void AddPhpTypeReferenceFromQualifiedName(
-        Group nameGroup,
+        Capture nameGroup,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
