@@ -1930,6 +1930,10 @@ public static partial class SymbolExtractor
         ],
     };
 
+    private static readonly Regex DockerfileEnvKeyValueRegex = new(
+        @"(?:^|\s)(?<name>[A-Za-z_][A-Za-z0-9_]*)=",
+        RegexOptions.Compiled);
+
     /// <summary>
     /// Return the set of languages that have symbol-extraction patterns.
     /// シンボル抽出パターンを持つ言語のセットを返す。
@@ -2090,6 +2094,9 @@ public static partial class SymbolExtractor
                 TryAddGoLabelSymbol(fileId, line, i, symbols);
             if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols))
                 continue;
+
+            if (lang == "dockerfile")
+                AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
@@ -3731,6 +3738,48 @@ public static partial class SymbolExtractor
     }
 
     private readonly record struct SameLineSignatureKey(int Line, int StartLine, string Signature);
+
+    private static void AddDockerfileAdditionalEnvSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length <= 3
+            || !trimmed.StartsWith("ENV", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[3]))
+        {
+            return;
+        }
+
+        var first = true;
+        foreach (Match match in DockerfileEnvKeyValueRegex.Matches(trimmed[3..].TrimStart()))
+        {
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+
+            var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
+    }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(
         long fileId,

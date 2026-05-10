@@ -20211,6 +20211,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsMultipleEnvKeyValueSymbols()
+    {
+        var content = "ENV APP_HOME=/app NODE_ENV=production PATH=/usr/local/bin:$PATH\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NODE_ENV");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
