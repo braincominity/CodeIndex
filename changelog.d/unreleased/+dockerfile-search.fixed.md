@@ -46,6 +46,7 @@ affected:
 - **Dockerfile `RUN --mount` stage references are limited to BuildKit options** — later shell command arguments named `--mount` no longer create phantom dependencies.
 - **Quoted Dockerfile `RUN --mount` stage names are indexed** — `RUN --mount=type=bind,from="assets"` now links back to the `assets` stage.
 - **Dockerfile `ONBUILD RUN --mount` stage dependencies are indexed** — trigger instructions now link mount `from=` stages.
+- **Dockerfile `USER` principals become symbols** — `USER appuser` now indexes `appuser` as a property symbol.
 
 ## 日本語
 
@@ -83,3 +84,4 @@ affected:
 - **Dockerfile `RUN --mount` の stage reference を BuildKit option に限定しました** — 後続の shell command argument にある `--mount` から架空の dependency を作らないようになりました。
 - **quote 付き Dockerfile `RUN --mount` の stage 名を index するようになりました** — `RUN --mount=type=bind,from="assets"` が `assets` stage に結びつくようになりました。
 - **Dockerfile `ONBUILD RUN --mount` の stage dependency を index するようになりました** — trigger instruction の mount `from=` stage も結びつくようになりました。
+- **Dockerfile `USER` principal を symbol として扱うようになりました** — `USER appuser` が `appuser` property symbol として index されるようになりました。

@@ -1656,6 +1656,7 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("property", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("property", new Regex(@"^\s*EXPOSE\s+(?<name>\d+(?:/(?:tcp|udp))?)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("property", new Regex(@"^\s*USER\s+(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("function", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+(?:AS|as)\s+(?<name>[A-Za-z0-9_.-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Named stage / 名前付きステージ
             new("class",    new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Base image / ベースイメージ
         ],
