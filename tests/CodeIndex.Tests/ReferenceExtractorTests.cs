@@ -10077,6 +10077,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockTypeAliasTargets_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /**
+             * @phpstan-type UserShape array{owner:\App\Models\User,invoice:Invoice}
+             */
+            final class Shapes {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Models\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Invoice" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "array" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
