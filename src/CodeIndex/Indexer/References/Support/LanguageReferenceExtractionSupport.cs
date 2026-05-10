@@ -347,6 +347,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranNamelistLineRegex = new(
         @"^\s*namelist\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranEquivalenceLineRegex = new(
+        @"^\s*equivalence\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranParenthesizedNameListRegex = new(
+        @"\((?<list>[^()]*)\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranSlashGroupNameRegex = new(
         @"/\s*(?<name>[A-Za-z_]\w*)\s*/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -3846,6 +3852,19 @@ internal static class LanguageReferenceExtractionSupport
             {
                 var group = match.Groups["name"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+            }
+        }
+
+        if (FortranEquivalenceLineRegex.IsMatch(preparedLine))
+        {
+            foreach (Match listMatch in FortranParenthesizedNameListRegex.Matches(preparedLine))
+            {
+                var list = listMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 

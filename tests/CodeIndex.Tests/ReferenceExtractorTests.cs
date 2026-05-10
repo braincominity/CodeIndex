@@ -11580,6 +11580,7 @@ public class ReferenceExtractorTests
                 common /repository_state/ status_code, delimiter
                 common anonymous_state, anonymous_flag
                 namelist /repository_config/ delimiter, status_code
+                equivalence (status_code, legacy_status), (delimiter, legacy_delimiter)
                 external legacy_hook, repository_probe
                 intrinsic sin, cos
                 value = prefix() // suffix()
@@ -11650,6 +11651,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "anonymous_flag" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "legacy_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_delimiter" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_probe" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "sin" && r.ReferenceKind == "reference");
