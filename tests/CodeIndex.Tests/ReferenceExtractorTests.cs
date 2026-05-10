@@ -2155,6 +2155,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileRunMountReferences_IgnoresQuotedShellText()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            RUN echo "--mount=type=bind,from=assets,target=/mnt/assets"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_DockerfileCopyFromReferences_IgnoresTaggedExternalImages()
     {
         const string content = """

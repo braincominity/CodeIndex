@@ -42,6 +42,7 @@ affected:
 - **Dockerfile `EXPOSE` ports become symbols** — `EXPOSE 8080/tcp` now indexes `8080/tcp` as a property symbol.
 - **Dockerfile multi-port `EXPOSE` lines expose every port** — `EXPOSE 80 443/tcp 53/udp` now indexes all listed ports.
 - **Quoted Dockerfile `COPY --from` stage names are indexed** — `COPY --from="builder"` now links back to the `builder` stage.
+- **Dockerfile `RUN --mount` text in shell strings stays ignored** — quoted command text no longer creates phantom stage references.
 
 ## 日本語
 
@@ -75,3 +76,4 @@ affected:
 - **Dockerfile の `EXPOSE` port を symbol として扱うようになりました** — `EXPOSE 8080/tcp` が `8080/tcp` property symbol として index されるようになりました。
 - **Dockerfile の複数 port `EXPOSE` 行ですべての port を出すようになりました** — `EXPOSE 80 443/tcp 53/udp` が列挙されたすべての port を index するようになりました。
 - **quote 付き Dockerfile `COPY --from` の stage 名を index するようになりました** — `COPY --from="builder"` が `builder` stage に結びつくようになりました。
+- **Dockerfile `RUN --mount` のshell文字列内テキストは無視し続けるようにしました** — quote 付き command text から架空の stage reference を作らないようになりました。

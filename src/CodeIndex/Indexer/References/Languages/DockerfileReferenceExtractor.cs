@@ -113,7 +113,7 @@ internal static class DockerfileReferenceExtractor
         if (!preparedLine.TrimStart().StartsWith("RUN", StringComparison.OrdinalIgnoreCase))
             return;
 
-        foreach (Match match in RunMountFromReferenceRegex.Matches(originalLine))
+        foreach (Match match in RunMountFromReferenceRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (!stageNames.Contains(name))
