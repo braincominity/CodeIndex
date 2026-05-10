@@ -23201,6 +23201,7 @@ public class SymbolExtractorTests
     {
         var content = """
             class My::Widget {
+                field $name;
                 method render {
                     return 1;
                 }
@@ -23210,6 +23211,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "perl", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "My::Widget");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
 }
