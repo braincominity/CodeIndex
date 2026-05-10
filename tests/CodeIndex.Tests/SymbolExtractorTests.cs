@@ -12481,6 +12481,11 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+
+        var profile = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "profile");
+        var profileLine = content.Split('\n')[profile.Line - 1];
+        Assert.NotNull(profile.StartColumn);
+        Assert.Equal('p', profileLine[profile.StartColumn.Value]);
     }
 
     [Fact]

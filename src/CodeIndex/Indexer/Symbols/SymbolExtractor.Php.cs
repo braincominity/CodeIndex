@@ -318,11 +318,21 @@ public static partial class SymbolExtractor
             if (ch != ',' || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
                 continue;
 
-            yield return (text[segmentStart..index].Trim(), segmentStart);
+            yield return TrimPhpCommaSegment(text, segmentStart, index);
             segmentStart = index + 1;
         }
 
-        yield return (text[segmentStart..].Trim(), segmentStart);
+        yield return TrimPhpCommaSegment(text, segmentStart, text.Length);
+    }
+
+    private static (string Text, int StartColumn) TrimPhpCommaSegment(string text, int start, int end)
+    {
+        while (start < end && char.IsWhiteSpace(text[start]))
+            start++;
+        while (end > start && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        return (text[start..end], start);
     }
 
 }
