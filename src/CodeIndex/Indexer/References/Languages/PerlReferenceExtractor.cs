@@ -12,6 +12,9 @@ internal static class PerlReferenceExtractor
     private static readonly Regex BaseModuleReferenceRegex = new(
         @"^\s*use\s+(?:base|parent)\s+(?<args>.+?);?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex MooseInheritanceReferenceRegex = new(
+        @"^\s*(?:extends|with)\s+(?<args>.+?);?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex QuotedModuleRegex = new(
         @"['""](?<name>[\p{L}_][\w:]*)['""]|qw\s*\((?<paren>[^)]*)\)|qw\s*\[(?<bracket>[^\]]*)\]|qw\s*\{(?<brace>[^}]*)\}|qw\s*<(?<angle>[^>]*)>|qw\s*/(?<slash>[^/]*)/",
@@ -35,6 +38,7 @@ internal static class PerlReferenceExtractor
     {
         EmitModuleReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitBaseModuleReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitMooseInheritanceReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitArrowCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall, addCallLikeReference);
     }
 
@@ -86,24 +90,7 @@ internal static class PerlReferenceExtractor
         if (!match.Success)
             return;
 
-        var args = match.Groups["args"].Value;
-        var argsStart = match.Groups["args"].Index;
-        foreach (Match moduleMatch in QuotedModuleRegex.Matches(args))
-        {
-            if (moduleMatch.Groups["name"].Success)
-            {
-                AddBaseModuleReference(moduleMatch.Groups["name"].Value, argsStart + moduleMatch.Groups["name"].Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
-                continue;
-            }
-
-            if (!TryGetQwNamesGroup(moduleMatch, out var namesGroup))
-                continue;
-
-            var names = namesGroup.Value;
-            var namesStart = argsStart + namesGroup.Index;
-            foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
-                AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
-        }
+        AddQuotedModuleReferences(match.Groups["args"], references, seen, fileId, context, lineNumber, resolveContainerForCall);
     }
 
     private static bool TryGetQwNamesGroup(Match moduleMatch, out Group namesGroup)
@@ -139,6 +126,51 @@ internal static class PerlReferenceExtractor
             context,
             lineNumber,
             resolveContainerForCall(column));
+    }
+
+    private static void EmitMooseInheritanceReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = MooseInheritanceReferenceRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        AddQuotedModuleReferences(match.Groups["args"], references, seen, fileId, context, lineNumber, resolveContainerForCall);
+    }
+
+    private static void AddQuotedModuleReferences(
+        Group argsGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var args = argsGroup.Value;
+        var argsStart = argsGroup.Index;
+        foreach (Match moduleMatch in QuotedModuleRegex.Matches(args))
+        {
+            if (moduleMatch.Groups["name"].Success)
+            {
+                AddBaseModuleReference(moduleMatch.Groups["name"].Value, argsStart + moduleMatch.Groups["name"].Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+                continue;
+            }
+
+            if (!TryGetQwNamesGroup(moduleMatch, out var namesGroup))
+                continue;
+
+            var names = namesGroup.Value;
+            var namesStart = argsStart + namesGroup.Index;
+            foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
+                AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        }
     }
 
     private static void EmitArrowCallReferences(

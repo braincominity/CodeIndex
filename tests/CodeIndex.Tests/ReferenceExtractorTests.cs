@@ -28380,6 +28380,8 @@ public class ReferenceExtractorTests
             use base qw{My::BraceBase My::BraceRole};
             use parent qw/My::SlashBase My::SlashRole/;
             use base qw<My::AngleBase My::AngleRole>;
+            extends 'My::MooseBase';
+            with qw(My::MooseRole My::OtherRole);
 
             sub render {
                 My::Widget->new();
@@ -28406,6 +28408,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "My::SlashRole" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::AngleBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::AngleRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::MooseBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::MooseRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::OtherRole" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Widget" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r =>
             r.SymbolName == "helper"
