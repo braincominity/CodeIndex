@@ -35,6 +35,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*::)?[A-Za-z_]\w*\s+as\s+(?:(?:public|protected|private)\s+)?(?<name>(?!public\b|protected\b|private\b)[A-Za-z_]\w*)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpDocblockTypeAliasRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?type\s+(?<name>[A-Za-z_]\w*)\s+(?<returnType>\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -264,6 +268,37 @@ public static partial class SymbolExtractor
                     StartColumn = nameGroup.Index,
                     EndLine = lineNumber,
                     Signature = line.Trim(),
+                },
+                line);
+        }
+    }
+
+    private static void ExtractPhpDocblockTypeAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var match = PhpDocblockTypeAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "type",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                    ReturnType = match.Groups["returnType"].Value,
                 },
                 line);
         }

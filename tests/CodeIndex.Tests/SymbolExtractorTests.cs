@@ -12613,6 +12613,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsDocblockTypeAliases()
+    {
+        var content = """
+            <?php
+            /**
+             * @phpstan-type UserShape array{id:int,name:string}
+             * @psalm-type EmailAddress non-empty-string
+             */
+            class UserTypes {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "UserShape" && s.ReturnType == "array{id:int,name:string}");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "EmailAddress" && s.ReturnType == "non-empty-string");
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsDefineConstants()
     {
         var content = """
