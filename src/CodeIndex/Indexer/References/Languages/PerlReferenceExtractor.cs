@@ -27,6 +27,9 @@ internal static class PerlReferenceExtractor
     private static readonly Regex ArrowCallRegex = new(
         @"(?<receiver>(?:[\p{L}_][\w:]*)|\$[\p{L}_]\w*)\s*->\s*(?<name>[\p{L}_]\w*)\s*(?:\(|\b)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex QualifiedFunctionCallRegex = new(
+        @"(?<![\w:])(?<name>[\p{L}_]\w*(?:::[\p{L}_]\w*)+)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitAdditionalReferences(
         string preparedLine,
@@ -43,6 +46,7 @@ internal static class PerlReferenceExtractor
         EmitRequiredModulePathReference(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitBaseModuleReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitMooseInheritanceReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitQualifiedFunctionCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitArrowCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall, addCallLikeReference);
     }
 
@@ -234,5 +238,39 @@ internal static class PerlReferenceExtractor
                 lineNumber,
                 resolveContainerForCall(receiverGroup.Index));
         }
+    }
+
+    private static void EmitQualifiedFunctionCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        foreach (Match match in QualifiedFunctionCallRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (IsQualifiedSubroutineDefinition(preparedLine, nameGroup.Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                resolveContainerForCall(nameGroup.Index));
+        }
+    }
+
+    private static bool IsQualifiedSubroutineDefinition(string line, int nameIndex)
+    {
+        var prefix = line[..nameIndex].TrimEnd();
+        return prefix.EndsWith("sub", StringComparison.Ordinal);
     }
 }

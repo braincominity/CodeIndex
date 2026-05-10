@@ -28424,5 +28424,29 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
             && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "My::Util::format"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_Perl_DoesNotTreatQualifiedSubSignatureAsCall()
+    {
+        const string content = """
+            package My::App;
+
+            sub My::Util::format ($value) {
+                return $value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "My::Util::format"
+            && r.ReferenceKind == "call");
     }
 }
