@@ -220,6 +220,9 @@ public static partial class SymbolExtractor
     private static readonly Regex RustMultilineImplTypeRegex = new(
         @"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?<name>" + RustIdentifierPattern + @")(?!\s+for\b)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex DockerfileNamedFromImageRegex = new(
+        @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)\s+(?:AS|as)\s+[A-Za-z0-9_.-]+",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2103,6 +2106,7 @@ public static partial class SymbolExtractor
                 AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
+                AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];
@@ -4030,6 +4034,37 @@ public static partial class SymbolExtractor
         => token.Length > 0
            && token[0] != '#'
            && token[0] != '[';
+
+    private static void AddDockerfileNamedStageBaseImageSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var match = DockerfileNamedFromImageRegex.Match(line);
+        if (!match.Success)
+            return;
+
+        var name = match.Groups["name"].Value;
+        if (symbols.Any(symbol => symbol.Kind == "function" && symbol.Name == name))
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+            },
+            line);
+    }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(
         long fileId,

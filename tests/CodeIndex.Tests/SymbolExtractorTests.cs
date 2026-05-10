@@ -20184,13 +20184,12 @@ public class SymbolExtractorTests
         var content = "FROM node:18 AS builder\nWORKDIR /app\nCOPY . .\nRUN npm build\n\nFROM alpine:3.18\nCOPY --from=builder /app/dist /app\n";
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
-        // Named stages (AS builder) take priority over base image on the same line
-        // 同一行では名前付きステージ(AS builder)がベースイメージより優先
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "node:18");
         // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app");
-        Assert.Equal(3, symbols.Count);
+        Assert.Equal(4, symbols.Count);
     }
 
     [Fact]
@@ -20205,10 +20204,11 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
-        Assert.Equal(4, symbols.Count);
+        Assert.Equal(5, symbols.Count);
     }
 
     [Fact]
@@ -20361,10 +20361,26 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "--platform=$BUILDPLATFORM");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
-        Assert.Equal(2, symbols.Count);
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_NamedStageBaseImagesSkipPriorStages()
+    {
+        var content = """
+            FROM alpine AS builder
+            FROM builder AS runtime
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "runtime");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "builder");
+        Assert.Equal(3, symbols.Count);
     }
 
     [Fact]
