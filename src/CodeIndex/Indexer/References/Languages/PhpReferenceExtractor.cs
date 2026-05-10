@@ -29,6 +29,10 @@ internal static class PhpReferenceExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@var\s+(?<types>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex DocblockThrowsTypeRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@throws\s+(?<types>\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex DocblockTypeNameRegex = new(
         @"(?<![-\w\\])\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\[\])?(?![-\w\\])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -141,6 +145,24 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container)
         => EmitDocblockTypeReferences(
             DocblockVarTypeRegex,
+            originalLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+    public static void EmitDocblockThrowsTypeReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+        => EmitDocblockTypeReferences(
+            DocblockThrowsTypeRegex,
             originalLine,
             references,
             seen,
