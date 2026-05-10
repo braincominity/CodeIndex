@@ -1325,6 +1325,22 @@ public static partial class ReferenceExtractor
                 }
             }
 
+            if (language == "php" && originalLine.Contains("@property", StringComparison.OrdinalIgnoreCase))
+            {
+                var docblockContext = originalLine.Trim();
+                if (docblockContext.Length > 0)
+                {
+                    PhpReferenceExtractor.EmitDocblockPropertyTypeReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        docblockContext,
+                        lineNumber,
+                        FindInnermostContainer(containerCandidates, lineNumber));
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
