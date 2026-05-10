@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.CompilerServices;
 using CodeIndex.Models;
@@ -3995,7 +3996,10 @@ public static partial class SymbolExtractor
 
         var body = trimmed[6..].TrimStart();
         if (body.StartsWith("[", StringComparison.Ordinal))
+        {
+            AddDockerfileJsonVolumeSymbols(fileId, line, lineNumber, symbols, body);
             return;
+        }
 
         var first = true;
         foreach (var token in body.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -4034,6 +4038,50 @@ public static partial class SymbolExtractor
         => token.Length > 0
            && token[0] != '#'
            && token[0] != '[';
+
+    private static void AddDockerfileJsonVolumeSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols,
+        string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return;
+
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                    continue;
+
+                var name = item.GetString();
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = name,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber,
+                        Signature = line.Trim(),
+                    },
+                    line);
+            }
+        }
+        catch (JsonException)
+        {
+        }
+    }
 
     private static void AddDockerfileNamedStageBaseImageSymbol(
         long fileId,
