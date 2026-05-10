@@ -9882,6 +9882,7 @@ public class ReferenceExtractorTests
             <?php
             /**
              * @return \App\Http\Response|JsonPayload|null
+             * @psalm-return \App\Http\StreamedResponse
              */
             function respond() {}
             ?>
@@ -9893,6 +9894,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\Response" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Response" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "JsonPayload" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Http\\StreamedResponse" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "StreamedResponse" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
     }
 

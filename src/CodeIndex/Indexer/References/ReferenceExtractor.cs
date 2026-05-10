@@ -1229,7 +1229,7 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            if (language == "php" && originalLine.Contains("@return", StringComparison.OrdinalIgnoreCase))
+            if (language == "php" && originalLine.Contains("return", StringComparison.OrdinalIgnoreCase))
             {
                 var docblockContext = originalLine.Trim();
                 if (docblockContext.Length > 0)
