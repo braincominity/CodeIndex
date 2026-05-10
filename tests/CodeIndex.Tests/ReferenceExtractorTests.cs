@@ -11578,6 +11578,7 @@ public class ReferenceExtractorTests
                 real(kind=real64) :: elapsed
                 character(kind=c_char, len=1) :: delimiter
                 common /repository_state/ status_code, delimiter
+                common anonymous_state, anonymous_flag
                 namelist /repository_config/ delimiter, status_code
                 external legacy_hook, repository_probe
                 intrinsic sin, cos
@@ -11645,6 +11646,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "repository_config" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("common", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("common", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "anonymous_state" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "anonymous_flag" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference");
