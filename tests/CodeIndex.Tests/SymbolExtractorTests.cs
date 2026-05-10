@@ -23214,4 +23214,21 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesRoleFeatureDeclarations()
+    {
+        var content = """
+            role My::Renderable {
+                method render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "My::Renderable");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
 }
