@@ -43,6 +43,7 @@ affected:
 - **Dockerfile multi-port `EXPOSE` lines expose every port** — `EXPOSE 80 443/tcp 53/udp` now indexes all listed ports.
 - **Quoted Dockerfile `COPY --from` stage names are indexed** — `COPY --from="builder"` now links back to the `builder` stage.
 - **Dockerfile `RUN --mount` text in shell strings stays ignored** — quoted command text no longer creates phantom stage references.
+- **Dockerfile `RUN --mount` stage references are limited to BuildKit options** — later shell command arguments named `--mount` no longer create phantom dependencies.
 
 ## 日本語
 
@@ -77,3 +78,4 @@ affected:
 - **Dockerfile の複数 port `EXPOSE` 行ですべての port を出すようになりました** — `EXPOSE 80 443/tcp 53/udp` が列挙されたすべての port を index するようになりました。
 - **quote 付き Dockerfile `COPY --from` の stage 名を index するようになりました** — `COPY --from="builder"` が `builder` stage に結びつくようになりました。
 - **Dockerfile `RUN --mount` のshell文字列内テキストは無視し続けるようにしました** — quote 付き command text から架空の stage reference を作らないようになりました。
+- **Dockerfile `RUN --mount` の stage reference を BuildKit option に限定しました** — 後続の shell command argument にある `--mount` から架空の dependency を作らないようになりました。

@@ -14,7 +14,7 @@ internal static class DockerfileReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
-        @"(?:^|\s)--mount=\S*\bfrom=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
+        @"(?:^|,)from=(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex BracedVariableReferenceRegex = new(
@@ -110,27 +110,130 @@ internal static class DockerfileReferenceExtractor
                 container);
         }
 
-        if (!preparedLine.TrimStart().StartsWith("RUN", StringComparison.OrdinalIgnoreCase))
+        EmitRunMountReferences(
+            originalLine,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            stageNames,
+            container);
+    }
+
+    private static void EmitRunMountReferences(
+        string line,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string> stageNames,
+        SymbolRecord? container)
+    {
+        if (!TryGetRunOptionsStart(line, out var index))
             return;
 
-        foreach (Match match in RunMountFromReferenceRegex.Matches(preparedLine))
+        while (index < line.Length)
         {
-            var name = match.Groups["name"].Value;
-            if (!stageNames.Contains(name))
-                continue;
+            index = SkipWhitespace(line, index);
+            if (index >= line.Length || !StartsWith(line, index, "--"))
+                return;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                match.Groups["name"].Index,
-                "call",
-                context,
-                lineNumber,
-                container);
+            var optionStart = index;
+            var optionEnd = ScanOptionToken(line, optionStart);
+            if (optionEnd <= optionStart)
+                return;
+
+            var option = line.Substring(optionStart, optionEnd - optionStart);
+            if (option.StartsWith("--mount=", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (Match match in RunMountFromReferenceRegex.Matches(option["--mount=".Length..]))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (!stageNames.Contains(name))
+                        continue;
+
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        optionStart + "--mount=".Length + match.Groups["name"].Index,
+                        "call",
+                        context,
+                        lineNumber,
+                        container);
+                }
+            }
+
+            index = optionEnd;
         }
     }
+
+    private static bool TryGetRunOptionsStart(string line, out int index)
+    {
+        index = SkipWhitespace(line, 0);
+        if (!StartsWith(line, index, "RUN"))
+            return false;
+
+        var afterRun = index + "RUN".Length;
+        if (afterRun < line.Length && !char.IsWhiteSpace(line[afterRun]))
+            return false;
+
+        index = afterRun;
+        return true;
+    }
+
+    private static int ScanOptionToken(string line, int index)
+    {
+        var quote = '\0';
+        while (index < line.Length)
+        {
+            var c = line[index];
+            if (quote != '\0')
+            {
+                if (c == '\\' && index + 1 < line.Length)
+                {
+                    index += 2;
+                    continue;
+                }
+
+                if (c == quote)
+                    quote = '\0';
+
+                index++;
+                continue;
+            }
+
+            if (c is '"' or '\'')
+            {
+                quote = c;
+                index++;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+                break;
+
+            index++;
+        }
+
+        return index;
+    }
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index;
+    }
+
+    private static bool StartsWith(string text, int index, string value)
+        => index >= 0
+           && index + value.Length <= text.Length
+           && string.Compare(text, index, value, 0, value.Length, StringComparison.OrdinalIgnoreCase) == 0;
 
     public static void EmitVariableReferences(
         string preparedLine,
