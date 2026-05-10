@@ -20266,6 +20266,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsExposePortSymbols()
+    {
+        var content = "EXPOSE 8080/tcp\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "8080/tcp");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
