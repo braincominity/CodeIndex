@@ -1270,6 +1270,8 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*(?<returnType>(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)))\s*(?:,\s*(?![^:\r\n]*\bparameter\b)[^:\r\n]*)?::\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
             // Old-style typed variables without :: / :: なしの旧形式型付き変数
             new("property", new Regex(@"^\s*(?<returnType>(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)))\s+(?!(?:function|subroutine)\b)(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            // Attribute-only variables / 属性のみの変数宣言
+            new("property", new Regex(@"^\s*(?:(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*,\s*)*(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*(?:::)?\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Entry points / entry 手続き
