@@ -9816,7 +9816,30 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "trim_name" && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\make_profile" && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference => reference.SymbolName == "make_profile" && reference.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_PhpUseConstImports_EmitReferences()
+    {
+        const string content = """
+            <?php
+            use const App\Config\DEFAULT_ROLE as ROLE;
+            use const App\Config\{APP_NAME, TIMEOUT as TIMEOUT_LIMIT};
+            use App\Mixed\{User, function make_profile, const DEFAULT_PROFILE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\DEFAULT_ROLE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "DEFAULT_ROLE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\APP_NAME" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "APP_NAME" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Config\\TIMEOUT" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "TIMEOUT" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Mixed\\DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference => reference.SymbolName == "DEFAULT_PROFILE" && reference.ReferenceKind == "reference");
     }
 
     [Fact]

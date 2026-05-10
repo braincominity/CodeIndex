@@ -49,7 +49,11 @@ internal static class PhpReferenceExtractor
         @"^\s*use\s+function\s+(?<imports>.+?)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    private static readonly Regex UseFunctionItemRegex = new(
+    private static readonly Regex UseConstRegex = new(
+        @"^\s*use\s+const\s+(?<imports>.+?)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex UseImportItemRegex = new(
         @"(?:^|,)\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
@@ -59,6 +63,10 @@ internal static class PhpReferenceExtractor
 
     private static readonly Regex GroupUseFunctionRegex = new(
         @"^\s*use\s+function\s+(?<prefix>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\\\{\s*(?<items>[^{}]+?)\s*\}\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex GroupUseConstRegex = new(
+        @"^\s*use\s+const\s+(?<prefix>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\\\{\s*(?<items>[^{}]+?)\s*\}\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex GroupUseTypeItemRegex = new(
@@ -400,14 +408,14 @@ internal static class PhpReferenceExtractor
         var groupFunctionMatch = GroupUseFunctionRegex.Match(preparedLine);
         if (groupFunctionMatch.Success)
         {
-            EmitGroupUseFunctionReferences(groupFunctionMatch, references, seen, fileId, context, lineNumber, container, requireFunctionKind: false);
+            EmitGroupUseImportReferences(groupFunctionMatch, references, seen, fileId, context, lineNumber, container, "function", requireImportKind: false);
             return;
         }
 
         var groupMatch = GroupUseTypeRegex.Match(preparedLine);
         if (groupMatch.Success)
         {
-            EmitGroupUseFunctionReferences(groupMatch, references, seen, fileId, context, lineNumber, container, requireFunctionKind: true);
+            EmitGroupUseImportReferences(groupMatch, references, seen, fileId, context, lineNumber, container, "function", requireImportKind: true);
             return;
         }
 
@@ -416,7 +424,51 @@ internal static class PhpReferenceExtractor
             return;
 
         var importsGroup = match.Groups["imports"];
-        foreach (Match itemMatch in UseFunctionItemRegex.Matches(importsGroup.Value))
+        foreach (Match itemMatch in UseImportItemRegex.Matches(importsGroup.Value))
+        {
+            var itemGroup = itemMatch.Groups["name"];
+            AddPhpReferenceFromName(
+                itemGroup.Value,
+                importsGroup.Index + itemGroup.Index,
+                "reference",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitUseConstReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var groupConstMatch = GroupUseConstRegex.Match(preparedLine);
+        if (groupConstMatch.Success)
+        {
+            EmitGroupUseImportReferences(groupConstMatch, references, seen, fileId, context, lineNumber, container, "const", requireImportKind: false);
+            return;
+        }
+
+        var groupMatch = GroupUseTypeRegex.Match(preparedLine);
+        if (groupMatch.Success)
+        {
+            EmitGroupUseImportReferences(groupMatch, references, seen, fileId, context, lineNumber, container, "const", requireImportKind: true);
+            return;
+        }
+
+        var match = UseConstRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        var importsGroup = match.Groups["imports"];
+        foreach (Match itemMatch in UseImportItemRegex.Matches(importsGroup.Value))
         {
             var itemGroup = itemMatch.Groups["name"];
             AddPhpReferenceFromName(
@@ -474,7 +526,7 @@ internal static class PhpReferenceExtractor
         }
     }
 
-    private static void EmitGroupUseFunctionReferences(
+    private static void EmitGroupUseImportReferences(
         Match groupMatch,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -482,7 +534,8 @@ internal static class PhpReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        bool requireFunctionKind)
+        string importKind,
+        bool requireImportKind)
     {
         var prefixGroup = groupMatch.Groups["prefix"];
         var prefix = prefixGroup.Value.TrimEnd('\\');
@@ -492,9 +545,9 @@ internal static class PhpReferenceExtractor
         var itemsGroup = groupMatch.Groups["items"];
         foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
         {
-            var isFunctionImport = itemMatch.Groups["kind"].Success
-                && itemMatch.Groups["kind"].Value.Equals("function", StringComparison.OrdinalIgnoreCase);
-            if (requireFunctionKind != isFunctionImport)
+            var isTargetKind = itemMatch.Groups["kind"].Success
+                && itemMatch.Groups["kind"].Value.Equals(importKind, StringComparison.OrdinalIgnoreCase);
+            if (requireImportKind != isTargetKind)
                 continue;
 
             var itemGroup = itemMatch.Groups["name"];
