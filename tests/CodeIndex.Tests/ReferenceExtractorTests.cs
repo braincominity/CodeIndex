@@ -9752,6 +9752,9 @@ public class ReferenceExtractorTests
             use const App\Service\USER_ROLE;
             class Consumer {
                 use Auditable, SoftDeletes;
+                use Timestampable, Blameable {
+                    Timestampable::touch insteadof Blameable;
+                }
             }
             ?>
             """;
@@ -9763,6 +9766,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "UserService" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Auditable" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "SoftDeletes" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Timestampable" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Blameable" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "make_user" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "USER_ROLE" && reference.ReferenceKind == "type_reference");
     }
