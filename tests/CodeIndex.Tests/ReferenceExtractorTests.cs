@@ -11582,6 +11582,8 @@ public class ReferenceExtractorTests
                 external legacy_hook, repository_probe
                 intrinsic sin, cos
                 value = prefix() // suffix()
+                callback => repository_resolver
+                callback => null()
                 call process(repo)
                 call repo%persist()
                 allocate(RepositoryAllocator :: allocated_repo)
@@ -11645,6 +11647,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "repository_probe" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "sin" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "cos" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_resolver" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "CompactFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "CompactOnlyFactory" && r.ReferenceKind == "type_reference");
