@@ -23140,6 +23140,14 @@ public class SymbolExtractorTests
             state sub cached_helper {
                 return THIRD_LIMIT;
             }
+
+            method dispatch ($request) {
+                return render($request);
+            }
+
+            fun normalize ($value) {
+                return $value;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "perl", content);
@@ -23154,6 +23162,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "local_helper");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cached_helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dispatch");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
     }
 
     [Fact]
