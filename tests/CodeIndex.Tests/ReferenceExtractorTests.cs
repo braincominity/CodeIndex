@@ -9887,6 +9887,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockVarTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            /** @var \App\Cache\Store<CacheItem>|null $store */
+            $store = resolve_store();
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Cache\\Store" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Store" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "CacheItem" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
