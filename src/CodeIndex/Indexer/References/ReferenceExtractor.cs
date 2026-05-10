@@ -1029,6 +1029,7 @@ public static partial class ReferenceExtractor
         var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
+        var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
         var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
@@ -1646,12 +1647,22 @@ public static partial class ReferenceExtractor
             {
                 DockerfileReferenceExtractor.EmitStageReferences(
                     preparedLine,
+                    originalLine,
                     context,
                     lineNumber,
                     references,
                     seen,
                     fileId,
                     dockerfileStageNames,
+                    container);
+                DockerfileReferenceExtractor.EmitVariableReferences(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    dockerfileVariableNames,
                     container);
             }
 

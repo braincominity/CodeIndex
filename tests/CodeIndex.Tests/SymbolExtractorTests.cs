@@ -20184,12 +20184,12 @@ public class SymbolExtractorTests
         var content = "FROM node:18 AS builder\nWORKDIR /app\nCOPY . .\nRUN npm build\n\nFROM alpine:3.18\nCOPY --from=builder /app/dist /app\n";
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
-        // Named stages (AS builder) take priority over base image on the same line
-        // 同一行では名前付きステージ(AS builder)がベースイメージより優先
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "node:18");
         // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
-        Assert.Equal(2, symbols.Count);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app");
+        Assert.Equal(5, symbols.Count);
     }
 
     [Fact]
@@ -20204,10 +20204,249 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
-        Assert.Equal(4, symbols.Count);
+        Assert.Equal(5, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsMultipleEnvKeyValueSymbols()
+    {
+        var content = "ENV APP_HOME=/app NODE_ENV=production PATH=/usr/local/bin:$PATH\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NODE_ENV");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PATH");
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_MultipleEnvKeyValueSymbolsIgnoreQuotedValueAssignments()
+    {
+        var content = "ENV APP_HOME=\"/opt BAR=not-a-key\" NODE_ENV=production\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NODE_ENV");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "BAR");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsLabelKeySymbols()
+    {
+        var content = "LABEL org.opencontainers.image.title=\"demo\"\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "org.opencontainers.image.title");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsMultipleLabelKeySymbols()
+    {
+        var content = "LABEL org.opencontainers.image.title=\"demo\" org.opencontainers.image.version=\"1.0\"\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "org.opencontainers.image.title");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "org.opencontainers.image.version");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsLegacyLabelKeySymbols()
+    {
+        var content = "LABEL com.example.channel stable\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "com.example.channel");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsExposePortSymbols()
+    {
+        var content = "EXPOSE 8080/tcp\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "8080/tcp");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsMultipleExposePortSymbols()
+    {
+        var content = "EXPOSE 80 443/tcp 53/udp\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "80");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "443/tcp");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "53/udp");
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsUserSymbols()
+    {
+        var content = "USER appuser\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "appuser");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsUserGroupSymbols()
+    {
+        var content = "USER appuser:appgroup\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "appuser:appgroup");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "appuser");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsWorkdirSymbols()
+    {
+        var content = "WORKDIR /app/service\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app/service");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsVolumePathSymbols()
+    {
+        var content = "VOLUME /var/lib/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsMultipleVolumePathSymbols()
+    {
+        var content = "VOLUME /var/lib/app /var/cache/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/cache/app");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_VolumePathSymbolsIgnoreInlineComments()
+    {
+        var content = "VOLUME /var/lib/app # /not-a-volume\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/not-a-volume");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsJsonVolumePathSymbols()
+    {
+        var content = "VOLUME [\"/var/lib/app\", \"/var/cache/app\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/cache/app");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsStopSignalSymbols()
+    {
+        var content = "STOPSIGNAL SIGTERM\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SIGTERM");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsShellExecutableSymbols()
+    {
+        var content = "SHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/bin/bash");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "-o");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsCopyDestinationPathSymbols()
+    {
+        var content = "COPY --from=builder /src/app /usr/local/bin/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/usr/local/bin/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/src/app");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsAddDestinationPathSymbols()
+    {
+        var content = "ADD archive.tar.gz /opt/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/opt/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "archive.tar.gz");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsJsonCopyDestinationPathSymbols()
+    {
+        var content = "COPY --chmod=0644 [\"package.json\", \"/app/package.json\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/app/package.json");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "package.json");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsJsonAddDestinationPathSymbols()
+    {
+        var content = "ADD [\"archive.tar.gz\", \"/opt/app\"]\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/opt/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "archive.tar.gz");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsOnbuildCopyDestinationPathSymbols()
+    {
+        var content = "ONBUILD COPY /src/app /usr/local/bin/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/usr/local/bin/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/src/app");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsOnbuildAddDestinationPathSymbols()
+    {
+        var content = "ONBUILD ADD archive.tar.gz /opt/app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/opt/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "archive.tar.gz");
+        Assert.Single(symbols);
     }
 
     [Fact]
@@ -20220,10 +20459,26 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.20");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "--platform=$BUILDPLATFORM");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "golang:1.22");
-        Assert.Equal(2, symbols.Count);
+        Assert.Equal(3, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_NamedStageBaseImagesSkipPriorStages()
+    {
+        var content = """
+            FROM alpine AS builder
+            FROM builder AS runtime
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "runtime");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "builder");
+        Assert.Equal(3, symbols.Count);
     }
 
     [Fact]
@@ -20242,6 +20497,32 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name.Contains("node:${NODE_VERSION}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsHyphenatedStageNames()
+    {
+        var content = """
+            FROM node:20 AS build-env
+            FROM build-env AS runtime
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build-env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "runtime");
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsDottedStageNames()
+    {
+        var content = """
+            FROM node:20 AS build.env
+            FROM build.env AS runtime
+            """;
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build.env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "runtime");
     }
 
     [Fact]

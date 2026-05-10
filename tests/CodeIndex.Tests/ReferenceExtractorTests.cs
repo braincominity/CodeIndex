@@ -2079,6 +2079,337 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IndexHyphenatedStageNames()
+    {
+        const string content = """
+            FROM node:20 AS build-env
+
+            FROM build-env AS runtime
+            COPY --from=build-env /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "build-env"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexDottedStageNames()
+    {
+        const string content = """
+            FROM node:20 AS build.env
+
+            FROM build.env AS runtime
+            COPY --from=build.env /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "build.env"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexMultipleStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+            FROM alpine AS cache
+
+            FROM alpine AS runtime
+            RUN --mount=type=bind,from=assets,target=/assets --mount=type=bind,from=cache,target=/cache true
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "cache"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexQuotedStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            RUN --mount=type=bind,from="assets",target=/mnt/assets cp -r /mnt/assets /app/assets
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IndexOnbuildStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            ONBUILD RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IgnoresQuotedShellText()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            RUN echo "--mount=type=bind,from=assets,target=/mnt/assets"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_DockerfileRunMountReferences_IgnoresCommandArguments()
+    {
+        const string content = """
+            FROM alpine AS assets
+
+            FROM alpine AS runtime
+            RUN echo --mount=type=bind,from=assets,target=/mnt/assets
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "assets"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IgnoresTaggedExternalImages()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            COPY --from=builder:latest /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IgnoresDigestExternalImages()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            COPY --from=builder@sha256:123abc /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IndexOnbuildStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            ONBUILD COPY --from=builder /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileCopyFromReferences_IndexQuotedStageDependencies()
+    {
+        const string content = """
+            FROM alpine AS builder
+
+            FROM alpine AS runtime
+            COPY --from="builder" /src/app /usr/local/bin/app
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileFromStageReferences_AllowsInlineComments()
+    {
+        const string content = """
+            FROM node:20 AS builder
+
+            FROM builder AS runtime # reuse the build stage
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "builder"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexBracedArgVariables()
+    {
+        const string content = """
+            ARG NODE_VERSION=20
+            FROM node:${NODE_VERSION} AS builder
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "NODE_VERSION"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexDefaultedBracedArgVariables()
+    {
+        const string content = """
+            ARG NODE_VERSION
+            FROM node:${NODE_VERSION:-20} AS builder
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "NODE_VERSION"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexColonlessDefaultedBracedArgVariables()
+    {
+        const string content = """
+            ARG NODE_VERSION
+            FROM node:${NODE_VERSION-20} AS builder
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "NODE_VERSION"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexUnbracedArgVariables()
+    {
+        const string content = """
+            ARG APP_HOME=/app
+            WORKDIR $APP_HOME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "APP_HOME"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IgnoresEscapedUnbracedVariables()
+    {
+        const string content = """
+            ARG APP_HOME=/app
+            RUN echo \$APP_HOME
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "APP_HOME");
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IgnoresEscapedBracedVariables()
+    {
+        const string content = """
+            ARG APP_HOME=/app
+            RUN echo \${APP_HOME}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "APP_HOME");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
     {
         // Multi-line expression body (declaration on one line, `=> expr;` on the next)

@@ -261,6 +261,8 @@ public class FileIndexer
         [".bash"]   = "shell",
         [".zsh"]    = "shell",
         [".fish"]   = "shell",
+        [".dockerfile"] = "dockerfile", // Suffix-style Dockerfile names such as app.Dockerfile / app.Dockerfile 形式
+        [".containerfile"] = "dockerfile", // Suffix-style Containerfile names such as app.Containerfile / app.Containerfile 形式
     };
 
     private static readonly (string Pattern, string Language)[] DisplayOnlyLanguageExtensions =
@@ -272,7 +274,9 @@ public class FileIndexer
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Dockerfile"]    = "dockerfile",
+        [".dockerfile"]   = "dockerfile",
         ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
+        [".containerfile"]= "dockerfile",
         ["Makefile"]      = "makefile",
         ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
         ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
@@ -306,7 +310,11 @@ public class FileIndexer
     private static readonly (string Prefix, string Language)[] FileNamePrefixMap =
     [
         ("Dockerfile.",  "dockerfile"),
+        ("Dockerfile-",  "dockerfile"),
+        ("Dockerfile_",  "dockerfile"),
         ("Containerfile.", "dockerfile"),
+        ("Containerfile-", "dockerfile"),
+        ("Containerfile_", "dockerfile"),
         ("Makefile.",    "makefile"),
         ("GNUmakefile.", "makefile"),
     ];
