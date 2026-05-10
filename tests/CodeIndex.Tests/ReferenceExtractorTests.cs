@@ -28376,6 +28376,10 @@ public class ReferenceExtractorTests
 
             use My::Util;
             use parent qw(My::Base My::Role);
+            use parent qw[My::BracketBase My::BracketRole];
+            use base qw{My::BraceBase My::BraceRole};
+            use parent qw/My::SlashBase My::SlashRole/;
+            use base qw<My::AngleBase My::AngleRole>;
 
             sub render {
                 My::Widget->new();
@@ -28394,6 +28398,14 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "My::Util" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "My::Base" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Role" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BracketBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BracketRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BraceBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BraceRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::SlashBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::SlashRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::AngleBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::AngleRole" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Widget" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r =>
             r.SymbolName == "helper"

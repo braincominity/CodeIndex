@@ -14,8 +14,9 @@ internal static class PerlReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex QuotedModuleRegex = new(
-        @"['""](?<name>[\p{L}_][\w:]*)['""]|qw\s*\((?<names>[^)]*)\)",
+        @"['""](?<name>[\p{L}_][\w:]*)['""]|qw\s*\((?<paren>[^)]*)\)|qw\s*\[(?<bracket>[^\]]*)\]|qw\s*\{(?<brace>[^}]*)\}|qw\s*<(?<angle>[^>]*)>|qw\s*/(?<slash>[^/]*)/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] QwNamesGroupNames = ["paren", "bracket", "brace", "angle", "slash"];
 
     private static readonly Regex ArrowCallRegex = new(
         @"(?<receiver>(?:[\p{L}_][\w:]*)|\$[\p{L}_]\w*)\s*->\s*(?<name>[\p{L}_]\w*)\s*(?:\(|\b)",
@@ -95,14 +96,27 @@ internal static class PerlReferenceExtractor
                 continue;
             }
 
-            if (!moduleMatch.Groups["names"].Success)
+            if (!TryGetQwNamesGroup(moduleMatch, out var namesGroup))
                 continue;
 
-            var names = moduleMatch.Groups["names"].Value;
-            var namesStart = argsStart + moduleMatch.Groups["names"].Index;
+            var names = namesGroup.Value;
+            var namesStart = argsStart + namesGroup.Index;
             foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
                 AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         }
+    }
+
+    private static bool TryGetQwNamesGroup(Match moduleMatch, out Group namesGroup)
+    {
+        foreach (var groupName in QwNamesGroupNames)
+        {
+            namesGroup = moduleMatch.Groups[groupName];
+            if (namesGroup.Success)
+                return true;
+        }
+
+        namesGroup = moduleMatch.Groups["paren"];
+        return false;
     }
 
     private static void AddBaseModuleReference(
