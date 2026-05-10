@@ -1412,7 +1412,7 @@ public static partial class SymbolExtractor
             // Moose/Moo attributes / Moose/Moo の属性
             new("property", new Regex(@"^\s*has\s+(?<quote>['""]?)\+?(?<name>" + PerlIdentifierPattern + @")\k<quote>\s*=>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Perl subroutines / Perl の subroutine
-            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
         ],
         ["c"] =

@@ -23135,6 +23135,10 @@ public class SymbolExtractorTests
                 return DEFAULT_LIMIT;
             }
 
+            sub My::App::qualified_render {
+                return DEFAULT_LIMIT;
+            }
+
             my sub local_helper {
                 return SECOND_LIMIT;
             }
@@ -23164,6 +23168,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "My::App::qualified_render");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "local_helper");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cached_helper");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dispatch");
