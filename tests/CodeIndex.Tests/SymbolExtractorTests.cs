@@ -12552,6 +12552,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsDefineConstants()
+    {
+        var content = """
+            <?php
+            define('APP_ENV', 'testing');
+            define("FEATURE_FLAG", true);
+            DEFINE('UPPER_DEFINE', true);
+            define($dynamic, true);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "APP_ENV");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FEATURE_FLAG");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UPPER_DEFINE");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "dynamic");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";
