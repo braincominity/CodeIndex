@@ -23128,9 +23128,33 @@ public class SymbolExtractorTests
                 FOURTH_LIMIT => 40,
                 "FIFTH_LIMIT" => 50,
             };
+            our $VERSION = '1.0';
+            our @EXPORT_OK = qw(render);
+            has name => (is => 'ro');
+            has '+id' => (default => 1);
 
             sub render : prototype($) {
                 return DEFAULT_LIMIT;
+            }
+
+            sub My::App::qualified_render {
+                return DEFAULT_LIMIT;
+            }
+
+            my sub local_helper {
+                return SECOND_LIMIT;
+            }
+
+            state sub cached_helper {
+                return THIRD_LIMIT;
+            }
+
+            method dispatch ($request) {
+                return render($request);
+            }
+
+            fun normalize ($value) {
+                return $value;
             }
             """;
 
@@ -23143,6 +23167,68 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "THIRD_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FOURTH_LIMIT");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIFTH_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "EXPORT_OK");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "My::App::qualified_render");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "local_helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cached_helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dispatch");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+    }
+
+    [Fact]
+    public void Extract_Perl_CapturesPackageBlockNamespaces()
+    {
+        var content = """
+            package My::Block {
+                sub render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "My::Block");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
+
+    [Fact]
+    public void Extract_Perl_CapturesClassFeatureDeclarations()
+    {
+        var content = """
+            class My::Widget {
+                field $name;
+                method render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "My::Widget");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
+
+    [Fact]
+    public void Extract_Perl_CapturesRoleFeatureDeclarations()
+    {
+        var content = """
+            role My::Renderable {
+                method render {
+                    return 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "My::Renderable");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
 }

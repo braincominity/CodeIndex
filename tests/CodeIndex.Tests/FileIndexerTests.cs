@@ -190,6 +190,9 @@ public class FileIndexerTests
     [InlineData("demo.rakumod", "raku")]
     [InlineData("demo.rakutest", "raku")]
     [InlineData("test.t", "perl")]
+    [InlineData("app.psgi", "perl")]
+    [InlineData("index.cgi", "perl")]
+    [InlineData("index.fcgi", "perl")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
@@ -501,6 +504,9 @@ public class FileIndexerTests
         Assert.Equal("perl", map[".pl"]);
         Assert.Equal("perl", map[".pm"]);
         Assert.Equal("perl", map[".pod"]);
+        Assert.Equal("perl", map[".psgi"]);
+        Assert.Equal("perl", map[".cgi"]);
+        Assert.Equal("perl", map[".fcgi"]);
         Assert.Equal("perl", map[".t"]);
         Assert.Equal("solidity", map[".sol"]);
         Assert.Equal("tcl", map[".tcl"]);

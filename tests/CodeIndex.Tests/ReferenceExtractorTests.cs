@@ -28375,7 +28375,14 @@ public class ReferenceExtractorTests
             package My::App;
 
             use My::Util;
+            require "My/Path/Loader.pm";
             use parent qw(My::Base My::Role);
+            use parent qw[My::BracketBase My::BracketRole];
+            use base qw{My::BraceBase My::BraceRole};
+            use parent qw/My::SlashBase My::SlashRole/;
+            use base qw<My::AngleBase My::AngleRole>;
+            extends 'My::MooseBase';
+            with qw(My::MooseRole My::OtherRole);
 
             sub render {
                 My::Widget->new();
@@ -28392,8 +28399,20 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "My::Util" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "My::Path::Loader" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "My::Base" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Role" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BracketBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BracketRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BraceBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::BraceRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::SlashBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::SlashRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::AngleBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::AngleRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::MooseBase" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::MooseRole" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::OtherRole" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "My::Widget" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r =>
             r.SymbolName == "helper"
@@ -28402,6 +28421,49 @@ public class ReferenceExtractorTests
             && r.ContainerName == "render");
         Assert.Contains(references, r =>
             r.SymbolName == "format"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "My::Util::format"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_Perl_DoesNotTreatQualifiedSubSignatureAsCall()
+    {
+        const string content = """
+            package My::App;
+
+            sub My::Util::format ($value) {
+                return $value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "My::Util::format"
+            && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_Perl_CapturesQualifiedCallAfterBarewordEndingInSub()
+    {
+        const string content = """
+            sub render {
+                call_sub My::Util::format($value);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "My::Util::format"
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
             && r.ContainerName == "render");

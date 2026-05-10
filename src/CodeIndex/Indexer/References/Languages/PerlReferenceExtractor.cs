@@ -8,17 +8,27 @@ internal static class PerlReferenceExtractor
     private static readonly Regex ModuleReferenceRegex = new(
         @"^\s*(?:use|require)\s+(?<name>[\p{L}_][\w:]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RequiredModulePathRegex = new(
+        @"^\s*require\s+['""](?<path>[\p{L}_][\p{L}\p{Nd}_]*(?:/[\p{L}_][\p{L}\p{Nd}_]*)*\.pm)['""]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex BaseModuleReferenceRegex = new(
         @"^\s*use\s+(?:base|parent)\s+(?<args>.+?);?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex MooseInheritanceReferenceRegex = new(
+        @"^\s*(?:extends|with)\s+(?<args>.+?);?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex QuotedModuleRegex = new(
-        @"['""](?<name>[\p{L}_][\w:]*)['""]|qw\s*\((?<names>[^)]*)\)",
+        @"['""](?<name>[\p{L}_][\w:]*)['""]|qw\s*\((?<paren>[^)]*)\)|qw\s*\[(?<bracket>[^\]]*)\]|qw\s*\{(?<brace>[^}]*)\}|qw\s*<(?<angle>[^>]*)>|qw\s*/(?<slash>[^/]*)/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] QwNamesGroupNames = ["paren", "bracket", "brace", "angle", "slash"];
 
     private static readonly Regex ArrowCallRegex = new(
         @"(?<receiver>(?:[\p{L}_][\w:]*)|\$[\p{L}_]\w*)\s*->\s*(?<name>[\p{L}_]\w*)\s*(?:\(|\b)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex QualifiedFunctionCallRegex = new(
+        @"(?<![\w:])(?<name>[\p{L}_]\w*(?:::[\p{L}_]\w*)+)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitAdditionalReferences(
@@ -33,7 +43,10 @@ internal static class PerlReferenceExtractor
         Action<string, int> addCallLikeReference)
     {
         EmitModuleReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitRequiredModulePathReference(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitBaseModuleReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitMooseInheritanceReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        EmitQualifiedFunctionCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitArrowCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall, addCallLikeReference);
     }
 
@@ -72,6 +85,33 @@ internal static class PerlReferenceExtractor
             resolveContainerForCall(nameGroup.Index));
     }
 
+    private static void EmitRequiredModulePathReference(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = RequiredModulePathRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var pathGroup = match.Groups["path"];
+        var moduleName = pathGroup.Value[..^3].Replace("/", "::", StringComparison.Ordinal);
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            moduleName,
+            pathGroup.Index,
+            "reference",
+            context,
+            lineNumber,
+            resolveContainerForCall(pathGroup.Index));
+    }
+
     private static void EmitBaseModuleReferences(
         string originalLine,
         List<ReferenceRecord> references,
@@ -85,24 +125,20 @@ internal static class PerlReferenceExtractor
         if (!match.Success)
             return;
 
-        var args = match.Groups["args"].Value;
-        var argsStart = match.Groups["args"].Index;
-        foreach (Match moduleMatch in QuotedModuleRegex.Matches(args))
+        AddQuotedModuleReferences(match.Groups["args"], references, seen, fileId, context, lineNumber, resolveContainerForCall);
+    }
+
+    private static bool TryGetQwNamesGroup(Match moduleMatch, out Group namesGroup)
+    {
+        foreach (var groupName in QwNamesGroupNames)
         {
-            if (moduleMatch.Groups["name"].Success)
-            {
-                AddBaseModuleReference(moduleMatch.Groups["name"].Value, argsStart + moduleMatch.Groups["name"].Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
-                continue;
-            }
-
-            if (!moduleMatch.Groups["names"].Success)
-                continue;
-
-            var names = moduleMatch.Groups["names"].Value;
-            var namesStart = argsStart + moduleMatch.Groups["names"].Index;
-            foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
-                AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+            namesGroup = moduleMatch.Groups[groupName];
+            if (namesGroup.Success)
+                return true;
         }
+
+        namesGroup = moduleMatch.Groups["paren"];
+        return false;
     }
 
     private static void AddBaseModuleReference(
@@ -125,6 +161,51 @@ internal static class PerlReferenceExtractor
             context,
             lineNumber,
             resolveContainerForCall(column));
+    }
+
+    private static void EmitMooseInheritanceReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = MooseInheritanceReferenceRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        AddQuotedModuleReferences(match.Groups["args"], references, seen, fileId, context, lineNumber, resolveContainerForCall);
+    }
+
+    private static void AddQuotedModuleReferences(
+        Group argsGroup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var args = argsGroup.Value;
+        var argsStart = argsGroup.Index;
+        foreach (Match moduleMatch in QuotedModuleRegex.Matches(args))
+        {
+            if (moduleMatch.Groups["name"].Success)
+            {
+                AddBaseModuleReference(moduleMatch.Groups["name"].Value, argsStart + moduleMatch.Groups["name"].Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+                continue;
+            }
+
+            if (!TryGetQwNamesGroup(moduleMatch, out var namesGroup))
+                continue;
+
+            var names = namesGroup.Value;
+            var namesStart = argsStart + namesGroup.Index;
+            foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
+                AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
+        }
     }
 
     private static void EmitArrowCallReferences(
@@ -157,5 +238,40 @@ internal static class PerlReferenceExtractor
                 lineNumber,
                 resolveContainerForCall(receiverGroup.Index));
         }
+    }
+
+    private static void EmitQualifiedFunctionCallReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        foreach (Match match in QualifiedFunctionCallRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (IsQualifiedSubroutineDefinition(preparedLine, nameGroup.Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                resolveContainerForCall(nameGroup.Index));
+        }
+    }
+
+    private static bool IsQualifiedSubroutineDefinition(string line, int nameIndex)
+    {
+        var prefix = line[..nameIndex].TrimEnd();
+        return string.Equals(prefix, "sub", StringComparison.Ordinal)
+            || prefix.EndsWith(" sub", StringComparison.Ordinal);
     }
 }
