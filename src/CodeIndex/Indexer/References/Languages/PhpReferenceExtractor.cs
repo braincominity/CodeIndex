@@ -17,6 +17,14 @@ internal static class PhpReferenceExtractor
         @"(?:#\[\s*|,\s*)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\b(?=\s*(?:\(|,|\]))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex DocblockParamTypeRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@param\s+(?<types>\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DocblockTypeNameRegex = new(
+        @"(?<![-\w\\])\??(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\[\])?(?![-\w\\])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex InstanceofRegex = new(
         @"\binstanceof\s+(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -76,8 +84,40 @@ internal static class PhpReferenceExtractor
     private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never",
-        "null", "object", "self", "static", "string", "true", "void",
+        "class", "null", "numeric", "object", "resource", "scalar", "self", "static", "string", "true", "void",
     };
+
+    public static void EmitDocblockParamTypeReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = DocblockParamTypeRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var typesGroup = match.Groups["types"];
+        foreach (Match typeMatch in DocblockTypeNameRegex.Matches(typesGroup.Value))
+        {
+            var nameGroup = typeMatch.Groups["name"];
+            if (IsPhpBuiltinTypeName(nameGroup.Value))
+                continue;
+
+            AddPhpTypeReferenceFromName(
+                nameGroup.Value,
+                typesGroup.Index + nameGroup.Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+    }
 
     public static void EmitAttributeReferences(
         string preparedLine,
