@@ -9702,6 +9702,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpPropertyTypes_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            class Profile {
+                private User|Guest $owner;
+                protected static ?Logger $logger;
+                public string $name;
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Guest" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Logger" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "string" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
