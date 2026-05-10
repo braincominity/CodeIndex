@@ -407,6 +407,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranAllocateSourceKeywordRegex = new(
         @"\b(?:source|mold)\s*=\s*(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranAllocationStatusKeywordRegex = new(
+        @"\b(?:stat|errmsg)\s*=\s*(?<name>[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranDeallocateListRegex = new(
         @"^\s*deallocate\s*\((?<list>.*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -4075,6 +4078,12 @@ internal static class LanguageReferenceExtractionSupport
                 var group = match.Groups["name"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
             }
+
+            foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+            }
         }
 
         var deallocateListMatch = FortranDeallocateListRegex.Match(preparedLine);
@@ -4098,6 +4107,12 @@ internal static class LanguageReferenceExtractionSupport
                     end++;
 
                 ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], list.Index + segmentStart + leading, "reference", context, lineNumber, container);
+            }
+
+            foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
             }
         }
 

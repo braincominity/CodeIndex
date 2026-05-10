@@ -11595,8 +11595,8 @@ public class ReferenceExtractorTests
                 call process(repo)
                 call repo%persist()
                 allocate(RepositoryAllocator :: allocated_repo)
-                allocate(plain_repo, source=template_repo, stat=status_code)
-                deallocate(allocated_repo, temporary_repo, stat=status_code)
+                allocate(plain_repo, source=template_repo, stat=allocate_status)
+                deallocate(allocated_repo, temporary_repo, stat=deallocate_status, errmsg=deallocate_message)
                 select type (repo)
                 type is (RepositorySnapshot)
                   call repo%persist()
@@ -11684,8 +11684,11 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference" && r.Context.Contains("allocate(RepositoryAllocator", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "plain_repo" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "template_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "allocate_status" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "temporary_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "deallocate_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "deallocate_message" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositorySnapshot" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryView" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
