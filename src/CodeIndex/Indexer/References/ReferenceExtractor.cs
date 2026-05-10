@@ -1197,6 +1197,22 @@ public static partial class ReferenceExtractor
                 }
             }
 
+            if (language == "php" && originalLine.Contains("#[", StringComparison.Ordinal))
+            {
+                var attributeContext = originalLine.Trim();
+                if (attributeContext.Length > 0)
+                {
+                    PhpReferenceExtractor.EmitAttributeReferences(
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        attributeContext,
+                        lineNumber,
+                        FindInnermostContainer(containerCandidates, lineNumber));
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"

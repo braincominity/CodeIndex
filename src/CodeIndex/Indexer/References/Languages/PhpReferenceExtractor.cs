@@ -13,6 +13,64 @@ internal static class PhpReferenceExtractor
         @"(?:\?->|->)\s*(?<name>[A-Za-z_]\w*)(?!\s*\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex AttributeRegex = new(
+        @"(?:#\[\s*|,\s*)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\b(?=\s*(?:\(|,|\]))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    public static void EmitAttributeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (!preparedLine.Contains("#[", StringComparison.Ordinal))
+            return;
+
+        foreach (Match match in AttributeRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var rawName = nameGroup.Value;
+            var trimmedName = rawName.TrimStart('\\');
+            if (trimmedName.Length == 0)
+                continue;
+
+            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
+            if (trimmedName.Contains('\\', StringComparison.Ordinal))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    trimmedName,
+                    qualifiedNameIndex,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
+            var shortName = trimmedName[shortNameStart..];
+            if (shortName.Length == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                shortName,
+                qualifiedNameIndex + shortNameStart,
+                "type_reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
     public static void EmitStaticAccessReferences(
         string preparedLine,
         List<ReferenceRecord> references,
