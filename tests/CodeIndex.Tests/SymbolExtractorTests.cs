@@ -12558,6 +12558,8 @@ public class SymbolExtractorTests
             <?php
             /**
              * @method static Builder<User> whereEmail(string $email)
+             * @method ?User findByEmail(string $email)
+             * @method User|Guest resolveActor(int $id)
              * @method refresh()
              */
             class UserQuery {}
@@ -12566,6 +12568,8 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "php", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "whereEmail" && s.ReturnType == "Builder<User>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "findByEmail" && s.ReturnType == "?User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "resolveActor" && s.ReturnType == "User|Guest");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "refresh" && s.ReturnType == null);
     }
 

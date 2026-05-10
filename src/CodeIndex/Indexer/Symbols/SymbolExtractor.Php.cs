@@ -24,7 +24,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex PhpDocblockMethodRegex = new(
-        @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?:(?<returnType>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*(?:<[^>\r\n]+>)?|\$this|self|static)\s+)?(?<name>[A-Za-z_]\w*)\s*\(",
+        @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?:(?<returnType>[^\s()]+)\s+)?(?<name>[A-Za-z_]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
