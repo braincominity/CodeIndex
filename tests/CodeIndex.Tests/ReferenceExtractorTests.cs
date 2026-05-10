@@ -11565,6 +11565,8 @@ public class ReferenceExtractorTests
               abstract interface
                 subroutine create_repository()
                   import :: RepositoryFactory
+                  import::CompactFactory
+                  import, only:CompactOnlyFactory
                 end subroutine create_repository
               end interface
             contains
@@ -11644,6 +11646,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "sin" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "cos" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "CompactFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "CompactOnlyFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RepositoryAllocator" && r.ReferenceKind == "type_reference");

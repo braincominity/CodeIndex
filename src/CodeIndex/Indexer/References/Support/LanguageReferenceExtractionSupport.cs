@@ -333,7 +333,7 @@ internal static class LanguageReferenceExtractionSupport
         @"(?:^|,)\s*[A-Za-z_]\w*\s*=>\s*(?<target>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranImportRegex = new(
-        @"^\s*import(?:\s*,\s*only)?(?:\s*::|\s*:)?\s+(?<list>.+)$",
+        @"^\s*import(?:\s*,\s*only)?(?:\s*::\s*|\s*:\s*|\s+)(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranIncludeRegex = new(
         @"^\s*include\s*['""](?<name>[^'""]+)['""]",
