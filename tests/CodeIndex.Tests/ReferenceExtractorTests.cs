@@ -9768,6 +9768,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpGroupUseTypeImports_EmitTypeReferences()
+    {
+        const string content = """
+            <?php
+            use App\Domain\{User, Team\Member as TeamMember};
+            use function App\Domain\{make_user};
+            use const App\Domain\{USER_ROLE};
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Domain\\Team\\Member" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Member" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "make_user" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "USER_ROLE" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";

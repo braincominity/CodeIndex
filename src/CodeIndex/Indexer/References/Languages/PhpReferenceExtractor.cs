@@ -45,6 +45,14 @@ internal static class PhpReferenceExtractor
         @"^\s*use\s+(?!(?:function|const)\b)(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?(?:\s*,\s*(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*))*\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex GroupUseTypeRegex = new(
+        @"^\s*use\s+(?!(?:function|const)\b)(?<prefix>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)\\\{\s*(?<items>[^{}]+?)\s*\}\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex GroupUseTypeItemRegex = new(
+        @"(?<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+[A-Za-z_]\w*)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly HashSet<string> BuiltinTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never",
@@ -344,6 +352,13 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        var groupMatch = GroupUseTypeRegex.Match(preparedLine);
+        if (groupMatch.Success)
+        {
+            EmitGroupUseTypeReferences(groupMatch, references, seen, fileId, context, lineNumber, container);
+            return;
+        }
+
         var match = UseTypeRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -358,6 +373,45 @@ internal static class PhpReferenceExtractor
                 context,
                 lineNumber,
                 container);
+        }
+    }
+
+    private static void EmitGroupUseTypeReferences(
+        Match groupMatch,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var prefixGroup = groupMatch.Groups["prefix"];
+        var prefix = prefixGroup.Value.TrimEnd('\\');
+        if (prefix.Length == 0)
+            return;
+
+        var itemsGroup = groupMatch.Groups["items"];
+        foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
+        {
+            var itemGroup = itemMatch.Groups["name"];
+            var rawItemName = itemGroup.Value;
+            var trimmedItemName = rawItemName.TrimStart('\\');
+            if (trimmedItemName.Length == 0)
+                continue;
+
+            var leadingBackslashCount = rawItemName.Length - trimmedItemName.Length;
+            var itemShortNameStart = trimmedItemName.LastIndexOf('\\') + 1;
+            var shortNameIndex = itemsGroup.Index + itemGroup.Index + leadingBackslashCount + itemShortNameStart;
+            AddPhpTypeReferenceFromName(
+                prefix + "\\" + trimmedItemName,
+                prefixGroup.Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container,
+                shortNameIndex);
         }
     }
 
@@ -381,14 +435,33 @@ internal static class PhpReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container)
+        => AddPhpTypeReferenceFromName(
+            nameGroup.Value,
+            nameGroup.Index,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+    private static void AddPhpTypeReferenceFromName(
+        string rawName,
+        int nameIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        int? shortNameIndexOverride = null)
     {
-        var rawName = nameGroup.Value;
         var trimmedName = rawName.TrimStart('\\');
         if (trimmedName.Length == 0)
             return;
 
         var leadingBackslashCount = rawName.Length - trimmedName.Length;
-        var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
+        var qualifiedNameIndex = nameIndex + leadingBackslashCount;
         if (trimmedName.Contains('\\', StringComparison.Ordinal))
         {
             ReferenceExtractor.AddReference(
@@ -413,7 +486,7 @@ internal static class PhpReferenceExtractor
             seen,
             fileId,
             shortName,
-            qualifiedNameIndex + shortNameStart,
+            shortNameIndexOverride ?? qualifiedNameIndex + shortNameStart,
             "type_reference",
             context,
             lineNumber,
