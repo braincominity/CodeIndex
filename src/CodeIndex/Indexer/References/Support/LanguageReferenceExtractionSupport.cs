@@ -353,8 +353,11 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranParenthesizedNameListRegex = new(
         @"\((?<list>[^()]*)\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranDataObjectListRegex = new(
-        @"^\s*data\s+(?<list>[^/]+?)/",
+    private static readonly Regex FortranDataLineRegex = new(
+        @"^\s*data\s+(?<tail>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranDataObjectGroupRegex = new(
+        @"(?:^|,)\s*(?<list>[^/]+?)\s*/",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranSaveRegex = new(
         @"^\s*save(?:\s*::|\s+)(?<list>.+)$",
@@ -3880,14 +3883,18 @@ internal static class LanguageReferenceExtractionSupport
             }
         }
 
-        var dataObjectListMatch = FortranDataObjectListRegex.Match(preparedLine);
-        if (dataObjectListMatch.Success)
+        var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
+        if (dataLineMatch.Success)
         {
-            var list = dataObjectListMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var tail = dataLineMatch.Groups["tail"];
+            foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = groupMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
