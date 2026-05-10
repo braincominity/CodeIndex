@@ -12371,9 +12371,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "OrderStatus");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Priority");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Priority" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Active" && s.ContainerName == "Status" && s.ReturnType == "'active'");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pending" && s.ContainerName == "Status" && s.ReturnType == "'pending'");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Draft" && s.ContainerName == "OrderStatus" && s.ReturnType == null);
