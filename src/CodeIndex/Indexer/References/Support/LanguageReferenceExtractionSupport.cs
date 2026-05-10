@@ -351,7 +351,7 @@ internal static class LanguageReferenceExtractionSupport
         @"^\s*intrinsic(?:\s*::)?\s*(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranAccessListRegex = new(
-        @"^\s*(?:public|private)\s*::\s*(?<list>.+)$",
+        @"^\s*(?:public|private)(?:\s*::\s*|\s+)(?<list>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranFinalizerRegex = new(
         @"^\s*final(?:\s*::)?\s+(?<list>.+)$",
