@@ -11543,6 +11543,9 @@ public class ReferenceExtractorTests
               use, intrinsic :: iso_c_binding, only: c_ptr, c_int, c_char, repository_ptr => c_ptr
               use repositories, only: local_status => remote_status
               use repository_legacy, legacy_local => legacy_remote
+              use::compact_repository
+              use::compact_repository_only, only: compact_symbol
+              use::compact_repository_rename, compact_local => compact_remote
               use, intrinsic :: iso_fortran_env, only: real64
               public :: Repository, create_repository
               public::RepositoryNoSpace
@@ -11607,6 +11610,12 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "repository_legacy" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "legacy_local" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "legacy_remote" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository_only" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_symbol" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository_rename" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_local" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_remote" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "iso_fortran_env" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "demo_mod" && r.ReferenceKind == "type_reference");
