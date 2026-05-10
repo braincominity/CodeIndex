@@ -12582,6 +12582,7 @@ public class SymbolExtractorTests
              * @property \App\Models\User $owner
              * @property-read Collection<User> $items
              * @property-write ?string $status
+             * @phpstan-property-read Money $balance
              */
             class UserPresenter {}
             """;
@@ -12591,6 +12592,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "owner" && s.ReturnType == "\\App\\Models\\User");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "items" && s.ReturnType == "Collection<User>");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "status" && s.ReturnType == "?string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "balance" && s.ReturnType == "Money");
     }
 
     [Fact]

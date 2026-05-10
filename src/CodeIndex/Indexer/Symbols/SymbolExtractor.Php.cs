@@ -28,7 +28,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex PhpDocblockPropertyRegex = new(
-        @"^\s*(?:/\*\*)?\s*\*?\s*@property(?:-read|-write)?\s+(?<returnType>[^\s]+)\s+\$(?<name>[A-Za-z_]\w*)\b",
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?property(?:-read|-write)?\s+(?<returnType>[^\s]+)\s+\$(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex PhpTraitAliasRegex = new(
