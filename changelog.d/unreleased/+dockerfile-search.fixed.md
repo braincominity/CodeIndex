@@ -36,6 +36,7 @@ affected:
 - **Dockerfile `ENV` key scanning ignores quoted values** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` no longer emits a false `BAR` property.
 - **Dockerfile `LABEL` keys become symbols** — labels such as `org.opencontainers.image.title` now index as property symbols.
 - **Dockerfile `LABEL` key-value lists expose every key** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` now indexes both label keys.
+- **Legacy Dockerfile `LABEL key value` keys become symbols** — space-separated label declarations now expose their label key for search.
 
 ## 日本語
 
@@ -63,3 +64,4 @@ affected:
 - **Dockerfile の `ENV` key scan が quoted value を無視するようになりました** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` が偽の `BAR` property を出さなくなりました。
 - **Dockerfile の `LABEL` key を symbol として扱うようになりました** — `org.opencontainers.image.title` のような label が property symbol として index されるようになりました。
 - **Dockerfile の `LABEL` key-value list ですべての key を出すようになりました** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` が両方の label key を index するようになりました。
+- **legacy Dockerfile `LABEL key value` の key を symbol として扱うようになりました** — 空白区切りの label 宣言でも検索用に label key を出すようになりました。
