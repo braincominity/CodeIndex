@@ -27,6 +27,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@method\s+(?:static\s+)?(?:(?<returnType>[^\s()]+)\s+)?(?<name>[A-Za-z_]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpDocblockPropertyRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@property(?:-read|-write)?\s+(?<returnType>[^\s]+)\s+\$(?<name>[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -195,6 +199,37 @@ public static partial class SymbolExtractor
                     ReturnType = match.Groups["returnType"].Success
                         ? match.Groups["returnType"].Value
                         : null,
+                },
+                line);
+        }
+    }
+
+    private static void ExtractPhpDocblockPropertySymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var match = PhpDocblockPropertyRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                    ReturnType = match.Groups["returnType"].Value,
                 },
                 line);
         }

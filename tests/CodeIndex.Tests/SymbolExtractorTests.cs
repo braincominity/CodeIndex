@@ -12574,6 +12574,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsDocblockProperties()
+    {
+        var content = """
+            <?php
+            /**
+             * @property \App\Models\User $owner
+             * @property-read Collection<User> $items
+             * @property-write ?string $status
+             */
+            class UserPresenter {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "owner" && s.ReturnType == "\\App\\Models\\User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "items" && s.ReturnType == "Collection<User>");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "status" && s.ReturnType == "?string");
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsDefineConstants()
     {
         var content = """

@@ -3725,6 +3725,8 @@ public static partial class SymbolExtractor
             ExtractPhpPromotedConstructorProperties(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockMethodSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockPropertySymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
