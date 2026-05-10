@@ -11578,7 +11578,7 @@ public class ReferenceExtractorTests
                 real(kind=real64) :: elapsed
                 character(kind=c_char, len=1) :: delimiter
                 common /repository_state/ status_code
-                namelist /repository_config/ delimiter
+                namelist /repository_config/ delimiter, status_code
                 external legacy_hook, repository_probe
                 intrinsic sin, cos
                 value = prefix() // suffix()
@@ -11643,6 +11643,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "release_repository" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_state" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_config" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "repository_probe" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "sin" && r.ReferenceKind == "reference");

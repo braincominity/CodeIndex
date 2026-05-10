@@ -347,6 +347,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranSlashGroupNameRegex = new(
         @"/\s*(?<name>[A-Za-z_]\w*)\s*/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranSlashGroupMemberListRegex = new(
+        @"/\s*[A-Za-z_]\w*\s*/(?<list>[^/]*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FortranSubmoduleParentRegex = new(
         @"^\s*submodule\s*\(\s*(?<parent>[A-Za-z_]\w*)(?:\s*:\s*(?<ancestor>[A-Za-z_]\w*))?\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3811,10 +3814,25 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in FortranIncludeRegex.Matches(originalLine))
             ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
 
-        if (FortranCommonLineRegex.IsMatch(preparedLine) || FortranNamelistLineRegex.IsMatch(preparedLine))
+        var isFortranCommonLine = FortranCommonLineRegex.IsMatch(preparedLine);
+        var isFortranNamelistLine = FortranNamelistLineRegex.IsMatch(preparedLine);
+        if (isFortranCommonLine || isFortranNamelistLine)
         {
             foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        if (isFortranNamelistLine)
+        {
+            foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+            {
+                var list = memberListMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
+            }
         }
 
         var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
