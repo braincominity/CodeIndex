@@ -1260,8 +1260,32 @@ public static partial class SymbolExtractor
             new("namespace", new Regex(@"^\s*submodule\s*\(\s*[^)]*\)\s*(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Program units / プログラム本体
             new("class", new Regex(@"^\s*program\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Block data program units / block data プログラム単位
+            new("class", new Regex(@"^\s*block\s+data\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Derived types / 派生型
+            new("class", new Regex(@"^\s*type(?!\s*\()\b(?:\s*,\s*(?:abstract|public|private|sequence|bind\s*\([^)]+\)|extends\s*\([^)]+\)))*\s*(?:::)?\s*(?!(?:is|default)\b)(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Enumerators / enumerator 定数
+            new("property", new Regex(@"^\s*enumerator(?:\s*::)?\s*(?<name>[A-Za-z_]\w*)(?<enumTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Parameter constants / parameter 定数
+            new("property", new Regex(@"^\s*(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\))\s*,[^:\r\n]*\bparameter\b[^:\r\n]*::\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Old-style parameter constants / 旧形式 parameter 定数
+            new("property", new Regex(@"^\s*parameter\s*\(\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)\)\s*(?:!.*)?$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Typed variables and components / 型付き変数・component
+            new("property", new Regex(@"^\s*(?<returnType>(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)))\s*(?:,\s*(?![^:\r\n]*\bparameter\b)[^:\r\n]*)?::\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            // Old-style typed variables without :: / :: なしの旧形式型付き変数
+            new("property", new Regex(@"^\s*(?<returnType>(?:(?:integer|real|logical|complex)(?:\s*\([^)]+\))?|character(?:\s*\([^)]+\))?|double\s+precision|type\s*\([^)]+\)|class\s*\([^)]+\)))\s+(?!(?:function|subroutine)\b)(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            // Attribute-only variables / 属性のみの変数宣言
+            new("property", new Regex(@"^\s*(?:(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*,\s*)*(?:allocatable|pointer|target|optional|save|dimension\s*\([^)]+\)|intent\s*\([^)]+\))\s*(?:::)?\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Common block members / common block メンバー
+            new("property", new Regex(@"^\s*common\s+(?:/\s*[A-Za-z_]\w*\s*/\s*)?(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Namelist members / namelist メンバー
+            new("property", new Regex(@"^\s*namelist\s+/\s*[A-Za-z_]\w*\s*/\s*(?<name>[A-Za-z_]\w*)(?<paramTail>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Subroutines / サブルーチン
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|module|impure)\s+)*subroutine\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
+            // Entry points / entry 手続き
+            new("function", new Regex(@"^\s*entry\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Module procedure implementations / module procedure 実装
+            new("function", new Regex(@"^\s*module\s+procedure\s+(?<name>[A-Za-z_]\w*)\s*(?:!.*)?$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.FortranEnd),
             // Procedure declarations in interfaces / interface 内の手続き宣言
             new("function", new Regex(@"^\s*(?:(?:pure|elemental|recursive|impure)\s+)*(?:(?:module\s+)?procedure)(?:\s*\([^)]+\))?(?:\s*,\s*[A-Za-z_]\w*)*\s*(?:::\s*)?(?<name>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             // Typed or untyped functions / 型付き・型なし関数
@@ -2983,6 +3007,16 @@ public static partial class SymbolExtractor
                             && pattern.BodyStyle == BodyStyle.None
                             ? TryExpandSwiftEnumCaseDeclaratorList(patternMatchLine, absoluteStartColumn, match)
                             : null;
+                        var fortranEnumeratorEntries = lang == "fortran"
+                            && pattern.Kind == "property"
+                            && pattern.BodyStyle == BodyStyle.None
+                            ? TryExpandFortranEnumeratorDeclaratorList(patternMatchLine, match)
+                            : null;
+                        var fortranParameterEntries = lang == "fortran"
+                            && pattern.Kind == "property"
+                            && pattern.BodyStyle == BodyStyle.None
+                            ? TryExpandFortranParameterDeclaratorList(patternMatchLine, match)
+                            : null;
 
                         if (pythonImportEntries != null)
                         {
@@ -3060,6 +3094,58 @@ public static partial class SymbolExtractor
                                         Signature = signature,
                                         Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                         ReturnType = NormalizeMetadata(entry.ReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else if (fortranEnumeratorEntries != null)
+                        {
+                            foreach (var entry in fortranEnumeratorEntries)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = entry.Name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = entry.StartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
+                                    },
+                                    line);
+                            }
+                        }
+                        else if (fortranParameterEntries != null)
+                        {
+                            foreach (var entry in fortranParameterEntries)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols,
+                                    startLine,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = kind,
+                                        Name = entry.Name,
+                                        Line = startLine,
+                                        StartLine = startLine,
+                                        StartColumn = entry.StartColumn,
+                                        EndLine = Math.Max(startLine, endLine),
+                                        BodyStartLine = bodyStartLine,
+                                        BodyEndLine = bodyEndLine,
+                                        Signature = signature,
+                                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                        ReturnType = NormalizeMetadata(rawReturnType),
                                     },
                                     line);
                             }
@@ -5235,6 +5321,90 @@ public static partial class SymbolExtractor
                 return null;
 
             results.Add((name, listStart + segmentStart + nameStart, rawValue));
+        }
+
+        return results.Count > 1 ? results : null;
+    }
+
+    private static List<(string Name, int StartColumn)>? TryExpandFortranEnumeratorDeclaratorList(
+        string patternMatchLine,
+        Match match)
+    {
+        if (!match.Groups["name"].Success || !match.Groups["enumTail"].Success)
+            return null;
+
+        var listStart = match.Groups["name"].Index;
+        var listEnd = match.Groups["enumTail"].Index + match.Groups["enumTail"].Length;
+        if (listStart < 0 || listStart >= patternMatchLine.Length || listEnd <= listStart)
+            return null;
+        if (listEnd > patternMatchLine.Length)
+            listEnd = patternMatchLine.Length;
+
+        var list = patternMatchLine[listStart..listEnd];
+        var results = new List<(string Name, int StartColumn)>();
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var leading = 0;
+            while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                leading++;
+            if (leading >= segment.Length)
+                continue;
+
+            if (segment[leading] != '_' && !char.IsLetter(segment[leading]))
+                return null;
+
+            var index = leading + 1;
+            while (index < segment.Length && (segment[index] == '_' || char.IsLetterOrDigit(segment[index])))
+                index++;
+
+            var name = segment[leading..index];
+            if (name.Length == 0)
+                return null;
+
+            results.Add((name, listStart + segmentStart + leading));
+        }
+
+        return results.Count > 1 ? results : null;
+    }
+
+    private static List<(string Name, int StartColumn)>? TryExpandFortranParameterDeclaratorList(
+        string patternMatchLine,
+        Match match)
+    {
+        if (!match.Groups["name"].Success || !match.Groups["paramTail"].Success)
+            return null;
+
+        var listStart = match.Groups["name"].Index;
+        var listEnd = match.Groups["paramTail"].Index + match.Groups["paramTail"].Length;
+        if (listStart < 0 || listStart >= patternMatchLine.Length || listEnd <= listStart)
+            return null;
+        if (listEnd > patternMatchLine.Length)
+            listEnd = patternMatchLine.Length;
+
+        var list = patternMatchLine[listStart..listEnd];
+        var results = new List<(string Name, int StartColumn)>();
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
+        {
+            var segment = list.Substring(segmentStart, segmentLength);
+            var leading = 0;
+            while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                leading++;
+            if (leading >= segment.Length)
+                continue;
+
+            if (segment[leading] != '_' && !char.IsLetter(segment[leading]))
+                return null;
+
+            var index = leading + 1;
+            while (index < segment.Length && (segment[index] == '_' || char.IsLetterOrDigit(segment[index])))
+                index++;
+
+            var name = segment[leading..index];
+            if (name.Length == 0)
+                return null;
+
+            results.Add((name, listStart + segmentStart + leading));
         }
 
         return results.Count > 1 ? results : null;

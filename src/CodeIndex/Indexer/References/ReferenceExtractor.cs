@@ -1606,7 +1606,7 @@ public static partial class ReferenceExtractor
             else if (language == "vb")
                 VisualBasicReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
             else if (language == "fortran")
-                FortranReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
+                FortranReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
             else if (language == "pascal")
                 PascalReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, container);
             else if (language == "objc")

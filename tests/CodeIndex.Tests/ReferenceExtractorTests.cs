@@ -11870,25 +11870,162 @@ public class ReferenceExtractorTests
     {
         const string content = """
             module demo_mod
-              use iso_c_binding
+              include 'repository_kinds.inc'
+              use, intrinsic :: iso_c_binding, only: c_ptr, c_int, c_char, repository_ptr => c_ptr
+              use repositories, only: local_status => remote_status
+              use repository_legacy, legacy_local => legacy_remote
+              use::compact_repository
+              use::compact_repository_only, only: compact_symbol
+              use::compact_repository_rename, compact_local => compact_remote
+              use, intrinsic :: iso_fortran_env, only: real64
+              public :: Repository, create_repository
+              public::RepositoryNoSpace
+              public RepositoryFactory
+              private :: legacy_hook
+              private internal_probe
+              type :: RepositoryBase
+              end type RepositoryBase
+              type, extends(RepositoryBase) :: Repository
+              contains
+                procedure :: persist => persist_impl
+                generic :: assignment(=) => assign_repository, assign_repository_alt
+                final :: cleanup_repository, close_repository
+                final::flush_repository
+                final release_repository
+              end type Repository
+              abstract interface
+                subroutine create_repository()
+                  import :: RepositoryFactory
+                  import::CompactFactory
+                  import, only:CompactOnlyFactory
+                end subroutine create_repository
+              end interface
             contains
               subroutine run(repo)
                 type(Repository) :: repo
                 class(User), allocatable :: current
+                procedure(RepositoryCallback), pointer :: callback
+                integer(c_int) :: status_code
+                real(kind=real64) :: elapsed
+                character(kind=c_char, len=1) :: delimiter
+                common /repository_state/ status_code, delimiter
+                common anonymous_state, anonymous_flag
+                namelist /repository_config/ delimiter, status_code
+                equivalence (status_code, legacy_status), (delimiter, legacy_delimiter)
+                data status_code, delimiter /0, ','/
+                data delayed_status /1/, delayed_flag /2/
+                save :: saved_repository
+                save /repository_state/
+                external legacy_hook, repository_probe
+                intrinsic sin, cos
                 value = prefix() // suffix()
+                callback => repository_resolver
+                callback => null()
+                associate (resolved_status => repository_status)
+                end associate
                 call process(repo)
+                call repo%persist()
+                allocate(RepositoryAllocator :: allocated_repo)
+                allocate(plain_repo, source=template_repo, stat=allocate_status)
+                deallocate(allocated_repo, temporary_repo, stat=deallocate_status, errmsg=deallocate_message)
+                select type (repo)
+                type is (RepositorySnapshot)
+                  call repo%persist()
+                class is (RepositoryView)
+                  call repo%persist()
+                end select
               end subroutine run
             end module demo_mod
+
+            submodule (demo_mod:demo_parent) demo_child
+            end submodule demo_child
             """;
 
         var symbols = SymbolExtractor.Extract(1, "fortran", content);
         var references = ReferenceExtractor.Extract(1, "fortran", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "repository_kinds.inc" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "iso_c_binding" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "c_ptr" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_ptr" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "repositories" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "local_status" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "remote_status" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_legacy" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_local" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_remote" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository_only" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_symbol" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_repository_rename" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_local" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "compact_remote" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "iso_fortran_env" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "demo_mod" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "demo_parent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "create_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryNoSpace" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "reference" && r.Context.Contains("public RepositoryFactory", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference" && r.Context.Contains("private ::", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "internal_probe" && r.ReferenceKind == "reference" && r.Context.Contains("private internal_probe", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "c_int" && r.ReferenceKind == "type_reference" && r.Context.Contains("integer(c_int)", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "real64" && r.ReferenceKind == "type_reference" && r.Context.Contains("real(kind=real64)", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "c_char" && r.ReferenceKind == "type_reference" && r.Context.Contains("character(kind=c_char", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "RepositoryBase" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "persist_impl" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "assign_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "assign_repository_alt" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "cleanup_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "close_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "flush_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "release_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_state" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_config" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("common", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("common", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "anonymous_state" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "anonymous_flag" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("namelist", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "legacy_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "legacy_delimiter" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "status_code" && r.ReferenceKind == "reference" && r.Context.Contains("data", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "delimiter" && r.ReferenceKind == "reference" && r.Context.Contains("data", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "delayed_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "delayed_flag" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "saved_repository" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_state" && r.ReferenceKind == "reference" && r.Context.Contains("save", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "legacy_hook" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_probe" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "sin" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "cos" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_resolver" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "repository_status" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "resolved_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "CompactFactory" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "CompactOnlyFactory" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryCallback" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryAllocator" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference" && r.Context.Contains("allocate(RepositoryAllocator", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "plain_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "template_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "allocate_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "temporary_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "deallocate_status" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "deallocate_message" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositorySnapshot" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RepositoryView" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "repo" && r.ReferenceKind == "call");
         Assert.Contains(references, r =>
             r.SymbolName == "process"
             && r.ReferenceKind == "call"

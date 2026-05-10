@@ -11336,6 +11336,23 @@ public class SymbolExtractorTests
                 end subroutine abstract_callback
               end interface
               implicit none
+              type :: point_t
+                integer :: x
+                real :: origin_x, origin_y
+              end type point_t
+              integer, parameter :: max_rank = 8, default_rank = 2
+              parameter (legacy_rank = 4, legacy_limit = selected_int_kind(9))
+              integer legacy_count, legacy_total
+              allocatable :: workspace, scratch
+              pointer :: shared_point
+              common /work_area/ common_status, common_flag
+              namelist /config_area/ config_status, config_flag
+              type, extends(point_t) :: colored_point
+                integer :: color
+              end type colored_point
+              enum, bind(c)
+                enumerator :: color_red = 1, color_blue = 2
+              end enum
             contains
               integer(kind=4) &
               function split_value(value)
@@ -11349,6 +11366,7 @@ public class SymbolExtractorTests
               recursive subroutine normalize(v)
                 call normalize2(v) ! function phantom()
                 print *, "subroutine phantom"
+                entry normalize_restart(v)
               contains
                 subroutine normalize_inner()
                 end subroutine normalize_inner
@@ -11360,6 +11378,10 @@ public class SymbolExtractorTests
 
             submodule (math_utils) math_utils_impl
             contains
+              module procedure normalize_impl
+                print *, "normalize"
+              end procedure normalize_impl
+
               module subroutine expand(v)
               end subroutine expand
             end submodule math_utils_impl
@@ -11367,6 +11389,11 @@ public class SymbolExtractorTests
             program demo
               print *, "hello"
             end program demo
+
+            block data constants_block
+              common /constants/ pi
+              data pi /3.14159/
+            end block data constants_block
 
             integer function add(a, b)
             end function add
@@ -11391,8 +11418,24 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "abstract_callback");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_value");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "split_subroutine");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "color_red");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "color_blue");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "max_rank");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default_rank");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_rank");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_limit");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_count" && s.ReturnType == "integer");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "legacy_total" && s.ReturnType == "integer");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "workspace");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "scratch");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "shared_point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "common_status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "common_flag");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config_status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config_flag");
         Assert.Equal("namespace", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerKind);
         Assert.Equal("math_iface", Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_iface").ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize_restart");
 
         var mathUtilsImpl = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "math_utils_impl");
         Assert.NotNull(mathUtilsImpl.BodyStartLine);
@@ -11401,6 +11444,34 @@ public class SymbolExtractorTests
         var demo = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "demo");
         Assert.NotNull(demo.BodyStartLine);
         Assert.NotNull(demo.BodyEndLine);
+
+        var constantsBlock = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "constants_block");
+        Assert.NotNull(constantsBlock.BodyStartLine);
+        Assert.NotNull(constantsBlock.BodyEndLine);
+
+        var point = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "point_t");
+        Assert.Equal("namespace", point.ContainerKind);
+        Assert.Equal("math_utils", point.ContainerName);
+        Assert.NotNull(point.BodyStartLine);
+        Assert.NotNull(point.BodyEndLine);
+
+        var pointX = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "x");
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("point_t", pointX.ContainerName);
+        Assert.Equal("integer", pointX.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "origin_x" && s.ReturnType == "real");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "origin_y" && s.ReturnType == "real");
+
+        var coloredPoint = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "colored_point");
+        Assert.Equal("namespace", coloredPoint.ContainerKind);
+        Assert.Equal("math_utils", coloredPoint.ContainerName);
+        Assert.NotNull(coloredPoint.BodyStartLine);
+        Assert.NotNull(coloredPoint.BodyEndLine);
+
+        var color = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "color");
+        Assert.Equal("class", color.ContainerKind);
+        Assert.Equal("colored_point", color.ContainerName);
+        Assert.Equal("integer", color.ReturnType);
 
         var normalize = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize");
         Assert.Equal("namespace", normalize.ContainerKind);
@@ -11416,6 +11487,12 @@ public class SymbolExtractorTests
         var expand = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "expand");
         Assert.Equal("namespace", expand.ContainerKind);
         Assert.Equal("math_utils_impl", expand.ContainerName);
+
+        var normalizeImpl = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize_impl");
+        Assert.Equal("namespace", normalizeImpl.ContainerKind);
+        Assert.Equal("math_utils_impl", normalizeImpl.ContainerName);
+        Assert.NotNull(normalizeImpl.BodyStartLine);
+        Assert.NotNull(normalizeImpl.BodyEndLine);
 
         var normalize2 = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "normalize2");
         Assert.Equal("namespace", normalize2.ContainerKind);
