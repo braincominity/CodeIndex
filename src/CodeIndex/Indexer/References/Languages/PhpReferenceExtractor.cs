@@ -26,7 +26,7 @@ internal static class PhpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockVarTypeRegex = new(
-        @"^\s*(?:/\*\*)?\s*\*?\s*@var\s+(?<types>\S+)",
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?var\s+(?<types>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockThrowsTypeRegex = new(

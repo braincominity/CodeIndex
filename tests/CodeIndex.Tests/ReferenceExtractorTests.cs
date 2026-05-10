@@ -9905,6 +9905,7 @@ public class ReferenceExtractorTests
         const string content = """
             <?php
             /** @var \App\Cache\Store<CacheItem>|null $store */
+            /** @phpstan-var \App\Cache\TaggedStore $tagged */
             $store = resolve_store();
             ?>
             """;
@@ -9915,6 +9916,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "App\\Cache\\Store" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Store" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "CacheItem" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\Cache\\TaggedStore" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "TaggedStore" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
     }
 
