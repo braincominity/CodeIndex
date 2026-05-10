@@ -15,6 +15,10 @@ public static partial class SymbolExtractor
         @"\bfunction\s+__construct\s*\((?<parameters>[^)]*)\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpConstructorStartRegex = new(
+        @"\bfunction\s+__construct\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex PhpPromotedPropertyParameterRegex = new(
         @"(?:(?<visibility>public|private|protected)\s+)(?:(?:readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -236,40 +240,81 @@ public static partial class SymbolExtractor
         {
             var line = lines[lineIndex];
             var constructorMatch = PhpSameLineConstructorRegex.Match(line);
-            if (!constructorMatch.Success)
+            var constructorStart = PhpConstructorStartRegex.IsMatch(line);
+            if (!constructorMatch.Success && !constructorStart)
                 continue;
 
-            var lineNumber = lineIndex + 1;
-            var parameters = constructorMatch.Groups["parameters"];
-            foreach (var parameter in EnumeratePhpTopLevelCommaSegments(parameters.Value))
+            if (constructorMatch.Success)
             {
-                var match = PhpPromotedPropertyParameterRegex.Match(parameter.Text);
-                if (!match.Success)
-                    continue;
+                var lineNumber = lineIndex + 1;
+                var parameters = constructorMatch.Groups["parameters"];
+                foreach (var parameter in EnumeratePhpTopLevelCommaSegments(parameters.Value))
+                {
+                    AddPhpPromotedPropertySymbol(
+                        fileId,
+                        symbols,
+                        line,
+                        lineNumber,
+                        parameters.Index + parameter.StartColumn,
+                        parameter.Text);
+                }
+            }
 
-                var name = match.Groups["name"].Value;
-                AddSymbolRecord(
+            if (constructorMatch.Success || !constructorStart)
+                continue;
+
+            for (var parameterLineIndex = lineIndex + 1;
+                 parameterLineIndex < lines.Length && parameterLineIndex <= lineIndex + 64;
+                 parameterLineIndex++)
+            {
+                var parameterLine = lines[parameterLineIndex];
+                AddPhpPromotedPropertySymbol(
+                    fileId,
                     symbols,
-                    cssSeenSymbols: null,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "property",
-                        Name = name,
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        StartColumn = parameters.Index + parameter.StartColumn + match.Groups["name"].Index,
-                        EndLine = lineNumber,
-                        Signature = line.Trim(),
-                        Visibility = match.Groups["visibility"].Value,
-                        ReturnType = match.Groups["returnType"].Success
-                            ? match.Groups["returnType"].Value
-                            : null,
-                    },
-                    line);
+                    parameterLine,
+                    parameterLineIndex + 1,
+                    0,
+                    parameterLine);
+
+                if (parameterLine.Contains(')'))
+                    break;
             }
         }
+    }
+
+    private static void AddPhpPromotedPropertySymbol(
+        long fileId,
+        List<SymbolRecord> symbols,
+        string line,
+        int lineNumber,
+        int baseColumn,
+        string parameterText)
+    {
+        var match = PhpPromotedPropertyParameterRegex.Match(parameterText);
+        if (!match.Success)
+            return;
+
+        var name = match.Groups["name"].Value;
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                StartColumn = baseColumn + match.Groups["name"].Index,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+                Visibility = match.Groups["visibility"].Value,
+                ReturnType = match.Groups["returnType"].Success
+                    ? match.Groups["returnType"].Value
+                    : null,
+            },
+            line);
     }
 
     private static IEnumerable<(string Text, int StartColumn)> EnumeratePhpTopLevelCommaSegments(string text)
