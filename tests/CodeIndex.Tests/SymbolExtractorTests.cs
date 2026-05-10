@@ -12467,6 +12467,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsSameLinePromotedConstructorProperties()
+    {
+        var content = """
+            <?php
+            class User {
+                public function __construct(public string $id, private readonly ?Profile $profile, string $local = 'x,y') {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "id" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "profile" && s.ReturnType == "?Profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ntypealias UserID = Int\npublic typealias Callback = (Int) -> Int\n\ndistributed actor RemoteWorker { }";

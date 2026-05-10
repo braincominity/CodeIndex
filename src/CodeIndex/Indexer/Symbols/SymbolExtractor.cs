@@ -3716,6 +3716,8 @@ public static partial class SymbolExtractor
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpAdditionalPropertySymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpPromotedConstructorProperties(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);

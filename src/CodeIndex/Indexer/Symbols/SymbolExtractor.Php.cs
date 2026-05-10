@@ -11,6 +11,14 @@ public static partial class SymbolExtractor
         @"^\s*(?:(?<visibility>public|private|protected|var)\s+)(?:(?:static|readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex PhpSameLineConstructorRegex = new(
+        @"\bfunction\s+__construct\s*\((?<parameters>[^)]*)\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex PhpPromotedPropertyParameterRegex = new(
+        @"(?:(?<visibility>public|private|protected)\s+)(?:(?:readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -221,5 +229,100 @@ public static partial class SymbolExtractor
 
     private static bool IsPhpIdentifierPart(char ch)
         => ch == '_' || char.IsLetterOrDigit(ch);
+
+    private static void ExtractPhpPromotedConstructorProperties(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var constructorMatch = PhpSameLineConstructorRegex.Match(line);
+            if (!constructorMatch.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var parameters = constructorMatch.Groups["parameters"];
+            foreach (var parameter in EnumeratePhpTopLevelCommaSegments(parameters.Value))
+            {
+                var match = PhpPromotedPropertyParameterRegex.Match(parameter.Text);
+                if (!match.Success)
+                    continue;
+
+                var name = match.Groups["name"].Value;
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = name,
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        StartColumn = parameters.Index + parameter.StartColumn + match.Groups["name"].Index,
+                        EndLine = lineNumber,
+                        Signature = line.Trim(),
+                        Visibility = match.Groups["visibility"].Value,
+                        ReturnType = match.Groups["returnType"].Success
+                            ? match.Groups["returnType"].Value
+                            : null,
+                    },
+                    line);
+            }
+        }
+    }
+
+    private static IEnumerable<(string Text, int StartColumn)> EnumeratePhpTopLevelCommaSegments(string text)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var quote = '\0';
+
+        for (var index = 0; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && index + 1 < text.Length)
+                {
+                    index++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '(')
+                parenDepth++;
+            else if (ch == ')' && parenDepth > 0)
+                parenDepth--;
+            else if (ch == '[')
+                bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0)
+                bracketDepth--;
+            else if (ch == '{')
+                braceDepth++;
+            else if (ch == '}' && braceDepth > 0)
+                braceDepth--;
+
+            if (ch != ',' || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+                continue;
+
+            yield return (text[segmentStart..index].Trim(), segmentStart);
+            segmentStart = index + 1;
+        }
+
+        yield return (text[segmentStart..].Trim(), segmentStart);
+    }
 
 }
