@@ -1325,7 +1325,7 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            if (language == "php" && originalLine.Contains("@property", StringComparison.OrdinalIgnoreCase))
+            if (language == "php" && originalLine.Contains("property", StringComparison.OrdinalIgnoreCase))
             {
                 var docblockContext = originalLine.Trim();
                 if (docblockContext.Length > 0)

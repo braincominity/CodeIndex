@@ -10009,6 +10009,7 @@ public class ReferenceExtractorTests
             /**
              * @property-read \App\Models\User $owner
              * @property Collection<Invoice> $invoices
+             * @psalm-property-write Money $balance
              */
             final class Account {}
             ?>
@@ -10021,6 +10022,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Collection" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Invoice" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Money" && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]

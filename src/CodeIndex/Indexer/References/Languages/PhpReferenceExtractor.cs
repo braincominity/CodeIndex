@@ -46,7 +46,7 @@ internal static class PhpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockPropertyTypeRegex = new(
-        @"^\s*(?:/\*\*)?\s*\*?\s*@property(?:-read|-write)?\s+(?<types>\S+)",
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?property(?:-read|-write)?\s+(?<types>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockMethodReturnTypeRegex = new(
