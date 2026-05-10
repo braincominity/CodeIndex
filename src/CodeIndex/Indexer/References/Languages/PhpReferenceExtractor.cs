@@ -125,7 +125,32 @@ internal static class PhpReferenceExtractor
                     lineNumber,
                     container);
             }
+
+            var memberGroup = match.Groups["member"];
+            if (memberGroup.Success
+                && !memberGroup.Value.Equals("class", StringComparison.OrdinalIgnoreCase)
+                && !IsPhpCallAfterStaticMember(preparedLine, memberGroup.Index + memberGroup.Length))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    memberGroup.Value,
+                    memberGroup.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
+    }
+
+    private static bool IsPhpCallAfterStaticMember(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '(';
     }
 
     public static void EmitObjectMemberAccessReferences(
