@@ -2093,7 +2093,10 @@ public static partial class SymbolExtractor
                 continue;
 
             if (lang == "dockerfile")
+            {
                 AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
+                AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
+            }
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
@@ -3751,7 +3754,7 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (var name in EnumerateDockerfileEnvKeyValueNames(trimmed[3..].TrimStart()))
+        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[3..].TrimStart(), IsDockerfileVariableName))
         {
             if (first)
             {
@@ -3777,7 +3780,48 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static IEnumerable<string> EnumerateDockerfileEnvKeyValueNames(string body)
+    private static void AddDockerfileAdditionalLabelSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length <= 5
+            || !trimmed.StartsWith("LABEL", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(trimmed[5]))
+        {
+            return;
+        }
+
+        var first = true;
+        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[5..].TrimStart(), IsDockerfileLabelName))
+        {
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)
     {
         var index = 0;
         while (index < body.Length)
@@ -3824,7 +3868,7 @@ public static partial class SymbolExtractor
             if (equalsIndex > 0)
             {
                 var name = token[..equalsIndex];
-                if (IsDockerfileVariableName(name))
+                if (isName(name))
                     yield return name;
             }
         }
@@ -3839,6 +3883,21 @@ public static partial class SymbolExtractor
         {
             var ch = name[i];
             if (!(char.IsAsciiLetterOrDigit(ch) || ch == '_'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsDockerfileLabelName(string name)
+    {
+        if (name.Length == 0 || !(char.IsAsciiLetterOrDigit(name[0]) || name[0] == '_'))
+            return false;
+
+        for (var i = 1; i < name.Length; i++)
+        {
+            var ch = name[i];
+            if (!(char.IsAsciiLetterOrDigit(ch) || ch is '_' or '.' or '-'))
                 return false;
         }
 

@@ -35,6 +35,7 @@ affected:
 - **Dockerfile `ENV` key-value lists expose every key** — `ENV APP_HOME=/app NODE_ENV=production` now indexes both `APP_HOME` and `NODE_ENV` property symbols.
 - **Dockerfile `ENV` key scanning ignores quoted values** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` no longer emits a false `BAR` property.
 - **Dockerfile `LABEL` keys become symbols** — labels such as `org.opencontainers.image.title` now index as property symbols.
+- **Dockerfile `LABEL` key-value lists expose every key** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` now indexes both label keys.
 
 ## 日本語
 
@@ -61,3 +62,4 @@ affected:
 - **Dockerfile の `ENV` key-value list ですべての key を出すようになりました** — `ENV APP_HOME=/app NODE_ENV=production` が `APP_HOME` と `NODE_ENV` の両方を property symbol として index するようになりました。
 - **Dockerfile の `ENV` key scan が quoted value を無視するようになりました** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` が偽の `BAR` property を出さなくなりました。
 - **Dockerfile の `LABEL` key を symbol として扱うようになりました** — `org.opencontainers.image.title` のような label が property symbol として index されるようになりました。
+- **Dockerfile の `LABEL` key-value list ですべての key を出すようになりました** — `LABEL org.opencontainers.image.title=... org.opencontainers.image.version=...` が両方の label key を index するようになりました。

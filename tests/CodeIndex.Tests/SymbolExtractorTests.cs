@@ -20245,6 +20245,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_DetectsMultipleLabelKeySymbols()
+    {
+        var content = "LABEL org.opencontainers.image.title=\"demo\" org.opencontainers.image.version=\"1.0\"\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "org.opencontainers.image.title");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "org.opencontainers.image.version");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """
