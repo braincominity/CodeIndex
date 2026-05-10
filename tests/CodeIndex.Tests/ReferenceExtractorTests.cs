@@ -9855,6 +9855,8 @@ public class ReferenceExtractorTests
             /**
              * @param \App\Models\User|Guest|null $actor
              * @param Collection<User>[] $users
+             * @phpstan-param \App\DTO\UserInput $input
+             * @param-out HydratedUser $actor
              */
             function handle($actor, $users): void {}
             ?>
@@ -9867,6 +9869,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Guest" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "Collection" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "App\\DTO\\UserInput" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserInput" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "HydratedUser" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
     }
 
