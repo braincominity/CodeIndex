@@ -404,6 +404,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex FortranAllocateListRegex = new(
         @"^\s*allocate\s*\((?<list>.*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FortranAllocateSourceKeywordRegex = new(
+        @"\b(?:source|mold)\s*=\s*(?<name>[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranDeallocateListRegex = new(
         @"^\s*deallocate\s*\((?<list>.*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -4065,6 +4068,12 @@ internal static class LanguageReferenceExtractionSupport
                     end++;
 
                 ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], objectListStart + segmentStart + leading, "reference", context, lineNumber, container);
+            }
+
+            foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
             }
         }
 

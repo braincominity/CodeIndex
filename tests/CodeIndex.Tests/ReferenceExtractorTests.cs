@@ -11683,6 +11683,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "RepositoryAllocator" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference" && r.Context.Contains("allocate(RepositoryAllocator", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "plain_repo" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "template_repo" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "allocated_repo" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "temporary_repo" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "RepositorySnapshot" && r.ReferenceKind == "type_reference");
