@@ -33,6 +33,7 @@ affected:
 - **Multiple Dockerfile BuildKit mounts are indexed** — a single `RUN` with several `--mount=...,from=stage` flags now records each stage dependency.
 - **Digest external `COPY --from` images are not mistaken for stages** — `COPY --from=builder@sha256:...` no longer creates a false stage reference to `builder`.
 - **Dockerfile `ENV` key-value lists expose every key** — `ENV APP_HOME=/app NODE_ENV=production` now indexes both `APP_HOME` and `NODE_ENV` property symbols.
+- **Dockerfile `ENV` key scanning ignores quoted values** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` no longer emits a false `BAR` property.
 
 ## 日本語
 
@@ -57,3 +58,4 @@ affected:
 - **Dockerfile BuildKit mount が複数ある場合も index するようになりました** — 1 つの `RUN` に複数の `--mount=...,from=stage` がある場合、それぞれの stage dependency を記録します。
 - **digest 付き外部 image の `COPY --from` を stage と誤認しなくなりました** — `COPY --from=builder@sha256:...` が `builder` への偽 stage 参照を作らなくなりました。
 - **Dockerfile の `ENV` key-value list ですべての key を出すようになりました** — `ENV APP_HOME=/app NODE_ENV=production` が `APP_HOME` と `NODE_ENV` の両方を property symbol として index するようになりました。
+- **Dockerfile の `ENV` key scan が quoted value を無視するようになりました** — `ENV APP_HOME="... BAR=..." NODE_ENV=production` が偽の `BAR` property を出さなくなりました。

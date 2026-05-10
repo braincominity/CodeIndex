@@ -20223,6 +20223,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_MultipleEnvKeyValueSymbolsIgnoreQuotedValueAssignments()
+    {
+        var content = "ENV APP_HOME=\"/opt BAR=not-a-key\" NODE_ENV=production\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "APP_HOME");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NODE_ENV");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "BAR");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """

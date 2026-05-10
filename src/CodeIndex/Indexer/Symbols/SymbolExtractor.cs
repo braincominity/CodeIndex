@@ -1930,10 +1930,6 @@ public static partial class SymbolExtractor
         ],
     };
 
-    private static readonly Regex DockerfileEnvKeyValueRegex = new(
-        @"(?:^|\s)(?<name>[A-Za-z_][A-Za-z0-9_]*)=",
-        RegexOptions.Compiled);
-
     /// <summary>
     /// Return the set of languages that have symbol-extraction patterns.
     /// シンボル抽出パターンを持つ言語のセットを返す。
@@ -3754,7 +3750,7 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (Match match in DockerfileEnvKeyValueRegex.Matches(trimmed[3..].TrimStart()))
+        foreach (var name in EnumerateDockerfileEnvKeyValueNames(trimmed[3..].TrimStart()))
         {
             if (first)
             {
@@ -3762,7 +3758,6 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var nameGroup = match.Groups["name"];
             AddSymbolRecord(
                 symbols,
                 cssSeenSymbols: null,
@@ -3771,7 +3766,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "property",
-                    Name = nameGroup.Value,
+                    Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
@@ -3779,6 +3774,74 @@ public static partial class SymbolExtractor
                 },
                 line);
         }
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileEnvKeyValueNames(string body)
+    {
+        var index = 0;
+        while (index < body.Length)
+        {
+            while (index < body.Length && char.IsWhiteSpace(body[index]))
+                index++;
+            if (index >= body.Length)
+                yield break;
+
+            var tokenStart = index;
+            var inSingleQuote = false;
+            var inDoubleQuote = false;
+            while (index < body.Length)
+            {
+                var ch = body[index];
+                if (ch == '\\' && index + 1 < body.Length)
+                {
+                    index += 2;
+                    continue;
+                }
+
+                if (ch == '\'' && !inDoubleQuote)
+                {
+                    inSingleQuote = !inSingleQuote;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '"' && !inSingleQuote)
+                {
+                    inDoubleQuote = !inDoubleQuote;
+                    index++;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && char.IsWhiteSpace(ch))
+                    break;
+
+                index++;
+            }
+
+            var token = body[tokenStart..index];
+            var equalsIndex = token.IndexOf('=');
+            if (equalsIndex > 0)
+            {
+                var name = token[..equalsIndex];
+                if (IsDockerfileVariableName(name))
+                    yield return name;
+            }
+        }
+    }
+
+    private static bool IsDockerfileVariableName(string name)
+    {
+        if (name.Length == 0 || !(char.IsAsciiLetter(name[0]) || name[0] == '_'))
+            return false;
+
+        for (var i = 1; i < name.Length; i++)
+        {
+            var ch = name[i];
+            if (!(char.IsAsciiLetterOrDigit(ch) || ch == '_'))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool TryAddRPacmanPackageLoaderSymbols(
