@@ -20341,6 +20341,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_VolumePathSymbolsIgnoreInlineComments()
+    {
+        var content = "VOLUME /var/lib/app # /not-a-volume\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/var/lib/app");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/not-a-volume");
+        Assert.Single(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsPlatformFlaggedStages()
     {
         var content = """

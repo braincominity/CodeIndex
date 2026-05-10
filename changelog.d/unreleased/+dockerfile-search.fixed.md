@@ -51,6 +51,7 @@ affected:
 - **Dockerfile `WORKDIR` paths become symbols** — `WORKDIR /app` now indexes `/app` as a property symbol.
 - **Dockerfile shell-form `VOLUME` paths become symbols** — `VOLUME /data` now indexes `/data` as a property symbol.
 - **Dockerfile multi-path `VOLUME` lines expose every path** — `VOLUME /data /cache` now indexes all listed shell-form paths.
+- **Dockerfile `VOLUME` inline comments stay out of symbols** — paths mentioned after `#` are no longer indexed as volumes.
 
 ## 日本語
 
@@ -93,3 +94,4 @@ affected:
 - **Dockerfile `WORKDIR` path を symbol として扱うようになりました** — `WORKDIR /app` が `/app` property symbol として index されるようになりました。
 - **Dockerfile shell form の `VOLUME` path を symbol として扱うようになりました** — `VOLUME /data` が `/data` property symbol として index されるようになりました。
 - **Dockerfile の複数 path `VOLUME` 行ですべての path を出すようになりました** — `VOLUME /data /cache` が列挙された shell form path をすべて index するようになりました。
+- **Dockerfile `VOLUME` の inline comment を symbol 対象から外しました** — `#` より後ろに書かれた path を volume として index しないようになりました。

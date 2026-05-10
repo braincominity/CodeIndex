@@ -4002,6 +4002,9 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (token[0] == '#')
+                break;
+
             if (!IsDockerfileVolumePath(token))
                 continue;
 
