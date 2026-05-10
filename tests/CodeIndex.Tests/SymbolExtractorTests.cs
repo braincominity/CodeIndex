@@ -12622,6 +12622,8 @@ public class SymbolExtractorTests
             /**
              * @phpstan-type UserShape array{id:int,name:string}
              * @psalm-type EmailAddress non-empty-string
+             * @phpstan-import-type RemoteShape from \App\Types\RemoteSource as LocalShape
+             * @psalm-import-type ExternalShape from \App\Types\ExternalSource
              */
             class UserTypes {}
             """;
@@ -12630,6 +12632,8 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "UserShape" && s.ReturnType == "array{id:int,name:string}");
         Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "EmailAddress" && s.ReturnType == "non-empty-string");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "LocalShape" && s.ReturnType == "\\App\\Types\\RemoteSource");
+        Assert.Contains(symbols, s => s.Kind == "type" && s.Name == "ExternalShape" && s.ReturnType == "\\App\\Types\\ExternalSource");
     }
 
     [Fact]

@@ -3731,6 +3731,8 @@ public static partial class SymbolExtractor
             ExtractPhpTraitAliasSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);

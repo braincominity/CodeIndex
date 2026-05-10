@@ -39,6 +39,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?type\s+(?<name>[A-Za-z_]\w*)\s+(?<returnType>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpDocblockImportTypeRegex = new(
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?import-type\s+(?<imported>[A-Za-z_]\w*)\s+from\s+(?<returnType>\S+)(?:\s+as\s+(?<alias>[A-Za-z_]\w*))?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static void ExtractPhpImportSymbols(List<SymbolRecord> symbols, string line, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -284,6 +288,39 @@ public static partial class SymbolExtractor
 
             var lineNumber = lineIndex + 1;
             var nameGroup = match.Groups["name"];
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "type",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                    ReturnType = match.Groups["returnType"].Value,
+                },
+                line);
+        }
+    }
+
+    private static void ExtractPhpDocblockImportTypeSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var match = PhpDocblockImportTypeRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var lineNumber = lineIndex + 1;
+            var nameGroup = match.Groups["alias"].Success
+                ? match.Groups["alias"]
+                : match.Groups["imported"];
             AddSymbolRecord(
                 symbols,
                 cssSeenSymbols: null,
