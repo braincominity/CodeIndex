@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Database;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Cli;
@@ -19,6 +20,8 @@ internal static class ProgramRunner
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} color_flag_invalid=true");
             return CommandExitCodes.UsageError;
         }
+
+        TryConsumeDebugUnsafeFlag(ref args);
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -72,35 +75,52 @@ internal static class ProgramRunner
                 return mcpExitCode;
             }
 
-            var exitCode = args[0] switch
+            var commandName = args[0];
+            var subArgs = args[1..];
+            Func<string[], int>? queryRunner = commandName switch
             {
-                "search" => QueryCommandRunner.RunSearch(args[1..], jsonOptions),
-                "definition" => QueryCommandRunner.RunDefinition(args[1..], jsonOptions),
-                "references" => QueryCommandRunner.RunReferences(args[1..], jsonOptions),
-                "callers" => QueryCommandRunner.RunCallers(args[1..], jsonOptions),
-                "callees" => QueryCommandRunner.RunCallees(args[1..], jsonOptions),
-                "symbols" => QueryCommandRunner.RunSymbols(args[1..], jsonOptions),
-                "files" => QueryCommandRunner.RunFiles(args[1..], jsonOptions),
-                "find" => QueryCommandRunner.RunFind(args[1..], jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args[1..], jsonOptions),
-                "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
-                "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),
-                "outline" => QueryCommandRunner.RunOutline(args[1..], jsonOptions),
-                "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
-                "validate" => QueryCommandRunner.RunValidate(args[1..], jsonOptions),
-                "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args[1..], jsonOptions),
-                "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
-                "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
-                "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
-                "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
-                "backfill-fold" => IndexCommandRunner.RunBackfillFold(args[1..], jsonOptions),
-                "db" => DbCommandRunner.RunIntegrityCheck(args[1..], jsonOptions),
-                _ when IsProjectPathArg(args[0])
-                    => IndexCommandRunner.Run(args, jsonOptions),
-                _ => ShowError(args, $"Unknown command: {args[0]}")
+                "search" => a => QueryCommandRunner.RunSearch(a, jsonOptions),
+                "definition" => a => QueryCommandRunner.RunDefinition(a, jsonOptions),
+                "references" => a => QueryCommandRunner.RunReferences(a, jsonOptions),
+                "callers" => a => QueryCommandRunner.RunCallers(a, jsonOptions),
+                "callees" => a => QueryCommandRunner.RunCallees(a, jsonOptions),
+                "symbols" => a => QueryCommandRunner.RunSymbols(a, jsonOptions),
+                "files" => a => QueryCommandRunner.RunFiles(a, jsonOptions),
+                "find" => a => QueryCommandRunner.RunFind(a, jsonOptions),
+                "excerpt" => a => QueryCommandRunner.RunExcerpt(a, jsonOptions),
+                "map" => a => QueryCommandRunner.RunMap(a, jsonOptions),
+                "inspect" => a => QueryCommandRunner.RunInspect(a, jsonOptions),
+                "outline" => a => QueryCommandRunner.RunOutline(a, jsonOptions),
+                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion),
+                "validate" => a => QueryCommandRunner.RunValidate(a, jsonOptions),
+                "languages" => a => QueryCommandRunner.RunLanguages(a, jsonOptions),
+                "impact" => a => QueryCommandRunner.RunImpact(a, jsonOptions),
+                "deps" => a => QueryCommandRunner.RunDeps(a, jsonOptions),
+                "unused" => a => QueryCommandRunner.RunUnused(a, jsonOptions),
+                "hotspots" => a => QueryCommandRunner.RunHotspots(a, jsonOptions),
+                _ => null,
             };
-            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={args[0]}");
+
+            int exitCode;
+            if (queryRunner is not null)
+            {
+                exitCode = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
+                    ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, queryRunner)
+                    : queryRunner(subArgs);
+            }
+            else
+            {
+                exitCode = commandName switch
+                {
+                    "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
+                    "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
+                    _ when IsProjectPathArg(commandName)
+                        => IndexCommandRunner.Run(args, jsonOptions),
+                    _ => ShowError(args, $"Unknown command: {commandName}")
+                };
+            }
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={commandName}");
             return exitCode;
         }
         catch (Exception ex)
@@ -179,6 +199,51 @@ internal static class ProgramRunner
             ConsoleUi.SetColorMode(requested.Value);
         args = kept.ToArray();
         return true;
+    }
+
+    // Strip the `--debug-unsafe` opt-in from `args` before subcommand parsing.
+    // The flag must be passed every command invocation (not via env var) so a stale
+    // CDIDX_DEBUG=unsafe in a shell profile or CI env cannot quietly leak indexed
+    // source content (#1530). Anything after `--` is left untouched so subcommand
+    // query strings keep their literal semantics.
+    // サブコマンド処理前に `--debug-unsafe` を取り除く。環境変数 CDIDX_DEBUG=unsafe が
+    // シェルプロファイル / CI に残った状態で索引済みソースが漏れないよう、明示的にフラグを
+    // 毎回渡す運用にする（#1530）。`--` 以降はサブコマンドのクエリ文字列を保つため触らない。
+    internal static bool TryConsumeDebugUnsafeFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        var seen = false;
+        foreach (var arg in args)
+        {
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--debug-unsafe")
+            {
+                seen = true;
+                continue;
+            }
+            kept.Add(arg);
+        }
+
+        if (seen)
+        {
+            DbDebug.EnableUnsafeForProcess();
+            args = kept.ToArray();
+        }
+        return seen;
     }
 
     internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()

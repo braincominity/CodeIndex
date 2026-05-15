@@ -14,7 +14,7 @@ internal static class JsonOutputFailure
             return false;
         }
 
-        Console.Error.WriteLine("Error: --json is not available on this trimmed build.");
+        Console.Error.WriteLine($"Error [{CommandErrorCodes.FeatureUnavailable}]: --json is not available on this trimmed build.");
         Console.Error.WriteLine("Hint: use `cdidx mcp` for structured output, omit `--json` for human-readable output, or use the NuGet/global-tool build if you need CLI JSON.");
         exitCode = CommandExitCodes.FeatureUnavailable;
         return true;

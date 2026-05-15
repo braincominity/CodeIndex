@@ -381,6 +381,8 @@ Use `--json` for machine-readable output (AI agents):
 {"path":"src/Auth/TokenService.cs","lang":"csharp","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":40,"snippet_end_line":47,"snippet":"if (claims.Count == 0)\\n    throw new InvalidOperationException();\\nreturn GenerateToken(claims);","match_lines":[42,47],"highlights":[{"line":47,"text":"return GenerateToken(claims);","terms":["GenerateToken"]}],"context_before":2,"context_after":3,"score":9.8}
 ```
 
+Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
+
 ### Search symbols (functions, classes, etc.)
 
 ```bash
@@ -606,18 +608,39 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
 
+### Error codes
+
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI / MCP error also carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Codes never get renamed or reused once published — retired codes simply stop being emitted.
+
+| Code | When emitted |
+|---|---|
+| `E001_DB_NOT_FOUND` | `--db` path (or default `.cdidx/codeindex.db`) does not exist |
+| `E002_DB_LOCKED` | SQLite reported `BUSY`/`LOCKED`, or `cdidx index` could not acquire its per-database file lock |
+| `E003_SCHEMA_TOO_NEW` | Reserved for hard read failures on an index written by a newer cdidx (today the same condition is surfaced softly via `status --json index_newer_than_reader: true`) |
+| `E004_DB_NOT_WRITABLE` | `--db` points at a read-only target but the command requires write access |
+| `E005_DB_INTEGRITY_FAILED` | `cdidx db --integrity-check` saw `PRAGMA integrity_check` return diagnostic rows |
+| `E006_FTS_QUERY_SYNTAX` | A raw `--fts` query string failed to parse |
+| `E007_TEMP_STORE_EXHAUSTED` | SQLite returned `SQLITE_FULL` (typically temp-store exhausted while planning a heavy query) |
+| `E008_DB_ERROR` | Generic SQLite error fallback (no more specific code matched) |
+| `E009_FEATURE_UNAVAILABLE` | Requested feature is unavailable in this build (e.g. `--json` on a manually trimmed custom build) |
+| `E010_USAGE_ERROR` | Argument parse error, conflicting flags, or unknown subcommand |
+| `E011_DIRECTORY_NOT_FOUND` | Project / target directory passed to `cdidx index` does not exist |
+
 ### Debugging reader errors
 
 If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
 
-  Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` instead (never paste this output publicly).
+  Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` **and** pass `--debug-unsafe` on the command line — env-var-only `unsafe` is downgraded to redacted with a one-shot warning so a stale `CDIDX_DEBUG=unsafe` in a shell profile or CI environment cannot quietly leak indexed source content. Never paste raw-mode output publicly.
 
   Reference line text is now stored once per file/line in `reference_lines`, so fresh indexes stay smaller than the legacy schema that duplicated the same `context` text on every `symbol_references` row. If an existing `.cdidx/codeindex.db` has already grown large, re-run `cdidx . --rebuild` to reclaim the space; `VACUUM` alone will not remove the old duplicated rows from a pre-migration database.
 
   ```bash
-  CDIDX_DEBUG=1 cdidx unused            # redacted text / テキスト伏字化
-  CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
+  CDIDX_DEBUG=1 cdidx unused                              # redacted text / テキスト伏字化
+  CDIDX_DEBUG=unsafe cdidx --debug-unsafe unused          # raw content, local only / 生テキスト、ローカルのみ
+  CDIDX_DEBUG=unsafe cdidx mcp --debug-unsafe             # MCP server, raw content allowed / MCP サーバーで生テキストを許可
   ```
+
+  MCP tool errors that fall through to the catch-all (e.g. unexpected SQLite exceptions) now reach the JSON-RPC client as `Error executing <tool> (<ExceptionType>). See cdidx server stderr for details.` instead of echoing `ex.Message`, because the underlying exception text can quote bound parameters or matched indexed content. Detailed messages remain on the MCP server's stderr for local debugging.
 
 ### Color output
 
@@ -1673,16 +1696,37 @@ cdidx map --path src/ --exclude-tests --json
 | `4` | この build では機能未提供（例: trim 済み自己完結リリース上の CLI `--json`） |
 | `5` | stale index（`status --check` が DB / workspace の差分を検出） |
 
+### エラーコード
+
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI / MCP のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、`--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+
+| コード | 発行条件 |
+|---|---|
+| `E001_DB_NOT_FOUND` | `--db` で指定した（または既定の `.cdidx/codeindex.db`）パスが存在しない |
+| `E002_DB_LOCKED` | SQLite が `BUSY`/`LOCKED` を返した、または `cdidx index` が DB 単位のファイルロックを取得できなかった |
+| `E003_SCHEMA_TOO_NEW` | 新しい cdidx が書いたインデックスを古い cdidx が読めず hard fail した場合に予約（現状は `status --json` の `index_newer_than_reader: true` でソフト表示） |
+| `E004_DB_NOT_WRITABLE` | `--db` が read-only を指しているが、コマンドが書き込みを要求 |
+| `E005_DB_INTEGRITY_FAILED` | `cdidx db --integrity-check` で `PRAGMA integrity_check` が検出行を返した |
+| `E006_FTS_QUERY_SYNTAX` | 生 `--fts` クエリ文字列のパースに失敗 |
+| `E007_TEMP_STORE_EXHAUSTED` | SQLite が `SQLITE_FULL` を返した（重いクエリの planning 中に temp-store 枯渇など） |
+| `E008_DB_ERROR` | 上記以外の一般的な SQLite エラー（フォールバック） |
+| `E009_FEATURE_UNAVAILABLE` | この build では機能が提供されていない（例: 手動 trim ビルドでの `--json`） |
+| `E010_USAGE_ERROR` | 引数のパースエラー、フラグの競合、未知のサブコマンド |
+| `E011_DIRECTORY_NOT_FOUND` | `cdidx index` に渡したプロジェクト / 対象ディレクトリが存在しない |
+
 ### reader エラーのデバッグ
 
 `The data is NULL at ordinal N` のような SQLite reader エラーでクエリが失敗した場合は、`CDIDX_DEBUG=1` を設定して再実行してください。失敗した SQL、バインド済みパラメータ、直近に読み取った行のカラムが stderr に出力されます。未設定時は何もしません。
 
-テキスト値（チャンクの `content`、`context`、パス、シグネチャ、文字列パラメータ）は**既定で伏字化**され、長さと SHA256 先頭のみを出力します。Issue に貼っても索引済みソースが漏れません。数値・カラム名・NULL マーカー・SQL 本文はそのまま出力されます。ローカルでの調査で生テキストが必要な場合は `CDIDX_DEBUG=unsafe` を指定してください（公開の場には貼らないこと）。
+テキスト値（チャンクの `content`、`context`、パス、シグネチャ、文字列パラメータ）は**既定で伏字化**され、長さと SHA256 先頭のみを出力します。Issue に貼っても索引済みソースが漏れません。数値・カラム名・NULL マーカー・SQL 本文はそのまま出力されます。ローカルでの調査で生テキストが必要な場合は `CDIDX_DEBUG=unsafe` を指定し、**併せて `--debug-unsafe` をコマンドラインで渡してください**。環境変数だけで `unsafe` を指定しても redacted にフォールバックし stderr に一度だけ警告が出るため、シェルプロファイルや CI に `CDIDX_DEBUG=unsafe` が残っていても索引済みソースが静かに漏れることはありません。生テキスト出力は公開の場には貼らないでください。
 
 ```bash
-CDIDX_DEBUG=1 cdidx unused            # テキスト伏字化
-CDIDX_DEBUG=unsafe cdidx unused       # 生テキスト、ローカルのみ
+CDIDX_DEBUG=1 cdidx unused                              # テキスト伏字化
+CDIDX_DEBUG=unsafe cdidx --debug-unsafe unused          # 生テキスト、ローカルのみ
+CDIDX_DEBUG=unsafe cdidx mcp --debug-unsafe             # MCP サーバーで生テキストを許可
 ```
+
+MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例外など）は、JSON-RPC クライアントへ `Error executing <tool> (<ExceptionType>). See cdidx server stderr for details.` として返るようになりました。`ex.Message` をそのまま返すと、SQLite 例外が引用するバインド値や索引内容のフラグメントが MCP トランスクリプト経由で漏れる恐れがあるためです。詳細メッセージは引き続きサーバー側 stderr に残るのでローカルデバッグに使えます。
 
 ### カラー出力
 

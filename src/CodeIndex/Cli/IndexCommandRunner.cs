@@ -42,11 +42,12 @@ public static class IndexCommandRunner
                 Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
                     "error",
                     $"directory not found: {options.ProjectPath}",
-                    "Check the project path and rerun `cdidx index <projectPath>` with an existing directory."),
+                    "Check the project path and rerun `cdidx index <projectPath>` with an existing directory.",
+                    CommandErrorCodes.DirectoryNotFound),
                     jsonContext.CommandErrorJsonResult));
             else
             {
-                Console.Error.WriteLine($"Error: directory not found: {options.ProjectPath}");
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DirectoryNotFound}]: directory not found: {options.ProjectPath}");
                 Console.Error.WriteLine("Hint: check the project path and rerun `cdidx index <projectPath>` with an existing directory.");
             }
             return CommandExitCodes.NotFound;
@@ -64,11 +65,12 @@ public static class IndexCommandRunner
                 Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
                     "error",
                     "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
-                    "Use one of: " + rebuildConflictSynopsis + "."),
+                    "Use one of: " + rebuildConflictSynopsis + ".",
+                    CommandErrorCodes.UsageError),
                     jsonContext.CommandErrorJsonResult));
             else
             {
-                Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
                 Console.Error.WriteLine("Hint: use one of: " + rebuildConflictSynopsis + ".");
             }
             return CommandExitCodes.UsageError;
@@ -81,7 +83,8 @@ public static class IndexCommandRunner
                 jsonOptions,
                 $"database must be writable for index: {dbPath}",
                 CommandExitCodes.DatabaseError,
-                "Point `--db` at a writable filesystem path, or omit `--db` to use `<projectPath>/.cdidx/codeindex.db`.");
+                "Point `--db` at a writable filesystem path, or omit `--db` to use `<projectPath>/.cdidx/codeindex.db`.",
+                CommandErrorCodes.DbNotWritable);
         }
 
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
@@ -252,7 +255,8 @@ public static class IndexCommandRunner
                     jsonOptions,
                     message,
                     CommandExitCodes.DatabaseError,
-                    "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.");
+                    "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.",
+                    CommandErrorCodes.DbLocked);
             }
         }
         else if (!options.Json)
@@ -355,7 +359,8 @@ public static class IndexCommandRunner
                 jsonOptions,
                 options.ParseError,
                 CommandExitCodes.UsageError,
-                "Run `cdidx backfill-fold --help` to see the supported command shape.");
+                "Run `cdidx backfill-fold --help` to see the supported command shape.",
+                CommandErrorCodes.UsageError);
 
         if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
             return WriteCommandError(
@@ -365,7 +370,8 @@ public static class IndexCommandRunner
                 isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError,
                 isNotFound
                     ? "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
-                    : "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx backfill-fold`.");
+                    : "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx backfill-fold`.",
+                isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError);
 
         try
         {
@@ -393,7 +399,8 @@ public static class IndexCommandRunner
                     jsonOptions,
                     "folded-name backfill verification failed: some rows still have NULL folded values",
                     CommandExitCodes.DatabaseError,
-                    "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.");
+                    "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
+                    CommandErrorCodes.DbError);
             }
 
             writer.MarkFoldReady();
@@ -433,7 +440,8 @@ public static class IndexCommandRunner
                 jsonOptions,
                 $"failed to backfill folded-name columns: {ex.Message}",
                 CommandExitCodes.DatabaseError,
-                "Retry `cdidx backfill-fold`. If this persists, rebuild the index with `cdidx index <projectPath> --rebuild`.");
+                "Retry `cdidx backfill-fold`. If this persists, rebuild the index with `cdidx index <projectPath> --rebuild`.",
+                CommandErrorCodes.DbError);
         }
     }
 
@@ -623,7 +631,8 @@ public static class IndexCommandRunner
                     jsonOptions,
                     $"failed to resolve changed files from git commits: {ex.Message}",
                     CommandExitCodes.UsageError,
-                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.");
+                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                    CommandErrorCodes.UsageError);
             }
             finally
             {
@@ -1482,15 +1491,16 @@ public static class IndexCommandRunner
         }
     }
 
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
             Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint),
+                new CommandErrorJsonResult("error", message, hint, errorCode),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
         else
         {
-            Console.Error.WriteLine($"Error: {message}");
+            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
+            Console.Error.WriteLine($"{prefix}: {message}");
             if (hint != null)
                 Console.Error.WriteLine($"Hint: {hint}");
         }

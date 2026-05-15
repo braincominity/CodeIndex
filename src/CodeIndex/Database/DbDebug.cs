@@ -9,12 +9,19 @@ namespace CodeIndex.Database;
 /// bound parameters, and last-read row so that reader-level exceptions
 /// (e.g. "The data is NULL at ordinal N") can be attributed to a concrete
 /// query and row. Text values are redacted by default (length + short SHA256
-/// prefix). Set CDIDX_DEBUG=unsafe to include raw text content — this can
-/// leak indexed source code to stderr and should only be used locally.
+/// prefix). Setting CDIDX_DEBUG=unsafe alone is no longer enough to dump raw
+/// text content — the process must also be started with the explicit
+/// `--debug-unsafe` CLI flag (set via <see cref="EnableUnsafeForProcess"/>).
+/// Without that per-invocation flag the helper downgrades to redacted mode and
+/// emits a one-shot stderr warning, so a stale `CDIDX_DEBUG=unsafe` left in a
+/// shell profile or CI environment cannot quietly leak indexed source content
+/// (#1530).
 /// CDIDX_DEBUG=1 のときだけ、直近の SQL・バインドパラメータ・直近の行を追跡し、
 /// reader 例外（例: "The data is NULL at ordinal N"）を具体的なクエリと行に結び付ける。
-/// 既定ではテキスト値はハッシュ化（長さと SHA256 先頭）される。CDIDX_DEBUG=unsafe を指定すると
-/// インデックス済みソースをそのまま出力し得るため、ローカル用途のみに限定する。
+/// 既定ではテキスト値はハッシュ化（長さと SHA256 先頭）される。CDIDX_DEBUG=unsafe を環境変数だけで
+/// 指定しても生テキストは出ない。プロセス起動時に `--debug-unsafe` を明示する必要があり、
+/// 指定しなかった場合は redacted にフォールバックして stderr に一度だけ警告を出す。
+/// シェルプロファイルや CI に残った `CDIDX_DEBUG=unsafe` で索引済みソースが漏れるのを防ぐ（#1530）。
 /// </summary>
 public static class DbDebug
 {
@@ -29,7 +36,35 @@ public static class DbDebug
     [ThreadStatic]
     private static bool _hasContext;
 
+    // Process-wide gate that must be flipped by an explicit CLI flag before
+    // CDIDX_DEBUG=unsafe is honored. Defaults to false so an env var alone
+    // never triggers raw-text mode (#1530).
+    // CDIDX_DEBUG=unsafe を有効化するためにプロセス側で必須となるゲート。
+    // 既定値は false で、環境変数だけでは生テキストモードに入れない（#1530）。
+    private static int _allowUnsafeProcess;
+    private static int _unsafeDowngradeWarned;
+
     public static bool IsEnabled => ResolveMode() != DebugMode.Off;
+
+    /// <summary>
+    /// Allow CDIDX_DEBUG=unsafe to actually produce raw text dumps in this
+    /// process. The CLI calls this when `--debug-unsafe` is passed at startup.
+    /// CDIDX_DEBUG=unsafe による生テキスト出力をこのプロセス内で許可する。
+    /// CLI は起動時に `--debug-unsafe` を受け取った場合のみ呼ぶ。
+    /// </summary>
+    public static void EnableUnsafeForProcess()
+    {
+        Interlocked.Exchange(ref _allowUnsafeProcess, 1);
+    }
+
+    internal static bool IsUnsafeAllowedForProcess() =>
+        Interlocked.CompareExchange(ref _allowUnsafeProcess, 0, 0) == 1;
+
+    internal static void ResetForTesting()
+    {
+        Interlocked.Exchange(ref _allowUnsafeProcess, 0);
+        Interlocked.Exchange(ref _unsafeDowngradeWarned, 0);
+    }
 
     private enum DebugMode { Off, Redacted, Unsafe }
 
@@ -40,10 +75,23 @@ public static class DbDebug
             return DebugMode.Off;
         if (raw.Equals("unsafe", StringComparison.OrdinalIgnoreCase) ||
             raw.Equals("full", StringComparison.OrdinalIgnoreCase))
-            return DebugMode.Unsafe;
+        {
+            if (IsUnsafeAllowedForProcess())
+                return DebugMode.Unsafe;
+            WarnUnsafeDowngradedOnce();
+            return DebugMode.Redacted;
+        }
         if (raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase))
             return DebugMode.Redacted;
         return DebugMode.Off;
+    }
+
+    private static void WarnUnsafeDowngradedOnce()
+    {
+        if (Interlocked.Exchange(ref _unsafeDowngradeWarned, 1) != 0)
+            return;
+        Console.Error.WriteLine(
+            "[cdidx] CDIDX_DEBUG=unsafe was ignored: pass --debug-unsafe on the command line to enable raw text dumps. Falling back to redacted mode for this process.");
     }
 
     /// <summary>

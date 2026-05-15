@@ -22,7 +22,8 @@ internal sealed record BackfillFoldJsonResult(
 internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("message")] string Message,
-    [property: JsonPropertyName("hint")] string? Hint);
+    [property: JsonPropertyName("hint")] string? Hint,
+    [property: JsonPropertyName("error_code")] string? ErrorCode = null);
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,

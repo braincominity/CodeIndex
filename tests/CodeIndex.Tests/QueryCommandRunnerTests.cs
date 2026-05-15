@@ -703,9 +703,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
             Assert.Contains(expectedHint, stderr);
-            Assert.DoesNotContain("Error: database error:", stderr);
+            Assert.DoesNotContain("database error:", stderr);
         }
         finally
         {
@@ -1605,7 +1605,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
             Assert.Contains("raw FTS5 syntax", stderr);
         }
         finally
@@ -28760,7 +28760,7 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-        Assert.Contains("Error: database not found at", stderr);
+        Assert.Contains("Error [E001_DB_NOT_FOUND]: database not found at", stderr);
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
