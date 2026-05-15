@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Database;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Cli;
@@ -19,6 +20,8 @@ internal static class ProgramRunner
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} color_flag_invalid=true");
             return CommandExitCodes.UsageError;
         }
+
+        TryConsumeDebugUnsafeFlag(ref args);
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -179,6 +182,51 @@ internal static class ProgramRunner
             ConsoleUi.SetColorMode(requested.Value);
         args = kept.ToArray();
         return true;
+    }
+
+    // Strip the `--debug-unsafe` opt-in from `args` before subcommand parsing.
+    // The flag must be passed every command invocation (not via env var) so a stale
+    // CDIDX_DEBUG=unsafe in a shell profile or CI env cannot quietly leak indexed
+    // source content (#1530). Anything after `--` is left untouched so subcommand
+    // query strings keep their literal semantics.
+    // サブコマンド処理前に `--debug-unsafe` を取り除く。環境変数 CDIDX_DEBUG=unsafe が
+    // シェルプロファイル / CI に残った状態で索引済みソースが漏れないよう、明示的にフラグを
+    // 毎回渡す運用にする（#1530）。`--` 以降はサブコマンドのクエリ文字列を保つため触らない。
+    internal static bool TryConsumeDebugUnsafeFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        var seen = false;
+        foreach (var arg in args)
+        {
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--debug-unsafe")
+            {
+                seen = true;
+                continue;
+            }
+            kept.Add(arg);
+        }
+
+        if (seen)
+        {
+            DbDebug.EnableUnsafeForProcess();
+            args = kept.ToArray();
+        }
+        return seen;
     }
 
     internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()

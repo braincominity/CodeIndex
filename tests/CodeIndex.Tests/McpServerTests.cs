@@ -232,6 +232,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildSanitizedToolErrorMessage_OmitsExceptionMessage()
+    {
+        // Issue #1530: the JSON-RPC tool result must not echo `ex.Message`,
+        // because SQLite errors and other content-bearing exceptions can quote
+        // bound parameter values or matched text. Only the tool name and
+        // exception type should reach the wire; full detail stays in stderr.
+        var ex = new InvalidOperationException("near 'SECRET_LITERAL': syntax error");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+        Assert.Contains("Error executing search", message);
+        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Contains("server stderr", message);
+        Assert.DoesNotContain("SECRET_LITERAL", message);
+        Assert.DoesNotContain("syntax error", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedLoopErrorMessage_OmitsExceptionMessage()
+    {
+        // Same protection as BuildSanitizedToolErrorMessage but for the
+        // outer JSON-RPC loop catch-all (#1530).
+        var ex = new InvalidOperationException("PRAGMA failed: secret table 'leaky_table' missing");
+
+        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+
+        Assert.Contains("Internal error", message);
+        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Contains("server stderr", message);
+        Assert.DoesNotContain("leaky_table", message);
+        Assert.DoesNotContain("PRAGMA failed", message);
+    }
+
+    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
@@ -342,7 +376,12 @@ public class McpServerTests : IDisposable
         Assert.Equal(7, root.GetProperty("id").GetInt32());
         var error = root.GetProperty("error");
         Assert.Equal(-32603, error.GetProperty("code").GetInt32());
-        Assert.Contains("serialize boom", error.GetProperty("message").GetString());
+        // Issue #1530: raw ex.Message must not leak into the JSON-RPC response.
+        // Only the exception type name and a stderr breadcrumb should surface.
+        var message = error.GetProperty("message").GetString();
+        Assert.Contains("InvalidOperationException", message);
+        Assert.Contains("cdidx server stderr", message);
+        Assert.DoesNotContain("serialize boom", message);
     }
 
     [Fact]

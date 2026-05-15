@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -302,6 +303,71 @@ public class ProgramRunnerTests
         var ex = new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
 
         Assert.True(JsonOutputFailure.IsTrimmedJsonUnavailable(ex));
+    }
+
+    [Fact]
+    public void TryConsumeDebugUnsafeFlag_StripsFlagAndEnablesProcessGate()
+    {
+        // Issue #1530: `--debug-unsafe` is the explicit per-process opt-in
+        // required for CDIDX_DEBUG=unsafe to actually emit raw text. The flag
+        // must be consumed so it never reaches the subcommand parser.
+        lock (TestConsoleLock.Gate)
+        {
+            DbDebug.ResetForTesting();
+            try
+            {
+                var args = new[] { "search", "--debug-unsafe", "foo" };
+                Assert.True(ProgramRunner.TryConsumeDebugUnsafeFlag(ref args));
+                Assert.Equal(new[] { "search", "foo" }, args);
+                Assert.True(DbDebug.IsUnsafeAllowedForProcess());
+            }
+            finally
+            {
+                DbDebug.ResetForTesting();
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeDebugUnsafeFlag_AbsentFlag_LeavesGateClosed()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            DbDebug.ResetForTesting();
+            try
+            {
+                var args = new[] { "search", "foo" };
+                Assert.False(ProgramRunner.TryConsumeDebugUnsafeFlag(ref args));
+                Assert.Equal(new[] { "search", "foo" }, args);
+                Assert.False(DbDebug.IsUnsafeAllowedForProcess());
+            }
+            finally
+            {
+                DbDebug.ResetForTesting();
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeDebugUnsafeFlag_AfterDoubleDash_PreservesQueryEscape()
+    {
+        // `--` is the query-escape sentinel for subcommands; tokens after it
+        // must stay literal even if they collide with global flag names.
+        lock (TestConsoleLock.Gate)
+        {
+            DbDebug.ResetForTesting();
+            try
+            {
+                var args = new[] { "search", "--", "--debug-unsafe" };
+                Assert.False(ProgramRunner.TryConsumeDebugUnsafeFlag(ref args));
+                Assert.Equal(new[] { "search", "--", "--debug-unsafe" }, args);
+                Assert.False(DbDebug.IsUnsafeAllowedForProcess());
+            }
+            finally
+            {
+                DbDebug.ResetForTesting();
+            }
+        }
     }
 
     private static JsonSerializerOptions CreateTrimmedFailureJsonOptions() => new()
