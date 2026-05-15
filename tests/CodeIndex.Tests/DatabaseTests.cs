@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -239,6 +240,66 @@ public class DatabaseTests : IDisposable
 
         cmd.CommandText = "SELECT context FROM reference_lines WHERE file_id = @fileId AND line = 2";
         Assert.Equal("return authenticate(user, password)", (string)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void InsertReferences_RollsBackChunkOnPartialFailureUnderOuterTransaction()
+    {
+        // Regression: #1518 — under an outer transaction, a mid-chunk
+        // symbol_references INSERT failure must not leave orphan reference_lines.
+        // 外側トランザクション下で symbol_references INSERT が失敗した場合、
+        // 同じチャンク内で挿入済みの reference_lines が孤児として残ってはならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/partial.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        using (var trig = _db.Connection.CreateCommand())
+        {
+            trig.CommandText = @"CREATE TRIGGER fail_symbol_marker BEFORE INSERT ON symbol_references
+                WHEN NEW.symbol_name = 'FAIL_ME' BEGIN
+                    SELECT RAISE(ABORT, 'forced symbol_references failure');
+                END";
+            trig.ExecuteNonQuery();
+        }
+
+        try
+        {
+            using var outer = _writer.BeginTransaction();
+            Assert.Throws<SqliteException>(() => _writer.InsertReferences([
+                new ReferenceRecord { FileId = fileId, SymbolName = "ok_before", ReferenceKind = "call", Line = 1, Column = 1, Context = "ok line", ContainerKind = "function", ContainerName = "c" },
+                new ReferenceRecord { FileId = fileId, SymbolName = "FAIL_ME", ReferenceKind = "call", Line = 99, Column = 1, Context = "fail line", ContainerKind = "function", ContainerName = "c" },
+            ]));
+            // Outer transaction must still be usable; its commit must not persist
+            // any reference_lines from the rolled-back chunk.
+            // 外側トランザクションはロールバック後も生存しており、commit してもチャンクの
+            // reference_lines は残らないこと。
+            outer.Commit();
+        }
+        finally
+        {
+            using var drop = _db.Connection.CreateCommand();
+            drop.CommandText = "DROP TRIGGER IF EXISTS fail_symbol_marker";
+            drop.ExecuteNonQuery();
+        }
+
+        using var refLineCount = _db.Connection.CreateCommand();
+        refLineCount.Parameters.AddWithValue("@fileId", fileId);
+        refLineCount.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId";
+        Assert.Equal(0L, (long)refLineCount.ExecuteScalar()!);
+
+        using var refCount = _db.Connection.CreateCommand();
+        refCount.Parameters.AddWithValue("@fileId", fileId);
+        refCount.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId";
+        Assert.Equal(0L, (long)refCount.ExecuteScalar()!);
+
+        using var orphanCount = _db.Connection.CreateCommand();
+        orphanCount.Parameters.AddWithValue("@fileId", fileId);
+        orphanCount.CommandText = @"SELECT COUNT(*) FROM reference_lines rl
+            WHERE rl.file_id = @fileId
+              AND NOT EXISTS (SELECT 1 FROM symbol_references sr WHERE sr.reference_line_id = rl.id)";
+        Assert.Equal(0L, (long)orphanCount.ExecuteScalar()!);
     }
 
     [Fact]

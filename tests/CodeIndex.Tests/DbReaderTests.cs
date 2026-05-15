@@ -790,33 +790,81 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_FindsCjkSubstringInsideLongerToken()
+    public void Search_CjkSubstringDoesNotMatchLongerTokenByDefault()
     {
-        // FTS5 default tokenizer (unicode61) treats an entire CJK run like "計算する" as one token.
-        // Without the CJK-only prefix-match fallback, `search 計算` would miss `def 計算する`.
-        // FTS5既定のunicode61トークナイザは「計算する」を単一トークンとして扱う。
-        // CJK 限定の prefix match fallback を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
-        InsertIndexedFile("src/cjk.py", "python",
+        // Issue #1519: the default literal-safe path is strict — a bare CJK query must NOT
+        // auto-widen into a prefix phrase, so `search 計算` no longer also returns content
+        // containing `計算する`/`計算機`/`計算結果`. Users opt in via the `prefix` flag or by
+        // appending `*` to the token; see the matching opt-in tests below. Earlier versions
+        // unconditionally promoted every CJK token to an FTS5 prefix phrase because the
+        // default unicode61 tokenizer indexes `計算する` as a single token, but that silently
+        // widened exact CJK identifier lookups and was reported as a relevance regression.
+        // Issue #1519: literal-safe 経路の既定挙動は strict — 素の CJK クエリを自動で prefix
+        // phrase に昇格させないため、`search 計算` は `計算する`/`計算機`/`計算結果` を含むコードに
+        // マッチしない。広げたい場合は `prefix` フラグか末尾 `*` でオプトインする（下のテストで
+        // 別途固定）。以前は unicode61 が `計算する` を単一トークンとして indexing する事情から
+        // 無条件に prefix 昇格させていたが、CJK 識別子の厳密検索が静かに広がっていたという
+        // 不具合報告に基づく挙動変更。
+        InsertIndexedFile("src/cjk_strict.py", "python",
             "def 計算する(値):\n    return 値 * 2\n");
 
         var results = _reader.Search("計算");
 
-        Assert.Contains(results, r => r.Path == "src/cjk.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/cjk_strict.py");
+    }
+
+    [Fact]
+    public void Search_CjkSubstringMatchesLongerTokenWhenPrefixFlagSet()
+    {
+        // Opt-in counterpart to the strict-default test above. Passing `prefix: true`
+        // promotes every token in the query to an FTS5 prefix phrase, restoring the
+        // "search 計算 finds 計算する" behavior on demand — the `--prefix` CLI flag and
+        // MCP `prefix` argument route here. This is the documented escape hatch for
+        // unicode61's CJK single-token tokenization.
+        // strict 既定の opt-in 版: `prefix: true` で全トークンを FTS5 prefix phrase に昇格させ、
+        // 「`search 計算` が `計算する` を見つける」挙動をオンデマンドで復元する。CLI の
+        // `--prefix` と MCP の `prefix` 引数はここを通る。unicode61 の CJK 単一トークン化に
+        // 対する正規のエスケープハッチ。
+        InsertIndexedFile("src/cjk_prefix.py", "python",
+            "def 計算する(値):\n    return 値 * 2\n");
+
+        var results = _reader.Search("計算", prefix: true);
+
+        Assert.Contains(results, r => r.Path == "src/cjk_prefix.py");
+    }
+
+    [Fact]
+    public void Search_CjkSubstringMatchesLongerTokenWhenTokenEndsWithAsterisk()
+    {
+        // Per-token opt-in: appending `*` to a single CJK token in the literal-safe path
+        // promotes that token (and only that token) to an FTS5 prefix phrase. This is the
+        // ergonomic shorthand for users who type `cdidx search 計算*` directly without
+        // adding the global `--prefix` flag. The trailing `*` is stripped from the literal
+        // before quoting so the resulting FTS expression is `"計算"*`, not `"計算*"`.
+        // トークン単位の opt-in: literal-safe 経路で CJK トークン末尾に `*` を付けると、
+        // そのトークンのみが FTS5 prefix phrase に昇格する。`cdidx search 計算*` のような
+        // 直接入力向けの shorthand。末尾 `*` は引用前に取り除かれ、最終的な FTS 式は
+        // `"計算*"` ではなく `"計算"*` になる。
+        InsertIndexedFile("src/cjk_asterisk.py", "python",
+            "def 計算する(値):\n    return 値 * 2\n");
+
+        var results = _reader.Search("計算*");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_asterisk.py");
     }
 
     [Fact]
     public void Search_CjkFullTokenQueryStillFindsExactFullToken()
     {
-        // Positive regression: the CJK prefix fallback must not break the case where the
-        // query already IS the full token. Searching '計算する' must still find content
-        // containing '計算する'. This pins the "CJK prefix fallback does not regress exact
-        // matches", NOT "CJK prefix fallback narrows to exact matches" — CJK tokens always
-        // take the prefix path, so '計算する' also matches '計算する追加' (that widening is
-        // intentional; users who want strict equality should use `--exact` / `instr`).
-        // 正の回帰テスト: クエリが既に完全トークンの場合でも CJK prefix fallback が壊していないこと。
-        // 「完全一致を保つ」ではなく「完全一致を取りこぼさない」ことを固定する点に注意 — CJK トークンは
-        // 常に prefix 経路を通るので '計算する' は '計算する追加' にもヒットする（意図的な挙動で、
-        // 厳密一致が必要なら `--exact` / `instr` 経路を使う）。
+        // Positive regression: searching '計算する' against content '計算する' continues to
+        // match under the new strict-by-default policy — unicode61 indexes both as the same
+        // single token, so the literal-safe phrase `"計算する"` finds it without needing the
+        // prefix opt-in. Pinning this keeps the strict-default change from accidentally
+        // removing exact CJK hits along with the auto-widening.
+        // 正の回帰テスト: 新しい strict 既定でも '計算する' のクエリは '計算する' を含む内容に
+        // 一致する。unicode61 は両方を同じ単一トークンとして indexing するため、literal-safe の
+        // phrase `"計算する"` で prefix opt-in なしに見つかる。strict 化が auto-widening と一緒に
+        // exact マッチまで巻き込んで取りこぼさないことを固定する。
         InsertIndexedFile("src/cjk_exact.py", "python",
             "def 計算する(値):\n    return 値\n");
 
@@ -826,19 +874,20 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_CjkFullTokenQueryAlsoWidensToLongerTokens()
+    public void Search_CjkFullTokenQueryDoesNotWidenToLongerTokenByDefault()
     {
-        // Pins the intentional widening: a CJK query ALWAYS takes the prefix fallback, so
-        // searching '計算する' also returns chunks containing '計算する追加'. This is the
-        // documented semantics — users who need strict equality must use the exact path.
-        // If a future change wants to narrow full-token CJK queries to non-prefix, this
-        // test should be the first to break and force an explicit decision, not a silent
-        // drift. Without this pin, issue #198 could be "fixed" by a revert that re-breaks
-        // the original reproduction (search 計算 → 0 hits) and no test would catch it.
-        // 意図的なワイドニングを固定する: CJK クエリは必ず prefix fallback を通るため、
-        // '計算する' の検索は '計算する追加' を含むチャンクも返す。厳密一致が必要な場合は
-        // exact 経路を使うのが仕様。将来この挙動を変更する場合にこのテストが最初に壊れ、
-        // 静かに #198 の元再現（search 計算 → 0 件）に戻されることを防ぐアンカー。
+        // The strict-default policy must also block widening when the query is itself a
+        // full token. Searching '計算する' must NOT also return content containing
+        // '計算する追加', because that file's indexed token is '計算する追加' — a different
+        // token. Pinning this stops a future revert that resurrects unconditional CJK
+        // prefix promotion: such a regression would re-break #1519 by widening '計算する'
+        // back into longer-token matches. Users who need that broad reach pass
+        // `prefix: true` or append `*` and get it back explicitly.
+        // クエリが完全トークンであっても strict 既定では拡張しない。`計算する` の検索は
+        // `計算する追加` を含むファイル（インデックス上は別トークン）まで広げてはならない。
+        // 無条件 CJK prefix 昇格を将来復活させる差分があった場合、このテストが #1519 の
+        // 再発（`計算する` が `計算する追加` まで広がる）を捕える。広く拾いたい場合は
+        // `prefix: true` か末尾 `*` で明示的にオプトインする。
         InsertIndexedFile("src/cjk_widen_short.py", "python",
             "def 計算する(値):\n    return 値\n");
         InsertIndexedFile("src/cjk_widen_long.py", "python",
@@ -847,23 +896,77 @@ public class DbReaderTests : IDisposable
         var results = _reader.Search("計算する");
 
         Assert.Contains(results, r => r.Path == "src/cjk_widen_short.py");
-        Assert.Contains(results, r => r.Path == "src/cjk_widen_long.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/cjk_widen_long.py");
     }
 
     [Fact]
-    public void Search_CjkPrefixDoesNotMatchUnrelatedCjkTokens()
+    public void Search_AsciiTokenWithoutPrefixFlagDoesNotMatchLongerToken()
     {
-        // The CJK prefix fallback must widen only to tokens that literally start with the
-        // query codepoints. An unrelated CJK word like '検索' must not match '計算' even
-        // though both are CJK single-token runs under unicode61.
-        // CJK prefix fallback はクエリのコードポイントから始まるトークンにのみ拡張されるべき。
-        // '検索' のような無関係なCJK語は、同じくunicode61で単一トークン扱いされても '計算' にマッチしてはならない。
+        // The strict-default policy applies uniformly to all scripts, not just CJK. A bare
+        // ASCII query 'auth' must NOT auto-widen to 'authenticate' under literal-safe
+        // sanitization — the user types `cdidx search auth*` (or passes `--prefix`) to
+        // opt into prefix expansion. Pinning this prevents future drift where the strict
+        // default is preserved for CJK but quietly skipped for ASCII.
+        // strict 既定は CJK だけでなく全スクリプトに一様に適用される。素の ASCII クエリ 'auth' は
+        // literal-safe サニタイザの下で 'authenticate' へ自動拡張してはならない — ユーザーは
+        // `cdidx search auth*`（または `--prefix`）で明示的にオプトインする。CJK では strict を
+        // 守りつつ ASCII では静かに skip するドリフトを将来防ぐためにここを固定する。
+        InsertIndexedFile("src/ascii_strict.py", "python",
+            "def authenticate(user):\n    return True\n");
+
+        var results = _reader.Search("auth");
+
+        Assert.DoesNotContain(results, r => r.Path == "src/ascii_strict.py");
+    }
+
+    [Fact]
+    public void Search_AsciiTokenMatchesLongerTokenWhenPrefixFlagSet()
+    {
+        // Opt-in counterpart: passing `prefix: true` widens an ASCII query to match longer
+        // tokens that start with it, restoring the `auth` → `authenticate` reach.
+        // ASCII クエリの opt-in 版: `prefix: true` を渡すと先頭一致するより長いトークンに
+        // 広げ、`auth` → `authenticate` の到達性を復元する。
+        InsertIndexedFile("src/ascii_prefix.py", "python",
+            "def authenticate(user):\n    return True\n");
+
+        var results = _reader.Search("auth", prefix: true);
+
+        Assert.Contains(results, r => r.Path == "src/ascii_prefix.py");
+    }
+
+    [Fact]
+    public void Search_AsciiTokenMatchesLongerTokenWhenTokenEndsWithAsterisk()
+    {
+        // Per-token opt-in for ASCII: appending `*` to the token promotes that token (and
+        // only that token) to an FTS5 prefix phrase. Mirrors `Search 計算*` semantics for
+        // ASCII identifiers so `cdidx search auth*` reaches `authenticate` without a flag.
+        // ASCII トークン単位の opt-in: 末尾に `*` を付けるとそのトークンのみ FTS5 prefix
+        // phrase に昇格する。`Search 計算*` と同じ挙動を ASCII 識別子でも提供し、`cdidx search
+        // auth*` がフラグ無しで `authenticate` に到達する。
+        InsertIndexedFile("src/ascii_asterisk.py", "python",
+            "def authenticate(user):\n    return True\n");
+
+        var results = _reader.Search("auth*");
+
+        Assert.Contains(results, r => r.Path == "src/ascii_asterisk.py");
+    }
+
+    [Fact]
+    public void Search_CjkPrefixOptInDoesNotMatchUnrelatedCjkTokens()
+    {
+        // Under `prefix: true`, the FTS5 prefix expansion must still widen only to tokens
+        // that literally start with the query codepoints. An unrelated CJK word like '検索'
+        // must not match '計算' even though both are CJK single-token runs under unicode61.
+        // Locks the safety boundary of the opt-in widening.
+        // `prefix: true` でも FTS5 prefix 拡張はクエリのコードポイントから始まるトークンにのみ
+        // 限定される。'検索' のような無関係な CJK 語が、同じく unicode61 で単一トークン扱いされる
+        // からといって '計算' にマッチしてはならない。opt-in 拡張の安全境界を固定する。
         InsertIndexedFile("src/cjk_match.py", "python",
             "def 計算する(値):\n    return 値\n");
         InsertIndexedFile("src/cjk_unrelated.py", "python",
             "def 検索する(値):\n    return 値\n");
 
-        var results = _reader.Search("計算");
+        var results = _reader.Search("計算", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/cjk_match.py");
         Assert.DoesNotContain(results, r => r.Path == "src/cjk_unrelated.py");
@@ -935,11 +1038,17 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void Search_LatinDiacriticTokenDoesNotWidenToPrefixSearch()
     {
-        // Latin-diacritic tokens (e.g. 'naïve') are tokenized normally by unicode61,
-        // so the CJK-only prefix fallback must NOT fire. Otherwise a literal 'naïve'
-        // query would silently widen to match 'naïvety', 'naïveness', etc.
-        // Latin系ダイアクリティカル付きトークン（例: 'naïve'）はunicode61で通常トークン化されるため、
-        // CJK限定のprefix fallbackが発動してはならない。発動すると 'naïve' が 'naïvety' 等まで広がる。
+        // Latin-diacritic tokens (e.g. 'naïve') are tokenized normally by unicode61, and
+        // under the strict-default literal-safe path no automatic prefix promotion fires —
+        // not for CJK, not for Latin, not for any script. A literal 'naïve' query must
+        // therefore find 'def naïve():' but not silently widen to 'def naïvety():'. This
+        // test predates the strict-by-default change but still locks the same guarantee:
+        // ordinary literal queries do not auto-prefix into neighboring tokens.
+        // Latin 系ダイアクリティカル付きトークン（例: 'naïve'）は unicode61 で通常トークン化される。
+        // strict 既定の literal-safe 経路では、CJK でも Latin でも自動 prefix 昇格は起きないため、
+        // 'naïve' のリテラルクエリは 'def naïve():' を見つけても 'def naïvety():' へ静かに広がっては
+        // ならない。本テストは strict 化以前から存在するが、保証する性質は同じ — 通常のリテラル
+        // クエリは隣接トークンへ自動 prefix 拡張しない。
         InsertIndexedFile("src/latin_exact.py", "python",
             "def naïve():\n    return 1\n");
         InsertIndexedFile("src/latin_longer.py", "python",
@@ -952,391 +1061,382 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_FindsNonBmpCjkExtensionHSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpCjkExtensionH()
     {
-        // Regression guard for CJK Unified Ideographs Extension H (U+31350..U+323AF,
-        // added in Unicode 15.0). These codepoints are non-BMP (supplementary plane) so
-        // they surface in .NET strings as surrogate pairs. If the predicate only walks
-        // chars instead of runes, or forgets Extension H's range, `search '𱍐'` returns
-        // 0 results against content containing `𱍐abc` — the exact #198 zero-hit shape,
-        // reproduced on a newer Unicode block. Pin that a CJK Extension H query still
-        // takes the prefix path and finds longer-token content.
-        // CJK Extension H (U+31350..U+323AF, Unicode 15.0) の回帰テスト。
-        // これらは非 BMP（補助面）のコードポイントで、.NET の string ではサロゲートペアとして
-        // 現れる。述語が char 走査だったり Extension H を忘れていたりすると、`search '𱍐'` が
-        // `𱍐abc` を含む内容に対して 0 件を返す — #198 の元症状そのものが新ブロックで再発する。
-        // CJK Extension H クエリが prefix 経路を通り、長いトークンの内容も見つけることを固定する。
+        // Regression guard that `prefix: true` (the `--prefix` opt-in) widens correctly
+        // into CJK Unified Ideographs Extension H (U+31350..U+323AF, Unicode 15.0). These
+        // codepoints are non-BMP (supplementary plane) so they surface in .NET strings as
+        // surrogate pairs — the sanitizer's token walk must therefore handle surrogate
+        // pairs. Without the opt-in (or trailing `*`), this query returns 0 hits under
+        // the strict default; with the opt-in, it must reach `𱍐abc` content.
+        // `prefix: true`（`--prefix` opt-in）が CJK Extension H (U+31350..U+323AF,
+        // Unicode 15.0) を正しく広げることの回帰テスト。これらは非 BMP（補助面）コードポイントで
+        // .NET 文字列ではサロゲートペアとして現れるため、サニタイザのトークン走査がサロゲートを
+        // 正しく扱う必要がある。opt-in（または末尾 `*`）がないと strict 既定では 0 件、opt-in を
+        // 渡せば `𱍐abc` を含む内容に到達する。
         var extensionHChar = char.ConvertFromUtf32(0x31350);
         InsertIndexedFile("src/ext_h.py", "python",
             $"def {extensionHChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(extensionHChar);
+        var results = _reader.Search(extensionHChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/ext_h.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpCjkExtensionISubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpCjkExtensionI()
     {
-        // Regression guard for CJK Unified Ideographs Extension I (U+2EBF0..U+2EE5F,
-        // Unicode 15.1, added 2023). Same non-BMP / surrogate-pair concern as Extension H,
-        // pinned separately so that a later "cleanup" dropping either range would break
+        // Regression guard that `prefix: true` covers CJK Unified Ideographs Extension I
+        // (U+2EBF0..U+2EE5F, Unicode 15.1, added 2023). Same non-BMP / surrogate-pair concern
+        // as Extension H, pinned separately so a later cleanup dropping either range breaks
         // its own dedicated test instead of silently regressing.
-        // CJK Extension I (U+2EBF0..U+2EE5F, Unicode 15.1) の回帰テスト。
-        // Extension H と同じく非 BMP だが、どちらかの範囲を「整理」で外すとそれぞれ固有の
-        // テストが壊れるよう、別テストとして固定する。
+        // `prefix: true` が CJK Extension I (U+2EBF0..U+2EE5F, Unicode 15.1) を網羅することの
+        // 回帰テスト。Extension H と同じく非 BMP だが、どちらかの範囲を「整理」で外すと
+        // それぞれ固有のテストが壊れるよう、別テストとして固定する。
         var extensionIChar = char.ConvertFromUtf32(0x2EBF0);
         InsertIndexedFile("src/ext_i.py", "python",
             $"def {extensionIChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(extensionIChar);
+        var results = _reader.Search(extensionIChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/ext_i.py");
     }
 
     [Fact]
-    public void Search_FindsIdeographicIterationMarkInsideLongerToken()
+    public void Search_PrefixOptInCoversIdeographicIterationMark()
     {
-        // Regression guard for Han-script codepoints outside the CJK Unified Ideographs
-        // blocks. '々' (U+3005, ideographic iteration mark) is Unicode script=Han but lives
-        // in the CJK Symbols and Punctuation block. unicode61 keeps it as a word character,
-        // so without explicit inclusion in the CJK prefix fallback set, `search '々'` returns
-        // 0 results against content containing `々abc` — same shape as #198 on a different
-        // codepoint class.
-        // CJK Unified Ideographs 範囲外の Han script コードポイントの回帰テスト。'々' (U+3005) は
-        // Unicode script=Han だが CJK Symbols and Punctuation ブロックに属する。unicode61 では
-        // 単語文字扱いなので、CJK prefix fallback セットに明示的に含めないと `search '々'` が
-        // `々abc` を含むファイルに対し 0 件を返す — #198 の別コードポイント版。
+        // Regression guard that `prefix: true` covers Han-script codepoints outside the CJK
+        // Unified Ideographs blocks. '々' (U+3005, ideographic iteration mark) is Unicode
+        // script=Han but lives in the CJK Symbols and Punctuation block. unicode61 keeps it
+        // as a word character, so under the strict default `search '々'` returns 0 results
+        // against `々abc`; with the opt-in it must match.
+        // `prefix: true` が CJK Unified Ideographs 範囲外の Han script コードポイントを
+        // 網羅することの回帰テスト。'々' (U+3005) は Unicode script=Han だが CJK Symbols and
+        // Punctuation ブロックに属する。unicode61 では単語文字扱いなので、strict 既定では
+        // `search '々'` が `々abc` に対し 0 件を返すが opt-in を渡せばマッチする。
         InsertIndexedFile("src/iter_mark.py", "python",
             "def 々abc(x):\n    return x\n");
 
-        var results = _reader.Search("々");
+        var results = _reader.Search("々", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/iter_mark.py");
     }
 
     [Fact]
-    public void Search_FindsIdeographicZeroInsideLongerToken()
+    public void Search_PrefixOptInCoversIdeographicZero()
     {
         // Same concern as 々 above but for '〇' (U+3007, ideographic number zero).
         // 上の 々 と同様、'〇' (U+3007) についての回帰テスト。
         InsertIndexedFile("src/ideograph_zero.py", "python",
             "def 〇abc(x):\n    return x\n");
 
-        var results = _reader.Search("〇");
+        var results = _reader.Search("〇", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/ideograph_zero.py");
     }
 
     [Fact]
-    public void Search_FindsHalfwidthHangulSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversHalfwidthHangul()
     {
-        // Regression guard for halfwidth Hangul letters (U+FFA0..U+FFDC). unicode61 keeps
-        // them as word characters, so without including that range in the CJK prefix
-        // fallback, `search 'ﾱ'` returns 0 results against content containing 'ﾱﾲﾳabc'.
-        // This is the same 0-hit shape as #198 on the halfwidth Hangul block, which is
-        // why the halfwidth range extends past U+FF9F (halfwidth Katakana) to U+FFDC.
-        // 半角ハングル (U+FFA0..U+FFDC) の回帰テスト。unicode61 は単語文字として扱うため、
-        // CJK prefix fallback 範囲に含めないと `search 'ﾱ'` が 'ﾱﾲﾳabc' を含む内容に対して
-        // 0 件になる — 半角ハングル版の #198 再現。U+FF9F までではなく U+FFDC まで広げる
-        // 必要がある理由を固定する。
+        // Regression guard that `prefix: true` covers halfwidth Hangul letters
+        // (U+FFA0..U+FFDC). unicode61 keeps them as word characters, so under the strict
+        // default `search 'ﾱ'` returns 0 against `ﾱﾲﾳabc`. The halfwidth range extends past
+        // U+FF9F (halfwidth Katakana) to U+FFDC — pinning that the sanitizer's tokenizer
+        // walk hands these to FTS5 prefix expansion correctly when opted in.
+        // `prefix: true` が半角ハングル (U+FFA0..U+FFDC) を網羅することの回帰テスト。
+        // unicode61 は単語文字扱いなので strict 既定では `search 'ﾱ'` が `ﾱﾲﾳabc` に対し 0 件。
+        // 半角範囲は U+FF9F（半角カナ）を越えて U+FFDC まで広がる — サニタイザのトークン走査が
+        // opt-in 時に FTS5 prefix 拡張へ正しく渡すことを固定する。
         InsertIndexedFile("src/halfwidth_hangul.py", "python",
             "def ﾱﾲﾳabc(x):\n    return x\n");
 
-        var results = _reader.Search("ﾱ");
+        var results = _reader.Search("ﾱ", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/halfwidth_hangul.py");
     }
 
     [Fact]
-    public void Search_FindsVerticalKanaRepeatMarkInsideLongerToken()
+    public void Search_PrefixOptInCoversVerticalKanaRepeatMark()
     {
-        // Regression guard for the vertical kana repeat mark block (U+3031..U+3035), Unicode
-        // category Lm (Letter Modifier). These codepoints are used in vertical-text Japanese
-        // as iteration marks. unicode61 keeps them as word characters, so without explicit
-        // inclusion in the CJK prefix fallback set, `search '〱'` returns 0 results against
-        // content containing `〱abc` — same shape as #198 on another Japanese block.
-        // 縦書き仮名反復記号（U+3031..U+3035、Unicode カテゴリ Lm）の回帰テスト。unicode61 では
-        // 単語文字として扱われるため、CJK prefix fallback セットに明示的に含めないと
-        // `search '〱'` が `〱abc` に対して 0 件を返す — 別ブロック版の #198 再現。
+        // Regression guard that `prefix: true` covers the vertical kana repeat mark block
+        // (U+3031..U+3035), Unicode category Lm (Letter Modifier). Used in vertical-text
+        // Japanese as iteration marks; unicode61 keeps them as word characters.
+        // `prefix: true` が縦書き仮名反復記号（U+3031..U+3035、Unicode カテゴリ Lm）を
+        // 網羅することの回帰テスト。unicode61 では単語文字として扱われる。
         InsertIndexedFile("src/vertical_kana.py", "python",
             "def 〱abc(x):\n    return x\n");
 
-        var results = _reader.Search("〱");
+        var results = _reader.Search("〱", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/vertical_kana.py");
     }
 
     [Fact]
-    public void Search_FindsBopomofoInsideLongerToken()
+    public void Search_PrefixOptInCoversBopomofo()
     {
-        // Regression guard for Bopomofo (U+3100..U+312F), the Mandarin Chinese phonetic
-        // system ("zhuyin"). Bopomofo letters are Unicode category Lo and survive unicode61
-        // tokenization as regular word characters, so a bare phrase query like `search 'ㄅ'`
-        // used to return 0 against content containing `ㄅabc` — same shape as the original
-        // #198 repro but on a different script. Pin that Bopomofo queries take the prefix
-        // fallback path.
-        // 注音符号（ボポモフォ、U+3100..U+312F、中国語発音）の回帰テスト。Unicode カテゴリ Lo で
-        // unicode61 は単語文字として保つため、`search 'ㄅ'` が `ㄅabc` に対して 0 件を返す
-        // 状態を防ぐ — #198 を別スクリプトで再現した形。
+        // Regression guard that `prefix: true` covers Bopomofo (U+3100..U+312F), the Mandarin
+        // Chinese phonetic system ("zhuyin"). Bopomofo letters are Unicode category Lo and
+        // survive unicode61 tokenization as regular word characters.
+        // `prefix: true` が注音符号（ボポモフォ、U+3100..U+312F、中国語発音）を網羅することの
+        // 回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として保つ。
         InsertIndexedFile("src/bopomofo.py", "python",
             "def ㄅabc(x):\n    return x\n");
 
-        var results = _reader.Search("ㄅ");
+        var results = _reader.Search("ㄅ", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/bopomofo.py");
     }
 
     [Fact]
-    public void Search_FindsBopomofoExtendedInsideLongerToken()
+    public void Search_PrefixOptInCoversBopomofoExtended()
     {
-        // Regression guard for Bopomofo Extended (U+31A0..U+31BF), which extends zhuyin with
-        // additional phonetic letters used for minority Chinese dialects (e.g. Min Nan, Hakka).
-        // Same category / tokenization concern as Bopomofo above; pinned separately so a later
-        // cleanup that drops either range breaks its own dedicated test.
-        // 拡張注音符号（U+31A0..U+31BF、閩南語や客家語等の発音）の回帰テスト。Bopomofo と同じく
-        // 単語文字扱いなので、それぞれの範囲を独立に固定する。
+        // Regression guard that `prefix: true` covers Bopomofo Extended (U+31A0..U+31BF),
+        // which extends zhuyin with additional phonetic letters used for minority Chinese
+        // dialects (e.g. Min Nan, Hakka). Pinned separately from Bopomofo so a later cleanup
+        // that drops either range breaks its own dedicated test.
+        // `prefix: true` が拡張注音符号（U+31A0..U+31BF、閩南語や客家語等の発音）を網羅すること
+        // の回帰テスト。Bopomofo と同じく単語文字扱いなので、それぞれの範囲を独立に固定する。
         InsertIndexedFile("src/bopomofo_ext.py", "python",
             "def ㆠabc(x):\n    return x\n");
 
-        var results = _reader.Search("ㆠ");
+        var results = _reader.Search("ㆠ", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/bopomofo_ext.py");
     }
 
     [Fact]
-    public void Search_FindsYiSyllableInsideLongerToken()
+    public void Search_PrefixOptInCoversYiSyllable()
     {
-        // Regression guard for Yi Syllables (U+A000..U+A48F), the syllabary used by the Nuosu
-        // (Yi) people in southwestern China. Yi syllables are Unicode category Lo, so unicode61
-        // keeps them as word characters; without CJK prefix promotion, `search 'ꀀ'` returns 0
-        // results against content containing 'ꀀabc' — same 0-hit shape as #198 on another
-        // Unicode-15-adjacent historical East Asian script. Yi Radicals (U+A490..U+A4CF) are
-        // intentionally excluded upstream because they are category So and dropped by unicode61.
-        // 彝文字音節（Yi Syllables、U+A000..U+A48F、中国南西部のノス族の文字体系）の回帰テスト。
-        // Unicode カテゴリ Lo で unicode61 は単語文字として扱うため、CJK prefix 昇格なしでは
-        // `search 'ꀀ'` が 'ꀀabc' を含む内容に対して 0 件を返す — #198 の別スクリプト版。
-        // 彝文字部首（Yi Radicals、U+A490..U+A4CF）は Unicode カテゴリ So のため上流で意図的に除外。
+        // Regression guard that `prefix: true` covers Yi Syllables (U+A000..U+A48F), the
+        // syllabary used by the Nuosu (Yi) people in southwestern China. Yi syllables are
+        // Unicode category Lo; unicode61 keeps them as word characters. Yi Radicals
+        // (U+A490..U+A4CF) are intentionally excluded upstream because they are category So
+        // and dropped by unicode61.
+        // `prefix: true` が彝文字音節（Yi Syllables、U+A000..U+A48F、中国南西部のノス族の文字
+        // 体系）を網羅することの回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として
+        // 扱う。彝文字部首（Yi Radicals、U+A490..U+A4CF）は Unicode カテゴリ So のため上流で
+        // 意図的に除外。
         InsertIndexedFile("src/yi_syllables.py", "python",
             "def ꀀabc(x):\n    return x\n");
 
-        var results = _reader.Search("ꀀ");
+        var results = _reader.Search("ꀀ", prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/yi_syllables.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpTangutSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpTangut()
     {
-        // Regression guard for Tangut (U+17000..U+187FF), a non-BMP historical East Asian
-        // logographic script used by the Western Xia empire (11th–13th century). Tangut is
-        // Unicode category Lo and unicode61 keeps it as word characters, so the surrogate-pair
-        // aware rune walk AND an explicit U+17000..U+187FF range entry are both required for
-        // `search '𗀀'` to match '𗀀abc'. Pinned as a dedicated Tangut-block test so a future
-        // rewrite that collapses Tangut into a different neighboring block breaks here, not
-        // silently on Chinese archaeological text.
-        // 西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）の回帰テスト。
-        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+187FF
-        // 範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。Tangut ブロック
-        // 単独のテストとして固定し、将来別ブロックへ統合するような書き換えがあっても中国考古
-        // テキストで黙って回帰する前にここで壊れるようにする。
+        // Regression guard that `prefix: true` covers Tangut (U+17000..U+187FF), a non-BMP
+        // historical East Asian logographic script used by the Western Xia empire
+        // (11th–13th century). Non-BMP, so the sanitizer's token walk must be
+        // surrogate-pair aware to hand the right rune to FTS5 prefix expansion.
+        // `prefix: true` が西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）を
+        // 網羅することの回帰テスト。非 BMP のため、サニタイザのトークン走査がサロゲートペアを
+        // 正しく扱う必要がある。
         var tangutChar = char.ConvertFromUtf32(0x17000);
         InsertIndexedFile("src/tangut.py", "python",
             $"def {tangutChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(tangutChar);
+        var results = _reader.Search(tangutChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/tangut.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpTangutComponentsSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpTangutComponents()
     {
-        // Regression guard for Tangut Components (U+18800..U+18AFF), the non-BMP block of
-        // radical / stroke components used to build Tangut logographs. Separate Unicode block
-        // and separate predicate branch from Tangut itself, so this test exercises its own
-        // branch rather than aliasing to the Tangut test. Unicode category Lo; unicode61 keeps
-        // it as word characters; same #198 zero-hit shape without explicit prefix fallback.
-        // 西夏文字部品（Tangut Components、U+18800..U+18AFF、非 BMP の西夏文字構成要素）の
-        // 回帰テスト。Tangut 本体とは別の Unicode ブロック・別の分岐を踏むため、Tangut テストと
-        // エイリアス化せず専用分岐を検証する。Unicode カテゴリ Lo で unicode61 は単語文字として
-        // 扱うため、prefix fallback なしでは #198 と同じ 0 件症状になる。
+        // Regression guard that `prefix: true` covers Tangut Components (U+18800..U+18AFF),
+        // the non-BMP block of radical / stroke components used to build Tangut logographs.
+        // Separate Unicode block from Tangut itself, so this test exercises its own range
+        // rather than aliasing to the Tangut test.
+        // `prefix: true` が西夏文字部品（Tangut Components、U+18800..U+18AFF、非 BMP の西夏
+        // 文字構成要素）を網羅することの回帰テスト。Tangut 本体とは別の Unicode ブロックなので
+        // Tangut テストとエイリアス化せず専用範囲を検証する。
         var tangutComponentsChar = char.ConvertFromUtf32(0x18800);
         InsertIndexedFile("src/tangut_components.py", "python",
             $"def {tangutComponentsChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(tangutComponentsChar);
+        var results = _reader.Search(tangutComponentsChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/tangut_components.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpKhitanSmallScriptSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpKhitanSmallScript()
     {
-        // Regression guard for Khitan Small Script (U+18B00..U+18CFF), the non-BMP script of
-        // the Liao dynasty's Khitan people (10th–13th century). Separate Unicode block and
-        // separate predicate branch from Tangut / Tangut Components / Tangut Supplement, so
-        // this test exercises its own branch. Unicode category Lo; unicode61 keeps it as
-        // word characters.
-        // 契丹小字（Khitan Small Script、U+18B00..U+18CFF、遼朝の非 BMP 表音文字）の回帰テスト。
-        // Tangut / Tangut Components / Tangut Supplement とは別の Unicode ブロック・別の分岐。
-        // Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        // Regression guard that `prefix: true` covers Khitan Small Script (U+18B00..U+18CFF),
+        // the non-BMP script of the Liao dynasty's Khitan people (10th–13th century).
+        // Separate Unicode block from Tangut / Tangut Components / Tangut Supplement, so
+        // this test exercises its own range.
+        // `prefix: true` が契丹小字（Khitan Small Script、U+18B00..U+18CFF、遼朝の非 BMP
+        // 表音文字）を網羅することの回帰テスト。Tangut / Tangut Components / Tangut
+        // Supplement とは別の Unicode ブロック。
         var khitanChar = char.ConvertFromUtf32(0x18B00);
         InsertIndexedFile("src/khitan_small.py", "python",
             $"def {khitanChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(khitanChar);
+        var results = _reader.Search(khitanChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/khitan_small.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpTangutSupplementSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpTangutSupplement()
     {
-        // Regression guard for Tangut Supplement (U+18D00..U+18D8F), the small non-BMP block
-        // added in Unicode 13.0 alongside Khitan Small Script. Separate predicate branch from
-        // Tangut / Tangut Components / Khitan, so this test exercises its own branch. Unicode
-        // category Lo; unicode61 keeps it as word characters.
-        // 西夏文字補助（Tangut Supplement、U+18D00..U+18D8F、Unicode 13.0 で Khitan Small Script と
-        // 同時追加された小規模な非 BMP ブロック）の回帰テスト。Tangut / Tangut Components /
-        // Khitan とは別の分岐。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        // Regression guard that `prefix: true` covers Tangut Supplement (U+18D00..U+18D8F),
+        // the small non-BMP block added in Unicode 13.0 alongside Khitan Small Script.
+        // Separate from Tangut / Tangut Components / Khitan.
+        // `prefix: true` が西夏文字補助（Tangut Supplement、U+18D00..U+18D8F、Unicode 13.0 で
+        // Khitan Small Script と同時追加された小規模な非 BMP ブロック）を網羅することの
+        // 回帰テスト。Tangut / Tangut Components / Khitan とは別の範囲。
         var tangutSupplementChar = char.ConvertFromUtf32(0x18D00);
         InsertIndexedFile("src/tangut_supplement.py", "python",
             $"def {tangutSupplementChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(tangutSupplementChar);
+        var results = _reader.Search(tangutSupplementChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/tangut_supplement.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpTangutIterationMarkInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpTangutIterationMark()
     {
-        // Regression guard for the Tangut Iteration Mark (U+16FE0), a non-BMP codepoint in the
-        // Ideographic Symbols and Punctuation block used to annotate repeated Tangut
-        // characters. Unicode category Lm (Modifier Letter) on the current runtime; unicode61
-        // keeps Lm codepoints as word characters, so `search '𖿠'` returned 0 against '𖿠abc'
-        // without explicit CJK prefix promotion. The Ideographic Symbols and Punctuation
-        // iteration / annotation codepoints (U+16FE0 Tangut iteration, U+16FE1 Nüshu iteration,
-        // U+16FE3 Old Chinese iteration, U+16FE4 Khitan filler, U+16FF0 / U+16FF1 Vietnamese
-        // reading marks) are listed individually in the predicate so U+16FE2 (Po, dropped by
-        // unicode61) does not ride along. Pinned separately so the Lm / ideographic-annotation
-        // branch cannot regress silently.
-        // Tangut 反復記号（U+16FE0、非 BMP の Ideographic Symbols and Punctuation ブロック）の
-        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Lm で unicode61 は単語文字として扱う。
-        // そのため CJK prefix 昇格がなければ `search '𖿠'` は '𖿠abc' に対して 0 件を返す。
-        // Ideographic Symbols and Punctuation の反復 / 注釈記号（U+16FE0 / 16FE1 / 16FE3 / 16FE4
-        // / 16FF0 / 16FF1）は個別列挙にし、U+16FE2 (Po, unicode61 が drop) を巻き込まないように
-        // している。Lm / ideographic annotation 分岐の回帰をここで固定する。
+        // Regression guard that `prefix: true` covers the Tangut Iteration Mark (U+16FE0),
+        // a non-BMP codepoint in the Ideographic Symbols and Punctuation block used to
+        // annotate repeated Tangut characters. Unicode category Lm (Modifier Letter) on the
+        // current runtime; unicode61 keeps Lm codepoints as word characters. The Ideographic
+        // Symbols and Punctuation iteration / annotation codepoints (U+16FE0 Tangut, U+16FE1
+        // Nüshu, U+16FE3 Old Chinese, U+16FE4 Khitan filler, U+16FF0 / U+16FF1 Vietnamese
+        // reading marks) all need the surrogate-pair-aware walk; U+16FE2 (Po) is dropped by
+        // unicode61 and must NOT ride along.
+        // `prefix: true` が Tangut 反復記号（U+16FE0、非 BMP の Ideographic Symbols and
+        // Punctuation ブロック）を網羅することの回帰テスト。現行ランタイムでは Unicode
+        // カテゴリ Lm で unicode61 は単語文字として扱う。U+16FE0 / 16FE1 / 16FE3 / 16FE4 /
+        // 16FF0 / 16FF1 はサロゲート対応の走査が必要。U+16FE2 (Po) は unicode61 が drop する
+        // ため巻き込んではならない。
         var tangutIterationMark = char.ConvertFromUtf32(0x16FE0);
         InsertIndexedFile("src/tangut_iter.py", "python",
             $"def {tangutIterationMark}abc(x):\n    return x\n");
 
-        var results = _reader.Search(tangutIterationMark);
+        var results = _reader.Search(tangutIterationMark, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/tangut_iter.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpKhitanSmallScriptFillerInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpKhitanSmallScriptFiller()
     {
-        // Regression guard for U+16FE4 (Khitan Small Script Filler), a non-BMP codepoint in the
-        // Ideographic Symbols and Punctuation block. On the current runtime this is Unicode
-        // category Mn (Nonspacing Mark); unicode61 still keeps Mn codepoints as word
-        // characters, so `search '𖿤'` returned 0 against '𖿤abc' without explicit CJK prefix
-        // promotion. Pinned so the Mn / Khitan-annotation case is covered in addition to Lm.
-        // 契丹小字フィラー（U+16FE4、非 BMP の Ideographic Symbols and Punctuation ブロック）の
-        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Mn。unicode61 は Mn も単語文字として
-        // 扱うため、CJK prefix 昇格がなければ `search '𖿤'` は '𖿤abc' に対して 0 件を返す。
-        // Lm だけでなく Mn / 契丹注釈のケースも別途固定する。
+        // Regression guard that `prefix: true` covers U+16FE4 (Khitan Small Script Filler),
+        // a non-BMP codepoint in the Ideographic Symbols and Punctuation block. On the
+        // current runtime this is Unicode category Mn (Nonspacing Mark); unicode61 still
+        // keeps Mn codepoints as word characters.
+        // `prefix: true` が契丹小字フィラー（U+16FE4、非 BMP の Ideographic Symbols and
+        // Punctuation ブロック）を網羅することの回帰テスト。現行ランタイムでは Unicode
+        // カテゴリ Mn。unicode61 は Mn も単語文字として扱う。
         var khitanFiller = char.ConvertFromUtf32(0x16FE4);
         InsertIndexedFile("src/khitan_filler.py", "python",
             $"def {khitanFiller}abc(x):\n    return x\n");
 
-        var results = _reader.Search(khitanFiller);
+        var results = _reader.Search(khitanFiller, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/khitan_filler.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpVietnameseReadingMarkInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpVietnameseReadingMark()
     {
-        // Regression guard for U+16FF0 (Vietnamese Alternate Reading Mark CA), a non-BMP
-        // codepoint in the Ideographic Symbols and Punctuation block used to annotate Chu Nom
-        // (Han-based Vietnamese) text. On the current runtime this is Unicode category Mc
-        // (Spacing Mark); unicode61 keeps Mc codepoints as word characters, so `search '𖿰'`
-        // returned 0 against '𖿰abc' without explicit CJK prefix promotion. Pinned so the Mc /
-        // Chu-Nom-annotation case is covered in addition to Lm / Mn.
-        // ベトナム語 Chu Nom 読み記号 CA（U+16FF0、非 BMP の Ideographic Symbols and Punctuation
-        // ブロック）の回帰テスト。現行ランタイムでは Unicode カテゴリ Mc。unicode61 は Mc も
-        // 単語文字として扱うため、CJK prefix 昇格がなければ `search '𖿰'` は '𖿰abc' に対して
-        // 0 件を返す。Lm / Mn だけでなく Mc / Chu Nom 注釈のケースも固定する。
+        // Regression guard that `prefix: true` covers U+16FF0 (Vietnamese Alternate Reading
+        // Mark CA), a non-BMP codepoint in the Ideographic Symbols and Punctuation block
+        // used to annotate Chu Nom (Han-based Vietnamese) text. On the current runtime this
+        // is Unicode category Mc (Spacing Mark); unicode61 keeps Mc codepoints as word
+        // characters.
+        // `prefix: true` がベトナム語 Chu Nom 読み記号 CA（U+16FF0、非 BMP の Ideographic
+        // Symbols and Punctuation ブロック）を網羅することの回帰テスト。現行ランタイムでは
+        // Unicode カテゴリ Mc。unicode61 は Mc も単語文字として扱う。
         var vietnameseReadingMark = char.ConvertFromUtf32(0x16FF0);
         InsertIndexedFile("src/vietnamese_ca.py", "python",
             $"def {vietnameseReadingMark}abc(x):\n    return x\n");
 
-        var results = _reader.Search(vietnameseReadingMark);
+        var results = _reader.Search(vietnameseReadingMark, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/vietnamese_ca.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpNushuSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpNushu()
     {
-        // Regression guard for Nüshu (U+1B170..U+1B2FF), a non-BMP syllabic script historically
-        // used by women in Jiangyong County, Hunan, China. Unicode category Lo; unicode61 keeps
-        // it as word characters. Non-BMP, so the same surrogate-pair-aware rune walk and explicit
-        // range inclusion required for Tangut also apply here. Without them, `search '𛅰'` returns
-        // 0 against '𛅰abc' — #198 repeated on another non-BMP historical East Asian script.
-        // 女書（Nüshu、U+1B170..U+1B2FF、中国湖南省江永県で女性たちが使った非 BMP 音節文字）の
-        // 回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。非 BMP のため、
-        // Tangut と同じく rune 走査と範囲追加の両方が必要。抜けると `search '𛅰'` が '𛅰abc' に
-        // 対して 0 件を返す — #198 の非 BMP 歴史的東アジア文字版。
+        // Regression guard that `prefix: true` covers Nüshu (U+1B170..U+1B2FF), a non-BMP
+        // syllabic script historically used by women in Jiangyong County, Hunan, China.
+        // Unicode category Lo; unicode61 keeps it as word characters. Non-BMP, so the
+        // surrogate-pair-aware rune walk applies.
+        // `prefix: true` が女書（Nüshu、U+1B170..U+1B2FF、中国湖南省江永県で女性たちが
+        // 使った非 BMP 音節文字）を網羅することの回帰テスト。Unicode カテゴリ Lo で
+        // unicode61 は単語文字として扱う。非 BMP のためサロゲート対応の走査が必要。
         var nushuChar = char.ConvertFromUtf32(0x1B170);
         InsertIndexedFile("src/nushu.py", "python",
             $"def {nushuChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(nushuChar);
+        var results = _reader.Search(nushuChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/nushu.py");
     }
 
     [Fact]
-    public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
+    public void Search_PrefixOptInCoversNonBmpKanaExtendedB()
     {
-        // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP
-        // kana codepoints are represented as surrogate pairs in .NET strings; the predicate
-        // must walk runes rather than chars AND must include this range in the fallback
-        // set. Without it, `search '𚿰'` returns 0 results against content containing
-        // '𚿰abc' — identical 0-hit shape to #198.
-        // Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0) の回帰テスト。非 BMP の仮名は
-        // .NET 文字列ではサロゲートペアとして現れるため、述語は rune を走査し、さらにこの
-        // 範囲を fallback セットに含める必要がある。抜けると `search '𚿰'` が '𚿰abc' を含む
-        // 内容に対して 0 件を返す — #198 と同じ症状が Kana Extended-B で再発する。
+        // Regression guard that `prefix: true` covers Kana Extended-B (U+1AFF0..U+1AFFF,
+        // Unicode 15.0). Non-BMP kana codepoints are represented as surrogate pairs in
+        // .NET strings; the sanitizer must walk runes rather than chars.
+        // `prefix: true` が Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0) を網羅すること
+        // の回帰テスト。非 BMP の仮名は .NET 文字列ではサロゲートペアとして現れるため、
+        // サニタイザは rune を走査する必要がある。
         var kanaExtendedBChar = char.ConvertFromUtf32(0x1AFF0);
         InsertIndexedFile("src/kana_ext_b.py", "python",
             $"def {kanaExtendedBChar}abc(x):\n    return x\n");
 
-        var results = _reader.Search(kanaExtendedBChar);
+        var results = _reader.Search(kanaExtendedBChar, prefix: true);
 
         Assert.Contains(results, r => r.Path == "src/kana_ext_b.py");
     }
 
     [Fact]
-    public void CountSearchResults_IncludesCjkSubstringMatches()
+    public void CountSearchResults_CjkSubstringYieldsZeroByDefault()
     {
-        // Count path shares the sanitizer, so the CJK prefix fallback must apply there too.
-        // Pin the exact count/fileCount instead of a loose `>= 1` so drift that inflates
-        // the count (e.g. prefix promotion leaking into an unrelated file) is caught too.
-        // カウント経路も同じサニタイザを共有するため、CJKの prefix フォールバックが効く必要がある。
-        // 緩い `>= 1` ではなく厳密な count/fileCount を固定し、prefix 昇格が無関係なファイルに
-        // 漏れて count が膨らむようなドリフトも捕える。
+        // Count path shares the sanitizer with Search, so the strict-default policy must
+        // apply there too: a bare CJK query returns 0/0 against content where the indexed
+        // token only contains the query as a prefix. Without this pin, a future change that
+        // re-enables auto-prefix promotion in the count path (but not Search, or vice versa)
+        // would silently desynchronize count vs. result-list relevance.
+        // カウント経路も Search と同じサニタイザを共有するため、strict 既定が同様に適用される。
+        // 素の CJK クエリは、インデックス上のトークンがクエリを接頭辞として含むだけの内容に
+        // 対しては 0/0 を返す。Search と count のどちらかにだけ自動 prefix を復活させるような
+        // 差分が入ると count と result list の relevance が静かに乖離するため、これを固定する。
         InsertIndexedFile("src/cjk_count_hit.py", "python",
             "def 計算する(値):\n    return 値\n");
         InsertIndexedFile("src/cjk_count_miss.py", "python",
             "def 検索する(値):\n    return 値\n");
 
         var counts = _reader.CountSearchResults("計算");
+
+        Assert.Equal(0, counts.Count);
+        Assert.Equal(0, counts.FileCount);
+    }
+
+    [Fact]
+    public void CountSearchResults_CjkSubstringMatchesWhenPrefixFlagSet()
+    {
+        // Opt-in counterpart to the strict-default count test above. Passing `prefix: true`
+        // through the count path must yield the matching count/fileCount, mirroring how
+        // Search behaves under the same opt-in.
+        // strict 既定の count テストに対する opt-in 版。`prefix: true` を count 経路にも渡すと、
+        // 同じ opt-in を渡した Search と一致する count/fileCount を返す。
+        InsertIndexedFile("src/cjk_count_hit.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_count_miss.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var counts = _reader.CountSearchResults("計算", prefix: true);
 
         Assert.Equal(1, counts.Count);
         Assert.Equal(1, counts.FileCount);
@@ -7515,6 +7615,74 @@ public class DbReaderTests : IDisposable
 
         var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
         Assert.Contains(dependencies, d => d.SourcePath == "src/Usage.cs" && d.TargetPath == "src/Svc.cs");
+    }
+
+    [Fact]
+    public void SearchSymbols_CSharpAmbiguousUsingExposureKeepsBothCandidatesIndividuallyAddressable_Issue1521()
+    {
+        // issue #1521: when two `using` directives both expose a same-named type
+        // (e.g. `using FooNs; using BarNs;` both exposing `Holder`), DbReader's
+        // base-type resolver iterated `GetActiveCSharpTypeNamespaces` — a HashSet
+        // of active namespaces — and returned the first match via FirstOrDefault,
+        // routing `class Derived : Holder` to whichever namespace bucket happened
+        // to enumerate first. The fix detects the ambiguity and declines to
+        // resolve rather than silently picking one. Both definitions remain
+        // individually addressable by their fully qualified names, and the
+        // deriving site stays reachable from a bare-name reference search.
+        // issue #1521: 2 つの using directive が同名型を公開する場合
+        // (`using FooNs; using BarNs;` の両方が `Holder` を露出)、DbReader の基底型
+        // 解決は `GetActiveCSharpTypeNamespaces` (active namespaces の HashSet) を
+        // 巡回して FirstOrDefault で最初の一致を返していたため、`class Derived :
+        // Holder` がどちらに routing されるかは namespace の bucket 列挙順に依存
+        // していた。本修正は曖昧性を検知して 1 つを silently 選ぶのではなく解決を
+        // 棄権する。両定義は完全修飾名で個別に到達可能で、bare 名の references
+        // 検索からも派生位置に到達できる。
+        InsertIndexedFile("src/FooNs/Holder.cs", "csharp",
+            """
+            namespace FooNs
+            {
+                public class Holder
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/BarNs/Holder.cs", "csharp",
+            """
+            namespace BarNs
+            {
+                public class Holder
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Use/Derived.cs", "csharp",
+            """
+            using FooNs;
+            using BarNs;
+
+            namespace UseNs
+            {
+                public class Derived : Holder
+                {
+                }
+            }
+            """);
+
+        // Both Holder definitions are indexed and individually addressable by
+        // their declaring file — neither is silently dropped during indexing.
+        // 両 Holder 定義は宣言ファイル単位で個別に到達可能であり、indexing 時に
+        // silently 落とされることはない。
+        var holderSymbols = _reader.SearchSymbols("Holder", lang: "csharp", exact: true).ToList();
+        Assert.Contains(holderSymbols, symbol => symbol.Path == "src/FooNs/Holder.cs" && symbol.Kind == "class");
+        Assert.Contains(holderSymbols, symbol => symbol.Path == "src/BarNs/Holder.cs" && symbol.Kind == "class");
+
+        // The bare `Holder` reference at the deriving site is recorded and
+        // surfaces in references search regardless of dictionary enumeration
+        // order; the resolver no longer silently picks one specific namespace.
+        // 派生位置の bare `Holder` 参照は dictionary 列挙順に依らず references
+        // 検索に現れる。resolver が特定 namespace を silently 選ぶことはない。
+        var holderRefs = _reader.SearchReferences("Holder", lang: "csharp", exact: true).ToList();
+        Assert.Contains(holderRefs, reference => reference.Path == "src/Use/Derived.cs");
     }
 
     [Fact]
@@ -14216,6 +14384,127 @@ public class DbReaderTests : IDisposable
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public void Search_RanksFilesWithExactSymbolMatchBeforeFilesWithout_Issue1520()
+    {
+        // Issue #1520: the search ORDER BY uses a per-file "exact symbol match" bucket so that
+        // FTS hits inside files where a symbol named exactly like the query exists float above
+        // files where the query only appears textually. Pin the observable ordering after
+        // materializing the EXISTS predicate into a derived-table LEFT JOIN.
+        // Issue #1520: ORDER BY のシンボル一致バケットをサブクエリ→LEFT JOIN 化したため、
+        // ランキングが従来通りに維持されることを観測ベースで pin する。
+        const string token = "rank_match_token_1520";
+        InsertIndexedFile(
+            "src/rank_text_only.py",
+            "python",
+            $"# bare mention only\nresult = {token}\n");
+        InsertIndexedFile(
+            "src/rank_symbol_hit.py",
+            "python",
+            $"def {token}():\n    return None\n");
+
+        var results = _reader.Search(token);
+
+        Assert.True(results.Count >= 2);
+        var symbolHitIndex = results.FindIndex(r => r.Path == "src/rank_symbol_hit.py");
+        var textOnlyIndex = results.FindIndex(r => r.Path == "src/rank_text_only.py");
+        Assert.True(symbolHitIndex >= 0, "file with the exact-symbol match should appear in results");
+        Assert.True(textOnlyIndex >= 0, "file with the textual-only match should appear in results");
+        Assert.True(symbolHitIndex < textOnlyIndex,
+            $"file with the exact-symbol match ranked at {symbolHitIndex} should precede textual-only at {textOnlyIndex}");
+    }
+
+    [Fact]
+    public void Search_RanksFilesWithPrefixSymbolMatchBeforeFilesWithout_Issue1520()
+    {
+        // Issue #1520: prefix bucket must still favor files that own a symbol whose name starts
+        // with the query (e.g. `auth*` matches an `authenticate` function declaration) over
+        // files that only contain the literal substring in chunk text.
+        // Issue #1520: prefix バケットも、シンボル名が query で始まるファイルを優先する挙動を維持する。
+        const string prefix = "prefix1520";
+        InsertIndexedFile(
+            "src/prefix_text_only.py",
+            "python",
+            $"# textual mention: {prefix}_lookup is just a string here.\n");
+        InsertIndexedFile(
+            "src/prefix_symbol_hit.py",
+            "python",
+            $"def {prefix}_handler():\n    return None\n");
+
+        var results = _reader.Search(prefix);
+
+        Assert.True(results.Count >= 2);
+        var symbolHitIndex = results.FindIndex(r => r.Path == "src/prefix_symbol_hit.py");
+        var textOnlyIndex = results.FindIndex(r => r.Path == "src/prefix_text_only.py");
+        Assert.True(symbolHitIndex >= 0);
+        Assert.True(textOnlyIndex >= 0);
+        Assert.True(symbolHitIndex < textOnlyIndex,
+            $"file with the prefix-symbol match ranked at {symbolHitIndex} should precede textual-only at {textOnlyIndex}");
+    }
+
+    [Fact]
+    public void SearchRankingBuckets_DoNotEmbedCorrelatedExistsInOrderBy_Issue1520()
+    {
+        // Issue #1520: the ranking constants must not embed a correlated EXISTS subquery
+        // against `symbols` that references the outer `f.id`. Such a subquery is re-evaluated
+        // per FTS hit before the LIMIT, turning a fast search into an O(N x M) sort.
+        // Issue #1520: ranking 定数に外側 f.id を参照する EXISTS を埋め戻していないことを固定する。
+        Assert.DoesNotContain("EXISTS", DbReader.ExactSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("EXISTS", DbReader.PrefixSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("FROM symbols", DbReader.ExactSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("FROM symbols", DbReader.PrefixSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("exact_symbol_match", DbReader.ExactSymbolMatchOrder, StringComparison.Ordinal);
+        Assert.Contains("prefix_symbol_match", DbReader.PrefixSymbolMatchOrder, StringComparison.Ordinal);
+        Assert.Contains("LEFT JOIN", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        Assert.Contains("SELECT DISTINCT file_id FROM symbols", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        // The materialized lookup must stay SARGable (no `lower(name)` wrapping).
+        Assert.DoesNotContain("lower(", DbReader.SearchSymbolMatchJoinsSql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Search_OrderByPlanDoesNotReScanSymbolsPerRow_Issue1520()
+    {
+        // Issue #1520: EXPLAIN QUERY PLAN of the full search SQL must show the ranking
+        // subqueries materialized once instead of re-scanning `symbols` correlated by `f.id`.
+        // Modern SQLite reports a single "MATERIALIZE" or "CO-ROUTINE" step for SELECT DISTINCT
+        // subqueries in FROM; the regression would surface a "CORRELATED SCALAR SUBQUERY"
+        // (or repeated "SEARCH symbols ... USING INDEX idx_symbols_file") instead.
+        // Issue #1520: EXPLAIN QUERY PLAN に CORRELATED SCALAR SUBQUERY が現れないことを固定する。
+        const string sql = @"
+            SELECT f.path, f.lang, c.start_line, c.end_line, c.content, rank
+            FROM fts_chunks
+            JOIN chunks c ON fts_chunks.rowid = c.id
+            JOIN files f ON c.file_id = f.id
+            LEFT JOIN (
+                SELECT DISTINCT file_id FROM symbols
+                WHERE name = @rankingQuery COLLATE NOCASE
+            ) AS exact_symbol_match ON exact_symbol_match.file_id = f.id
+            LEFT JOIN (
+                SELECT DISTINCT file_id FROM symbols
+                WHERE name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+            ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id
+            WHERE fts_chunks MATCH @query
+            ORDER BY
+                CASE WHEN exact_symbol_match.file_id IS NULL THEN 1 ELSE 0 END,
+                CASE WHEN prefix_symbol_match.file_id IS NULL THEN 1 ELSE 0 END,
+                rank
+            LIMIT 10";
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        cmd.Parameters.AddWithValue("@query", "authenticate");
+        cmd.Parameters.AddWithValue("@rankingQuery", "authenticate");
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", "authenticate%");
+
+        var plan = new StringBuilder();
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                plan.AppendLine(reader.GetString(3));
+
+        var planText = plan.ToString();
+        Assert.DoesNotContain("CORRELATED", planText);
     }
 
     private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)

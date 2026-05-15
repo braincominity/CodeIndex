@@ -433,7 +433,10 @@ public class DbWriter
         for (int i = 0; i < references.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, references.Count);
-            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+            // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
+            // symbol_references share one rollback boundary; without it a mid-chunk failure
+            // under an outer transaction would orphan committed reference_lines (#1518).
+            using var transaction = BeginTransaction();
 
             using var lineCmd = _conn.CreateCommand();
             lineCmd.CommandText = @"
@@ -499,7 +502,7 @@ public class DbWriter
                 cmd.ExecuteNonQuery();
             }
 
-            transaction?.Commit();
+            transaction.Commit();
         }
     }
 

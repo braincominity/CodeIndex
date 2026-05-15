@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -34,7 +35,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callers <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callees <query>|--query <query>|-- <query>", output);
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
+        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]", output);
         Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
         Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]", output);
@@ -99,7 +100,7 @@ public class ConsoleUiTests
     {
         var output = CaptureUsageOutput(showBanner: false);
 
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
+        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
@@ -291,6 +292,72 @@ public class ConsoleUiTests
             Assert.DoesNotContain("focus-column", findBranch);
             Assert.Contains("focus-column", excerptBranch);
         }
+    }
+
+    [Fact]
+    public void PrintCompletions_ExcerptFlagSetsMatchAcrossShells()
+    {
+        var bashExcerpt = ExtractBashSubcommandFlags(ConsoleUi.GetCompletionScript("bash"), "excerpt", "references");
+        var zshExcerpt = ExtractZshSubcommandFlags(ConsoleUi.GetCompletionScript("zsh"), "excerpt", "references");
+        var fishExcerpt = ExtractFishSubcommandFlags(ConsoleUi.GetCompletionScript("fish"), "excerpt");
+
+        // --help is universal in bash but is not enumerated by the zsh/fish scripts;
+        // exclude it from the parity comparison so the flag sets line up cleanly.
+        bashExcerpt.Remove("help");
+
+        Assert.Equal(bashExcerpt, zshExcerpt);
+        Assert.Equal(bashExcerpt, fishExcerpt);
+        // Sanity check: required excerpt flags are present in every shell.
+        foreach (var flag in new[] { "db", "json", "start", "end", "before", "after", "max-line-width", "focus-line", "focus-column", "focus-length" })
+        {
+            Assert.Contains(flag, bashExcerpt);
+            Assert.Contains(flag, zshExcerpt);
+            Assert.Contains(flag, fishExcerpt);
+        }
+    }
+
+    private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand, string nextSubcommand)
+    {
+        var startMarker = $"[ \"$cmd\" = \"{subcommand}\" ]; then";
+        var endMarker = $"[ \"$cmd\" = \"{nextSubcommand}\" ]; then";
+        var branch = ExtractBetween(script, startMarker, endMarker);
+        var quoted = Regex.Match(branch, "compgen -W \"(?<flags>[^\"]*)\"");
+        Assert.True(quoted.Success, $"bash branch for {subcommand} did not contain a compgen list");
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var token in quoted.Groups["flags"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.StartsWith("--", StringComparison.Ordinal) && token.Length > 2)
+                flags.Add(token[2..]);
+        }
+        return flags;
+    }
+
+    private static SortedSet<string> ExtractZshSubcommandFlags(string script, string subcommand, string nextSubcommand)
+    {
+        var startMarker = $"[[ $subcmd == {subcommand} ]]; then";
+        var endMarker = $"[[ $subcmd == {nextSubcommand} ]]; then";
+        var branch = ExtractBetween(script, startMarker, endMarker);
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(branch, @"'--(?<name>[a-z][a-z0-9-]*)\["))
+            flags.Add(match.Groups["name"].Value);
+        return flags;
+    }
+
+    private static SortedSet<string> ExtractFishSubcommandFlags(string script, string subcommand)
+    {
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        var pattern = new Regex($@"__fish_seen_subcommand_from\s+(?<list>[^']+)'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        foreach (var line in script.Split('\n'))
+        {
+            var match = pattern.Match(line);
+            if (!match.Success)
+                continue;
+            var subcmds = match.Groups["list"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (Array.IndexOf(subcmds, subcommand) < 0)
+                continue;
+            flags.Add(match.Groups["flag"].Value);
+        }
+        return flags;
     }
 
     [Fact]
@@ -505,6 +572,116 @@ public class ConsoleUiTests
     public void FindClosestCommand_GarbageInput_ReturnsNull(string input)
     {
         Assert.Null(ConsoleUi.FindClosestCommand(input));
+    }
+
+    [Theory]
+    [InlineData("auto", ColorMode.Auto)]
+    [InlineData("Always", ColorMode.Always)]
+    [InlineData("NEVER", ColorMode.Never)]
+    [InlineData(" always ", ColorMode.Always)]
+    public void TryParseColorMode_KnownValue_ReturnsTrue(string value, ColorMode expected)
+    {
+        Assert.True(ConsoleUi.TryParseColorMode(value, out var mode));
+        Assert.Equal(expected, mode);
+    }
+
+    [Theory]
+    [InlineData("on")]
+    [InlineData("off")]
+    [InlineData("yes")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseColorMode_UnknownValue_ReturnsFalse(string? value)
+    {
+        Assert.False(ConsoleUi.TryParseColorMode(value, out _));
+    }
+
+    [Fact]
+    public void ShouldUseColor_Always_OverridesNoColorEnv()
+    {
+        using var env = new ColorEnvironmentScope();
+        Environment.SetEnvironmentVariable("NO_COLOR", "1");
+        ConsoleUi.SetColorMode(ColorMode.Always);
+
+        Assert.True(ConsoleUi.ShouldUseColor());
+    }
+
+    [Fact]
+    public void ShouldUseColor_Never_OverridesCliColorForceEnv()
+    {
+        using var env = new ColorEnvironmentScope();
+        Environment.SetEnvironmentVariable("CLICOLOR_FORCE", "1");
+        ConsoleUi.SetColorMode(ColorMode.Never);
+
+        Assert.False(ConsoleUi.ShouldUseColor());
+    }
+
+    [Fact]
+    public void ColorizeKind_ColorModeAlways_EmitsAnsiEvenWhenRedirected()
+    {
+        using var env = new ColorEnvironmentScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+
+        var output = ConsoleUi.ColorizeKind("class");
+
+        Assert.Contains("\x1b[36m", output);
+        Assert.Contains("\x1b[0m", output);
+    }
+
+    [Fact]
+    public void ColorizeKind_ColorModeNever_OmitsAnsi()
+    {
+        using var env = new ColorEnvironmentScope();
+        ConsoleUi.SetColorMode(ColorMode.Never);
+
+        var output = ConsoleUi.ColorizeKind("class");
+
+        Assert.DoesNotContain("\x1b[", output);
+        Assert.Equal("class", output);
+    }
+
+    [Fact]
+    public void PrintUsage_DocumentsColorFlag()
+    {
+        var output = CaptureUsageOutput(showBanner: false);
+        Assert.Contains("--color <when>", output);
+        Assert.Contains("`auto`", output);
+        Assert.Contains("`always`", output);
+        Assert.Contains("`never`", output);
+        Assert.Contains("NO_COLOR", output);
+        Assert.Contains("CLICOLOR_FORCE", output);
+    }
+
+    private sealed class ColorEnvironmentScope : IDisposable
+    {
+        private readonly bool _lockTaken;
+        private readonly string? _originalNoColor;
+        private readonly string? _originalForce;
+        private readonly string? _originalCliColor;
+        private readonly ColorMode _originalMode;
+
+        public ColorEnvironmentScope()
+        {
+            Monitor.Enter(TestConsoleLock.Gate);
+            _lockTaken = true;
+            _originalNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
+            _originalForce = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+            _originalCliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+            _originalMode = ConsoleUi.GetColorMode();
+            Environment.SetEnvironmentVariable("NO_COLOR", null);
+            Environment.SetEnvironmentVariable("CLICOLOR_FORCE", null);
+            Environment.SetEnvironmentVariable("CLICOLOR", null);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("NO_COLOR", _originalNoColor);
+            Environment.SetEnvironmentVariable("CLICOLOR_FORCE", _originalForce);
+            Environment.SetEnvironmentVariable("CLICOLOR", _originalCliColor);
+            ConsoleUi.SetColorMode(_originalMode);
+            if (_lockTaken)
+                Monitor.Exit(TestConsoleLock.Gate);
+        }
     }
 
     private static string CaptureUsageOutput(bool showBanner = true)

@@ -72,6 +72,7 @@ public static class QueryCommandRunner
         "--exact",
         "--exact-name",
         "--exact-substring",
+        "--prefix",
         "--reverse",
         "--help",
         "-h",
@@ -89,13 +90,20 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"], options.Query))
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name", "--prefix"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
+        if (exact && options.Prefix)
+        {
+            WriteValidationError(
+                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
+                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "search"))
@@ -115,7 +123,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
@@ -130,7 +138,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
             if (results.Count == 0)
             {
                 if (options.Json)
@@ -2751,6 +2759,7 @@ public static class QueryCommandRunner
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
+        bool prefix = false;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -2892,6 +2901,9 @@ public static class QueryCommandRunner
                     break;
                 case "--exact-substring":
                     exactSubstring = true;
+                    break;
+                case "--prefix":
+                    prefix = true;
                     break;
                 case "--depth":
                     if (!TryReadRawOptionValue(args, ref i, "--depth", inlineValue, out var depthValue, out var missingDepthError))
@@ -3102,6 +3114,7 @@ public static class QueryCommandRunner
             Since = since,
             NoDedup = noDedup,
             Exact = exact,
+            Prefix = prefix,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -4513,6 +4526,7 @@ public sealed class QueryCommandOptions
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool Exact { get; init; }
+    public bool Prefix { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
