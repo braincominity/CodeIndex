@@ -630,14 +630,17 @@ For scripts and AI agents that need to classify failures without substring-match
 
 If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
 
-  Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` instead (never paste this output publicly).
+  Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` **and** pass `--debug-unsafe` on the command line — env-var-only `unsafe` is downgraded to redacted with a one-shot warning so a stale `CDIDX_DEBUG=unsafe` in a shell profile or CI environment cannot quietly leak indexed source content. Never paste raw-mode output publicly.
 
   Reference line text is now stored once per file/line in `reference_lines`, so fresh indexes stay smaller than the legacy schema that duplicated the same `context` text on every `symbol_references` row. If an existing `.cdidx/codeindex.db` has already grown large, re-run `cdidx . --rebuild` to reclaim the space; `VACUUM` alone will not remove the old duplicated rows from a pre-migration database.
 
   ```bash
-  CDIDX_DEBUG=1 cdidx unused            # redacted text / テキスト伏字化
-  CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
+  CDIDX_DEBUG=1 cdidx unused                              # redacted text / テキスト伏字化
+  CDIDX_DEBUG=unsafe cdidx --debug-unsafe unused          # raw content, local only / 生テキスト、ローカルのみ
+  CDIDX_DEBUG=unsafe cdidx mcp --debug-unsafe             # MCP server, raw content allowed / MCP サーバーで生テキストを許可
   ```
+
+  MCP tool errors that fall through to the catch-all (e.g. unexpected SQLite exceptions) now reach the JSON-RPC client as `Error executing <tool> (<ExceptionType>). See cdidx server stderr for details.` instead of echoing `ex.Message`, because the underlying exception text can quote bound parameters or matched indexed content. Detailed messages remain on the MCP server's stderr for local debugging.
 
 ### Color output
 
@@ -1715,12 +1718,15 @@ cdidx map --path src/ --exclude-tests --json
 
 `The data is NULL at ordinal N` のような SQLite reader エラーでクエリが失敗した場合は、`CDIDX_DEBUG=1` を設定して再実行してください。失敗した SQL、バインド済みパラメータ、直近に読み取った行のカラムが stderr に出力されます。未設定時は何もしません。
 
-テキスト値（チャンクの `content`、`context`、パス、シグネチャ、文字列パラメータ）は**既定で伏字化**され、長さと SHA256 先頭のみを出力します。Issue に貼っても索引済みソースが漏れません。数値・カラム名・NULL マーカー・SQL 本文はそのまま出力されます。ローカルでの調査で生テキストが必要な場合は `CDIDX_DEBUG=unsafe` を指定してください（公開の場には貼らないこと）。
+テキスト値（チャンクの `content`、`context`、パス、シグネチャ、文字列パラメータ）は**既定で伏字化**され、長さと SHA256 先頭のみを出力します。Issue に貼っても索引済みソースが漏れません。数値・カラム名・NULL マーカー・SQL 本文はそのまま出力されます。ローカルでの調査で生テキストが必要な場合は `CDIDX_DEBUG=unsafe` を指定し、**併せて `--debug-unsafe` をコマンドラインで渡してください**。環境変数だけで `unsafe` を指定しても redacted にフォールバックし stderr に一度だけ警告が出るため、シェルプロファイルや CI に `CDIDX_DEBUG=unsafe` が残っていても索引済みソースが静かに漏れることはありません。生テキスト出力は公開の場には貼らないでください。
 
 ```bash
-CDIDX_DEBUG=1 cdidx unused            # テキスト伏字化
-CDIDX_DEBUG=unsafe cdidx unused       # 生テキスト、ローカルのみ
+CDIDX_DEBUG=1 cdidx unused                              # テキスト伏字化
+CDIDX_DEBUG=unsafe cdidx --debug-unsafe unused          # 生テキスト、ローカルのみ
+CDIDX_DEBUG=unsafe cdidx mcp --debug-unsafe             # MCP サーバーで生テキストを許可
 ```
+
+MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例外など）は、JSON-RPC クライアントへ `Error executing <tool> (<ExceptionType>). See cdidx server stderr for details.` として返るようになりました。`ex.Message` をそのまま返すと、SQLite 例外が引用するバインド値や索引内容のフラグメントが MCP トランスクリプト経由で漏れる恐れがあるためです。詳細メッセージは引き続きサーバー側 stderr に残るのでローカルデバッグに使えます。
 
 ### カラー出力
 
