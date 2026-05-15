@@ -1557,6 +1557,14 @@ public partial class McpServer
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
+        // (`git switch other-branch` inside the worktree) without a `--check` workspace scan.
+        // Like the CLI full-scan path, the value is only persisted at the end of a successful
+        // run (errors == 0) so a crashed / partial index keeps the previous HEAD and surfaces
+        // staleness until the next clean refresh. Issues #1508 and #1512.
+        // worktree 内の HEAD 切替検出のため HEAD を捕捉。CLI full-scan と同じく成功時のみ
+        // 書き込み、partial 失敗は旧 HEAD を残して次回 full scan で更新する。
+        var currentHeadCommit = GitHelper.TryGetHeadCommit(projectPath);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1606,11 +1614,11 @@ public partial class McpServer
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
+                projectRootWritten = true;
+            }
         }
 
         // First mutation point — demote readiness just before any write.
@@ -1745,6 +1753,12 @@ public partial class McpServer
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            // Persist the current HEAD only after the run is fully successful (errors == 0).
+            // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
+            // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
+            // untouched and surface staleness until the next clean refresh. Issues #1508 / #1512.
+            // CLI full-scan と同じく成功時のみ HEAD を記録する。partial / 失敗は旧 HEAD を残す。
+            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
