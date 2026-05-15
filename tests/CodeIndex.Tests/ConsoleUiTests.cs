@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -291,6 +292,72 @@ public class ConsoleUiTests
             Assert.DoesNotContain("focus-column", findBranch);
             Assert.Contains("focus-column", excerptBranch);
         }
+    }
+
+    [Fact]
+    public void PrintCompletions_ExcerptFlagSetsMatchAcrossShells()
+    {
+        var bashExcerpt = ExtractBashSubcommandFlags(ConsoleUi.GetCompletionScript("bash"), "excerpt", "references");
+        var zshExcerpt = ExtractZshSubcommandFlags(ConsoleUi.GetCompletionScript("zsh"), "excerpt", "references");
+        var fishExcerpt = ExtractFishSubcommandFlags(ConsoleUi.GetCompletionScript("fish"), "excerpt");
+
+        // --help is universal in bash but is not enumerated by the zsh/fish scripts;
+        // exclude it from the parity comparison so the flag sets line up cleanly.
+        bashExcerpt.Remove("help");
+
+        Assert.Equal(bashExcerpt, zshExcerpt);
+        Assert.Equal(bashExcerpt, fishExcerpt);
+        // Sanity check: required excerpt flags are present in every shell.
+        foreach (var flag in new[] { "db", "json", "start", "end", "before", "after", "max-line-width", "focus-line", "focus-column", "focus-length" })
+        {
+            Assert.Contains(flag, bashExcerpt);
+            Assert.Contains(flag, zshExcerpt);
+            Assert.Contains(flag, fishExcerpt);
+        }
+    }
+
+    private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand, string nextSubcommand)
+    {
+        var startMarker = $"[ \"$cmd\" = \"{subcommand}\" ]; then";
+        var endMarker = $"[ \"$cmd\" = \"{nextSubcommand}\" ]; then";
+        var branch = ExtractBetween(script, startMarker, endMarker);
+        var quoted = Regex.Match(branch, "compgen -W \"(?<flags>[^\"]*)\"");
+        Assert.True(quoted.Success, $"bash branch for {subcommand} did not contain a compgen list");
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var token in quoted.Groups["flags"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.StartsWith("--", StringComparison.Ordinal) && token.Length > 2)
+                flags.Add(token[2..]);
+        }
+        return flags;
+    }
+
+    private static SortedSet<string> ExtractZshSubcommandFlags(string script, string subcommand, string nextSubcommand)
+    {
+        var startMarker = $"[[ $subcmd == {subcommand} ]]; then";
+        var endMarker = $"[[ $subcmd == {nextSubcommand} ]]; then";
+        var branch = ExtractBetween(script, startMarker, endMarker);
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(branch, @"'--(?<name>[a-z][a-z0-9-]*)\["))
+            flags.Add(match.Groups["name"].Value);
+        return flags;
+    }
+
+    private static SortedSet<string> ExtractFishSubcommandFlags(string script, string subcommand)
+    {
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        var pattern = new Regex($@"__fish_seen_subcommand_from\s+(?<list>[^']+)'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        foreach (var line in script.Split('\n'))
+        {
+            var match = pattern.Match(line);
+            if (!match.Success)
+                continue;
+            var subcmds = match.Groups["list"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (Array.IndexOf(subcmds, subcommand) < 0)
+                continue;
+            flags.Add(match.Groups["flag"].Value);
+        }
+        return flags;
     }
 
     [Fact]

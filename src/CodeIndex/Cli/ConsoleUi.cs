@@ -821,6 +821,8 @@ _cdidx";
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l start -r -d 'Start line'");
+        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l end -r -d 'End line'");
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
         lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
