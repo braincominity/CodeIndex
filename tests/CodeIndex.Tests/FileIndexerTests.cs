@@ -2499,4 +2499,113 @@ public class FileIndexerTests
     {
         File.SetUnixFileMode(path, mode);
     }
+
+    // Bare CR (legacy Mac) line endings used to be silently normalized to LF by
+    // BuildRecordWithRawBytes, hiding line-counting / regex assumptions that
+    // may be wrong elsewhere. Issue #1538: detect CR-only and three-way mixes
+    // so they surface in `cdidx validate` / file_issues.
+    // BuildRecordWithRawBytes が CR (旧 Mac) 行末を黙って LF に正規化していた問題
+    // (Issue #1538) に対し、CR-only と 3 種混在を検出して file_issues に出す。
+    [Fact]
+    public void ValidateContent_CrOnlyLineEndings_EmitsCrOnlyIssue()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("line1\rline2\rline3\r");
+        var content = "line1\nline2\nline3\n";
+
+        var issues = FileIndexer.ValidateContent("legacy_mac.txt", rawBytes, content);
+
+        var crOnly = Assert.Single(issues, i => i.Kind == "cr_only_line_endings");
+        Assert.Equal(0, crOnly.Line);
+        Assert.Contains("CR-only", crOnly.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+    }
+
+    [Fact]
+    public void ValidateContent_ThreeWayLineEndings_EmitsThreeWayIssue()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("crlf\r\nlf-only\rcr-only\n");
+        var content = "crlf\nlf-only\ncr-only\n";
+
+        var issues = FileIndexer.ValidateContent("three_way.txt", rawBytes, content);
+
+        var threeWay = Assert.Single(issues, i => i.Kind == "mixed_line_endings_three_way");
+        Assert.Equal(0, threeWay.Line);
+        Assert.Contains("CRLF", threeWay.Message);
+        Assert.Contains("LF", threeWay.Message);
+        Assert.Contains("CR", threeWay.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
+
+    [Fact]
+    public void ValidateContent_CrlfPlusCrOnly_EmitsMixedIssue()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("crlf\r\ncr-only\rmore-crlf\r\n");
+        var content = "crlf\ncr-only\nmore-crlf\n";
+
+        var issues = FileIndexer.ValidateContent("mixed_crlf_cr.txt", rawBytes, content);
+
+        var mixed = Assert.Single(issues, i => i.Kind == "mixed_line_endings");
+        Assert.Equal(0, mixed.Line);
+        Assert.Contains("CRLF and CR", mixed.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+    }
+
+    [Fact]
+    public void ValidateContent_LfPlusCrOnly_EmitsMixedIssue()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("lf\nthen-cr\rback-to-lf\n");
+        var content = "lf\nthen-cr\nback-to-lf\n";
+
+        var issues = FileIndexer.ValidateContent("mixed_lf_cr.txt", rawBytes, content);
+
+        var mixed = Assert.Single(issues, i => i.Kind == "mixed_line_endings");
+        Assert.Equal(0, mixed.Line);
+        Assert.Contains("LF and CR", mixed.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
+
+    [Fact]
+    public void ValidateContent_CrlfPlusLf_StillEmitsExistingMixedIssue()
+    {
+        // Regression guard: existing CRLF+LF kind / message must not change.
+        // 既存の CRLF+LF kind / メッセージが変わっていないことの回帰ガード。
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("crlf\r\nlf\n");
+        var content = "crlf\nlf\n";
+
+        var issues = FileIndexer.ValidateContent("mixed.txt", rawBytes, content);
+
+        var mixed = Assert.Single(issues, i => i.Kind == "mixed_line_endings");
+        Assert.Equal("Mixed line endings (CRLF and LF)", mixed.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+    }
+
+    [Fact]
+    public void ValidateContent_PureCrlf_DoesNotFlagLineEndings()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("a\r\nb\r\nc\r\n");
+        var content = "a\nb\nc\n";
+
+        var issues = FileIndexer.ValidateContent("pure_crlf.txt", rawBytes, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
+
+    [Fact]
+    public void ValidateContent_PureLf_DoesNotFlagLineEndings()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("a\nb\nc\n");
+        var content = "a\nb\nc\n";
+
+        var issues = FileIndexer.ValidateContent("pure_lf.txt", rawBytes, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
 }
