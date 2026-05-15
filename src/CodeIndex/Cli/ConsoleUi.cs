@@ -5,6 +5,20 @@ using System.Text;
 namespace CodeIndex.Cli;
 
 /// <summary>
+/// User-visible color output policy. Drives ANSI escape emission.
+/// 色出力ポリシー。ANSI エスケープ発行を制御する。
+/// </summary>
+public enum ColorMode
+{
+    /// <summary>Honor env vars (NO_COLOR / CLICOLOR_FORCE / CLICOLOR) and fall back to TTY auto-detect.</summary>
+    Auto = 0,
+    /// <summary>Always emit ANSI escapes, even when stdout is redirected.</summary>
+    Always = 1,
+    /// <summary>Never emit ANSI escapes, even on a TTY.</summary>
+    Never = 2,
+}
+
+/// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
 /// </summary>
@@ -375,6 +389,7 @@ public static class ConsoleUi
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
+        Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
@@ -823,14 +838,49 @@ _cdidx";
 
     // --- Helpers / ヘルパー ---
 
+    private static ColorMode _colorMode = ColorMode.Auto;
+
+    /// <summary>
+    /// Set the active color-output mode. <see cref="ColorMode.Always"/> and
+    /// <see cref="ColorMode.Never"/> short-circuit env / TTY checks in
+    /// <see cref="ShouldUseColor"/>; <see cref="ColorMode.Auto"/> defers to
+    /// the existing CLICOLOR_FORCE / NO_COLOR / CLICOLOR / TTY chain.
+    /// 色出力モードを設定する。Always / Never は環境変数と TTY 判定を上書きする。
+    /// </summary>
+    public static void SetColorMode(ColorMode mode) => _colorMode = mode;
+
+    internal static ColorMode GetColorMode() => _colorMode;
+
+    /// <summary>
+    /// Parse a user-supplied `--color` value. Accepts `auto`, `always`, and
+    /// `never` (case-insensitive). Returns false on any other value.
+    /// `--color` 値を解析する。`auto` / `always` / `never` のみ許可。
+    /// </summary>
+    public static bool TryParseColorMode(string? value, out ColorMode mode)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "auto":
+                mode = ColorMode.Auto;
+                return true;
+            case "always":
+                mode = ColorMode.Always;
+                return true;
+            case "never":
+                mode = ColorMode.Never;
+                return true;
+            default:
+                mode = ColorMode.Auto;
+                return false;
+        }
+    }
+
     /// <summary>
     /// Colorize a symbol kind name with ANSI escape codes for terminal output.
-    /// Degrades to plain text when output is redirected (not a terminal) or when
-    /// the user opts out of color via NO_COLOR / CLICOLOR=0. CLICOLOR_FORCE forces
-    /// color on regardless of TTY status.
-    /// シンボル種別名をANSIエスケープコードで色付けする。リダイレクト時、または
-    /// NO_COLOR / CLICOLOR=0 で色を無効化された場合は無色テキスト。
-    /// CLICOLOR_FORCE が指定された場合は TTY でなくても色を付ける。
+    /// Honors the active <see cref="ColorMode"/>; in <see cref="ColorMode.Auto"/>
+    /// falls back to <see cref="ShouldUseColor"/>'s env + TTY policy.
+    /// シンボル種別名を ANSI エスケープコードで色付けする。<see cref="ColorMode"/> を尊重し、
+    /// auto では環境変数と TTY 自動判定にフォールバックする。
     /// </summary>
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
@@ -869,18 +919,20 @@ _cdidx";
     }
 
     /// <summary>
-    /// Decide whether ANSI color escapes should be emitted, honoring the standard
-    /// NO_COLOR (https://no-color.org) and CLICOLOR / CLICOLOR_FORCE conventions.
-    /// Precedence (highest first):
-    ///   1. CLICOLOR_FORCE (any non-empty value other than "0") — force color on.
-    ///   2. NO_COLOR (any non-empty value) — color off.
-    ///   3. CLICOLOR=0 — color off.
-    ///   4. Otherwise fall back to <see cref="ShouldUseInteractiveConsole"/>.
-    /// ANSI 色エスケープを出力するかを判定する。NO_COLOR / CLICOLOR /
-    /// CLICOLOR_FORCE の慣習に従い、TTY 判定より優先する。
+    /// Decide whether ANSI color escapes should be emitted. Precedence (highest first):
+    ///   1. Explicit <see cref="ColorMode"/> from `--color` flag (Always/Never short-circuit).
+    ///   2. CLICOLOR_FORCE (any non-empty value other than "0") — force color on.
+    ///   3. NO_COLOR (any non-empty value) — color off.
+    ///   4. CLICOLOR=0 — color off.
+    ///   5. Otherwise fall back to <see cref="ShouldUseInteractiveConsole"/>.
+    /// ANSI 色エスケープを出力するかを判定する。`--color` フラグ > 環境変数 > TTY 判定。
     /// </summary>
-    internal static bool ShouldUseColor()
+    public static bool ShouldUseColor()
     {
+        if (_colorMode == ColorMode.Always)
+            return true;
+        if (_colorMode == ColorMode.Never)
+            return false;
         if (IsForceColorRequested())
             return true;
         if (IsNoColorRequested())

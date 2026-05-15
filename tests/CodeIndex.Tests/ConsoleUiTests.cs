@@ -507,6 +507,116 @@ public class ConsoleUiTests
         Assert.Null(ConsoleUi.FindClosestCommand(input));
     }
 
+    [Theory]
+    [InlineData("auto", ColorMode.Auto)]
+    [InlineData("Always", ColorMode.Always)]
+    [InlineData("NEVER", ColorMode.Never)]
+    [InlineData(" always ", ColorMode.Always)]
+    public void TryParseColorMode_KnownValue_ReturnsTrue(string value, ColorMode expected)
+    {
+        Assert.True(ConsoleUi.TryParseColorMode(value, out var mode));
+        Assert.Equal(expected, mode);
+    }
+
+    [Theory]
+    [InlineData("on")]
+    [InlineData("off")]
+    [InlineData("yes")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseColorMode_UnknownValue_ReturnsFalse(string? value)
+    {
+        Assert.False(ConsoleUi.TryParseColorMode(value, out _));
+    }
+
+    [Fact]
+    public void ShouldUseColor_Always_OverridesNoColorEnv()
+    {
+        using var env = new ColorEnvironmentScope();
+        Environment.SetEnvironmentVariable("NO_COLOR", "1");
+        ConsoleUi.SetColorMode(ColorMode.Always);
+
+        Assert.True(ConsoleUi.ShouldUseColor());
+    }
+
+    [Fact]
+    public void ShouldUseColor_Never_OverridesCliColorForceEnv()
+    {
+        using var env = new ColorEnvironmentScope();
+        Environment.SetEnvironmentVariable("CLICOLOR_FORCE", "1");
+        ConsoleUi.SetColorMode(ColorMode.Never);
+
+        Assert.False(ConsoleUi.ShouldUseColor());
+    }
+
+    [Fact]
+    public void ColorizeKind_ColorModeAlways_EmitsAnsiEvenWhenRedirected()
+    {
+        using var env = new ColorEnvironmentScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+
+        var output = ConsoleUi.ColorizeKind("class");
+
+        Assert.Contains("\x1b[36m", output);
+        Assert.Contains("\x1b[0m", output);
+    }
+
+    [Fact]
+    public void ColorizeKind_ColorModeNever_OmitsAnsi()
+    {
+        using var env = new ColorEnvironmentScope();
+        ConsoleUi.SetColorMode(ColorMode.Never);
+
+        var output = ConsoleUi.ColorizeKind("class");
+
+        Assert.DoesNotContain("\x1b[", output);
+        Assert.Equal("class", output);
+    }
+
+    [Fact]
+    public void PrintUsage_DocumentsColorFlag()
+    {
+        var output = CaptureUsageOutput(showBanner: false);
+        Assert.Contains("--color <when>", output);
+        Assert.Contains("`auto`", output);
+        Assert.Contains("`always`", output);
+        Assert.Contains("`never`", output);
+        Assert.Contains("NO_COLOR", output);
+        Assert.Contains("CLICOLOR_FORCE", output);
+    }
+
+    private sealed class ColorEnvironmentScope : IDisposable
+    {
+        private readonly bool _lockTaken;
+        private readonly string? _originalNoColor;
+        private readonly string? _originalForce;
+        private readonly string? _originalCliColor;
+        private readonly ColorMode _originalMode;
+
+        public ColorEnvironmentScope()
+        {
+            Monitor.Enter(TestConsoleLock.Gate);
+            _lockTaken = true;
+            _originalNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
+            _originalForce = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+            _originalCliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+            _originalMode = ConsoleUi.GetColorMode();
+            Environment.SetEnvironmentVariable("NO_COLOR", null);
+            Environment.SetEnvironmentVariable("CLICOLOR_FORCE", null);
+            Environment.SetEnvironmentVariable("CLICOLOR", null);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("NO_COLOR", _originalNoColor);
+            Environment.SetEnvironmentVariable("CLICOLOR_FORCE", _originalForce);
+            Environment.SetEnvironmentVariable("CLICOLOR", _originalCliColor);
+            ConsoleUi.SetColorMode(_originalMode);
+            if (_lockTaken)
+                Monitor.Exit(TestConsoleLock.Gate);
+        }
+    }
+
     private static string CaptureUsageOutput(bool showBanner = true)
     {
         lock (TestConsoleLock.Gate)
