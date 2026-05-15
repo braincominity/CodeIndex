@@ -274,10 +274,13 @@ public partial class McpServer
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
+        if (prefix && exact)
+            return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact);
+            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
