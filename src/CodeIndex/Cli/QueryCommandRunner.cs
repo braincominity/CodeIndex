@@ -3195,7 +3195,7 @@ public static class QueryCommandRunner
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
@@ -3210,7 +3210,7 @@ public static class QueryCommandRunner
         }
         catch (FtsQuerySyntaxException ex)
         {
-            Console.Error.WriteLine($"Error: FTS5 query syntax: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
             if (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
@@ -3226,15 +3226,31 @@ public static class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
+            if (ex is SqliteException sqliteEx)
             {
-                Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
-                Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
-                Database.DbDebug.DumpToStderr(ex);
-                return CommandExitCodes.DatabaseError;
+                if (sqliteEx.SqliteErrorCode == 13)
+                {
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.TempStoreExhausted}]: SQLite temp-store exhausted while evaluating this query.");
+                    Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
+                    Database.DbDebug.DumpToStderr(ex);
+                    return CommandExitCodes.DatabaseError;
+                }
+
+                // SQLITE_BUSY (5) and SQLITE_LOCKED (6) both mean a concurrent writer is
+                // holding the database; surface E002_DB_LOCKED so scripts can implement
+                // retry-with-backoff without substring-matching the prose message.
+                // SQLITE_BUSY/LOCKED は別 writer によるロック競合なので、リトライ判断用に
+                // E002_DB_LOCKED で機械可読に区別する。
+                if (sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6)
+                {
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
+                    Console.Error.WriteLine("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
+                    Database.DbDebug.DumpToStderr(ex);
+                    return CommandExitCodes.DatabaseError;
+                }
             }
 
-            Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
             Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;

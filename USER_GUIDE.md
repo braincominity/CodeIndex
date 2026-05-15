@@ -603,6 +603,24 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
 
+### Error codes
+
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI / MCP error also carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Codes never get renamed or reused once published — retired codes simply stop being emitted.
+
+| Code | When emitted |
+|---|---|
+| `E001_DB_NOT_FOUND` | `--db` path (or default `.cdidx/codeindex.db`) does not exist |
+| `E002_DB_LOCKED` | SQLite reported `BUSY`/`LOCKED`, or `cdidx index` could not acquire its per-database file lock |
+| `E003_SCHEMA_TOO_NEW` | Reserved for hard read failures on an index written by a newer cdidx (today the same condition is surfaced softly via `status --json index_newer_than_reader: true`) |
+| `E004_DB_NOT_WRITABLE` | `--db` points at a read-only target but the command requires write access |
+| `E005_DB_INTEGRITY_FAILED` | `cdidx db --integrity-check` saw `PRAGMA integrity_check` return diagnostic rows |
+| `E006_FTS_QUERY_SYNTAX` | A raw `--fts` query string failed to parse |
+| `E007_TEMP_STORE_EXHAUSTED` | SQLite returned `SQLITE_FULL` (typically temp-store exhausted while planning a heavy query) |
+| `E008_DB_ERROR` | Generic SQLite error fallback (no more specific code matched) |
+| `E009_FEATURE_UNAVAILABLE` | Requested feature is unavailable in this build (e.g. `--json` on a manually trimmed custom build) |
+| `E010_USAGE_ERROR` | Argument parse error, conflicting flags, or unknown subcommand |
+| `E011_DIRECTORY_NOT_FOUND` | Project / target directory passed to `cdidx index` does not exist |
+
 ### Debugging reader errors
 
 If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
@@ -1666,6 +1684,24 @@ cdidx map --path src/ --exclude-tests --json
 | `3` | データベースエラー |
 | `4` | この build では機能未提供（例: trim 済み自己完結リリース上の CLI `--json`） |
 | `5` | stale index（`status --check` が DB / workspace の差分を検出） |
+
+### エラーコード
+
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI / MCP のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、`--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+
+| コード | 発行条件 |
+|---|---|
+| `E001_DB_NOT_FOUND` | `--db` で指定した（または既定の `.cdidx/codeindex.db`）パスが存在しない |
+| `E002_DB_LOCKED` | SQLite が `BUSY`/`LOCKED` を返した、または `cdidx index` が DB 単位のファイルロックを取得できなかった |
+| `E003_SCHEMA_TOO_NEW` | 新しい cdidx が書いたインデックスを古い cdidx が読めず hard fail した場合に予約（現状は `status --json` の `index_newer_than_reader: true` でソフト表示） |
+| `E004_DB_NOT_WRITABLE` | `--db` が read-only を指しているが、コマンドが書き込みを要求 |
+| `E005_DB_INTEGRITY_FAILED` | `cdidx db --integrity-check` で `PRAGMA integrity_check` が検出行を返した |
+| `E006_FTS_QUERY_SYNTAX` | 生 `--fts` クエリ文字列のパースに失敗 |
+| `E007_TEMP_STORE_EXHAUSTED` | SQLite が `SQLITE_FULL` を返した（重いクエリの planning 中に temp-store 枯渇など） |
+| `E008_DB_ERROR` | 上記以外の一般的な SQLite エラー（フォールバック） |
+| `E009_FEATURE_UNAVAILABLE` | この build では機能が提供されていない（例: 手動 trim ビルドでの `--json`） |
+| `E010_USAGE_ERROR` | 引数のパースエラー、フラグの競合、未知のサブコマンド |
+| `E011_DIRECTORY_NOT_FOUND` | `cdidx index` に渡したプロジェクト / 対象ディレクトリが存在しない |
 
 ### reader エラーのデバッグ
 
