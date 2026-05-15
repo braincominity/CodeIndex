@@ -16,6 +16,15 @@ public static class WorkspaceMetadataEnricher
             status.GitIsDirty = dirty;
             status.IndexedHeadCommit = indexedHead;
             status.WorktreeHeadChanged = headChanged;
+            // #1509: compare the current HEAD against the SHA stamped at index time. Only
+            // makes sense when both sides are known; otherwise leave the field null so the
+            // CLI/MCP consumer can render "indexed at <sha>" without a misleading 0/N hint.
+            // Note this reads `status.IndexedHeadSha` which was populated by the DbReader
+            // (#1509 keys, stamped on every successful index — distinct from `indexedHead`
+            // above which is #1508's full-scan-only `indexed_head_commit`).
+            // #1509: index 時 HEAD と現 HEAD を比較し、両方判明している時のみ N を載せる。
+            if (root != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(root, status.IndexedHeadSha);
         });
 
     public static void Enrich(RepoMapResult map, string dbPath, bool dbPathExplicit = false) =>
