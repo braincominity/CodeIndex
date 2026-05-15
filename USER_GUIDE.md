@@ -589,6 +589,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication for raw results |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--top <n>` | Query commands | Alias for `--limit` |
+| `--color <when>` | All commands | Control ANSI color output. Accepts `auto` (default), `always`, or `never`. Precedence: `--color` flag > `NO_COLOR` / `CLICOLOR_FORCE` / `CLICOLOR` env vars > TTY auto-detect. Use `--color=always` to keep colored kind labels through a pager such as `cdidx symbols Foo \| less -R`; use `--color=never` (or `NO_COLOR=1`) to suppress ANSI even on a TTY. |
 
 If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
 
@@ -1640,6 +1641,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
+| `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `NO_COLOR` / `CLICOLOR_FORCE` / `CLICOLOR` 環境変数 > TTY 自動判定。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
 
 クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
 

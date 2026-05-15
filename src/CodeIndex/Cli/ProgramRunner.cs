@@ -12,6 +12,14 @@ internal static class ProgramRunner
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         jsonOptions ??= CreateDefaultJsonOptions();
 
+        if (!TryConsumeColorFlag(ref args, out var colorError))
+        {
+            Console.Error.WriteLine(colorError);
+            Console.Error.WriteLine("Hint: use one of `auto`, `always`, `never`.");
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} color_flag_invalid=true");
+            return CommandExitCodes.UsageError;
+        }
+
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
             ConsoleUi.PrintUsage(showBanner: args.Length > 0);
@@ -110,6 +118,68 @@ internal static class ProgramRunner
 
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+
+    internal static bool TryConsumeColorFlag(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        ConsoleUi.SetColorMode(ColorMode.Auto);
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        ColorMode? requested = null;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+
+            // After a `--` token, leave everything alone so subcommands keep
+            // their query-escape semantics (e.g. `cdidx search -- --color=auto`).
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? rawValue = null;
+            if (arg == "--color")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --color requires a value (one of `auto`, `always`, `never`).";
+                    return false;
+                }
+                rawValue = args[++i];
+            }
+            else if (arg.StartsWith("--color=", StringComparison.Ordinal))
+            {
+                rawValue = arg.Substring("--color=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (!ConsoleUi.TryParseColorMode(rawValue, out var mode))
+            {
+                error = $"Error: invalid --color value `{rawValue}`.";
+                return false;
+            }
+            requested = mode;
+        }
+
+        if (requested.HasValue)
+            ConsoleUi.SetColorMode(requested.Value);
+        args = kept.ToArray();
+        return true;
+    }
 
     internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()
     {

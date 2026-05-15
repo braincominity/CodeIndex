@@ -174,6 +174,128 @@ public class ProgramRunnerTests
         Assert.DoesNotContain("directory not found", stderr, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(new[] { "--color=always", "status" }, ColorMode.Always, new[] { "status" })]
+    [InlineData(new[] { "status", "--color", "never" }, ColorMode.Never, new[] { "status" })]
+    [InlineData(new[] { "search", "--color=auto", "foo" }, ColorMode.Auto, new[] { "search", "foo" })]
+    [InlineData(new[] { "status" }, ColorMode.Auto, new[] { "status" })]
+    public void TryConsumeColorFlag_StripsFlagAndSetsMode(string[] input, ColorMode expectedMode, string[] expectedKept)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = input;
+                Assert.True(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(expectedMode, ConsoleUi.GetColorMode());
+                Assert.Equal(expectedKept, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeColorFlag_InvalidValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = new[] { "search", "--color=sparkly" };
+                Assert.False(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Contains("sparkly", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeColorFlag_MissingValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = new[] { "search", "--color" };
+                Assert.False(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Contains("requires a value", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeColorFlag_AfterDoubleDash_PreservesQueryEscape()
+    {
+        // `--` is the query-escape sentinel; anything after it must be left in
+        // place so subcommands like `cdidx search -- --color=auto` can treat
+        // `--color=auto` as a literal query argument rather than the global flag.
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = new[] { "search", "--", "--color=auto" };
+                Assert.True(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(ColorMode.Auto, ConsoleUi.GetColorMode());
+                Assert.Equal(new[] { "search", "--", "--color=auto" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumeColorFlag_FlagBeforeDoubleDash_StillConsumed()
+    {
+        // The global flag must still be consumed when it appears before `--`,
+        // even if the same string appears again afterward as a literal query.
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = new[] { "search", "--color=always", "--", "--color=auto" };
+                Assert.True(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(ColorMode.Always, ConsoleUi.GetColorMode());
+                Assert.Equal(new[] { "search", "--", "--color=auto" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_InvalidColorValue_ReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--color=sparkly", "status"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("invalid --color value `sparkly`", stderr);
+        Assert.Contains("Hint:", stderr);
+    }
+
     [Fact]
     public void IsTrimmedJsonUnavailable_RecognizesReflectionDisabledMessage()
     {
