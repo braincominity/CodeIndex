@@ -465,6 +465,24 @@ public class DbContext : IDisposable
     // full scan が改めて記録する。同じ値を `status` (no `--check`) でも参照し、
     // `worktree_head_changed` として worktree の HEAD 切替を素早く通知する。Issues #1508 / #1512。
     public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
+    // #1509: full Git HEAD commit and short branch name captured at the end of every
+    // successful index run (full scan AND partial update), plus the UTC timestamp of that
+    // stamp. Together they let `status` (and any future cross-session staleness check)
+    // decide whether the index was built against the commit currently checked out, or
+    // whether the working tree has advanced since indexing. This is DIFFERENT from
+    // `IndexedHeadCommitMetaKey` above (#1508): that key only fires on full scans so it
+    // can drive "rebuild after branch switch" warnings, while these keys fire on every
+    // successful index so `commits_ahead_of_indexed_head` reflects the true last-touched
+    // HEAD regardless of update mode. Stored as plain strings to keep DbReader's inline
+    // codeindex_meta lookup degradation behavior intact on legacy / read-only DBs.
+    // #1509: 成功 index (full scan / partial 問わず) の終端で HEAD commit / branch 名 /
+    // stamp 時刻を保存する。これにより status などが「DB の HEAD が現在の HEAD と何コミット
+    // ズレているか」を検出できる。`IndexedHeadCommitMetaKey` (#1508) とは異なり、こちらは
+    // partial update でも更新するため commits_ahead_of_indexed_head が常に正確になる。
+    // codeindex_meta が無い legacy DB では reader 側で null フォールバックする。
+    public const string IndexedHeadShaMetaKey = "indexed_head_sha";
+    public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
+    public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
     // every class-like row for that language. Readers fall back to the legacy heuristic when

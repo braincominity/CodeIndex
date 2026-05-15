@@ -1715,8 +1715,25 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
-                if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                // #1509 surface: SHA / branch / timestamp / drift come from the per-success
+                // stamp (indexed_head_sha / _branch / _timestamp) and reflect last-touched HEAD
+                // regardless of update mode. #1508/#1512's IndexedHeadCommit (full-scan only)
+                // is rendered separately below when it disagrees with the runtime GitHead.
+                if (status.IndexedHeadSha != null)
+                {
+                    var branchSuffix = string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
+                        ? string.Empty
+                        : $" (branch {status.IndexedHeadBranch})";
+                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadSha}{branchSuffix}");
+                }
+                else if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                {
                     Console.WriteLine($"Idx HEAD : {status.IndexedHeadCommit}");
+                }
+                if (status.IndexedHeadTimestamp != null)
+                    Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
+                if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
+                    Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
                     WriteWorkspaceCheck(status.WorkspaceCheck);
                 if (status.Languages.Count > 0)
