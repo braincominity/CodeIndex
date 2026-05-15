@@ -551,6 +551,23 @@ The detector intentionally allows short inline code examples (e.g. `` `const foo
 
 See [Exit codes](USER_GUIDE.md#exit-codes) in USER_GUIDE.
 
+## Error code taxonomy
+
+Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4` feature-unavailable, `5` stale). Scripts, oncall runbooks, and AI agents that need to react to *which* failure happened — not just the bucket — should read the stable `Exxx_NAME` taxonomy emitted on every CLI / MCP error path. The user-facing table lives in [Error codes](USER_GUIDE.md#error-codes); this section captures the developer contract.
+
+**Where it surfaces**
+
+- Human stderr is prefixed with the bracketed code: `Error [E001_DB_NOT_FOUND]: database not found at <path>`. The prose after the prefix can change between releases; the code cannot.
+- `--json` envelopes (`CommandErrorJsonResult`) gain an additive optional `error_code` field. The field is `null`-omitted via `JsonIgnoreCondition.WhenWritingNull`, so existing JSON consumers see no schema break — they only observe the field once a runner attaches a code.
+- The taxonomy is owned by `src/CodeIndex/Cli/CommandErrorCodes.cs`. All emitters route through `WriteCommandError(... , string? errorCode = null)` in `DbCommandRunner` / `IndexCommandRunner` and the equivalent stderr writers in `QueryCommandRunner.WithDb`.
+
+**Stability contract**
+
+- Codes are append-only. Once a code is published in a tagged release, it must not be renamed, renumbered, or reused for a different failure shape, even if the implementation site moves.
+- Retiring a code means stopping new emissions but leaving the constant in `CommandErrorCodes.cs` so old log archives stay decodable.
+- When adding a new code, allocate the next free `Exxx` slot, document its trigger condition in the XML doc-comment on the constant, wire it through every relevant `WriteCommandError` call, mirror the entry into both the English and Japanese tables in `USER_GUIDE.md`, and add a regression test under `tests/CodeIndex.Tests/CommandErrorCodesTests.cs` (one assertion for the bracketed stderr prefix and one for the JSON `error_code` field).
+- `E003_SCHEMA_TOO_NEW` is intentionally reserved with no current emission site — the equivalent forward-compatibility condition is surfaced softly via `status --json index_newer_than_reader`. A future binary that decides to hard-fail on an unknown schema stamp at open time must emit `E003`.
+
 ## Design decisions
 
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
@@ -1701,6 +1718,23 @@ description と context フィールドは、保存およびオプションの G
 ## 終了コード
 
 USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを参照してください。
+
+## エラーコード taxonomy
+
+プロセス終了コード（`0` 成功、`1` 引数、`2` 未検出、`3` DB、`4` 機能未提供、`5` stale）は粗い分類です。スクリプト・オンコール runbook・AI エージェントが「どのバケットか」だけでなく「どの失敗か」で分岐したい場合は、CLI / MCP のすべてのエラー経路で発行される安定した `Exxx_NAME` taxonomy を読んでください。利用者向けの一覧は [エラーコード](USER_GUIDE.md#エラーコード) にあります。本節は開発者向けの契約をまとめます。
+
+**どこに出るか**
+
+- 人間向け stderr は角括弧で前置: `Error [E001_DB_NOT_FOUND]: database not found at <path>`。コード以降の文言はリリース間で変わり得ますが、コードは変わりません。
+- `--json` エンベロープ（`CommandErrorJsonResult`）には任意フィールド `error_code` を追加します。`JsonIgnoreCondition.WhenWritingNull` で null 時は省略されるため、既存 JSON 利用者にスキーマ破壊なし — runner がコードを付けた瞬間にだけ field が現れます。
+- taxonomy の本体は `src/CodeIndex/Cli/CommandErrorCodes.cs`。すべての発行点は `DbCommandRunner` / `IndexCommandRunner` の `WriteCommandError(... , string? errorCode = null)` または `QueryCommandRunner.WithDb` 内の同等な stderr ライターを通します。
+
+**安定性契約**
+
+- コードは append-only。一度 tagged release で公開したコードは、実装が移動しても renaming / renumbering / 別の失敗形態への流用をしません。
+- コードを廃止する場合は新規 emission を止めるだけにし、古いログをデコードできるよう `CommandErrorCodes.cs` の定数自体は残します。
+- 新しいコードを追加するときは、次の空き `Exxx` slot を割り当て、定数の XML doc-comment にトリガー条件を書き、関連するすべての `WriteCommandError` 呼び出しを通し、`USER_GUIDE.md` の英語表と日本語表の両方に同じ行を追加し、`tests/CodeIndex.Tests/CommandErrorCodesTests.cs` に regression test を追加（角括弧 stderr の prefix 用と JSON `error_code` field 用の 2 アサーション）してください。
+- `E003_SCHEMA_TOO_NEW` は意図的に発行点なしで予約しています。今は同等な forward-compatibility 条件を `status --json index_newer_than_reader` でソフトに表示しています。将来 open 時の未知 schema stamp を hard fail させるバイナリは `E003` を発行する必要があります。
 
 ## 設計判断
 
