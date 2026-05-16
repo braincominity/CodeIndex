@@ -128,10 +128,13 @@ internal static class MetricsSink
         using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
         {
             Indented = false,
-            // ISO-8601 timestamps contain `+` for the timezone offset, which the default
-            // strict encoder rewrites to `+`. Use the relaxed encoder so the JSONL is
-            // human-readable in tail / grep workflows; the file is local-only.
-            // ISO-8601 timestamp の `+` を `+` にエスケープせず人間可読のまま残すため relaxed エンコーダを使う。
+            // The default strict encoder escapes characters the JSON spec does not
+            // strictly require to be literal (e.g. the `+` in ISO-8601 timezone
+            // offsets becomes a unicode escape). Use the relaxed encoder so the
+            // JSONL stays human-readable in tail / grep workflows; the file is
+            // local-only.
+            // strict encoder は ISO-8601 timestamp の `+` 等まで unicode escape
+            // するため、ローカル前提の JSONL が tail / grep で読みづらくなる。relaxed encoder で人間可読のまま残す。
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }))
         {
