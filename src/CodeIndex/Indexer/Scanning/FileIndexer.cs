@@ -353,6 +353,10 @@ public class FileIndexer
 
     // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)
     private const long MaxFileSize = 10 * 1024 * 1024;
+    // Extensionless shebang detection reads at most the first physical line within this
+    // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
+    // unsupported so binary executables and minified data are not parsed as scripts.
+    private const int ShebangProbeByteLimit = 256;
 
     private readonly string _projectRoot;
     private readonly string _ignoreRuleRoot;
@@ -2466,6 +2470,8 @@ public class FileIndexer
     /// <summary>
     /// Try to infer a language from an extensionless script shebang.
     /// This is a cheap fallback used only after extension and exact-filename checks fail.
+    /// It reads at most <see cref="ShebangProbeByteLimit"/> bytes from the first line;
+    /// NUL bytes and over-cap first lines are treated as non-scripts.
     /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
     /// </summary>
     private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
@@ -2479,13 +2485,24 @@ public class FileIndexer
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
-            Span<byte> buffer = stackalloc byte[256];
+            Span<byte> buffer = stackalloc byte[ShebangProbeByteLimit];
             var bytesRead = stream.Read(buffer);
             if (bytesRead <= 0)
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var firstLine = Encoding.UTF8.GetString(buffer[..bytesRead])
-                .Split(['\r', '\n'], 2)[0];
+            var bytes = buffer[..bytesRead];
+            if (bytes.Contains((byte)0))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var lineEnd = bytes.IndexOfAny((byte)'\r', (byte)'\n');
+            if (lineEnd < 0)
+            {
+                if (bytesRead == ShebangProbeByteLimit)
+                    return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+                lineEnd = bytesRead;
+            }
+
+            var firstLine = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes[..lineEnd]);
 
             if (firstLine.StartsWith('\uFEFF'))
                 firstLine = firstLine[1..];
@@ -2518,6 +2535,10 @@ public class FileIndexer
         catch (UnauthorizedAccessException)
         {
             return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
     }
 
