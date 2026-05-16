@@ -233,6 +233,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(HookCommandJsonResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(List<CalleeResult>))]
