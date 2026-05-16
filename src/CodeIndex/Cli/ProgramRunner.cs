@@ -9,10 +9,26 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
-    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null)
+    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null, string? configStartDirectory = null)
     {
         appVersion ??= ConsoleUi.LoadVersion();
+
+        // Load project-local `.cdidxrc.json` before anything else reads env vars so log
+        // location, debug mode, and MCP gates honor the file (#1571). Hard-fail on
+        // validation errors so silent typos cannot quietly change behavior.
+        // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
+        // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
+        var configResult = CdidxConfigFile.LoadAndApply(configStartDirectory ?? Environment.CurrentDirectory);
+        if (configResult.Failed)
+        {
+            Console.Error.WriteLine(configResult.Error);
+            Console.Error.WriteLine($"Hint: fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
+            return CommandExitCodes.UsageError;
+        }
+
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
+        if (configResult.Loaded)
+            GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
         jsonOptions ??= CreateDefaultJsonOptions();
 
         if (!TryConsumeColorFlag(ref args, out var colorError))
