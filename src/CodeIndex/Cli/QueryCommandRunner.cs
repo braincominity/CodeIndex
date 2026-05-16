@@ -1711,7 +1711,15 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
         if (options.StatusExplainField != null)
+        {
+            if (options.Json)
+            {
+                Console.Error.WriteLine("Error: status --explain is human-readable only and cannot be combined with --json.");
+                Console.Error.WriteLine("Hint: omit --json, or use plain `status --json` to read machine-oriented readiness fields.");
+                return CommandExitCodes.UsageError;
+            }
             return WriteStatusReadinessExplanation(options.StatusExplainField);
+        }
 
         return WithDb(options.DbPath, reader =>
         {

@@ -28181,6 +28181,19 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_Explain_RejectsJsonMode()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "fold_ready", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("cannot be combined with --json", stderr);
+        Assert.Contains("status --json", stderr);
+    }
+
+    [Fact]
     public void RunStatus_Json_UsesIndexedAndSourceFreshnessInsteadOfClockAge()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_freshness");
