@@ -1029,10 +1029,7 @@ public static class IndexCommandRunner
                 if (!options.Json)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
-                    if (options.Verbose)
-                        Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}\n{ex.StackTrace}");
-                    else
-                        Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}");
+                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex));
                     ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
@@ -1512,6 +1509,17 @@ public static class IndexCommandRunner
         }
     }
 
+    // Public stderr stays a single user-facing line; stack frames leak internal type names,
+    // source paths, and line numbers to any stderr consumer (notably MCP clients that
+    // capture child-process stderr for diagnostics), so we never append `ex.StackTrace`
+    // here even under `--verbose`. Deeper diagnostics live in opt-in channels like
+    // `cdidx report` or `CDIDX_DEBUG` (#1578).
+    // 公開 stderr は 1 行のユーザー向けメッセージのみとし、`ex.StackTrace` は載せない。
+    // 内部型名・ソースパス・行番号が stderr 取り込み側 (MCP クライアントなど) に漏れるため、
+    // `--verbose` でも付加しない。詳細診断は `cdidx report` / `CDIDX_DEBUG` で取得する (#1578)。
+    internal static string FormatPerFileErrorLine(string label, string path, Exception ex) =>
+        $"  [{label}] {path}: {ex.Message}";
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
@@ -1823,10 +1831,7 @@ public static class IndexCommandRunner
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
-                    if (options.Verbose)
-                        Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
-                    else
-                        Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}");
+                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", filePath, ex));
                     ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }

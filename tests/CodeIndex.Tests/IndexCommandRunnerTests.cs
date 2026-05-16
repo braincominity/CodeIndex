@@ -45,6 +45,37 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatPerFileErrorLine_OmitsStackTrace_ToKeepStderrSafeForMcpConsumers()
+    {
+        // Issue #1578: the verbose-mode error path previously appended `ex.StackTrace`
+        // to stderr, leaking internal type names, source paths, and line numbers to
+        // anyone capturing the indexer's stderr (notably MCP clients). The shared
+        // formatter must emit a single user-facing line regardless of verbose state.
+        // Issue #1578: verbose 時の stderr に `ex.StackTrace` が乗ると内部型名・パス・
+        // 行番号が MCP クライアントなど stderr 取り込み側へ漏れていた。共通フォーマッタ
+        // は verbose に関係なく 1 行のユーザー向けメッセージのみ出力すること。
+        Exception captured;
+        try
+        {
+            throw new InvalidOperationException("simulated indexing failure");
+        }
+        catch (Exception ex)
+        {
+            captured = ex;
+        }
+
+        Assert.NotNull(captured.StackTrace);
+
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
+
+        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain(captured.StackTrace!, line);
+        Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
+    }
+
+    [Fact]
     public void Run_HelpFlagReturnsSuccess()
     {
         int exitCode;
