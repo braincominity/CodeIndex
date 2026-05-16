@@ -6853,6 +6853,7 @@ public class McpServerTests : IDisposable
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
         Assert.NotNull(structured["hash"]);
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
     }
@@ -6898,6 +6899,7 @@ public class McpServerTests : IDisposable
 
         var structured = response2["result"]!["structuredContent"]!;
         Assert.Equal("duplicate", structured["status"]!.GetValue<string>());
+        Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
     }
 
     [Fact]
