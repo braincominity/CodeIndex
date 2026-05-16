@@ -37,7 +37,7 @@ public class McpAuditLogTests : IDisposable
         new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
 
     private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter) =>
-        new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, toolFilter: filter, auditLog: sink);
+        new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, authenticator: null, toolFilter: filter, auditLog: sink);
 
     [Fact]
     public void ToolsCall_Ping_EmitsAuditRecordWithCallerFromInitialize()
