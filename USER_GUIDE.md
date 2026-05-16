@@ -803,6 +803,37 @@ Over-quota tool calls receive a structured JSON-RPC `-32000` error:
 
 Inside `batch_query`, each inner slot is also checked against the inner tool's bucket. Over-quota slots surface `error_category: "rate_limited"` and `retry_after_ms` directly in the per-slot result without failing the rest of the batch.
 
+### Project-local configuration file (`.cdidxrc.json`)
+
+You can check a `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first `.cdidxrc.json`, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
+
+Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. A malformed file (invalid JSON, unknown key, wrong type) is a hard error: cdidx exits `1` with the file path and the offending field; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
+
+Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
+
+Supported schema (snake_case keys; every key is optional):
+
+```jsonc
+{
+  "$schema": "https://github.com/Widthdom/CodeIndex",
+  "debug": "1",                          // → CDIDX_DEBUG
+  "metrics_path": "./.cdidx/metrics.jsonl", // → CDIDX_METRICS
+  "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
+  "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
+  "mcp": {
+    "tools": {
+      "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
+      "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
+    },
+    "rate_limit": {
+      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+    }
+  }
+}
+```
+
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`.
 
 ## How it works
 
@@ -2078,6 +2109,37 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 `batch_query` の内側スロットも各内側ツールのバケットで判定されます。超過したスロットはバッチ全体を失敗させずに、スロット結果に `error_category: "rate_limited"` と `retry_after_ms` を含めて返します。
 
+### プロジェクト固有の設定ファイル (`.cdidxrc.json`)
+
+シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初の `.cdidxrc.json` を探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
+
+優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。不正なファイル（無効な JSON、未知のキー、型違い）は hard error として扱われ、cdidx はファイルパスと該当フィールドを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
+
+シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
+
+対応スキーマ（snake_case、すべて任意）:
+
+```jsonc
+{
+  "$schema": "https://github.com/Widthdom/CodeIndex",
+  "debug": "1",                          // → CDIDX_DEBUG
+  "metrics_path": "./.cdidx/metrics.jsonl", // → CDIDX_METRICS
+  "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
+  "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
+  "mcp": {
+    "tools": {
+      "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
+      "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
+    },
+    "rate_limit": {
+      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+    }
+  }
+}
+```
+
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。
 
 ## 動作の仕組み
 
