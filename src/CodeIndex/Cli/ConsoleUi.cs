@@ -68,10 +68,10 @@ public static class ConsoleUi
         ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
         ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>]"),
+        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
         ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]"),
-        ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
+        ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--explain <field>]"),
@@ -90,6 +90,7 @@ public static class ConsoleUi
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
+    private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
     [
@@ -445,6 +446,28 @@ public static class ConsoleUi
     }
 
     /// <summary>
+    /// Format byte counts for human-facing CLI output using binary units.
+    /// 人間向けCLI出力用にバイト数を2進単位で整形する。
+    /// </summary>
+    public static string FormatBytes(long bytes)
+    {
+        if (bytes < 0)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} bytes");
+        if (bytes < 1024)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} bytes");
+
+        var value = (double)bytes;
+        var unitIndex = 0;
+        while (value >= 1024 && unitIndex < ByteUnits.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{value:N1} {ByteUnits[unitIndex]}");
+    }
+
+    /// <summary>
     /// Build metadata stamped into the assembly at compile time, used by
     /// `--version` so dev builds and tagged releases are distinguishable in
     /// bug reports (#1550). Any field can be "unknown" when the build host
@@ -571,6 +594,7 @@ public static class ConsoleUi
         Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
         Console.WriteLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
+        Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis, inclusive (default: 5; --depth 2 returns callers at depth 1 and 2; --depth 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
