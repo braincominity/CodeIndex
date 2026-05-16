@@ -35,6 +35,12 @@ public class SuggestionRecord
     public string? Context { get; set; }
 
     /// <summary>
+    /// Agent or tool name that recorded the suggestion (optional).
+    /// 提案を記録したエージェントまたはツール名（任意）。
+    /// </summary>
+    public string? Agent { get; set; }
+
+    /// <summary>
     /// SHA256 dedup hash of (category + language + normalized description).
     /// Prevents the same suggestion from being recorded twice.
     /// (category + language + 正規化済み description) のSHA256重複排除ハッシュ。
