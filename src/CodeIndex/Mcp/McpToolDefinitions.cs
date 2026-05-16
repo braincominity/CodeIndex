@@ -328,7 +328,7 @@ public partial class McpServer
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
-                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings, mixed_line_endings_three_way, cr_only_line_endings, utf16_bom, non_utf8_likely)" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings, mixed_line_endings_three_way, cr_only_line_endings, utf16_bom, non_utf8_likely, line_too_long)" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." }
                     }
                 },
@@ -460,7 +460,22 @@ public partial class McpServer
                 SuggestionAnnotations())
         };
 
-        var result = new JsonObject { ["tools"] = tools };
+        // Per-deployment enablement gate (#1561). Drop any tool the operator disabled via
+        // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` so AI clients never see destructive
+        // or out-of-scope tools advertised in the first place.
+        // デプロイ単位の有効化ゲート (#1561)。`CDIDX_MCP_TOOLS_ALLOW` /
+        // `CDIDX_MCP_TOOLS_DENY` で除外されたツールは tools/list 段階で隠し、AI クライアント
+        // が破壊的ツールや範囲外ツールを最初から見えないようにする。
+        var filtered = new JsonArray();
+        foreach (var tool in tools)
+        {
+            var name = tool?["name"]?.GetValue<string>();
+            if (name == null || !_toolFilter.IsEnabled(name))
+                continue;
+            filtered.Add(tool!.DeepClone());
+        }
+
+        var result = new JsonObject { ["tools"] = filtered };
         return CreateSuccessResponse(id, result);
     }
 }

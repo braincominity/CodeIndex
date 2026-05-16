@@ -2316,7 +2316,58 @@ public class FileIndexer
             }
         }
 
+        // line_too_long — surface the chunk/symbol/reference skip path that
+        // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
+        // (e.g. 1 MB minified `.min.js`, base64-encoded asset). The matching
+        // guards in ChunkSplitter, SymbolExtractor, and ReferenceExtractor
+        // already return empty for such files; this FileIssue lets callers
+        // diagnose the silent stall the issue was filed for. Closes #1542.
+        // line_too_long — 単一物理行が ChunkSplitter.MaxLineLength を超える
+        // ファイル (例: 1 MB minified .min.js、base64 ペイロード) で発生する
+        // chunk/symbol/reference スキップ経路を可視化する。ChunkSplitter /
+        // SymbolExtractor / ReferenceExtractor 側の同等ガードはすでに空を返す
+        // ため、本 FileIssue は issue 起票時の「無音停止」を切り分けやすくする
+        // 観測点を提供する。Closes #1542.
+        var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
+        if (longLine > 0)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "line_too_long",
+                Line = longLine,
+                Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
+            });
+        }
+
         return issues;
+    }
+
+    /// <summary>
+    /// Return the 1-based number of the first line whose length exceeds
+    /// <paramref name="maxLineLength"/>, or 0 when none. Assumes `\n` is the
+    /// only line separator (callers normalize CRLF). Used by ValidateContent
+    /// to attach a precise line number to the `line_too_long` FileIssue.
+    /// </summary>
+    private static int FindOversizeLine(string content, int maxLineLength)
+    {
+        if (string.IsNullOrEmpty(content))
+            return 0;
+        int lineNumber = 1;
+        int lineLen = 0;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                lineNumber++;
+                lineLen = 0;
+                continue;
+            }
+            lineLen++;
+            if (lineLen > maxLineLength)
+                return lineNumber;
+        }
+        return 0;
     }
 
     /// <summary>

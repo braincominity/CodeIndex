@@ -169,6 +169,83 @@ public class ChunkSplitterTests
     }
 
     [Fact]
+    public void HasOversizeLine_ReturnsTrue_ForLineExceedingCap()
+    {
+        // A single physical line one char beyond MaxLineLength must trigger
+        // the oversize-line skip path. Closes #1542.
+        // MaxLineLength を 1 文字でも超える物理行は oversize-line スキップ経路を
+        // 起動する。Closes #1542.
+        var content = new string('a', ChunkSplitter.MaxLineLength + 1);
+        Assert.True(ChunkSplitter.HasOversizeLine(content));
+    }
+
+    [Fact]
+    public void HasOversizeLine_ReturnsFalse_AtCapBoundary()
+    {
+        // A line exactly at the cap must not be flagged; only strictly longer
+        // lines trigger the skip. Closes #1542.
+        // ちょうど上限の長さの行は対象外。厳密に超えた行のみがスキップ対象。
+        // Closes #1542.
+        var content = new string('a', ChunkSplitter.MaxLineLength);
+        Assert.False(ChunkSplitter.HasOversizeLine(content));
+    }
+
+    [Fact]
+    public void HasOversizeLine_ReturnsFalse_ForManyShortLines()
+    {
+        // Many short lines below the cap must not be flagged, even when the
+        // total content size is large. The cap is per physical line, not per
+        // file. Closes #1542.
+        // 上限以下の短い行が大量にあってもフラグは立たない。上限はファイル全体
+        // ではなく物理行ごとに適用される。Closes #1542.
+        var line = new string('a', 1024);
+        var content = string.Join('\n', Enumerable.Repeat(line, 200));
+        Assert.False(ChunkSplitter.HasOversizeLine(content));
+    }
+
+    [Fact]
+    public void HasOversizeLine_NullOrEmpty_ReturnsFalse()
+    {
+        // Defensive null/empty contract — must not throw and must not flag
+        // empty input as oversize. Closes #1542.
+        // null / 空入力でも例外を出さず、空入力を oversize 扱いしない。
+        // Closes #1542.
+        Assert.False(ChunkSplitter.HasOversizeLine(null));
+        Assert.False(ChunkSplitter.HasOversizeLine(""));
+    }
+
+    [Fact]
+    public void Split_OversizeSingleLine_ReturnsNoChunks()
+    {
+        // A 1 MB single-line file (e.g. minified `.min.js`, base64 asset)
+        // must yield zero chunks so downstream readers do not persist a
+        // multi-MB Content column, and the matching guards in
+        // SymbolExtractor / ReferenceExtractor skip regex-based extraction
+        // for the same file. Closes #1542.
+        // 1 MB の単一行ファイル (例: minified .min.js、base64 ペイロード) は
+        // 0 チャンクを返し、複数 MB の Content カラムが永続化されないように
+        // する。SymbolExtractor / ReferenceExtractor の同等ガードも合わせて
+        // 正規表現抽出をスキップする。Closes #1542.
+        var content = new string('x', 1_000_000);
+        var chunks = ChunkSplitter.Split(1, content);
+        Assert.Empty(chunks);
+    }
+
+    [Fact]
+    public void Split_OversizeLineAmongShortLines_ReturnsNoChunks()
+    {
+        // Even when only one line exceeds the cap, the whole file is skipped
+        // because that single line is the source of the regex-backtracking
+        // / OOM hazard. Closes #1542.
+        // 1 行だけが上限を超える場合でもファイル全体をスキップする。その
+        // 1 行が正規表現のバックトラック / OOM 危険源だから。Closes #1542.
+        var oversize = new string('y', ChunkSplitter.MaxLineLength + 1);
+        var content = "short line 1\n" + oversize + "\nshort line 3\n";
+        var chunks = ChunkSplitter.Split(1, content);
+        Assert.Empty(chunks);
+    }
+
+    [Fact]
     public void Split_ConsecutiveLineLeadingBoms_AllStripped()
     {
         // A consecutive run of U+FEFF at a line start (either at offset 0 or

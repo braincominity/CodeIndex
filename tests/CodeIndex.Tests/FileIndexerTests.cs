@@ -2893,4 +2893,74 @@ public class FileIndexerTests
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
         Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
     }
+
+    [Fact]
+    public void ValidateContent_OversizeLine_EmitsLineTooLongIssue()
+    {
+        // A single physical line longer than ChunkSplitter.MaxLineLength (e.g.
+        // 1 MB minified `.min.js`) must surface as a `line_too_long` FileIssue
+        // pointing at the offending 1-based line number, so the chunk / symbol /
+        // reference skip path is observable from the existing issues channel.
+        // Closes #1542.
+        // ChunkSplitter.MaxLineLength を超える単一物理行 (例: 1 MB minified
+        // .min.js) は、対象行を 1-based 行番号で指す `line_too_long` FileIssue
+        // として表面化させ、chunk / symbol / reference スキップ経路を既存の
+        // issues 経路から観測できるようにする。Closes #1542.
+        var oversize = new string('a', ChunkSplitter.MaxLineLength + 1);
+        var content = "ok\n" + oversize + "\nok\n";
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("bundle.min.js", raw, content);
+
+        var lineTooLong = Assert.Single(issues, i => i.Kind == "line_too_long");
+        Assert.Equal(2, lineTooLong.Line);
+        Assert.Contains("exceeds", lineTooLong.Message);
+    }
+
+    [Fact]
+    public void ValidateContent_NoOversizeLine_DoesNotEmitLineTooLongIssue()
+    {
+        // Files whose every physical line stays within the cap must not be
+        // flagged, even when the total content is large. The cap is per
+        // physical line, not per file. Closes #1542.
+        // すべての物理行が上限以内なら、ファイル全体のサイズが大きくても
+        // フラグは立たない。上限は物理行ごとに適用される。Closes #1542.
+        var line = new string('a', 1024);
+        var content = string.Join('\n', Enumerable.Repeat(line, 200));
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("ok.js", raw, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "line_too_long");
+    }
+
+    [Fact]
+    public void SymbolExtractor_Extract_OversizeLine_ReturnsEmpty()
+    {
+        // SymbolExtractor must mirror the ChunkSplitter oversize-line skip so
+        // regex-based symbol extraction does not stall on minified payloads.
+        // The content below would otherwise expose dozens of `function`
+        // signatures to the JavaScript symbol pattern loop. Closes #1542.
+        // SymbolExtractor も ChunkSplitter の oversize-line スキップに揃え、
+        // 正規表現ベースのシンボル抽出が minified ペイロードで停止しないよう
+        // にする。下記の内容は通常なら JavaScript シンボルパターンで
+        // 多数の `function` シグネチャを露出させる。Closes #1542.
+        var oversize = string.Concat(Enumerable.Repeat("function f(){}", ChunkSplitter.MaxLineLength / 14 + 1));
+        var symbols = SymbolExtractor.Extract(fileId: 1, lang: "javascript", content: oversize, filePath: "bundle.min.js");
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void ReferenceExtractor_Extract_OversizeLine_ReturnsEmpty()
+    {
+        // ReferenceExtractor must mirror the ChunkSplitter oversize-line skip
+        // so regex-based reference extraction does not stall on minified
+        // payloads. Closes #1542.
+        // ReferenceExtractor も ChunkSplitter の oversize-line スキップに揃え、
+        // 正規表現ベースの参照抽出が minified ペイロードで停止しないように
+        // する。Closes #1542.
+        var oversize = string.Concat(Enumerable.Repeat("foo();bar();", ChunkSplitter.MaxLineLength / 12 + 1));
+        var refs = ReferenceExtractor.Extract(fileId: 1, lang: "javascript", content: oversize, symbols: Array.Empty<CodeIndex.Models.SymbolRecord>(), path: "bundle.min.js");
+        Assert.Empty(refs);
+    }
 }

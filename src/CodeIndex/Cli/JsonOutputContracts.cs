@@ -30,6 +30,16 @@ internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("issues")] List<string> Issues);
 
+internal sealed record ReportBundleSummary(
+    [property: JsonPropertyName("output_path")] string OutputPath,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("schema_tables")] int SchemaTables,
+    [property: JsonPropertyName("log_lines_included")] int LogLinesIncluded,
+    [property: JsonPropertyName("log_included")] bool LogIncluded,
+    [property: JsonPropertyName("db_included")] bool DbIncluded,
+    [property: JsonPropertyName("db_path")] string? DbPath);
+
 internal sealed record QueryCountJsonResult(
     [property: JsonPropertyName("count")] int Count);
 
@@ -165,6 +175,13 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     int DefinitionSites,
     List<string> Paths);
 
+internal sealed record VersionInfoJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("commit")] string Commit,
+    [property: JsonPropertyName("build_date")] string BuildDate,
+    [property: JsonPropertyName("dirty")] string Dirty);
+
 [JsonSourceGenerationOptions(
     WriteIndented = false,
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
@@ -226,6 +243,7 @@ internal sealed record GroupedSymbolHotspotJsonResult(
 [JsonSerializable(typeof(RepoLanguageResult))]
 [JsonSerializable(typeof(RepoMapResult))]
 [JsonSerializable(typeof(RepoModuleResult))]
+[JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(StatusResult))]
@@ -233,6 +251,7 @@ internal sealed record GroupedSymbolHotspotJsonResult(
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
+[JsonSerializable(typeof(VersionInfoJsonResult))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 
 internal static class CliJsonSerializerContextFactory

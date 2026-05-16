@@ -71,6 +71,32 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
 
+## Supported Surfaces
+
+`cdidx` is a **CLI and MCP server** only. The supported, versioned surfaces are
+the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC
+interface. There is no public library / SDK API: the `cdidx` NuGet package is
+published as a .NET global tool (`PackAsTool=true`), and `public` types on the
+assembly are implementation details that may change without notice. See
+[INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use).
+
+## Verifying releases
+
+Every GitHub release ships the following supply-chain artifacts next to
+the per-platform `CodeIndex-<rid>.tar.gz` / `.zip` binaries:
+
+| Asset | Purpose |
+|---|---|
+| `sha256sums.txt` | SHA-256 of every release asset (including the SBOM). `install.sh` uses it to verify the downloaded tarball before placing anything under `$HOME/.local/bin/`. |
+| `cdidx.sbom.cdx.json` | CycloneDX 1.x JSON Software Bill of Materials covering every NuGet dependency (including the bundled `SQLitePCLRaw` native asset) so compliance reviewers (SOC2, FedRAMP-style) and scanners (Snyk, Trivy, Grype) can audit transitive dependencies without re-deriving them from `.deps.json`. |
+
+Quick check after downloading both files from the release page:
+
+```bash
+sha256sum --check sha256sums.txt --ignore-missing
+jq '.metadata.component.name, .components | length' cdidx.sbom.cdx.json
+```
+
 ## License and Fair Source Use
 
 CodeIndex and official `cdidx` binaries are source-available / Fair Source-style software
@@ -152,6 +178,35 @@ cdidx mcp
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
+
+## サポート対象の利用面
+
+`cdidx` は **CLI と MCP サーバーとしてのみ** 提供します。バージョニング契約の
+対象となるのは、`cdidx` CLI（`--json` 出力を含む）と `cdidx mcp` の JSON-RPC
+インターフェースだけです。公開ライブラリ/SDK API は提供していません。`cdidx`
+NuGet パッケージは .NET グローバルツールとして公開されており
+（`PackAsTool=true`）、アセンブリ上の `public` 型は CLI/MCP の実装上の事情で
+公開されているだけの実装詳細で、予告なく変更される可能性があります。詳細は
+[INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use)
+を参照してください。
+
+## リリース成果物の検証
+
+各 GitHub release では、プラットフォーム別の
+`CodeIndex-<rid>.tar.gz` / `.zip` バイナリと並んで、サプライチェーン関連の
+成果物を同梱しています。
+
+| アセット | 用途 |
+|---|---|
+| `sha256sums.txt` | 各リリースアセット（SBOM を含む）の SHA-256。`install.sh` は `$HOME/.local/bin/` に何も書き込む前に tarball をこのファイルで検証します。 |
+| `cdidx.sbom.cdx.json` | CycloneDX 1.x JSON 形式の Software Bill of Materials。同梱の `SQLitePCLRaw` ネイティブアセットを含む全 NuGet 依存を列挙するため、SOC2 / FedRAMP 系のコンプライアンスレビューや Snyk / Trivy / Grype などのスキャナーが `.deps.json` から再構築せずに推移的依存を監査できます。 |
+
+リリースページから両ファイルをダウンロードしたあとの簡易チェック例:
+
+```bash
+sha256sum --check sha256sums.txt --ignore-missing
+jq '.metadata.component.name, .components | length' cdidx.sbom.cdx.json
+```
 
 ## ライセンスと Fair Source の扱い
 

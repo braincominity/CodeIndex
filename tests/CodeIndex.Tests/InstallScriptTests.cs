@@ -3247,13 +3247,14 @@ public sealed class InstallScriptTests : IDisposable
                 --version)
                     # Trailing-diagnostic shape: first non-empty line starts with
                     # `cdidx v1.2.3` (so token enumeration sees one distinct token
-                    # equal to the requested tag) but adds diagnostic text after
-                    # the version. Real cdidx --version output is literally
-                    # `cdidx v<ver>` with nothing trailing, so the exact-match
-                    # check must reject this.
-                    # 先頭行が `cdidx v1.2.3` で始まるが末尾に診断文が続くケース。
-                    # 実バイナリの --version 出力は `cdidx v<ver>` 単独なので完全
-                    # 一致を要求して弾く。
+                    # equal to the requested tag) but adds bare diagnostic text
+                    # after the version. Real cdidx --version is either
+                    # `cdidx v<ver>` alone or `cdidx v<ver> (<build metadata>)`
+                    # (#1550), so trailing text without parens must be rejected.
+                    # 先頭行が `cdidx v1.2.3` で始まるが末尾に括弧無し診断文が続く
+                    # ケース。実バイナリの --version 出力は `cdidx v<ver>` 単独か
+                    # `cdidx v<ver> (<build metadata>)` の形のみ許容するため
+                    # (#1550)、括弧で囲われない末尾文字列は弾く。
                     echo "cdidx v1.2.3 warning: expected package missing"
                     ;;
                 search) echo "sample.py:1: def greet(name):" ;;
@@ -3274,6 +3275,54 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionFirstLineWithBuildMetadata_AcceptsAndContinues()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // Real cdidx --version output may include the build-metadata suffix
+        // since #1550 (e.g. `cdidx v1.2.3 (commit abc1234, built 2026-05-12,
+        // clean)`). The reinstall validator must accept that shape so dev
+        // builds and tagged releases stay distinguishable in bug reports.
+        // The mock binary still indexes a scratch project (returning a tiny
+        // search result), so the reinstall validation should succeed.
+        // #1550 で導入された build-metadata 付き --version 出力を validator が
+        // 受け入れることを検証。括弧で囲ったメタデータは許容する。
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    echo "cdidx v1.2.3 (commit abc1234, built 2026-05-12, clean)"
+                    ;;
+                search)
+                    echo "sample.py:1:def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
     [Fact]

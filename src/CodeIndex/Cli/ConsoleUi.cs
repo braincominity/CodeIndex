@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Reflection;
 using System.Text;
 
 namespace CodeIndex.Cli;
@@ -44,6 +45,7 @@ public static class ConsoleUi
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json] [--check]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
+        ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--depth <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
@@ -336,6 +338,43 @@ public static class ConsoleUi
         return "0.0.0";
     }
 
+    /// <summary>
+    /// Build metadata stamped into the assembly at compile time, used by
+    /// `--version` so dev builds and tagged releases are distinguishable in
+    /// bug reports (#1550). Any field can be "unknown" when the build host
+    /// lacks git (e.g. a tarball-only checkout).
+    /// `--version` がバグ報告で dev ビルドとタグ済みリリースを区別できる
+    /// よう、ビルド時にアセンブリへ刻んだメタデータ (#1550)。git の無い
+    /// ビルドホストでは各フィールドが "unknown" になりうる。
+    /// </summary>
+    public sealed record BuildMetadata(string Version, string Commit, string BuildDate, string Dirty);
+
+    /// <summary>
+    /// Load the full build metadata: semver from version.json plus commit/build
+    /// date/dirty flag stamped into the assembly via <c>AssemblyMetadataAttribute</c>.
+    /// version.json の semver と、AssemblyMetadataAttribute で刻まれた
+    /// commit / build date / dirty フラグを合わせて読み込む。
+    /// </summary>
+    public static BuildMetadata LoadBuildMetadata()
+    {
+        var assembly = typeof(ConsoleUi).Assembly;
+        return new BuildMetadata(
+            Version: LoadVersion(),
+            Commit: ReadAssemblyMetadata(assembly, "CdidxCommit"),
+            BuildDate: ReadAssemblyMetadata(assembly, "CdidxBuildDate"),
+            Dirty: ReadAssemblyMetadata(assembly, "CdidxBuildDirty"));
+    }
+
+    private static string ReadAssemblyMetadata(Assembly assembly, string key)
+    {
+        foreach (var attr in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+        {
+            if (string.Equals(attr.Key, key, StringComparison.Ordinal))
+                return string.IsNullOrWhiteSpace(attr.Value) ? "unknown" : attr.Value!;
+        }
+        return "unknown";
+    }
+
     // --- Usage / 使い方 ---
 
     /// <summary>
@@ -371,6 +410,7 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
+        Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
@@ -560,7 +600,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "report", "license",
     ];
 
     /// <summary>
