@@ -61,7 +61,67 @@ public static class QueryCommandRunner
         "--focus-column",
         "--focus-length",
         "--max-line-width",
+        "--explain",
     ];
+    private sealed record StatusReadinessField(
+        string FieldName,
+        string Label,
+        string ReadyText,
+        string DegradedText,
+        string Remediation);
+
+    private static readonly StatusReadinessField[] StatusReadinessFields =
+    [
+        new(
+            "graph_table_available",
+            "Reference graph table",
+            "reference, caller, callee, impact, unused, and hotspot queries can read indexed reference edges.",
+            "reference graph queries degrade to empty or incomplete results because the symbol_references table is missing.",
+            "Run `cdidx index <projectPath>` to rebuild the graph-capable index."),
+        new(
+            "issues_table_available",
+            "Validation issues table",
+            "validate can read indexed file issue rows.",
+            "validate output degrades to empty because the file_issues table is missing.",
+            "Run `cdidx index <projectPath>` to rebuild the issue table."),
+        new(
+            "sql_graph_contract_ready",
+            "SQL graph contract",
+            "SQL reference/dependency rows were written with the current call-column and qualified-name contract.",
+            "SQL graph/dependency readers may return stale or incomplete results.",
+            "Run `cdidx index <projectPath>` to rewrite SQL graph rows."),
+        new(
+            "hotspot_family_ready",
+            "Hotspot family contract",
+            "cross-file hotspot family grouping is stamped for all supported languages in this index.",
+            "cross-file hotspot grouping may be degraded for one or more languages.",
+            "Run `cdidx index <projectPath>` to restamp authoritative hotspot families."),
+        new(
+            "csharp_symbol_name_ready",
+            "C# symbol-name contract",
+            "C# exact-name lookup uses authoritative persisted names for operators, conversions, and indexers.",
+            "C# exact-name lookup for operators, conversions, and indexers may fall back to older canonical names.",
+            "Run `cdidx index <projectPath>` to upgrade canonical C# symbol names."),
+        new(
+            "csharp_metadata_target_ready",
+            "C# metadata target contract",
+            "deps and impact use authoritative C# metadata-attribute targets.",
+            "deps and impact metadata-attribute edges fall back to legacy signature/name heuristics.",
+            "Run `cdidx index <projectPath>` to restamp authoritative C# metadata targets."),
+        new(
+            "fold_ready",
+            "Unicode exact-name fold contract",
+            "--exact-name can use Unicode NFKC + CaseFold equality.",
+            "--exact-name falls back to ASCII COLLATE NOCASE, so non-ASCII casing pairs may not match.",
+            "Run `cdidx backfill-fold` to restamp folded-name columns in place, or `cdidx index <projectPath> --rebuild` for a full rebuild."),
+        new(
+            "index_newer_than_reader",
+            "Reader compatibility",
+            "this cdidx binary understands all persisted index contract versions.",
+            "this DB was written by a newer cdidx, so older readers may degrade instead of trusting newer contract stamps.",
+            "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use."),
+    ];
+
     private static readonly HashSet<string> FlagOnlyOptions =
     [
         "--json",
@@ -147,6 +207,7 @@ public static class QueryCommandRunner
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No results found.");
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -1228,7 +1289,25 @@ public static class QueryCommandRunner
                 continue;
 
             if (rawArg.StartsWith('-'))
-                return $"Error: unsupported option for find: {rawArg}";
+            {
+                var error = $"Error: unsupported option for find: {rawArg}";
+                // Suggest the closest accepted find flag for typos like `--paht` → `--path`
+                // (#1582). Strip any inline `=value` portion before matching, since the prefix
+                // might not have been a recognized value-taking option (TrySplitInlineOptionValue
+                // only splits on known options).
+                // `--paht` → `--path` のようなタイプミスから回復させるため、find が受理する
+                // フラグの中で最も近いものを提案する (#1582)。`--foo=bar` 形では prefix が未知
+                // value-taking option の場合 TrySplitInlineOptionValue が分解しないので、
+                // suggester 用に `=` 前の部分を独自に切り出して照合する。
+                var nameForSuggestion = arg;
+                var eq = nameForSuggestion.IndexOf('=');
+                if (eq > 0)
+                    nameForSuggestion = nameForSuggestion[..eq];
+                var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, allowedWithValues.Concat(allowedFlags).Where(o => o != "--"));
+                if (suggestion != null)
+                    error += $"\nDid you mean: {suggestion}?";
+                return error;
+            }
 
             queryCount++;
             if (queryCount > 1)
@@ -1650,6 +1729,16 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
+        if (options.StatusExplainField != null)
+        {
+            if (options.Json)
+            {
+                Console.Error.WriteLine("Error: status --explain is human-readable only and cannot be combined with --json.");
+                Console.Error.WriteLine("Hint: omit --json, or use plain `status --json` to read machine-oriented readiness fields.");
+                return CommandExitCodes.UsageError;
+            }
+            return WriteStatusReadinessExplanation(options.StatusExplainField);
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1684,11 +1773,22 @@ public static class QueryCommandRunner
                 : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
+            IReadOnlyList<StatusCheckFailure> checkFailures = options.CheckWorkspace
+                ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
+                : Array.Empty<StatusCheckFailure>();
+            if (options.CheckWorkspace)
+                status.FailedChecks = checkFailures.Select(f => f.Name).ToList();
+
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
                     status,
                     CliJsonSerializerContextFactory.Create(jsonOptions).StatusResult));
+            }
+            else if (options.CheckWorkspace)
+            {
+                if (checkFailures.Count > 0)
+                    WriteStatusCheckDiagnostics(checkFailures);
             }
             else
             {
@@ -1749,6 +1849,7 @@ public static class QueryCommandRunner
                 // #1546: case-sensitivity を診断用に明示する。
                 if (status.PathCaseSensitive != null)
                     Console.WriteLine($"FS Case : {(status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive")}");
+                WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (status.IndexNewerThanReader)
@@ -1803,11 +1904,7 @@ public static class QueryCommandRunner
 
             if (!options.CheckWorkspace)
                 return CommandExitCodes.Success;
-            if (status.WorkspaceCheck?.Checked != true)
-                return CommandExitCodes.FeatureUnavailable;
-            return status.WorkspaceCheck.MatchesWorkspace
-                ? CommandExitCodes.Success
-                : CommandExitCodes.StaleIndex;
+            return GetStatusCheckExitCode(checkFailures);
         });
     }
 
@@ -2615,6 +2712,16 @@ public static class QueryCommandRunner
         _ => bucket,
     };
 
+    // Issue kinds emitted by FileIndexer.ValidateFileContent for `validate --kind` filtering.
+    // Keep in sync with `Kind = "..."` assignments in FileIndexer.cs so typos like
+    // `--kind replacement_chra` produce a did-you-mean hint instead of silently filtering
+    // to zero results (#1582).
+    // FileIndexer.ValidateFileContent が出力する file_issues 行の Kind 一覧。
+    // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
+    // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
+    private static readonly string[] AllValidValidateKinds =
+        ["bom", "cr_only_line_endings", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("validate", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
@@ -2648,7 +2755,10 @@ public static class QueryCommandRunner
                 else if (!issuesAvailable)
                     Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
+                {
                     Console.Error.WriteLine("No encoding issues found.");
+                    WriteValidateKindHint(options.Kind);
+                }
                 return CommandExitCodes.Success;
             }
 
@@ -2783,13 +2893,49 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool checkWorkspace = false;
+        HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
+        string? statusExplainField = null;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
         {
             parseErrors ??= [];
             parseErrors.Add(error);
+        }
+
+        void AddStatusCheckScopes(string rawScopes)
+        {
+            if (string.IsNullOrWhiteSpace(rawScopes))
+            {
+                AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
+                return;
+            }
+
+            statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var scope = rawScope.ToLowerInvariant();
+                switch (scope)
+                {
+                    case "workspace":
+                    case "fold":
+                    case "graph":
+                    case "issues":
+                    case "hotspot":
+                    case "csharp":
+                    case "sql":
+                    case "newer":
+                        statusCheckScopes.Add(scope);
+                        break;
+                    default:
+                        AddParseError($"Error: unsupported --check scope '{rawScope}'. Use one or more of workspace, fold, graph, issues, hotspot, csharp, sql, newer.");
+                        break;
+                }
+            }
+
+            if (statusCheckScopes.Count == 0)
+                AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
         }
 
         // Track non-repeatable value-taking options that have already been observed and warn on
@@ -2809,6 +2955,13 @@ public static class QueryCommandRunner
         for (int i = 0; i < args.Length; i++)
         {
             var currentArg = args[i];
+            if (allowStatusCheck && currentArg.StartsWith("--check=", StringComparison.Ordinal))
+            {
+                checkWorkspace = true;
+                AddStatusCheckScopes(currentArg["--check=".Length..]);
+                continue;
+            }
+
             var inlineValue = TrySplitInlineOptionValue(currentArg, out var inlineOptionName)
                 ? currentArg[(inlineOptionName!.Length + 1)..]
                 : null;
@@ -2955,6 +3108,26 @@ public static class QueryCommandRunner
                     else
                     {
                         AddParseError("Error: --check is not supported by this command.");
+                    }
+                    break;
+                case "--explain":
+                    if (allowStatusCheck)
+                    {
+                        if (TryReadStringOptionValue(args, ref i, "--explain", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var explainValue, out var explainError))
+                        {
+                            WarnIfDuplicateSingleValueOption("--explain", explainValue!);
+                            statusExplainField = explainValue;
+                        }
+                        else
+                            AddParseError(explainError!);
+                    }
+                    else if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --explain is not supported by this command.");
                     }
                     break;
                 case "--path":
@@ -3140,7 +3313,9 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
+            StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
+            StatusExplainField = statusExplainField,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
@@ -3334,6 +3509,8 @@ public static class QueryCommandRunner
             var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
                 ? inlineOptionName!
                 : arg;
+            if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
+                normalizedArg = "--check";
 
             if (supported.Contains(normalizedArg))
             {
@@ -3366,6 +3543,26 @@ public static class QueryCommandRunner
                 i++;
 
             Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
+            // Suggest the closest accepted flag for this command when the user mistypes
+            // a flag name (e.g. `--paht` → `--path`). Built on the same suggester used for
+            // subcommand typos so the recovery experience is consistent (#1582).
+            // TrySplitInlineOptionValue only splits inline `=value` when the prefix is a
+            // known value-taking option, so for an unrecognized `--paht=foo` the normalized
+            // arg keeps the `=value`. Strip any trailing `=value` here so the matcher can
+            // still find `--path` from `--paht=foo`.
+            // ユーザーがフラグ名をミスタイプしたとき (例: `--paht` → `--path`) に
+            // そのコマンドで受理される最も近いフラグを提案する。サブコマンドの did-you-mean と
+            // 同じ suggester を共用し、回復体験を統一する (#1582)。
+            // TrySplitInlineOptionValue は prefix が既知の value-taking option のときだけ
+            // inline `=value` を分解するため、`--paht=foo` のように未知のオプションでは
+            // `=value` が残る。matcher のために `=` 以降を除去してから候補を探す。
+            var nameForSuggestion = normalizedArg;
+            var eq = nameForSuggestion.IndexOf('=');
+            if (eq > 0)
+                nameForSuggestion = nameForSuggestion[..eq];
+            var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, supported.Where(o => o != "--"));
+            if (suggestion != null)
+                Console.Error.WriteLine($"Did you mean: {suggestion}?");
             Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
             Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
             return true;
@@ -3644,6 +3841,85 @@ public static class QueryCommandRunner
            && !signal.HasMissingTable
            && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
 
+    private static int WriteStatusReadinessExplanation(string fieldName)
+    {
+        var field = FindStatusReadinessField(fieldName);
+        if (field == null)
+        {
+            Console.Error.WriteLine($"Error: unknown status readiness field `{fieldName}`.");
+            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            return CommandExitCodes.UsageError;
+        }
+
+        Console.WriteLine($"{field.Label} ({field.FieldName})");
+        Console.WriteLine();
+        Console.WriteLine($"Ready: {field.ReadyText}");
+        Console.WriteLine($"Degraded: {field.DegradedText}");
+        Console.WriteLine($"Remediation: {field.Remediation}");
+        return CommandExitCodes.Success;
+    }
+
+    private static StatusReadinessField? FindStatusReadinessField(string fieldName)
+        => StatusReadinessFields.FirstOrDefault(
+            field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
+
+    private static void WriteStatusReadinessSummary(StatusResult status, QueryCommandOptions options)
+    {
+        Console.WriteLine("Readiness:");
+        foreach (var field in StatusReadinessFields)
+        {
+            var degraded = IsStatusReadinessFieldDegraded(status, field.FieldName);
+            var state = degraded ? "degraded" : "ready";
+            Console.WriteLine($"  {field.Label,-32} {state}");
+
+            if (degraded)
+            {
+                Console.WriteLine($"    {BuildStatusReadinessDegradedDetail(status, options, field.FieldName, field.DegradedText)}");
+                Console.WriteLine($"    {BuildStatusReadinessRemediation(status, options, field.FieldName, field.Remediation)}");
+            }
+        }
+    }
+
+    private static bool IsStatusReadinessFieldDegraded(StatusResult status, string fieldName)
+        => fieldName switch
+        {
+            "graph_table_available" => !status.GraphTableAvailable,
+            "issues_table_available" => !status.IssuesTableAvailable,
+            "sql_graph_contract_ready" => !status.SqlGraphContractReady,
+            "hotspot_family_ready" => !status.HotspotFamilyReady,
+            "csharp_symbol_name_ready" => !status.CSharpSymbolNameReady,
+            "csharp_metadata_target_ready" => !status.CSharpMetadataTargetReady,
+            "fold_ready" => !status.FoldReady,
+            "index_newer_than_reader" => status.IndexNewerThanReader,
+            _ => false,
+        };
+
+    private static string BuildStatusReadinessDegradedDetail(StatusResult status, QueryCommandOptions options, string fieldName, string fallback)
+        => fieldName switch
+        {
+            "sql_graph_contract_ready" => status.SqlGraphContractDegradedReason ?? fallback,
+            "hotspot_family_ready" => status.HotspotFamilyDegradedReason ?? fallback,
+            "fold_ready" => BuildFoldNotReadyExplanation(status.FoldReadyReason),
+            "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
+            "graph_table_available" => "reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
+            "issues_table_available" => "validate output is degraded to empty because the file_issues table is missing.",
+            "csharp_symbol_name_ready" => "C# exact-name for operators / conversion operators / indexers is degraded.",
+            "csharp_metadata_target_ready" => "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic.",
+            _ => fallback,
+        };
+
+    private static string BuildStatusReadinessRemediation(StatusResult status, QueryCommandOptions options, string fieldName, string fallback)
+        => fieldName switch
+        {
+            "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
+            "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
+            "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
+            "csharp_metadata_target_ready" => "Run `cdidx index .` to re-stamp authoritative is_metadata_target values.",
+            "index_newer_than_reader" => "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use.",
+            _ => fallback,
+        };
+
     private static bool IsStatusDegraded(StatusResult status)
         => !status.GraphTableAvailable
            || !status.IssuesTableAvailable
@@ -3653,6 +3929,69 @@ public static class QueryCommandRunner
            || !status.CSharpMetadataTargetReady
            || !status.FoldReady
            || status.IndexNewerThanReader;
+
+    private sealed record StatusCheckFailure(string Name, bool IsStale, string Diagnostic);
+
+    private static IReadOnlyList<StatusCheckFailure> BuildStatusCheckFailures(StatusResult status, IReadOnlySet<string>? scopedChecks)
+    {
+        var failures = new List<StatusCheckFailure>();
+        var checkAll = scopedChecks is not { Count: > 0 };
+        bool Includes(string scope) => checkAll || scopedChecks!.Contains(scope);
+
+        if (Includes("workspace"))
+        {
+            if (status.WorkspaceCheck?.Checked != true)
+            {
+                failures.Add(new StatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
+            }
+            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            {
+                var check = status.WorkspaceCheck;
+                failures.Add(new StatusCheckFailure(
+                    "workspace_stale",
+                    true,
+                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+            }
+        }
+
+        if (Includes("graph") && !status.GraphTableAvailable)
+            failures.Add(new StatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
+        if (Includes("issues") && !status.IssuesTableAvailable)
+            failures.Add(new StatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
+        if (Includes("sql") && !status.SqlGraphContractReady)
+            failures.Add(new StatusCheckFailure("sql_graph_contract_ready", false, $"[degraded] sql_graph_contract_ready=false reason={status.SqlGraphContractDegradedReason ?? "unknown"}"));
+        if (Includes("hotspot") && !status.HotspotFamilyReady)
+            failures.Add(new StatusCheckFailure("hotspot_family_ready", false, $"[degraded] hotspot_family_ready=false reason={status.HotspotFamilyDegradedReason ?? "unknown"}"));
+        if (Includes("csharp") && !status.CSharpSymbolNameReady)
+            failures.Add(new StatusCheckFailure("csharp_symbol_name_ready", false, "[degraded] csharp_symbol_name_ready=false"));
+        if (Includes("csharp") && !status.CSharpMetadataTargetReady)
+            failures.Add(new StatusCheckFailure("csharp_metadata_target_ready", false, "[degraded] csharp_metadata_target_ready=false"));
+        if (Includes("fold") && !status.FoldReady)
+            failures.Add(new StatusCheckFailure("fold_ready", false, $"[degraded] fold_ready=false reason={status.FoldReadyReason ?? "unknown"}"));
+        if (Includes("newer") && status.IndexNewerThanReader)
+            failures.Add(new StatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
+
+        return failures;
+    }
+
+    private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
+    {
+        foreach (var failure in failures)
+            Console.Error.WriteLine(failure.Diagnostic);
+    }
+
+    private static int GetStatusCheckExitCode(IReadOnlyList<StatusCheckFailure> failures)
+    {
+        var stale = failures.Any(f => f.IsStale);
+        var degraded = failures.Any(f => !f.IsStale);
+        return (stale, degraded) switch
+        {
+            (false, false) => CommandExitCodes.Success,
+            (true, false) => 1,
+            (false, true) => 2,
+            _ => 3,
+        };
+    }
 
     private static bool IsFoldOnlyReadinessDegraded(StatusResult status)
         => !status.FoldReady
@@ -3831,8 +4170,33 @@ public static class QueryCommandRunner
     {
         if (lang == null) return;
         var status = reader.GetStatus();
-        if (status.Languages.Count > 0 && !status.Languages.ContainsKey(lang))
+        if (status.Languages.Count > 0 && status.Languages.ContainsKey(lang))
+            return;
+
+        if (status.Languages.Count > 0)
             Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
+
+        // Recover from `--lang pythno` / `--lang csarp` typos by suggesting the
+        // closest indexed language first; if the typo does not match anything currently
+        // in the DB (or the DB has no languages yet) fall back to the full supported set
+        // exposed by `ReferenceExtractor.GetSupportedLanguages()` so the suggester is still
+        // useful against an empty/fresh index (#1582).
+        // `--lang pythno` / `--lang csarp` のようなタイプミスから回復させるため、
+        // インデックスに存在する言語の中から最も近いものを優先的に提案する。
+        // インデックスに無い、もしくは languages が空の場合は
+        // `ReferenceExtractor.GetSupportedLanguages()` 全体から候補を探し、
+        // 空のインデックスでも did-you-mean が機能するようにする (#1582)。
+        // Skip the suggestion entirely if the closest candidate is the exact value the user
+        // already supplied (case-insensitive). FindClosestMatch returns the input verbatim when
+        // it is a member of the candidate set — e.g. `--lang java` against a Java-supported but
+        // unindexed repo would otherwise self-suggest "Did you mean: --lang java?".
+        // 提案候補がユーザー指定値そのものと一致する場合は提案を出さない。
+        // FindClosestMatch は候補集合に同名がいれば入力をそのまま返すため、例えば Java は
+        // サポート対象だが index 済みでない場合の `--lang java` で自己提案を出してしまう。
+        var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
+                         ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
+        if (suggestion != null && !string.Equals(suggestion, lang, StringComparison.OrdinalIgnoreCase))
+            Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
     }
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
@@ -3860,6 +4224,9 @@ public static class QueryCommandRunner
         if (!AllValidKinds.Contains(kind))
         {
             Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", AllValidKinds)}");
+            var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidKinds);
+            if (suggestion != null)
+                Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
             return;
         }
         // Kind is valid but not found in this index — hint that no symbols of this kind exist
@@ -3867,6 +4234,25 @@ public static class QueryCommandRunner
         var existingKinds = reader.GetDistinctKinds();
         if (!existingKinds.Contains(kind))
             Console.Error.WriteLine($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
+    }
+
+    private static void WriteValidateKindHint(string? kind)
+    {
+        if (string.IsNullOrEmpty(kind)) return;
+        if (AllValidValidateKinds.Contains(kind, StringComparer.Ordinal))
+            return;
+
+        // `validate --kind` accepts only the file-issue kinds emitted by FileIndexer. A typo
+        // like `--kind replacement_chra` filters to zero rows, which previously printed the
+        // same "No encoding issues found." message as a genuinely clean repo and silently
+        // hid the typo. Surface a hint + suggester for the closest known kind (#1582).
+        // `validate --kind` は FileIndexer が出す file_issues kind のみ受理する。
+        // `--kind replacement_chra` のようなタイプミスは 0 行となり、クリーンな状態と区別が
+        // つかないまま暗黙に握り潰されていた。ヒントと did-you-mean を出すよう改修 (#1582)。
+        Console.Error.WriteLine($"Hint: '{kind}' is not a known validate kind. Available: {string.Join(", ", AllValidValidateKinds)}");
+        var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidValidateKinds);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
     }
 
     private static void WriteGraphReferenceKindHint(string command, string? kind, bool json)
@@ -3889,6 +4275,9 @@ public static class QueryCommandRunner
         }
 
         Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
+        var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
     }
 
     // Reference kinds that are valid `references --kind` values but NOT valid
@@ -4556,7 +4945,9 @@ public sealed class QueryCommandOptions
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
+    public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
+    public string? StatusExplainField { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }
