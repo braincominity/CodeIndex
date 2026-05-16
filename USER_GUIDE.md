@@ -1053,7 +1053,7 @@ Once configured, the AI can directly call these tools:
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxDepth`: `maxDepth: N` returns callers at depth 1..N — a chain A→B→C→D queried against D with `maxDepth: 2` yields C at depth 1 and B at depth 2); use `maxDepth: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact symbols; unique names use codebase-wide counts, duplicate-name families fall back conservatively |
-| `batch_query` | Execute multiple queries in a single call (MCP only, max 10) |
+| `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response now includes a top-level `metadata` object with `total_elapsed_ms`, `success_count`, and `failure_count`, and every entry in `results` carries `elapsed_ms` plus a compact `args_summary` so callers can spot partial failures and slow inner queries without re-issuing them. |
 | `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
@@ -2131,7 +2131,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxDepth` は inclusive で、`maxDepth: N` 指定時は depth 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxDepth: 2` 検索すると C(depth=1) と B(depth=2) が返る）。`maxDepth: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きいシンボルを検索。一意名は codebase 全体件数、同名ファミリーは保守的に縮退 |
-| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件） |
+| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `elapsed_ms` / `args_summary` が含まれ、部分失敗や遅い内部クエリを再実行せず把握できます。 |
 | `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |

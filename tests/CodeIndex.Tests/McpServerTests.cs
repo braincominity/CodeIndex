@@ -3831,6 +3831,72 @@ public class McpServerTests : IDisposable
         Assert.Contains("not allowed", results[0]!["error"]!.GetValue<string>());
     }
 
+    // Regression pins for issue #1537: batch_query must surface envelope metadata
+    // (total_elapsed_ms / success_count / failure_count) and per-slot elapsed_ms so
+    // callers can detect partial failure and slow inner queries without re-issuing.
+    // #1537 回帰テスト: batch_query は envelope メタデータ（total_elapsed_ms /
+    // success_count / failure_count）とスロット毎の elapsed_ms を返し、部分失敗や
+    // 遅いクエリを再実行せず検出できるようにする。
+    [Fact]
+    public void ToolsCall_BatchQuery_ReturnsEnvelopeMetadata_Issue1537()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"status"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var metadata = structured["metadata"]!;
+        Assert.Equal(2, metadata["success_count"]!.GetValue<int>());
+        Assert.Equal(0, metadata["failure_count"]!.GetValue<int>());
+        Assert.True(metadata["total_elapsed_ms"]!.GetValue<long>() >= 0);
+
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(2, results.Count);
+        foreach (var slot in results)
+        {
+            Assert.True(slot!["elapsed_ms"]!.GetValue<long>() >= 0);
+            Assert.NotNull(slot["args_summary"]);
+        }
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("all succeeded", text);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_CountsFailuresInEnvelope_Issue1537()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"index","arguments":{"path":"."}},{"tool":"bogus_tool"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var metadata = structured["metadata"]!;
+        Assert.Equal(1, metadata["success_count"]!.GetValue<int>());
+        Assert.Equal(2, metadata["failure_count"]!.GetValue<int>());
+
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(3, results.Count);
+        Assert.NotNull(results[0]!["elapsed_ms"]);
+        Assert.NotNull(results[1]!["elapsed_ms"]);
+        Assert.NotNull(results[2]!["elapsed_ms"]);
+        Assert.Contains("not allowed", results[1]!["error"]!.GetValue<string>());
+        Assert.Contains("Unknown tool", results[2]!["error"]!.GetValue<string>());
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("1 succeeded, 2 failed", text);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ArgsSummaryReflectsRequestedArguments_Issue1537()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"symbols","arguments":{"query":"App","lang":"csharp"}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var slot = response["result"]!["structuredContent"]!["results"]!.AsArray()[0]!;
+        var summary = slot["args_summary"]!.GetValue<string>();
+        Assert.Contains("query=", summary);
+        Assert.Contains("App", summary);
+        Assert.Contains("lang=", summary);
+    }
+
     [Fact]
     public void ToolsCall_Languages_ReturnsCapabilities()
     {
