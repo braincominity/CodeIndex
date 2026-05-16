@@ -95,8 +95,10 @@ public class ConsoleUiTests
 
         Assert.Contains("Update workflows:", output);
         Assert.Contains("Use --commits with a project path after normal commits", output);
+        Assert.Contains("Use --changed-between <old-ref> <new-ref> after switching branches", output);
         Assert.Contains("Use --files only for known in-place edits or new files", output);
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
+        Assert.Contains("cdidx index ./myproject --changed-between main feature", output);
     }
 
     [Fact]

@@ -74,6 +74,7 @@ public class McpServerTests : IDisposable
             Signature = "public void Run() { }",
             ContainerKind = "class",
             ContainerName = "App",
+            ContainerQualifiedName = "App",
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
@@ -4769,6 +4770,10 @@ public class McpServerTests : IDisposable
         Assert.NotNull(result["structuredContent"]);
         var structured = result["structuredContent"]!;
         Assert.Equal("src/app.cs", structured["path"]!.GetValue<string>());
+        var symbols = structured["symbols"]!.AsArray();
+        var run = symbols.Single(symbol => symbol!["name"]!.GetValue<string>() == "Run")!;
+        Assert.Equal("Run()", run["displayName"]!.GetValue<string>());
+        Assert.Equal("App.Run", run["path"]!.GetValue<string>());
     }
 
     [Fact]

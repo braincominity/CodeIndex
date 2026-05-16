@@ -4107,6 +4107,42 @@ jobs:
     }
 
     [Fact]
+    public void RunOutline_HumanDisplaysCompactOverloadSignatures()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_overload_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/worker.cs",
+                "csharp",
+                """
+                using System.Threading;
+
+                public class Worker
+                {
+                    public void Process(string input) { }
+                    public void Process(int count, CancellationToken cancellationToken = default) { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/worker.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Process(string)", stdout);
+            Assert.Contains("Process(int, CancellationToken)", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Human_CSharpTopLevelStatementsFile_WritesHelpfulNote()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_human");

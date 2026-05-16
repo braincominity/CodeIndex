@@ -1600,15 +1600,23 @@ public static class QueryCommandRunner
 
                 Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
                 Console.WriteLine();
+                var duplicateNames = outline.Symbols
+                    .GroupBy(sym => sym.Name, StringComparer.Ordinal)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)
+                    .ToHashSet(StringComparer.Ordinal);
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
                     var indent = sym.Depth > 0 ? new string(' ', 4 * sym.Depth) : "";
-                    var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
-                    var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
+                    var useDisplayName = sym.Kind is "function" or "method" or "constructor"
+                        && duplicateNames.Contains(sym.Name)
+                        && !string.IsNullOrWhiteSpace(sym.DisplayName);
+                    var ret = !useDisplayName && sym.ReturnType != null ? $": {sym.ReturnType} " : "";
+                    var sig = useDisplayName ? sym.DisplayName : sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
                     // シグネチャに既に visibility が含まれている場合は重複を避ける
-                    var vis = sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
+                    var vis = !useDisplayName && sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
                         ? $"{sym.Visibility} "
                         : "";
                     Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
