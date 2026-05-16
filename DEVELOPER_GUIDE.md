@@ -65,6 +65,10 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### Status freshness age threshold
+
+`status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
+
 ## Database schema
 
 ### Tables
@@ -1463,6 +1467,10 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ```
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+
+### status freshness age threshold
+
+`status --check` の DB/worktree checksum 比較は `IndexFreshnessChecker` に置き、ユーザー向け age hint のしきい値は `QueryCommandRunner` で解決する。優先順位は CLI の `--stale-after <duration>`、`CDIDX_STALE_AFTER`、`.cdidxrc.json` の `stale_after`、24 時間の既定値。duration suffix は `m` / `h` / `d` をサポートする。JSON 出力では `--check` 時のみ `stale_after_seconds` と `index_age_seconds` を返し、クライアントが text を解析せずに適用しきい値を確認できるようにする。
 
 ## データベーススキーマ
 

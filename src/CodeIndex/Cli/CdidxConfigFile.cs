@@ -31,6 +31,7 @@ internal static class CdidxConfigFile
         "metrics_path",
         "disable_persistent_log",
         "global_tool_log_dir",
+        "stale_after",
         "mcp",
     };
 
@@ -127,6 +128,13 @@ internal static class CdidxConfigFile
                 if (!TryReadString(logDir, "global_tool_log_dir", path, out var value, out var err))
                     return new LoadResult(Path: path, Error: err);
                 pending.Add(("CDIDX_GLOBAL_TOOL_LOG_DIR", value!));
+            }
+
+            if (root.TryGetProperty("stale_after", out var staleAfter))
+            {
+                if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
+                    return new LoadResult(Path: path, Error: err);
+                pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
             }
 
             if (root.TryGetProperty("mcp", out var mcp))

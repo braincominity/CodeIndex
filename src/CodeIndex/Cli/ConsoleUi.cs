@@ -65,7 +65,7 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
-        ("status", "cdidx status [--db <path>] [--json] [--check]"),
+        ("status", "cdidx status [--db <path>] [--json] [--check] [--stale-after <duration>]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
@@ -777,7 +777,7 @@ public static class ConsoleUi
 
     private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
         flagName is "--max-line-width" or "--snippet-lines" or "--fts" or "--no-dedup"
-            or "--prefix" or "--exact-substring" or "--integrity-check" or "--check"
+            or "--prefix" or "--exact-substring" or "--integrity-check" or "--check" or "--stale-after"
             or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
             or "--before" or "--after" or "--group-by-name";
 
