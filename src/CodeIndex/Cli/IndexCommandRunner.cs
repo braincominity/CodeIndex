@@ -1998,7 +1998,6 @@ public static class IndexCommandRunner
                     FilesScanned = files.Count,
                     FilesSkipped = skipped,
                     FilesPurged = purged,
-                    UnknownExtensionFileCount = scanResult.UnknownExtensionFiles.Count,
                     Warnings = warnings,
                     Errors = errors,
                 },

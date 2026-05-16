@@ -97,8 +97,6 @@ internal sealed class IndexFullScanSummaryJsonResult
     public int FilesScanned { get; init; }
     public int FilesSkipped { get; init; }
     public int FilesPurged { get; init; }
-    [JsonPropertyName("unknown_extension_file_count")]
-    public int UnknownExtensionFileCount { get; init; }
     public int Warnings { get; init; }
     public int Errors { get; init; }
 }
