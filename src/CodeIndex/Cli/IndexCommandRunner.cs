@@ -38,7 +38,7 @@ public static class IndexCommandRunner
         var initialCwd = TryCaptureCurrentDirectory();
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
         var stopwatch = Stopwatch.StartNew();
-        var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
+        var isUpdateMode = options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
 
         if (!Directory.Exists(options.ProjectPath))
@@ -61,20 +61,20 @@ public static class IndexCommandRunner
         if (options.Watch)
         {
             // --watch is the only mode that holds the process open after the initial scan, so
-            // combining it with --commits, --files, or --dry-run produces ambiguous semantics:
+            // combining it with --commits, --changed-between, --files, or --dry-run produces ambiguous semantics:
             // those flags describe a one-shot snapshot. Reject the combination up front with
             // an actionable hint instead of silently picking one behavior.
-            // --watch のみが初回スキャン後も常駐するため、ワンショット用の --commits / --files /
+            // --watch のみが初回スキャン後も常駐するため、ワンショット用の --commits / --changed-between / --files /
             // --dry-run と併用すると挙動が曖昧になる。ヒント付きで早期に拒否する。
-            if (options.Commits.Count > 0 || options.UpdateFiles.Count > 0 || options.DryRun)
+            if (options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0 || options.DryRun)
             {
                 const string watchConflictSynopsis =
                     "`cdidx index <projectPath> --watch [--debounce <ms>]` "
-                    + "(omit --commits / --files / --dry-run; the initial scan plus continuous watch handles incremental refresh)";
+                    + "(omit --commits / --changed-between / --files / --dry-run; the initial scan plus continuous watch handles incremental refresh)";
                 return WriteCommandError(
                     options.Json,
                     jsonOptions,
-                    "--watch cannot be combined with --commits, --files, or --dry-run (watch already drives continuous incremental updates)",
+                    "--watch cannot be combined with --commits, --changed-between, --files, or --dry-run (watch already drives continuous incremental updates)",
                     CommandExitCodes.UsageError,
                     "Use " + watchConflictSynopsis + ".",
                     CommandErrorCodes.UsageError);
@@ -88,20 +88,32 @@ public static class IndexCommandRunner
             const string rebuildConflictSynopsis =
                 "`cdidx index <projectPath> --rebuild`, "
                 + "`cdidx index <projectPath> --commits <id> [id ...]`, "
+                + "`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`, "
                 + "or `cdidx index <projectPath> --files <path> [path ...]`";
             if (options.Json)
                 Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
                     "error",
-                    "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
+                    "--rebuild cannot be used with --commits, --changed-between, or --files (rebuild requires a full rescan)",
                     "Use one of: " + rebuildConflictSynopsis + ".",
                     CommandErrorCodes.UsageError),
                     jsonContext.CommandErrorJsonResult));
             else
             {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: --rebuild cannot be used with --commits, --changed-between, or --files (rebuild requires a full rescan)");
                 Console.Error.WriteLine("Hint: use one of: " + rebuildConflictSynopsis + ".");
             }
             return CommandExitCodes.UsageError;
+        }
+
+        if (options.ChangedBetweenSpecified && options.ChangedBetweenRefs.Count != 2)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "--changed-between requires exactly two refs",
+                CommandExitCodes.UsageError,
+                "Rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
+                CommandErrorCodes.UsageError);
         }
 
         if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(dbPath))
@@ -172,9 +184,10 @@ public static class IndexCommandRunner
                         .ToList();
                 }
             }
-            else if (options.Commits.Count > 0)
+            else if (options.Commits.Count > 0 || options.ChangedBetweenSpecified)
             {
-                // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
+                // Git update modes: files changed in commits or between refs.
+                // Git更新モード: コミットまたはref間の変更ファイル。
                 var changedFiles = new HashSet<string>(StringComparer.Ordinal);
                 var relevantIgnoreFileChanged = false;
                 var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
@@ -185,6 +198,18 @@ public static class IndexCommandRunner
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
                         var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
                         relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                        foreach (var path in normalized)
+                            changedFiles.Add(path);
+                    }
+                    catch { /* ignore git errors in dry-run */ }
+                }
+                if (options.ChangedBetweenRefs.Count == 2)
+                {
+                    try
+                    {
+                        var changed = GitHelper.GetChangedFilesBetweenRefs(options.ProjectPath, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
+                        var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var rangeTouchedRelevantIgnoreFile);
+                        relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
                         foreach (var path in normalized)
                             changedFiles.Add(path);
                     }
@@ -462,8 +487,8 @@ public static class IndexCommandRunner
             else
             {
                 Console.WriteLine("Backfilling folded-name columns ...");
-                Console.WriteLine($"  symbols:            {symbols:N0} row(s) rewritten");
-                Console.WriteLine($"  symbol_references:  {symbolReferences:N0} row(s) rewritten");
+                Console.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} rewritten");
+                Console.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} rewritten");
                 if (rewriteAll)
                     Console.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
                 Console.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
@@ -544,6 +569,8 @@ public static class IndexCommandRunner
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
         var commits = new List<string>();
+        var changedBetweenRefs = new List<string>();
+        var changedBetweenSpecified = false;
         var updateFiles = new List<string>();
 
         for (int i = 0; i < args.Length; i++)
@@ -598,6 +625,13 @@ public static class IndexCommandRunner
                     if (commits.Count == 0)
                         Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                     break;
+                case "--changed-between":
+                    changedBetweenSpecified = true;
+                    while (i + 1 < args.Length && !args[i + 1].StartsWith('-') && changedBetweenRefs.Count < 2)
+                        changedBetweenRefs.Add(args[++i]);
+                    if (changedBetweenRefs.Count != 2)
+                        Console.Error.WriteLine("Warning: --changed-between requires exactly two refs / --changed-between は2つのrefが必要です");
+                    break;
                 case "--files":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                         updateFiles.Add(args[++i]);
@@ -651,6 +685,8 @@ public static class IndexCommandRunner
             Json = json,
             Quiet = quiet,
             Commits = commits,
+            ChangedBetweenSpecified = changedBetweenSpecified,
+            ChangedBetweenRefs = changedBetweenRefs,
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
             DryRun = dryRun,
@@ -836,9 +872,42 @@ public static class IndexCommandRunner
             }
             if (!options.Json && !options.Quiet)
             {
-                Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
+                Console.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
                 Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
             }
+        }
+
+        if (options.ChangedBetweenSpecified)
+        {
+            CancellationTokenSource? spinnerCts = null;
+            try
+            {
+                if (!options.Json)
+                    spinnerCts = ConsoleUi.StartSpinner("Resolving changed files between refs...", spinnerFrames);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
+                var changedFiles = GitHelper.GetChangedFilesBetweenRefs(projectRoot, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
+                var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
+                relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
+                foreach (var f in normalized)
+                    targetPaths.Add(f);
+            }
+            catch (Exception ex)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"failed to resolve changed files between git refs: {ex.Message}",
+                    CommandExitCodes.UsageError,
+                    "Check the refs and rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
+                    CommandErrorCodes.UsageError);
+            }
+            finally
+            {
+                ConsoleUi.StopSpinner(spinnerCts);
+            }
+
+            if (!options.Json)
+                Console.WriteLine($"  Found {targetPaths.Count} changed file(s) between git refs");
         }
 
         if (options.UpdateFiles.Count > 0)
@@ -880,7 +949,7 @@ public static class IndexCommandRunner
         }
 
         if (!options.Json && !options.Quiet)
-            Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
+            Console.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         CancellationTokenSource? updateCts = null;
           var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
@@ -1852,7 +1921,7 @@ public static class IndexCommandRunner
             .ToList();
         if (!options.Json && !options.Quiet)
         {
-            Console.WriteLine($"  Found {files.Count:N0} files");
+            Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
             foreach (var error in scanResult.Errors)
                 ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
             Console.WriteLine();
@@ -2515,6 +2584,8 @@ public sealed class IndexCommandOptions
     public bool Json { get; init; }
     public bool Quiet { get; init; }
     public List<string> Commits { get; init; } = [];
+    public bool ChangedBetweenSpecified { get; init; }
+    public List<string> ChangedBetweenRefs { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }

@@ -89,6 +89,68 @@ public static class GitHelper
     }
 
     /// <summary>
+    /// Get changed files between two git refs, including both sides of renames.
+    /// 2つのgit ref間の変更ファイルを取得する。rename は旧パスと新パスの両方を含める。
+    /// </summary>
+    public static List<string> GetChangedFilesBetweenRefs(string projectRoot, string oldRef, string newRef)
+    {
+        ValidateGitRef(oldRef, nameof(oldRef));
+        ValidateGitRef(newRef, nameof(newRef));
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = projectRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("diff");
+        psi.ArgumentList.Add("--name-status");
+        psi.ArgumentList.Add("-M");
+        psi.ArgumentList.Add(oldRef);
+        psi.ArgumentList.Add(newRef);
+        psi.ArgumentList.Add("--");
+
+        var (exitCode, output, error) = RunProcessCapturingOutput(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+
+        if (exitCode != 0)
+            throw new InvalidOperationException($"git diff failed between {oldRef} and {newRef}: {error.Trim()}");
+
+        var paths = new List<string>();
+        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                continue;
+
+            var status = parts[0];
+            if ((status.StartsWith('R') || status.StartsWith('C')) && parts.Length >= 3)
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[2]));
+            }
+            else if (parts.Length >= 2)
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
+            }
+        }
+
+        return paths;
+    }
+
+    private static void ValidateGitRef(string value, string parameterName)
+    {
+        // Reject values starting with "-" to prevent git option injection even though
+        // callers also add "--" after the refs.
+        if (string.IsNullOrWhiteSpace(value) || value.StartsWith('-') || !Regex.IsMatch(value, @"^[a-zA-Z0-9_./^~:@{}-]+$"))
+            throw new ArgumentException($"Invalid git ref: {value}", parameterName);
+    }
+
+    /// <summary>
     /// Try to resolve the current HEAD commit for the repository that contains the project root.
     /// projectRoot を含むリポジトリの現在の HEAD コミットを安全に取得する。
     /// </summary>

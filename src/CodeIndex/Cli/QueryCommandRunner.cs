@@ -1603,15 +1603,23 @@ public static class QueryCommandRunner
 
                 Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
                 Console.WriteLine();
+                var duplicateNames = outline.Symbols
+                    .GroupBy(sym => sym.Name, StringComparer.Ordinal)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)
+                    .ToHashSet(StringComparer.Ordinal);
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
                     var indent = sym.Depth > 0 ? new string(' ', 4 * sym.Depth) : "";
-                    var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
-                    var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
+                    var useDisplayName = sym.Kind is "function" or "method" or "constructor"
+                        && duplicateNames.Contains(sym.Name)
+                        && !string.IsNullOrWhiteSpace(sym.DisplayName);
+                    var ret = !useDisplayName && sym.ReturnType != null ? $": {sym.ReturnType} " : "";
+                    var sig = useDisplayName ? sym.DisplayName : sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
                     // シグネチャに既に visibility が含まれている場合は重複を避ける
-                    var vis = sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
+                    var vis = !useDisplayName && sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
                         ? $"{sym.Visibility} "
                         : "";
                     Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
@@ -1859,7 +1867,7 @@ public static class QueryCommandRunner
                 if (status.IndexedHeadTimestamp != null)
                     Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
                 if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
-                    Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
+                    Console.WriteLine($"Idx Drift: workspace is {ConsoleUi.Counted(ahead, "commit")} ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
                 {
                     WriteStatusAge(status, staleAfter.Value);
@@ -3922,7 +3930,7 @@ public static class QueryCommandRunner
         if (options.ExtraNames.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: unexpected extra positional argument(s) for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
+        Console.Error.WriteLine($"Error: unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
         Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
@@ -3938,7 +3946,7 @@ public static class QueryCommandRunner
             return false;
 
         Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
-        Console.Error.WriteLine("Hint: remove the extra positional argument(s) and use the documented flags only.");
+        Console.Error.WriteLine("Hint: remove the extra positional arguments and use the documented flags only.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
     }
@@ -4820,7 +4828,7 @@ public static class QueryCommandRunner
             var extra = analysis.DefinitionFileCount > pathPreview.Count
                 ? $" (+{analysis.DefinitionFileCount - pathPreview.Count} more)"
                 : string.Empty;
-            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {analysis.DefinitionCount} definition(s) across {analysis.DefinitionFileCount} file(s): {string.Join(", ", pathPreview)}{extra}");
+            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {ConsoleUi.Counted(analysis.DefinitionCount, "definition")} across {ConsoleUi.Counted(analysis.DefinitionFileCount, "file")}: {string.Join(", ", pathPreview)}{extra}");
         }
         else if (analysis.ZeroResultReason == "no_matching_definition")
         {

@@ -292,15 +292,15 @@ public partial class McpServer
         return arr;
     }
 
-    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported, string? graphSupportReason = null)
+    private static string BuildGraphSummary(string singular, string plural, int count, string? lang, bool? graphSupported, string? graphSupportReason = null)
     {
         if (count > 0)
-            return $"Found {count} {label}.";
+            return $"Found {ConsoleUi.Counted(count, singular, plural)}.";
 
         if (graphSupported == false && lang != null)
-            return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
+            return $"No {plural} found. Call-graph queries are not indexed for '{lang}'.";
 
-        return $"No {label} found.";
+        return $"No {plural} found.";
     }
 
     private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason)
@@ -495,7 +495,7 @@ public partial class McpServer
             };
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
-            return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
+            return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "symbol"), structured);
         });
     }
 
@@ -552,7 +552,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
+                ConsoleUi.FoundSummary(results.Count, "definition"),
                 payload);
         });
     }
@@ -617,7 +617,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
+                BuildGraphSummary("reference", "references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -681,7 +681,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
+                BuildGraphSummary("caller", "callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -745,7 +745,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
+                BuildGraphSummary("callee", "callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -797,7 +797,7 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            return CreateToolResult(id, $"Found {results.Count} file(s).", structured);
+            return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "file"), structured);
         });
     }
 
@@ -880,7 +880,10 @@ public partial class McpServer
     private static string BuildAnalyzeSymbolSummary(SymbolAnalysisResult analysis)
     {
         if (analysis.ExactZeroHint != null)
-            return $"Symbol analysis returned. Substring would return {analysis.ExactZeroHint.RelaxedCount} similarly named symbol(s).";
+        {
+            var relaxedCount = analysis.ExactZeroHint.RelaxedCount ?? analysis.ExactZeroHint.SampleNames.Count;
+            return $"Symbol analysis returned. Substring would return {ConsoleUi.Counted(relaxedCount, "similarly named symbol")}.";
+        }
 
         return "Symbol analysis returned.";
     }
@@ -1049,7 +1052,7 @@ public partial class McpServer
             }
 
             var structured = JsonSerializer.SerializeToNode(outline, _jsonOptions)!.AsObject();
-            return CreateToolResult(id, $"Outline: {outline.SymbolCount} symbol(s) in {outline.TotalLines} lines.", structured);
+            return CreateToolResult(id, $"Outline: {ConsoleUi.Counted(outline.SymbolCount, "symbol")} in {ConsoleUi.Counted(outline.TotalLines, "line")}.", structured);
         });
     }
 
@@ -1202,7 +1205,7 @@ public partial class McpServer
             }
 
             var fileCount = structured["fileCount"]!.GetValue<int>();
-            return CreateToolResult(id, $"Found {results.Count} in-file match(es) across {fileCount} file(s).", structured);
+            return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
     }
 
@@ -1536,7 +1539,7 @@ public partial class McpServer
             };
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
-                ? $"Found {results.Count} dependency edge(s)."
+                ? $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
@@ -1631,9 +1634,9 @@ public partial class McpServer
 
             var summary = analysis.ImpactMode switch
             {
-                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only."
+                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {ConsoleUi.Counted(hintCount, "possible file-level dependent")} across {ConsoleUi.Counted(hintFileCount, "file")}. These hints are heuristic only."
                     + truncatedTail,
-                _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
+                _ when count > 0 => $"Found {ConsoleUi.Counted(count, "transitive caller")} across {ConsoleUi.Counted(fileCount, "file")} (depth {maxActualDepth})."
                     + truncatedTail,
                 _ => "No impact found.",
             };
@@ -1767,7 +1770,7 @@ public partial class McpServer
             AddHotspotFamilySignal(payload, hotspotSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = visibleCount > 0
-                ? $"Found {visibleCount} {groupBy} hotspot(s)."
+                ? $"Found {ConsoleUi.Counted(visibleCount, $"{groupBy} hotspot")}."
                 : "No symbol hotspots found.";
             if (!hotspotSignal.Ready)
             {
@@ -1821,7 +1824,7 @@ public partial class McpServer
             };
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
