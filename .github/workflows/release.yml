@@ -179,7 +179,19 @@ jobs:
       # よう、安定メジャーをピン留めする。
       - name: Install CycloneDX SBOM tool (linux-x64 only)
         if: matrix.rid == 'linux-x64'
-        run: dotnet tool install --global CycloneDX --version 6.2.0
+        # actions/setup-dotnet@v4 does not put $HOME/.dotnet/tools on PATH
+        # automatically, so we append it via $GITHUB_PATH for every subsequent
+        # step. Without this, the next step would fail with
+        # "dotnet-CycloneDX: command not found" on GitHub-hosted runners even
+        # though the tool is installed correctly under $HOME/.dotnet/tools.
+        # actions/setup-dotnet@v4 は $HOME/.dotnet/tools を自動では PATH に
+        # 加えないため、$GITHUB_PATH 経由で明示的に追加して後続 step から
+        # `dotnet-CycloneDX` を直接呼べるようにする。これを忘れると、ツール
+        # 自体は $HOME/.dotnet/tools に正しくインストールされていても、次の
+        # step が `command not found` で落ちる。
+        run: |
+          dotnet tool install --global CycloneDX --version 6.2.0
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Generate CycloneDX SBOM (linux-x64 only)
         if: matrix.rid == 'linux-x64'
