@@ -322,10 +322,11 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--rebuild", "--commits", "HEAD"]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--rebuild cannot be used with --commits or --files", stderr);
+            Assert.Contains("--rebuild cannot be used with --commits, --changed-between, or --files", stderr);
             Assert.Contains("Hint: use one of:", stderr);
             Assert.Contains("`cdidx index <projectPath> --rebuild`", stderr);
             Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", stderr);
+            Assert.Contains("`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`", stderr);
             Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", stderr);
         }
         finally
@@ -344,12 +345,13 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("--rebuild cannot be used with --commits or --files", json.GetProperty("message").GetString());
+            Assert.Contains("--rebuild cannot be used with --commits, --changed-between, or --files", json.GetProperty("message").GetString());
             var hint = json.GetProperty("hint").GetString();
             Assert.NotNull(hint);
             Assert.StartsWith("Use one of:", hint);
             Assert.Contains("`cdidx index <projectPath> --rebuild`", hint);
             Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", hint);
+            Assert.Contains("`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`", hint);
             Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", hint);
         }
         finally
@@ -367,7 +369,7 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--watch", "--commits", "HEAD"]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--watch cannot be combined with --commits, --files, or --dry-run", stderr);
+            Assert.Contains("--watch cannot be combined with --commits, --changed-between, --files, or --dry-run", stderr);
             Assert.Contains("`cdidx index <projectPath> --watch", stderr);
         }
         finally
@@ -385,7 +387,7 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--watch", "--files", "app.py"]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--watch cannot be combined with --commits, --files, or --dry-run", stderr);
+            Assert.Contains("--watch cannot be combined with --commits, --changed-between, --files, or --dry-run", stderr);
         }
         finally
         {
@@ -2902,6 +2904,125 @@ public class IndexCommandRunnerTests
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("src/OldName.cs", indexedPaths);
             Assert.Contains("src/NewName.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithChangedBetween_UpdatesNewPathAndRemovesRenamedOldPath()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var oldPath = Path.Combine(srcDir, "OldName.cs");
+            var newPath = Path.Combine(srcDir, "NewName.cs");
+
+            File.WriteAllText(oldPath, "public class SameName { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            RunGit(projectRoot, "branch", "before-switch");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Move(oldPath, newPath);
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "rename");
+            RunGit(projectRoot, "branch", "after-switch");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-switch", "after-switch", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/OldName.cs", indexedPaths);
+            Assert.Contains("src/NewName.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithChangedBetween_FallsBackToFullScanWhenIgnoreFilesChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            RunGit(projectRoot, "branch", "before-switch");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
+            RunGit(projectRoot, "add", ".gitignore");
+            RunGit(projectRoot, "commit", "-m", "ignore generated");
+            RunGit(projectRoot, "branch", "after-switch");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-switch", "after-switch", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+            Assert.Contains(".gitignore", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithChangedBetweenMissingRef_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--changed-between requires exactly two refs", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithChangedBetweenMissingRef_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "HEAD", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--changed-between requires exactly two refs", json.GetProperty("message").GetString());
         }
         finally
         {
