@@ -1948,7 +1948,8 @@ public partial class McpServer
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
-        var files = indexer.ScanFiles();
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files;
         int processed = 0, skipped = 0, errors = 0;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
@@ -2074,6 +2075,9 @@ public partial class McpServer
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            writer.SetMeta(
+                DbContext.UnknownExtensionFileCountMetaKey,
+                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
@@ -2130,6 +2134,7 @@ public partial class McpServer
                 ["scanned"] = files.Count,
                 ["skipped"] = skipped,
                 ["purged"] = purged,
+                ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
                 ["errors"] = errors
             },
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
