@@ -982,7 +982,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    var size = options.RawBytes ? $"{r.Size.ToString("N0", CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(r.Size);
+                    var size = options.RawBytes ? $"{r.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(r.Size);
                     Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {size,12}  {r.Path}");
                 }
                 Console.Error.WriteLine($"({results.Count} files)");
@@ -1420,7 +1420,7 @@ public static class QueryCommandRunner
                 WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                 WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
                 {
-                    var size = options.RawBytes ? $"{item.Size.ToString("N0", CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(item.Size);
+                    var size = options.RawBytes ? $"{item.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(item.Size);
                     return $"{item.Path}  [{item.Lines} lines, {size}]";
                 }));
                 WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));

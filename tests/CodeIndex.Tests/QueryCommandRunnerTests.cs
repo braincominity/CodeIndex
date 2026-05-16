@@ -31557,7 +31557,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, rawExit);
             Assert.Contains("5.0 GiB", formattedStdout);
             Assert.DoesNotContain("5368709120 bytes", formattedStdout);
-            Assert.Contains("5,368,709,120 bytes", rawStdout);
+            Assert.Contains("5368709120 bytes", rawStdout);
             Assert.Equal("(1 files)" + Environment.NewLine, formattedStderr);
             Assert.Equal("(1 files)" + Environment.NewLine, rawStderr);
         }
@@ -31617,7 +31617,7 @@ jobs:
             Assert.Contains("Largest files:", formattedStdout);
             Assert.Contains("src/big.cs", formattedStdout);
             Assert.Contains("5.0 GiB", formattedStdout);
-            Assert.Contains("5,368,709,120 bytes", rawStdout);
+            Assert.Contains("5368709120 bytes", rawStdout);
         }
         finally
         {
