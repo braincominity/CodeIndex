@@ -23,7 +23,9 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("hint")] string? Hint,
-    [property: JsonPropertyName("error_code")] string? ErrorCode = null);
+    [property: JsonPropertyName("error_code")] string? ErrorCode = null,
+    [property: JsonPropertyName("path")] string? Path = null,
+    [property: JsonPropertyName("category")] string? Category = null);
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,

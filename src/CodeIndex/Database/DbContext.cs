@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -87,7 +88,8 @@ public class DbContext : IDisposable
             using var connection = OpenSqliteConnectionWithRetry(
                 () => createConnection(openTarget),
                 openConnection,
-                sleep);
+                sleep,
+                dbPath: dbPath);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
@@ -159,7 +161,8 @@ public class DbContext : IDisposable
             _connection = OpenSqliteConnectionWithRetry(
                 () => new SqliteConnection(builder.ConnectionString),
                 static connection => connection.Open(),
-                static milliseconds => System.Threading.Thread.Sleep(milliseconds));
+                static milliseconds => System.Threading.Thread.Sleep(milliseconds),
+                dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctions(_connection);
 
@@ -207,9 +210,14 @@ public class DbContext : IDisposable
         Func<SqliteConnection> createConnection,
         Action<SqliteConnection> openConnection,
         Action<int>? sleep = null,
-        int maxOpenAttempts = 5)
+        int maxOpenAttempts = 5,
+        string? dbPath = null)
     {
+        if (maxOpenAttempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxOpenAttempts), maxOpenAttempts, "Must be at least 1.");
+
         SqliteConnection? connection = null;
+        SqliteException? lastBusyError = null;
         for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
         {
             connection?.Dispose();
@@ -219,9 +227,16 @@ public class DbContext : IDisposable
                 openConnection(connection);
                 return connection;
             }
-            catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxOpenAttempts)
+            catch (SqliteException ex) when (IsTransientBusyError(ex))
             {
-                sleep?.Invoke(50 * attempt);
+                // #1580: capture the busy error on every attempt — including the
+                // last — so the end-of-loop throw can wrap it in a structured
+                // CodeIndexException instead of leaking SqliteException to callers
+                // (which previously made the bottom `throw` unreachable).
+                // #1580: 末尾の throw を必ず通すために busy エラーを全試行で捕捉する。
+                lastBusyError = ex;
+                if (attempt < maxOpenAttempts)
+                    sleep?.Invoke(50 * attempt);
             }
             catch
             {
@@ -229,8 +244,19 @@ public class DbContext : IDisposable
                 throw;
             }
         }
+        connection?.Dispose();
 
-        throw new InvalidOperationException("Failed to open SQLite connection.");
+        // Issue #1580: surface the DB path and a recovery hint instead of a bare
+        // `InvalidOperationException("Failed to ...")` so the caller (CLI / MCP) can
+        // tell which database failed and which retry knob to suggest.
+        // #1580: 失敗した DB のパスとリカバリ手順を構造化して投げる。
+        throw new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection after retries.",
+            path: dbPath,
+            hint: "Another process holds a write lock on the database. If another cdidx index is running, wait for it to finish; otherwise check for other SQLite clients (e.g. backup tools, DB browsers) accessing the file, then retry.",
+            innerException: lastBusyError);
     }
 
     // Detect whether a SQLite URI explicitly requests read-only semantics. Only URIs that

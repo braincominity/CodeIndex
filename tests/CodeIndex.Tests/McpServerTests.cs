@@ -698,6 +698,67 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        // Issue #1580: CodeIndexException carries author-controlled Code / Category /
+        // Path / Hint values, so the MCP catch-all must surface them so clients can
+        // branch on Code without parsing free-form messages. The free-form `Message`
+        // text built by CodeIndexException itself (which already includes the path
+        // suffix) still must not be echoed verbatim, to keep #1530 closed for the
+        // database message body.
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+        Assert.Contains("Error executing search", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedLoopErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+
+        Assert.Contains("Internal error", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_NoPathNoHint_OmitsFragments()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbError,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Generic failure.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+
+        Assert.Contains("[E008_DB_ERROR/database]", message);
+        Assert.DoesNotContain("path=", message);
+        Assert.DoesNotContain("hint=", message);
+    }
+
+    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the

@@ -1158,16 +1158,39 @@ public partial class McpServer : IDisposable
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)
     // while keeping bound values or matched content out of the response (#1530).
+    // For CodeIndexException (#1580) the Code / Category / Path / Hint fields
+    // are author-controlled and therefore safe to echo verbatim, so the client
+    // gets the structured failure metadata it needs without re-introducing the
+    // ex.Message leak vector #1530 closed.
     // ツール catch-all のワイヤー向け本文。クライアントが分岐できるよう tool 名と
-    // 例外型は残し、バインド値や一致内容は含めない（#1530）。
-    internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex) =>
-        $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
+    // 例外型は残し、バインド値や一致内容は含めない（#1530）。CodeIndexException (#1580)
+    // の Code / Category / Path / Hint は実装側で固定したフィールドなのでそのまま転写し、
+    // #1530 で封じた ex.Message 漏れを再現させずに失敗詳細をクライアントへ届ける。
+    internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex)
+    {
+        if (ex is CodeIndexException codeIndexEx)
+            return $"Error executing {toolName} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
+        return $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
+    }
 
     // Wire-safe error body for the JSON-RPC loop catch-all. Same rationale as
-    // the tool catch-all (#1530).
-    // JSON-RPC ループ catch-all のワイヤー向け本文。理由はツール catch-all と同じ（#1530）。
-    internal static string BuildSanitizedLoopErrorMessage(Exception ex) =>
-        $"Internal error ({ex.GetType().Name}). See cdidx server stderr for details.";
+    // the tool catch-all (#1530, #1580).
+    // JSON-RPC ループ catch-all のワイヤー向け本文。理由はツール catch-all と同じ（#1530, #1580）。
+    internal static string BuildSanitizedLoopErrorMessage(Exception ex)
+    {
+        if (ex is CodeIndexException codeIndexEx)
+            return $"Internal error ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
+        return $"Internal error ({ex.GetType().Name}). See cdidx server stderr for details.";
+    }
+
+    // Quote so paths/hints with spaces stay one token. Single quotes are kept
+    // for human readability — this is a display contract, not a shell-parsing one.
+    // 空白を含む path / hint が 2 トークンに見えないよう単引用符でラップする。
+    private static string BuildPathFragment(CodeIndexException ex) =>
+        string.IsNullOrEmpty(ex.Path) ? string.Empty : $" path='{ex.Path}'";
+
+    private static string BuildHintFragment(CodeIndexException ex) =>
+        string.IsNullOrEmpty(ex.Hint) ? string.Empty : $" hint='{ex.Hint}'";
 
     // Tool implementations are in McpToolHandlers.cs / ツール実装は McpToolHandlers.cs に分離
 
