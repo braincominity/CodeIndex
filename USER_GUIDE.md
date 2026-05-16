@@ -632,7 +632,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI / MCP error also carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). MCP tool errors today surface as `isError: true` text content without a structured `error_code` field, and the bracketed CLI constant is not guaranteed to appear in the MCP message text — see [Troubleshooting](#troubleshooting) for the documented MCP message per failure mode that MCP clients should match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -2023,7 +2023,7 @@ cdidx report --output report.tgz --json
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI / MCP のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、`--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。MCP ツールエラーは現状 `isError: true` のテキストコンテンツとして返り、構造化された `error_code` フィールドを持たず、本文に CLI 側の角括弧付き定数が必ず含まれる保証もありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文は [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
