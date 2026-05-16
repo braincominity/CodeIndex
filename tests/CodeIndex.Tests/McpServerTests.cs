@@ -307,6 +307,331 @@ public class McpServerTests : IDisposable
         }
     }
 
+    // --- Authentication tests (#1559) / 認証テスト (#1559) ---
+
+    [Fact]
+    public void DefaultAuthenticator_AllowsRequestsWithoutToken()
+    {
+        // #1559: the historical stdio default must keep working without an auth token so
+        // existing clients (Claude Code, Cursor, Windsurf) don't break when the upgrade
+        // ships. The permissive default is wired by the parameterless ctor.
+        // #1559: stdio 既定の従来動作はトークン無しで通る必要がある。permissive 既定は
+        // 引数なしコンストラクタで wire される。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MatchingToken_DispatchesNormally()
+    {
+        // #1559: when the server is configured with a token, the matching token in
+        // params.auth.token authenticates the request and dispatch proceeds.
+        // #1559: トークン設定済みサーバーに対し、params.auth.token に一致する値を
+        // 添えれば認証成功し dispatch に進む。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MissingToken_ReturnsUnauthorized()
+    {
+        // #1559: a configured server must reject requests with no token. The wire response
+        // carries only -32001 + "Unauthorized" (no detail) per the #1530 sanitization rule.
+        // #1559: トークン設定済みサーバーはトークン未提示のリクエストを拒否する。ワイヤ応答は
+        // #1530 サニタイズ方針に従い -32001 と "Unauthorized" のみ。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32001, error["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", error["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_WrongToken_ReturnsUnauthorized()
+    {
+        // #1559: an incorrect token must produce the same wire response shape as a missing
+        // token so callers cannot mount a token-presence oracle on the response body.
+        // #1559: 不一致トークンも未提示と同じワイヤ応答にすることで、応答本文を見て
+        // トークン有無を判定するオラクル攻撃を防ぐ。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"auth":{"token":"wrong"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32001, error["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", error["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_ToolsCallWithToken_Dispatches()
+    {
+        // #1559: the auth check runs uniformly across initialize/tools/list/tools/call/ping
+        // so a tool dispatch with a matching token still reaches the handler and returns the
+        // tool result instead of an Unauthorized error.
+        // #1559: 認証チェックは initialize/tools/list/tools/call/ping に統一されているため、
+        // 一致トークン付きのツール呼び出しはハンドラまで届き Unauthorized ではなくツール結果を返す。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_NotificationsBypassAuthCheck()
+    {
+        // Notifications (no id) produce no response so the auth check would have nothing to
+        // signal on; the existing notification short-circuit must stay BEFORE the auth gate
+        // so a token-protected server still tolerates `notifications/initialized` without
+        // synthesising an error response.
+        // 通知 (id 無し) は応答が無いので認証チェックがエラーを返す手段を持たない。通知の
+        // ショートサーキットを認証ゲートより前に置き続け、token 保護サーバーでも
+        // `notifications/initialized` を黙って受け入れられるようにする。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;
+
+        var response = server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MalformedAuthShape_TreatedAsMissing()
+    {
+        // Defensive: an `auth` object whose `token` field is not a string (number, array,
+        // object) must not crash the server. The token-authenticator catches the cast and
+        // treats it as a missing token so the wire stays uniform.
+        // 防御: `auth.token` が文字列でない（数値・配列・オブジェクト）入力でサーバーが
+        // クラッシュしてはならない。token authenticator は cast 失敗を未提示扱いにし、
+        // ワイヤ応答を統一する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"auth":{"token":42}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_IsActionable()
+    {
+        // The stderr log keeps the actionable detail (method, reason, recovery hint) so an
+        // operator can diagnose without combing through the wire transcript. The wire stays
+        // sanitized per #1530.
+        // stderr ログには診断用詳細 (method/reason/復旧ヒント) を残す。ワイヤ応答は #1530
+        // 方針でサニタイズしたまま保つ。
+        var log = McpServer.BuildAuthFailureLog("tools/call", "missing auth token");
+
+        Assert.Contains("Auth failed", log);
+        Assert.Contains("tools/call", log);
+        Assert.Contains("missing auth token", log);
+        Assert.Contains("CDIDX_MCP_AUTH_TOKEN", log);
+        Assert.Contains("params.auth.token", log);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_EmptyTokenInCtor_Rejected()
+    {
+        // An empty configured token would make every empty-string presentation succeed, so
+        // the constructor must refuse it. RunMcp's factory already pre-filters on
+        // whitespace, but the constructor is the public contract.
+        // 空文字を期待トークンに設定すると空文字提示が全て通ってしまうため、コンストラクタで
+        // 拒否する。RunMcp の factory は空白フィルタを掛けるが、コンストラクタが公開契約。
+        Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator(string.Empty));
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
+    {
+        // FromEnvironment() must default to permissive stdio when the env var is unset or
+        // whitespace, so unconfigured installs preserve the historical behaviour.
+        // 環境変数が未設定 or 空白の場合は permissive stdio に fallback し、未設定インストールの
+        // 従来動作を維持する。
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, null);
+            Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
+
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "   ");
+            Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void TokenAuthenticator_NonStringMethod_ReturnsUnauthorized()
+    {
+        // #1559: a non-string `method` (e.g. `42`) must hit the auth gate and produce
+        // -32001 "Unauthorized", not a -32603 "Internal error" leaked from a throwing
+        // GetValue<string>() call on the way to dispatch. Otherwise the token-protected
+        // server would tell unauthenticated callers that their malformed request reached
+        // dispatch internals.
+        // #1559: 非文字列 method（例: 42）は認証ゲートに到達して -32001 を返すべきで、
+        // GetValue<string>() の例外から -32603 を漏らしてはならない。漏らすと token 保護下で
+        // 未認証呼び出しに「dispatch 内部まで届いた」事実を伝えてしまう。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":42}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MissingMethodWithToken_ReturnsMethodError()
+    {
+        // After auth passes, a request that omits `method` entirely still gets the
+        // structured -32600 "missing method" error. This documents that the auth gate runs
+        // first but does not swallow downstream method-shape validation when the caller is
+        // authenticated.
+        // 認証が通った後で `method` が欠落しているリクエストには従来通り -32600
+        // "missing method" を返す。認証ゲートは先行するが、認証済み呼び出しに対しては
+        // 既存の method 形式検証を残す。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"params":{"auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        Assert.Contains("missing method", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_SanitizesControlCharsInMethod()
+    {
+        // The stderr log interpolates the caller-controlled `method`; if we don't strip
+        // control characters, an attacker can send `"method":"evil\n[forged]"` and split
+        // the diagnostic across two lines (log forging). Sanitization replaces \n/\r/etc.
+        // with `?` and clamps method length so a single auth failure never spans lines.
+        // stderr ログには caller 由来の `method` が埋め込まれる。制御文字を除去しないと
+        // `"method":"evil\n[forged]"` で 1 件のログを 2 行に分割されてしまう（ログ偽造）。
+        // 制御文字を `?` に置換し、長さも切り詰める。
+        var log = McpServer.BuildAuthFailureLog("evil\n[forged]\rfoo\t", "missing auth token");
+
+        Assert.DoesNotContain('\n', log);
+        Assert.DoesNotContain('\r', log);
+        Assert.DoesNotContain('\t', log);
+        Assert.Contains("evil?[forged]?foo?", log);
+        Assert.Contains("missing auth token", log);
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_ClampsLongMethod()
+    {
+        // The log clamps method to a fixed cap to keep a single auth-failure line readable
+        // and to bound the cost of stderr writes when a hostile client sends a giant method.
+        // method を一定長に切り詰めることでログ行を読みやすく保ち、巨大 method による
+        // stderr 書き込みコストも抑える。
+        var huge = new string('A', 5000);
+
+        var log = McpServer.BuildAuthFailureLog(huge, "missing auth token");
+
+        Assert.DoesNotContain(new string('A', 5000), log);
+        Assert.Contains("…", log);
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_NullMethod_LabeledNone()
+    {
+        // After the safe method-extraction change, `method` may be null when the request
+        // omits it or sets it to a non-string. The log must still be readable rather than
+        // showing a literal "null".
+        // 安全な method 抽出により method が null になり得る（欠落 or 非文字列）。ログは
+        // 読みやすい表記にしておき、リテラル "null" を出さない。
+        var log = McpServer.BuildAuthFailureLog(null, "missing auth token");
+
+        Assert.Contains("Auth failed for method (none)", log);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_WrongLengthToken_UniformWireResponse()
+    {
+        // The hash-based compare normalizes presented tokens to a fixed length before
+        // FixedTimeEquals, so a wrong-length guess and a wrong equal-length guess produce
+        // byte-identical wire responses. Verifies the two error bodies are exactly equal
+        // (no length echoed back, no detail leaked).
+        // ハッシュ比較により提示トークンは固定長に正規化されてから FixedTimeEquals に渡る
+        // ので、長さ違いの推測と同長の不一致は同一のワイヤ応答になる。両エラーボディが
+        // バイト単位で完全一致することを確認する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var shortReq = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"x"}}}""")!;
+        var sameLenReq = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"WRONG!"}}}""")!;
+
+        var shortResp = server.HandleMessage(shortReq)!;
+        var sameLenResp = server.HandleMessage(sameLenReq)!;
+
+        Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
+        Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_TokenSet_ReturnsTokenAuthenticator()
+    {
+        // When CDIDX_MCP_AUTH_TOKEN holds a non-whitespace value, the factory must produce a
+        // TokenMcpAuthenticator that enforces a matching token on the wire.
+        // CDIDX_MCP_AUTH_TOKEN に空白以外の値があれば factory は TokenMcpAuthenticator を
+        // 返し、ワイヤ上で一致トークンを強制する。
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "s3cret");
+            var authenticator = McpAuthenticatorFactory.FromEnvironment();
+            Assert.IsType<TokenMcpAuthenticator>(authenticator);
+
+            var matching = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"s3cret"}}}""")!;
+            Assert.True(authenticator.Authenticate(matching).IsAuthenticated);
+
+            var bad = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"nope"}}}""")!;
+            Assert.False(authenticator.Authenticate(bad).IsAuthenticated);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
     [Fact]
     public void BuildOversizedMessageLog_IsActionable()
     {

@@ -22,6 +22,7 @@ public partial class McpServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
+    private readonly IMcpAuthenticator _authenticator;
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -81,11 +82,16 @@ public partial class McpServer : IDisposable
     private const int StdioBufferSize = 64 * 1024;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null)
+        : this(dbPath, version, dbPathExplicit, null, null)
     {
     }
 
-    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
+    public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
+        : this(dbPath, version, dbPathExplicit, null, authenticator)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
     {
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
@@ -97,6 +103,17 @@ public partial class McpServer : IDisposable
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
+        _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
+    }
+
+    // Legacy internal entry point retained for the existing serializer-injection tests that
+    // do not need a custom authenticator. New tests should use the public constructors above
+    // or the five-arg internal overload.
+    // serializer 注入だけが必要な既存テスト向けの内部互換 entry。新規テストは公開コンストラクタ
+    // か 5 引数 overload を使うこと。
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null)
+    {
     }
 
     /// <summary>
@@ -192,7 +209,14 @@ public partial class McpServer : IDisposable
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object");
 
-        var method = obj["method"]?.GetValue<string>();
+        // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
+        // throw before the auth gate runs, otherwise a token-protected server would surface
+        // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
+        // "Unauthorized"`, leaking that the request reached dispatch internals (#1559).
+        // `method` は防御的に取り出す。`"method":42` のような非文字列が GetValue<string>()
+        // で例外を投げると、認証ゲート前に -32603 が返ってしまい、未認証呼び出し元に dispatch
+        // 内部まで届いた事実が漏れる (#1559)。
+        var method = TryGetStringMember(obj, "method");
         if (!TryGetRequestId(obj, out var hasId, out var id))
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null");
 
@@ -205,6 +229,21 @@ public partial class McpServer : IDisposable
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine(BuildUnknownNotificationLog(method));
             return null;
+        }
+
+        // Authenticate every responded request before dispatch so the auth contract is
+        // uniform across `initialize`, `tools/list`, `tools/call`, and `ping`. Run auth even
+        // when `method` is missing or malformed so a token-protected server cannot be probed
+        // for method-shape errors without credentials (#1559). Notifications already
+        // short-circuited above because they produce no response and cannot leak an error code.
+        // すべての応答対象リクエストを dispatch 前に認証する。`method` が欠落・不正でも
+        // 認証は走らせ、トークン保護下のサーバーで未認証呼び出し元に method 形式エラーを
+        // 漏らさない (#1559)。通知は応答が無いため上のブランチで先に return している。
+        var authResult = _authenticator.Authenticate(request);
+        if (!authResult.IsAuthenticated)
+        {
+            Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
+            return CreateErrorResponse(hasId: true, id: id, code: -32001, message: "Unauthorized");
         }
 
         if (method == null)
@@ -221,6 +260,71 @@ public partial class McpServer : IDisposable
             _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}"),
         };
     }
+
+    // Safe accessor that returns null instead of throwing when `name` is missing OR present
+    // with a non-string value. JsonNode's `GetValue<string>()` throws InvalidOperationException
+    // on non-string scalars, which would bubble out of HandleMessage and turn into -32603
+    // before the auth gate runs.
+    // `name` が無いケースと文字列以外で存在するケースのどちらでも null を返す安全アクセサ。
+    // JsonNode の `GetValue<string>()` は非文字列で例外を投げ、認証ゲート前に -32603 化して
+    // しまう。
+    private static string? TryGetStringMember(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        try
+        {
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Cap on the logged `method` label. Long enough for every spec method (`notifications/cancelled`
+    // is 23 chars) and any plausible client extension, short enough to keep one log line readable.
+    // ログ出力する `method` の長さ上限。仕様メソッド全てと拡張も収まる長さで、1 行を読みやすく保つ。
+    private const int LoggedMethodMaxLength = 64;
+
+    // Strip caller-controlled control characters from `method` and clamp its length before
+    // interpolating into a stderr log line. Prevents log forging: a malicious client could
+    // otherwise send `"method":"evil\n[forged]"` and split the diagnostic across two lines
+    // (#1559).
+    // stderr 行に method を埋め込む前に制御文字を除去し、長さを切る。これをしないと
+    // `"method":"evil\n[forged]"` で診断ログを 2 行に分割するログ偽造ができてしまう (#1559)。
+    internal static string SanitizeMethodForLog(string? method)
+    {
+        if (string.IsNullOrEmpty(method))
+            return "(none)";
+        var sb = new StringBuilder(Math.Min(method.Length, LoggedMethodMaxLength));
+        var truncated = false;
+        foreach (var ch in method)
+        {
+            if (sb.Length >= LoggedMethodMaxLength)
+            {
+                truncated = true;
+                break;
+            }
+            if (ch < 0x20 || ch == 0x7F)
+                sb.Append('?');
+            else
+                sb.Append(ch);
+        }
+        if (truncated)
+            sb.Append('…');
+        return sb.ToString();
+    }
+
+    // Stderr log for an auth failure. Mirrors the #1530 sanitization pattern: keep the
+    // wire response generic and put the detail on stderr for local diagnostics. The method
+    // label is run through SanitizeMethodForLog because it is caller-controlled and reaches
+    // stderr before any allow-list check (#1559).
+    // 認証失敗の stderr ログ。#1530 のサニタイズ方針に倣い、ワイヤ応答は一般化したまま
+    // 詳細だけを stderr に残す。method は認証前に通るため SanitizeMethodForLog で
+    // 制御文字除去と長さ切詰めを行う (#1559)。
+    internal static string BuildAuthFailureLog(string? method, string? reason) =>
+        $"[cdidx-mcp] Auth failed for method {SanitizeMethodForLog(method)}: {reason ?? "(unspecified)"}. Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token on each request.";
 
     /// <summary>
     /// Handle the initialize handshake.

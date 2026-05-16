@@ -1123,6 +1123,14 @@ Graph-oriented MCP tools such as `references`, `callers`, and `callees` also ret
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
+#### Optional MCP authentication: `CDIDX_MCP_AUTH_TOKEN`
+
+The default `cdidx mcp` transport is **permissive** — the OS-enforced stdio process boundary already gates access, and every existing client setup above (Claude Code, Cursor, Windsurf, Copilot, Codex) keeps working unchanged. When `CDIDX_MCP_AUTH_TOKEN` is unset (or whitespace-only), the server accepts every request and tags it with the shared `stdio` / `local` caller identity.
+
+If you expose `cdidx mcp` over a less-trusted transport (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. The comparison is constant-time (`CryptographicOperations.FixedTimeEquals`), so the server does not leak the secret through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
+
+This is a defensive primitive for custom MCP clients you control and for the networked transports that will reuse the same `McpCallerIdentity` shape (audit log #1562). Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce token authentication.
+
 ### Why cdidx over grep/ripgrep for AI workflows?
 
 | | `grep` / `rg` | `cdidx` |
@@ -2248,6 +2256,14 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+#### MCP 認証（任意）: `CDIDX_MCP_AUTH_TOKEN`
+
+`cdidx mcp` の既定 transport は **permissive** です — OS のプロセス境界が stdio へのアクセスを既に絞っているため、上記の Claude Code / Cursor / Windsurf / Copilot / Codex の設定はそのまま動作します。`CDIDX_MCP_AUTH_TOKEN` を未設定（または空白のみ）にしておくと、サーバーは全リクエストを受理し、共有の `stdio` / `local` 呼び出し元アイデンティティを付与します。
+
+`cdidx mcp` を信頼度の低い transport（転送ソケット、サンドボックスブリッジ、共有 CI ランナーなど）に露出する場合は、`CDIDX_MCP_AUTH_TOKEN` に空白以外の秘密値を設定してください。設定すると、サーバーは応答が必要な全 JSON-RPC リクエスト（`initialize`、`tools/list`、`tools/call`、`ping`）に対し、`params.auth.token` が同じトークンと一致することを要求します。比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較なので、サーバーは secret をタイミング経由で漏らしません。不一致は統一された JSON-RPC `-32001 "Unauthorized"` を返します。ワイヤ本文では「未提示」と「不一致」を区別しないため、応答を用いたトークン存在判定オラクル攻撃を防ぎます（#1530）。失敗詳細はローカル診断用に `cdidx mcp` の stderr に出力されます。通知（`notifications/initialized`、`notifications/cancelled`）はゲートをスキップします — `id` を持たずエラーコードも返せないためです。
+
+これは defense-in-depth の基盤であり、自分で制御する MCP クライアントや、同じ `McpCallerIdentity` を再利用するネットワーク transport（監査ログ #1562）で活用するためのものです。stdio クライアントが `params.auth.token` を注入しない場合、変数を設定した時点で拒否されるので、token 認証を能動的に強制したい場合以外は未設定のまま残してください。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 

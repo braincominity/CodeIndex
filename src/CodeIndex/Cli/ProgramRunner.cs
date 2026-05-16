@@ -404,7 +404,14 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
+        // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
+        // permissive local-stdio default keeps the historical behaviour; when set every
+        // JSON-RPC request must include a matching `params.auth.token`.
+        // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
+        // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
+        // `params.auth.token` の一致を要求する。
+        var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
+        using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit, authenticator);
         server.RunAsync().GetAwaiter().GetResult();
         return CommandExitCodes.Success;
     }
