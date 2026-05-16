@@ -1752,13 +1752,14 @@ public class FileIndexer
         var ancestorPaths = new HashSet<string>(pathComparer);
 
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
-        if (!File.Exists(gitmodulesPath))
+        var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
+        if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths);
 
         string[] lines;
         try
         {
-            lines = File.ReadAllLines(gitmodulesPath);
+            lines = File.ReadAllLines(prefixedGitmodulesPath);
         }
         catch (IOException)
         {
