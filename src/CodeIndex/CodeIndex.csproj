@@ -8,6 +8,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
+    <!--
+      Embed a Windows app manifest declaring `longPathAware=true` so the OS
+      lifts the legacy MAX_PATH(260) limit on `cdidx.exe` (apphost / published
+      Windows binary) when `LongPathsEnabled` is set in the registry. Without
+      this opt-in, deep monorepo paths are silently skipped by the FileIndexer
+      walker on Windows. Closes #1547.
+      Windows の LongPathsEnabled レジストリが有効な環境で legacy MAX_PATH(260) 制限を
+      cdidx.exe (apphost / 公開バイナリ) で解除するため、`longPathAware=true` の
+      Windows app manifest を埋め込む。Closes #1547.
+    -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
     <!-- NuGet Global Tool / NuGet グローバルツール設定 -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cdidx</ToolCommandName>
