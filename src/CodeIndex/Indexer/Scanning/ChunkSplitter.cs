@@ -14,6 +14,45 @@ public static class ChunkSplitter
     // Overlap with previous chunk / 前チャンクとの重複行数
     private const int Overlap = 10;
 
+    // Per-line byte cap (in chars). Lines longer than this trigger the
+    // oversize-line skip path: chunks/symbols/references for that file
+    // are skipped and ValidateContent emits a `line_too_long` FileIssue
+    // so downstream regex-based extraction cannot stall on minified or
+    // base64-encoded payloads packed into a single physical line. Closes #1542.
+    // 行ごとのバイト上限 (char 数)。これを超える行は oversize-line スキップ
+    // 経路に入り、当該ファイルの chunks / symbols / references をスキップし、
+    // ValidateContent から `line_too_long` FileIssue を発行する。これにより
+    // 1 行に詰め込まれた minified / base64 ペイロードに対して下流の正規表現
+    // 抽出が停止しないようにする。Closes #1542.
+    public const int MaxLineLength = 64 * 1024;
+
+    /// <summary>
+    /// Returns true when <paramref name="content"/> contains any single line
+    /// whose length exceeds <see cref="MaxLineLength"/>. Used by ChunkSplitter,
+    /// SymbolExtractor, ReferenceExtractor, and ValidateContent to share a
+    /// single cap so the indexer never feeds an unbounded line into regex-based
+    /// extraction. Assumes `\n` is the only line separator (callers normalize
+    /// CRLF first). Closes #1542.
+    /// </summary>
+    public static bool HasOversizeLine(string? content)
+    {
+        if (string.IsNullOrEmpty(content))
+            return false;
+        int lineLen = 0;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                lineLen = 0;
+                continue;
+            }
+            lineLen++;
+            if (lineLen > MaxLineLength)
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Split file content into chunks.
     /// ファイル内容をチャンクに分割する。
@@ -43,6 +82,20 @@ public static class ChunkSplitter
         // matching the no-chunks contract for empty files.
         // BOM/CRLF剥離後に再度空判定し、BOMのみの入力が空ファイルと同じく0チャンクになるようにする。
         if (content.Length == 0)
+            return [];
+        // Skip oversize-line files (e.g. 1 MB minified `.min.js`, base64 blobs):
+        // returning no chunks prevents a single multi-MB Content column from
+        // being persisted, and parallel guards in SymbolExtractor / ReferenceExtractor
+        // keep the regex-based extractors from stalling on the same input.
+        // ValidateContent emits a `line_too_long` FileIssue so the skip is
+        // observable through the existing issues channel. Closes #1542.
+        // oversize-line ファイル (例: 1 MB minified .min.js、base64 ペイロード) を
+        // スキップする。チャンクを返さないことで複数 MB の Content カラムが
+        // 永続化されるのを防ぎ、SymbolExtractor / ReferenceExtractor 側の同等
+        // ガードと合わせて、正規表現抽出が同じ入力で停止しないようにする。
+        // スキップは ValidateContent からの `line_too_long` FileIssue として
+        // 既存の issues 経路で観測できる。Closes #1542.
+        if (HasOversizeLine(content))
             return [];
         // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
         var lines = content.EndsWith('\n')

@@ -2024,6 +2024,19 @@ public static partial class SymbolExtractor
         if (string.IsNullOrEmpty(content))
             return [];
 
+        // Oversize-line skip: bail out for files that pack a multi-MB payload
+        // into a single physical line (minified bundles, base64 blobs). The
+        // matching guard in ChunkSplitter / ReferenceExtractor / ValidateContent
+        // keeps the indexer from stalling on regex backtracking and surfaces
+        // the skip as a `line_too_long` FileIssue. Closes #1542.
+        // 1 行に複数 MB のペイロードを詰めたファイル (minified bundle や base64
+        // ペイロード等) は早期に抜ける。ChunkSplitter / ReferenceExtractor /
+        // ValidateContent の同等ガードと合わせて、正規表現のバックトラックで
+        // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
+        // として表面化させる。Closes #1542.
+        if (ChunkSplitter.HasOversizeLine(content))
+            return [];
+
         if (lang == "xml")
         {
             if (content.Contains('\r'))
