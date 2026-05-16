@@ -141,6 +141,54 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatPerFileErrorLine_OmitsStackTrace_ToKeepStderrSafeForMcpConsumers()
+    {
+        // Issue #1578: the verbose-mode error path previously appended `ex.StackTrace`
+        // to stderr, leaking internal type names, source paths, and line numbers to
+        // anyone capturing the indexer's stderr (notably MCP clients). The shared
+        // formatter must emit a single user-facing line regardless of verbose state.
+        // Issue #1578: verbose 時の stderr に `ex.StackTrace` が乗ると内部型名・パス・
+        // 行番号が MCP クライアントなど stderr 取り込み側へ漏れていた。共通フォーマッタ
+        // は verbose に関係なく 1 行のユーザー向けメッセージのみ出力すること。
+        Exception captured;
+        try
+        {
+            throw new InvalidOperationException("simulated indexing failure");
+        }
+        catch (Exception ex)
+        {
+            captured = ex;
+        }
+
+        Assert.NotNull(captured.StackTrace);
+
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
+
+        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain(captured.StackTrace!, line);
+        Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
+    }
+
+    [Fact]
+    public void FormatPerFileErrorLine_CollapsesNewlinesInPathAndMessage_PreventingInjection()
+    {
+        // Issue #1578 follow-up: even without ex.StackTrace, a multiline exception
+        // message (or a CR/LF-bearing path) could still inject pseudo-stack lines
+        // into stderr that MCP clients then misinterpret. The formatter must keep
+        // the output on a single line.
+        // Issue #1578 派生: ex.StackTrace を外しても、`ex.Message` や `path` に CR/LF が
+        // 含まれると疑似スタック行が stderr に注入されうる。フォーマッタは 1 行に保つこと。
+        var ex = new InvalidOperationException("first line\nat Internal.Type.Method() in /home/secret.cs:42");
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "weird\r\npath.cs", ex);
+
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain("\r", line);
+        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
+    }
+
+    [Fact]
     public void Run_HelpFlagReturnsSuccess()
     {
         int exitCode;
