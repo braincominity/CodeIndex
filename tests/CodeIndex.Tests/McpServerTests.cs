@@ -188,6 +188,15 @@ public class McpServerTests : IDisposable
             .Select(n => n!.GetValue<string>())
             .ToArray();
         Assert.Equal(McpServer.SupportedProtocolVersions, supported);
+
+        // #1581: the version-negotiation error path must also carry the canonical envelope
+        // (`category` / `suggestion` / `retry_safe`) on top of the #1554 version fields so
+        // clients can branch on category instead of parsing the message string.
+        // #1581: バージョン交渉エラーも canonical envelope を必ず併載し、クライアントは
+        // category で分岐できる。
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(data["suggestion"]!.GetValue<string>()));
+        Assert.False(data["retry_safe"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -7519,6 +7528,226 @@ public class McpServerTests : IDisposable
         Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", log);
     }
 
+    // --- Structured error envelope (#1581) / 構造化エラー envelope（#1581） ---
+
+    private static void AssertEnvelope(JsonNode? data, string expectedCategory, bool expectedRetrySafe)
+    {
+        Assert.NotNull(data);
+        Assert.Equal(expectedCategory, data!["category"]!.GetValue<string>());
+        Assert.Equal(expectedRetrySafe, data["retry_safe"]!.GetValue<bool>());
+        var suggestion = data["suggestion"]!.GetValue<string>();
+        Assert.False(string.IsNullOrWhiteSpace(suggestion));
+    }
+
+    [Fact]
+    public void ErrorResponse_InvalidRequest_NotAnObject_CarriesEnvelope()
+    {
+        // #1581: every JSON-RPC error response must carry `data.{category, suggestion, retry_safe}`.
+        // Sending a non-object JSON value (here, an array) trips the `-32600` branch. Clients
+        // should be able to branch on `data.category == "invalid_request"` instead of the
+        // free-text `message`.
+        // #1581: すべての JSON-RPC エラー応答は `data.{category, suggestion, retry_safe}` を
+        // 含む。`-32600` 経路（非オブジェクト）でも canonical envelope を返す。
+        var response = _server.HandleMessage(JsonNode.Parse("[]")!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32600, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "invalid_request", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void ErrorResponse_MethodNotFound_CarriesEnvelope()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"no/such/method"}""")!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32601, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "method_not_found", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void ErrorResponse_MissingToolName_CarriesEnvelope()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}""")!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "missing_parameter", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void ErrorResponse_UnknownTool_CarriesEnvelopeAndToolName()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"does_not_exist"}}""")!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "tool_unknown", expectedRetrySafe: false);
+        Assert.Equal("does_not_exist", error["data"]!["tool"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ErrorResponse_ToolDisabled_CarriesEnvelope()
+    {
+        // Tool-disabled (#1561) keeps the -32601 wire code but adds the #1581 envelope so
+        // clients can distinguish operator-disabled tools from typos (tool_unknown).
+        // tool_disabled（#1561）はワイヤコード -32601 を維持しつつ envelope を併載し、
+        // typo（tool_unknown）と区別できるようにする。
+        Environment.SetEnvironmentVariable("CDIDX_MCP_TOOLS_DENY", "status");
+        try
+        {
+            using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+            var response = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            var error = response["error"]!;
+            Assert.Equal(-32601, error["code"]!.GetValue<int>());
+            AssertEnvelope(error["data"], "tool_disabled", expectedRetrySafe: false);
+            Assert.Equal("status", error["data"]!["tool"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_MCP_TOOLS_DENY", null);
+        }
+    }
+
+    [Fact]
+    public void ErrorResponse_Unauthorized_CarriesEnvelope()
+    {
+        // Auth failures use server code -32001 with `permission_denied`; the wire message
+        // stays generic so a token-protected server does not leak internals to unauth callers.
+        // 認証失敗はサーバーコード -32001 と permission_denied で返し、生メッセージは汎用に保つ。
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false,
+            new TokenMcpAuthenticator("secret-token"));
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32001, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "permission_denied", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void RateLimited_Error_AlsoCarriesCanonicalEnvelope()
+    {
+        // The pre-existing #1560 fields (`error_category`, `tool`, `caller`, `retry_after_ms`)
+        // stay intact for backward compatibility; #1581 adds `category`, `suggestion`, and
+        // `retry_safe` (true — back off and retry) under the same `error.data` object.
+        // #1560 既存フィールドは維持しつつ、#1581 の canonical envelope を併載する。
+        // rate_limited は retry_safe=true（バックオフして再試行）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+        var initialize = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"c","version":"1"}}}""")!;
+        _server.HandleMessage(initialize);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!);
+        var throttled = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var data = throttled["error"]!["data"]!;
+        // Legacy fields preserved / 既存フィールド維持
+        Assert.Equal("rate_limited", data["error_category"]!.GetValue<string>());
+        Assert.Equal("status", data["tool"]!.GetValue<string>());
+        // Canonical envelope added / canonical envelope を併載
+        AssertEnvelope(data, "rate_limited", expectedRetrySafe: true);
+    }
+
+    [Fact]
+    public void ToolResult_DatabaseMissing_CarriesEnvelopeOnStructuredContent()
+    {
+        // Tool-result errors (MCP isError shape) mirror the JSON-RPC envelope by exposing
+        // `category` / `suggestion` / `retry_safe` under `result.structuredContent`. The
+        // `index_missing` category is retry_safe so clients can rebuild and retry.
+        // ツール結果エラー（MCP isError 形式）も `result.structuredContent` に envelope を載せる。
+        // index_missing は retry_safe=true（rebuild 後に再試行可能）。
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_missing_{Guid.NewGuid():N}.db");
+        using var server = new McpServer(missingDb, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        Assert.Null(response["error"]);
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        AssertEnvelope(result["structuredContent"], "index_missing", expectedRetrySafe: true);
+    }
+
+    [Fact]
+    public void ClassifyException_MapsCancelledToRequestCancelled()
+    {
+        var c = McpErrorEnvelope.ClassifyException(new OperationCanceledException());
+        Assert.Equal("request_cancelled", c.Category);
+        Assert.True(c.RetrySafe);
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, c.JsonRpcCode);
+    }
+
+    [Fact]
+    public void ClassifyException_MapsSqliteSchemaErrorsToIndexStale()
+    {
+        // SqliteException whose message names a missing table/column maps to `index_stale`
+        // so clients know `cdidx index --rebuild` is the path to recovery (retry_safe=true).
+        // テーブル / カラム不在を訴える SqliteException は index_stale にマッピングし、
+        // rebuild で復旧可能（retry_safe=true）であることをクライアントに伝える。
+        SqliteException sqlite;
+        try
+        {
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT * FROM no_such_table_xyz";
+            cmd.ExecuteReader();
+            throw new InvalidOperationException("expected SqliteException");
+        }
+        catch (SqliteException ex)
+        {
+            sqlite = ex;
+        }
+
+        var c = McpErrorEnvelope.ClassifyException(sqlite);
+        Assert.Equal("index_stale", c.Category);
+        Assert.True(c.RetrySafe);
+        Assert.Equal(McpErrorEnvelope.CodeIndexStale, c.JsonRpcCode);
+    }
+
+    [Fact]
+    public void ClassifyException_DefaultsToInternalError()
+    {
+        var c = McpErrorEnvelope.ClassifyException(new InvalidOperationException("boom"));
+        Assert.Equal("internal_error", c.Category);
+        Assert.False(c.RetrySafe);
+        Assert.Equal(-32603, c.JsonRpcCode);
+    }
+
+    [Fact]
+    public void ErrorResponse_ProcessFrame_ParseError_CarriesEnvelope()
+    {
+        // ProcessFrame returns a serialized response string; parse it back to inspect the
+        // envelope. Parse-error responses have `id: null` per JSON-RPC spec.
+        // ProcessFrame は文字列を返すので、パースして envelope を検査する。Parse error は
+        // 仕様により `id: null`。
+        var raw = _server.ProcessFrame("not a json frame");
+        Assert.NotNull(raw);
+        var response = JsonNode.Parse(raw!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32700, error["code"]!.GetValue<int>());
+        AssertEnvelope(error["data"], "parse_error", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void BuildData_ExtraDataCannotShadowCanonicalKeys()
+    {
+        // Defense-in-depth: if a category-specific call passes `extraData` with the same key
+        // names, the canonical contract still wins so clients always see a coherent envelope.
+        // canonical キー（category / suggestion / retry_safe）は extraData で上書きできない。
+        var extra = new JsonObject
+        {
+            ["category"] = "spoofed",
+            ["suggestion"] = "spoofed",
+            ["retry_safe"] = true,
+            ["tool"] = "search",
+        };
+        var data = McpErrorEnvelope.BuildData("invalid_argument", "real suggestion", retrySafe: false, extra);
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal("real suggestion", data["suggestion"]!.GetValue<string>());
+        Assert.False(data["retry_safe"]!.GetValue<bool>());
+        Assert.Equal("search", data["tool"]!.GetValue<string>());
+    }
+
     private static void WriteOversizedAsciiFile(string path)
     {
         const int targetBytes = 10 * 1024 * 1024 + 1;
@@ -7533,5 +7762,156 @@ public class McpServerTests : IDisposable
             stream.Write(chunk, 0, toWrite);
             written += toWrite;
         }
+    }
+
+    // Issue #1573: the MCP loop used to block on stdin until EOF with no signal-driven exit
+    // path, so SIGINT/SIGTERM left the process hung. The fix wires CancellationToken through to
+    // the transport's ReadFrameAsync; this test pins that contract by tripping the token while
+    // ReadFrameAsync is blocked and asserting the loop drains cleanly and disposes the transport.
+    // #1573: 旧実装は stdin EOF まで固まり、SIGINT/SIGTERM で吊り下がっていた。修正で
+    // CancellationToken が ReadFrameAsync まで届くようになったため、ブロック中にトークンを
+    // トリップしたときループが正常終了し transport が dispose されることを固定するテスト。
+    [Fact]
+    public async Task RunAsync_CancellationDrainsLoopAndDisposesTransport()
+    {
+        var transport = new CancellableFakeTransport();
+        using var cts = new CancellationTokenSource();
+
+        var runTask = _server.RunAsync(transport, cts.Token);
+
+        await transport.WaitForReadAsync(TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+
+        // The loop must observe cancellation and return on its own — without the fix this awaits
+        // forever because ReadLineAsync ignored the (then-non-existent) token.
+        // 修正前は ReadLineAsync が token を見ていないため永遠にブロックした。完了することを確認。
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(runTask.IsCompletedSuccessfully, "RunAsync should exit cleanly when its CancellationToken is cancelled.");
+        Assert.True(transport.ReadCalls >= 1);
+    }
+
+    // Cancellation must also unblock readers that were already pending before the signal arrived
+    // and stop the loop without producing a spurious WriteFrameAsync call (which would otherwise
+    // be observable as a half-completed request on the wire).
+    // 信号到着前から待機中の reader も解除し、ループが余分な WriteFrameAsync を出さずに終了することを確認。
+    [Fact]
+    public async Task RunAsync_CancelledBeforeAnyResponseDoesNotWriteFrame()
+    {
+        var transport = new CancellableFakeTransport();
+        using var cts = new CancellationTokenSource();
+
+        var runTask = _server.RunAsync(transport, cts.Token);
+        await transport.WaitForReadAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, transport.WriteCalls);
+    }
+
+    /// <summary>
+    /// In-memory IMcpTransport whose ReadFrameAsync blocks until the supplied CancellationToken
+    /// trips. Records read/write counts so tests can assert the loop actually entered the read
+    /// before cancellation arrived (and never wrote a response after).
+    /// CancellationToken がトリップするまで ReadFrameAsync をブロックするインメモリ実装。
+    /// ループが read に入ってからキャンセルが来たことと、その後 write が発生していないことを検証する。
+    /// </summary>
+    private sealed class CancellableFakeTransport : IMcpTransport
+    {
+        private readonly TaskCompletionSource _readEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Name => "fake";
+        public string Endpoint => "memory://test";
+        public int ReadCalls { get; private set; }
+        public int WriteCalls { get; private set; }
+        public bool Disposed { get; private set; }
+
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            ReadCalls++;
+            _readEntered.TrySetResult();
+            // Honour the token: a never-completing Task<string?> + token-driven cancellation
+            // mirrors how stdio's ReadLineAsync(CancellationToken) behaves on SIGINT/SIGTERM.
+            // token に従って待機。stdio の ReadLineAsync(CancellationToken) と同じ動作を再現する。
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken)))
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task WaitForReadAsync(TimeSpan timeout) => _readEntered.Task.WaitAsync(timeout);
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress
+    // (and PosixSignal.SIGTERM on Unix) must trip the loop. This test exercises the cross-platform
+    // Ctrl+C path by raising the .NET CancelKeyPress event directly via reflection — the test cannot
+    // send real signals to the test process without crashing the xUnit runner.
+    // #1573 の中核。Console.CancelKeyPress 経由 (Unix では PosixSignal.SIGTERM 経由) でループを
+    // 止められることが要件。実信号は xUnit runner ごと落とすため、リフレクションで CancelKeyPress
+    // を直接発火させてクロスプラットフォーム経路を検証する。
+    [Fact]
+    public void RegisterShutdownHandlers_ConsoleCancelKeyPress_CancelsToken()
+    {
+        using var cts = new CancellationTokenSource();
+        using var registration = McpServer.RegisterShutdownHandlers(cts);
+
+        Assert.False(cts.IsCancellationRequested);
+        RaiseConsoleCancelKeyPress();
+        Assert.True(cts.IsCancellationRequested);
+    }
+
+    // After the registration is disposed, a subsequent Ctrl+C must not touch a stale CTS — the
+    // typical RunMcpHttp shape disposes the CTS right after the registration, so a late signal
+    // would otherwise hit ObjectDisposedException and crash the host.
+    // registration を dispose した後の Ctrl+C は使用済み CTS に触れてはならない。RunMcpHttp は
+    // registration の直後に CTS を dispose するため、late signal で ObjectDisposedException で
+    // host が落ちないことを担保する。
+    [Fact]
+    public void RegisterShutdownHandlers_AfterDispose_DoesNotInvokeHandler()
+    {
+        using var cts = new CancellationTokenSource();
+        var registration = McpServer.RegisterShutdownHandlers(cts);
+        registration.Dispose();
+
+        RaiseConsoleCancelKeyPress();
+
+        Assert.False(cts.IsCancellationRequested);
+    }
+
+    private static void RaiseConsoleCancelKeyPress()
+    {
+        // Console.CancelKeyPress is exposed as a public event but its backing delegate field is
+        // private. Reflection is the only test-time path; .NET intentionally does not let user
+        // code synthesise ConsoleCancelEventArgs (its constructor is internal). We construct the
+        // args via the same internal ctor the runtime uses for real Ctrl+C events. The backing
+        // field is null when no handlers are attached — that itself proves the handler was
+        // removed, so callers must not assume a non-null delegate after dispose.
+        // Console.CancelKeyPress は public event だが backing field は private で、
+        // ConsoleCancelEventArgs の ctor も internal。reflection が唯一のテスト経路。
+        // ハンドラ未登録の状態ではフィールドは null になり、それ自体が解除済みの証拠なので、
+        // 呼び出し側は dispose 後に non-null を仮定してはならない。
+        var field = typeof(Console).GetField("s_cancelCallbacks", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var del = (ConsoleCancelEventHandler?)field!.GetValue(null);
+        if (del == null)
+            return;
+        var argsType = typeof(ConsoleCancelEventArgs);
+        var argsCtor = argsType.GetConstructor(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, binder: null, types: new[] { typeof(ConsoleSpecialKey) }, modifiers: null);
+        Assert.NotNull(argsCtor);
+        var args = (ConsoleCancelEventArgs)argsCtor!.Invoke(new object[] { ConsoleSpecialKey.ControlC });
+        del!.Invoke(null!, args);
     }
 }
