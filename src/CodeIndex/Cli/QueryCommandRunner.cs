@@ -14,6 +14,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
+    internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
@@ -62,6 +65,7 @@ public static class QueryCommandRunner
         "--focus-column",
         "--focus-length",
         "--max-line-width",
+        "--stale-after",
         "--explain",
     ];
     private sealed record StatusReadinessField(
@@ -1751,6 +1755,17 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            var staleAfter = (Value: DefaultStaleAfter, Error: (string?)null);
+            if (options.CheckWorkspace || options.StaleAfter.HasValue)
+            {
+                staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+                if (staleAfter.Error != null)
+                {
+                    Console.Error.WriteLine(staleAfter.Error);
+                    return CommandExitCodes.UsageError;
+                }
+            }
+
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
             if (options.CheckWorkspace)
@@ -1759,6 +1774,9 @@ public static class QueryCommandRunner
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
+                status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
+                if (status.IndexedAt.HasValue)
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((DateTime.UtcNow - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
@@ -1796,6 +1814,8 @@ public static class QueryCommandRunner
             }
             else if (options.CheckWorkspace)
             {
+                if (options.StaleAfter.HasValue)
+                    WriteStatusAge(status, staleAfter.Value);
                 if (checkFailures.Count > 0)
                     WriteStatusCheckDiagnostics(checkFailures);
             }
@@ -1838,7 +1858,10 @@ public static class QueryCommandRunner
                 if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
                     Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
+                {
+                    WriteStatusAge(status, staleAfter.Value);
                     WriteWorkspaceCheck(status.WorkspaceCheck);
+                }
                 if (status.Languages.Count > 0)
                 {
                     Console.WriteLine("Languages:");
@@ -2906,6 +2929,7 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool checkWorkspace = false;
+        TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
         bool rawBytes = false;
@@ -3127,6 +3151,27 @@ public static class QueryCommandRunner
                         AddParseError("Error: --check is not supported by this command.");
                     }
                     break;
+                case "--stale-after":
+                    if (allowStatusCheck)
+                    {
+                        if (TryReadStringOptionValue(args, ref i, "--stale-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var staleAfterValue, out var staleAfterError))
+                        {
+                            WarnIfDuplicateSingleValueOption("--stale-after", staleAfterValue!);
+                            if (TryParseStaleAfter(staleAfterValue!, out var parsedStaleAfter, out var parseStaleAfterError))
+                                staleAfter = parsedStaleAfter;
+                            else
+                                AddParseError(parseStaleAfterError!);
+                        }
+                        else
+                        {
+                            AddParseError(staleAfterError!);
+                        }
+                    }
+                    else
+                    {
+                        AddParseError("Error: --stale-after is not supported by this command.");
+                    }
+                    break;
                 case "--explain":
                     if (allowStatusCheck)
                     {
@@ -3346,6 +3391,7 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
+            StaleAfter = staleAfter,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
             RawBytes = rawBytes,
@@ -3379,6 +3425,74 @@ public static class QueryCommandRunner
 
     internal static IReadOnlyCollection<string> GetCompletionLanguageAliases()
         => LanguageDisplayAliases.Values.SelectMany(aliases => aliases).ToArray();
+
+    internal static bool TryParseStaleAfter(string value, out TimeSpan staleAfter, out string? error)
+    {
+        staleAfter = default;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = "Error: --stale-after requires a duration like 30m, 2h, or 7d.";
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        var suffix = trimmed[^1];
+        var numberText = trimmed[..^1];
+        TimeSpan unit;
+        switch (suffix)
+        {
+            case 'm':
+            case 'M':
+                unit = TimeSpan.FromMinutes(1);
+                break;
+            case 'h':
+            case 'H':
+                unit = TimeSpan.FromHours(1);
+                break;
+            case 'd':
+            case 'D':
+                unit = TimeSpan.FromDays(1);
+                break;
+            default:
+                error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+                return false;
+        }
+
+        if (!double.TryParse(numberText, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var number) ||
+            !double.IsFinite(number) ||
+            number <= 0)
+        {
+            error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+            return false;
+        }
+
+        var ticks = number * unit.Ticks;
+        if (ticks > TimeSpan.MaxValue.Ticks)
+        {
+            error = $"Error: stale-after value '{value}' is too large.";
+            return false;
+        }
+
+        staleAfter = TimeSpan.FromTicks((long)Math.Round(ticks, MidpointRounding.AwayFromZero));
+        return true;
+    }
+
+    private static (TimeSpan Value, string? Error) ResolveStaleAfter(QueryCommandOptions options, string? envValue)
+    {
+        if (options.StaleAfter.HasValue)
+            return (options.StaleAfter.Value, null);
+
+        if (!string.IsNullOrWhiteSpace(envValue))
+        {
+            if (TryParseStaleAfter(envValue, out var parsed, out var error))
+                return (parsed, null);
+            return (DefaultStaleAfter, error!.Replace("--stale-after", StaleAfterEnvironmentVariable, StringComparison.Ordinal));
+        }
+
+        return (DefaultStaleAfter, null);
+    }
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
     {
@@ -3746,8 +3860,19 @@ public static class QueryCommandRunner
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
 
-        if (freshness.IndexedAt.HasValue && (DateTime.UtcNow - freshness.IndexedAt.Value).TotalHours > 24)
-            Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
+        var staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+        if (staleAfter.Error != null)
+        {
+            Console.Error.WriteLine(staleAfter.Error);
+            return;
+        }
+
+        if (freshness.IndexedAt.HasValue)
+        {
+            var age = DateTime.UtcNow - freshness.IndexedAt.Value;
+            if (age > staleAfter.Value)
+                Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
+        }
     }
 
     private static string BuildZeroResultLine(string message, QueryCommandOptions options)
@@ -4189,6 +4314,37 @@ public static class QueryCommandRunner
             Console.WriteLine($"  Unverifiable DB rows : {check.UnverifiableFileCount:N0}{FormatSamples(check.UnverifiableFiles)}");
         if (check.ScanErrorCount > 0)
             Console.WriteLine($"  Scan errors : {check.ScanErrorCount:N0}{FormatSamples(check.ScanErrors)}");
+    }
+
+    private static void WriteStatusAge(StatusResult status, TimeSpan staleAfter)
+    {
+        if (!status.IndexedAt.HasValue)
+            return;
+
+        var age = DateTime.UtcNow - status.IndexedAt.Value;
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+
+        Console.WriteLine($"Age     : index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter)})");
+    }
+
+    internal static string FormatDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero)
+            duration = TimeSpan.Zero;
+
+        var totalDays = (int)duration.TotalDays;
+        var hours = duration.Hours;
+        var minutes = duration.Minutes;
+        var seconds = duration.Seconds;
+
+        if (totalDays > 0)
+            return hours > 0 ? $"{totalDays}d{hours}h" : $"{totalDays}d";
+        if (duration.TotalHours >= 1)
+            return minutes > 0 ? $"{(int)duration.TotalHours}h{minutes}m" : $"{(int)duration.TotalHours}h";
+        if (duration.TotalMinutes >= 1)
+            return seconds > 0 ? $"{(int)duration.TotalMinutes}m{seconds}s" : $"{(int)duration.TotalMinutes}m";
+        return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
 
     private static string FormatSamples(IReadOnlyList<string> samples)
@@ -4799,6 +4955,7 @@ public static class QueryCommandRunner
         ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
         ["--snippet-focus"] = "pass one of `leftmost`, `quality`, or `proximity`, e.g. `--snippet-focus quality` (default quality).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
+        ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
     };
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
@@ -5079,6 +5236,7 @@ public sealed class QueryCommandOptions
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
+    public TimeSpan? StaleAfter { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
     public bool RawBytes { get; init; }

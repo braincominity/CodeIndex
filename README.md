@@ -66,7 +66,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
 - Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
-- Exact DB/worktree freshness checks with `status --check`.
+- Exact DB/worktree freshness checks with `status --check`, including an
+  overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
 - Human `status` output translates readiness flags and `status --explain <field>`
   describes one readiness field/remediation; `status --json` keeps raw fields for
   automation, including the last full-scan unknown-extension count.
@@ -189,7 +190,8 @@ cdidx mcp
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
-- `status --check` による DB と作業ツリーの完全一致確認。
+- `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
+  `CDIDX_STALE_AFTER` で age threshold を上書き可能。
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
   個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
   と直近 full scan の未知拡張子数を維持します。

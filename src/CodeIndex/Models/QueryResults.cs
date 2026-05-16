@@ -404,6 +404,22 @@ public class StatusResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? FailedChecks { get; set; }
     /// <summary>
+    /// Effective age threshold, in seconds, used by `status --check` to explain stale-index
+    /// warnings. Null when `--check` was not requested.
+    /// `status --check` が stale 判定の説明に使った有効なしきい値（秒）。
+    /// </summary>
+    [JsonPropertyName("stale_after_seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? StaleAfterSeconds { get; set; }
+    /// <summary>
+    /// Age of the current index at `status --check` time, in seconds. Null when the DB has no
+    /// indexed timestamp or `--check` was not requested.
+    /// `status --check` 実行時点の index 経過秒数。timestamp が無い場合や未 check 時は null。
+    /// </summary>
+    [JsonPropertyName("index_age_seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? IndexAgeSeconds { get; set; }
+    /// <summary>
     /// True when the index exposes the full reference / validation tables. False signals a
     /// degraded read (legacy or read-only DB where TryMigrateForRead could not create
     /// symbol_references / file_issues), so a zero reference or issue count must not be
