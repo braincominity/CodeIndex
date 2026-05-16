@@ -832,6 +832,98 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_SkipsAppleDoubleResourceForks()
+    {
+        // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`
+        // looks like JavaScript) but are binary metadata blobs. They must be skipped wherever
+        // they appear in the tree, including nested directories.
+        // AppleDouble (`._*`) は原ファイルと同じ拡張子に見えるバイナリメタデータで、ツリーの
+        // どこに置かれていても index 対象にしてはならない。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
+            File.WriteAllText(Path.Combine(tempDir, "._app.js"), "\x00\x05\x16\x07AppleDouble");
+            File.WriteAllText(Path.Combine(tempDir, "._.gitignore"), "\x00\x05\x16\x07AppleDouble");
+
+            var sub = Path.Combine(tempDir, "sub");
+            Directory.CreateDirectory(sub);
+            File.WriteAllText(Path.Combine(sub, "main.py"), "def hello(): pass\n");
+            File.WriteAllText(Path.Combine(sub, "._main.py"), "\x00\x05\x16\x07AppleDouble");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js", "sub/main.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_AllowsRecognizedDotfiles()
+    {
+        // The AppleDouble denylist must not collateral-damage well-known dotfiles such as
+        // .gitignore, .editorconfig, and .cdidxrc.json — they do not start with `._`.
+        // AppleDouble の除外は `._` 接頭辞のみで判定するため、.gitignore / .editorconfig /
+        // .cdidxrc.json などの既知 dotfile は引き続き走査対象に残る必要がある。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "node_modules\n");
+            File.WriteAllText(Path.Combine(tempDir, ".editorconfig"), "root = true\n");
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxrc.json"), "{}");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetFileName(path))
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Contains(".editorconfig", files);
+            Assert.Contains(".gitignore", files);
+            Assert.Contains(".cdidxrc.json", files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_TreatsAppleDoubleAsDefaultFileExclusion()
+    {
+        // Update-mode (--files / --commits) must match the walker's denylist so that
+        // re-indexing an AppleDouble path explicitly does not bypass the default skip.
+        // --files / --commits の更新モードでも AppleDouble を明示的に対象に含められないよう、
+        // walker と同じ既定除外を返すこと。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var appleDouble = Path.Combine(tempDir, "._app.js");
+            File.WriteAllText(appleDouble, "\x00\x05\x16\x07AppleDouble");
+
+            var indexer = new FileIndexer(tempDir);
+            var filter = indexer.EvaluatePathFilter(appleDouble);
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsDirectorySymlinkPointingAtAncestor()
     {
         if (OperatingSystem.IsWindows())
