@@ -266,6 +266,26 @@ public class SuggestionStoreTests : IDisposable
         Assert.False(File.Exists(filePath), "Original corrupt file should be removed");
     }
 
+    [Fact]
+    public void StreamingReadShare_AllowsConcurrentReplacementWrite()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        _store.TryAdd(MakeRecord("other", null, "Existing suggestion"));
+
+        using var readHandle = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            SuggestionStore.StreamingReadFileShare);
+
+        var record = MakeRecord("other", null, "Concurrent write suggestion");
+
+        var ex = Record.Exception(() => _store.TryAdd(record));
+
+        Assert.Null(ex);
+        Assert.Contains(_store.LoadAll(), s => s.Hash == record.Hash);
+    }
+
     // --- MarkSubmitted tests / MarkSubmitted テスト ---
 
     [Fact]

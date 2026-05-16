@@ -19,6 +19,7 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -328,7 +329,7 @@ public class SuggestionStore
             _filePath,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            StreamingReadFileShare,
             bufferSize: 16 * 1024,
             useAsync: true);
 
