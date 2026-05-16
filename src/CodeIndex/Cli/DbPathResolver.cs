@@ -329,7 +329,8 @@ public static class DbPathResolver
             try
             {
                 var absolutePath = Path.Combine(candidateRoot, sample.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(absolutePath))
+                var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+                if (!File.Exists(ioPath))
                     continue;
 
                 pathExistsMatches++;
@@ -337,7 +338,7 @@ public static class DbPathResolver
                 // checksums recorded by an indexer running on a different OS.
                 // FileIndexer のヘルパを使い、OS をまたいだ clone (CRLF と LF) でも、
                 // 他 OS で生成された checksum と引き続き一致するようにする。
-                var checksum = FileIndexer.ComputeChecksum(File.ReadAllBytes(absolutePath));
+                var checksum = FileIndexer.ComputeChecksum(File.ReadAllBytes(ioPath));
                 if (string.Equals(checksum, sample.Checksum, StringComparison.OrdinalIgnoreCase))
                     checksumMatches++;
             }

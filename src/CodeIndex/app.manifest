@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="cdidx" />
+  <!--
+    Declare the published Windows binary as long-path-aware so the OS lifts
+    the legacy MAX_PATH (260) limit when LongPathsEnabled is set in the
+    registry. Without this opt-in, deep monorepo paths
+    (node_modules/.pnpm/<pkg>@<ver>/node_modules/...) are silently skipped
+    by the FileIndexer walker on Windows. Closes #1547.
+    Windows の LongPathsEnabled レジストリが有効な環境で legacy MAX_PATH(260)
+    制限を解除するため、公開バイナリを long-path-aware として宣言する。
+    無いと深い monorepo パス (node_modules/.pnpm/<pkg>@<ver>/...) が
+    FileIndexer の walker から黙って漏れる。Closes #1547.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

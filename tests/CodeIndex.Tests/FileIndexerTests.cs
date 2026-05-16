@@ -2387,6 +2387,172 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_Utf16LeBomFile_DecodedAsUtf16()
+    {
+        // Files written as UTF-16 LE with BOM (FF FE) must be decoded via UTF-16, not
+        // through the UTF-8 fallback that mangles every other byte into U+FFFD / NUL.
+        // Closes #1540.
+        // UTF-16 LE BOM (FF FE) 付きで書かれたソースは UTF-8 fallback ではなく UTF-16 で
+        // デコードしなければならない。UTF-8 経路では 1 バイトおきに U+FFFD / NUL に
+        // 化けてシンボル抽出が壊れる。Closes #1540.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16le.cs");
+            var payload = "using System;\nnamespace Utf16Le;\n";
+            var rawBytes = new byte[] { 0xFF, 0xFE }
+                .Concat(System.Text.Encoding.Unicode.GetBytes(payload))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16Le;", content);
+            Assert.DoesNotContain('�', content);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_Utf16BeBomFile_DecodedAsUtf16()
+    {
+        // UTF-16 BE BOM (FE FF) must also be decoded via UTF-16 BE so files authored on
+        // big-endian Windows or by legacy tooling keep their symbols intact. Closes #1540.
+        // UTF-16 BE BOM (FE FF) も UTF-16 BE でデコードし、ビッグエンディアン Windows
+        // やレガシツール由来のソースが壊れないようにする。Closes #1540.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16be.cs");
+            var payload = "using System;\nnamespace Utf16Be;\n";
+            var rawBytes = new byte[] { 0xFE, 0xFF }
+                .Concat(System.Text.Encoding.BigEndianUnicode.GetBytes(payload))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16Be;", content);
+            Assert.DoesNotContain('�', content);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ValidateContent_Utf16LeBomFile_EmitsUtf16BomNotRawByteIssues()
+    {
+        // When a file decodes via UTF-16 LE, the raw bytes are full of NULs (every ASCII
+        // codepoint) and the CRLF heuristic sees 0D 00 0A 00. ValidateContent must skip the
+        // `bom` / `null_byte` / `mixed_line_endings` paths and emit a single `utf16_bom`
+        // issue instead. Closes #1540.
+        // UTF-16 LE デコード経路では生バイト列に大量の NUL が並び、CRLF 判定は 0D 00 0A 00
+        // を見て誤検出する。ValidateContent は `bom` / `null_byte` / `mixed_line_endings`
+        // を出さず `utf16_bom` 1 件に集約する。Closes #1540.
+        var payload = "using System;\nclass C { }\n";
+        var rawBytes = new byte[] { 0xFF, 0xFE }
+            .Concat(System.Text.Encoding.Unicode.GetBytes(payload))
+            .ToArray();
+        // Simulate the content that BuildRecordWithRawBytes would produce.
+        var content = payload;
+
+        var issues = FileIndexer.ValidateContent("utf16le.cs", rawBytes, content);
+
+        Assert.Contains(issues, i => i.Kind == "utf16_bom");
+        Assert.DoesNotContain(issues, i => i.Kind == "bom");
+        Assert.DoesNotContain(issues, i => i.Kind == "null_byte");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+        Assert.DoesNotContain(issues, i => i.Kind == "replacement_char");
+        Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
+    }
+
+    [Fact]
+    public void ValidateContent_HighFffdRatio_EmitsAggregateNonUtf8Likely()
+    {
+        // A file decoded with many U+FFFD characters (mojibake from SHIFT_JIS / GBK / Latin-1
+        // misread as UTF-8) must collapse to one `non_utf8_likely` aggregate issue, not
+        // hundreds of per-line `replacement_char` issues that drown the diagnostic. Closes #1540.
+        // SHIFT_JIS / GBK / ISO-8859-1 を UTF-8 で読んで化けた content は per-line
+        // `replacement_char` で埋め尽くすのではなく `non_utf8_likely` 1 件に集約する。
+        // Closes #1540.
+        // Build content with > 1% U+FFFD ratio and many lines.
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 50; i++)
+        {
+            sb.Append("alpha � beta\n");
+        }
+        var content = sb.ToString();
+        // Raw bytes do not matter here for non_utf8_likely (it reads `content`), so use
+        // ASCII-safe bytes that won't trip the raw-byte heuristics.
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("placeholder\n");
+
+        var issues = FileIndexer.ValidateContent("garbled.cs", rawBytes, content);
+
+        Assert.Contains(issues, i => i.Kind == "non_utf8_likely");
+        // Per-line replacement_char emission must be suppressed when the aggregate fires.
+        // アグリゲートが出た場合は per-line replacement_char を抑止する。
+        Assert.DoesNotContain(issues, i => i.Kind == "replacement_char");
+    }
+
+    [Fact]
+    public void ValidateContent_LowFffdRatio_KeepsPerLineReplacementCharIssues()
+    {
+        // Below the aggregate threshold (a few stray U+FFFD in an otherwise clean file),
+        // the existing per-line `replacement_char` issues must still fire so genuine point
+        // defects (one stray byte in an otherwise-UTF-8 file) remain actionable. Closes #1540.
+        // 集約しきい値未満 (大半が正しく UTF-8 で書かれた中に数文字だけ U+FFFD が残る)
+        // の場合は従来の per-line `replacement_char` を出し続け、点の不具合を見逃さない。
+        // Closes #1540.
+        // 4 U+FFFD chars in a long file → far below 1% ratio AND below the minimum-count
+        // floor of 5, so the aggregate must not fire.
+        var sb = new System.Text.StringBuilder();
+        sb.Append("line1 clean\n");
+        sb.Append("line2 has � here\n");
+        sb.Append("line3 has � here\n");
+        for (int i = 0; i < 200; i++) sb.Append("filler ascii ascii ascii\n");
+        sb.Append("trailing �\n");
+        sb.Append("another �\n");
+        var content = sb.ToString();
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("placeholder\n");
+
+        var issues = FileIndexer.ValidateContent("partial.cs", rawBytes, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
+        Assert.Contains(issues, i => i.Kind == "replacement_char");
+    }
+
+    [Fact]
+    public void ValidateContent_Utf32LePrefix_NotMisclassifiedAsUtf16()
+    {
+        // UTF-32 LE shares the first two bytes with UTF-16 LE (FF FE 00 00). The detector
+        // must exclude this prefix so a UTF-32 LE file does not get tagged with `utf16_bom`
+        // and skip the raw-byte heuristics that would otherwise catch its NUL pattern.
+        // Closes #1540.
+        // UTF-32 LE は UTF-16 LE と先頭 2 バイトを共有する (FF FE 00 00)。この prefix を
+        // 検出器から除外し、UTF-32 LE を `utf16_bom` と誤判定して NUL バイトの生バイト
+        // ヒューリスティクスを飛ばさないようにする。Closes #1540.
+        var rawBytes = new byte[] { 0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00 };
+        // The content passed in does not matter much — what matters is that the validator
+        // does not emit `utf16_bom`. We pass an ASCII placeholder.
+        var content = "A";
+
+        var issues = FileIndexer.ValidateContent("utf32le.txt", rawBytes, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "utf16_bom");
+    }
+
+    [Fact]
     public void StripLineLeadingBom_BomFreeContent_ReturnsSameInstance()
     {
         // BOM-free content (the dominant case) must hit the fast path and
