@@ -880,6 +880,8 @@ public partial class DbReader
                     }
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                    if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase))
+                        continue;
                     var key = $"{caller.Path}:{callerName}";
 
                     if (!visited.Add(key))
