@@ -1272,9 +1272,8 @@ public partial class McpServer
     private const int BatchArgsSummaryMaxLength = 200;
     private static string BuildArgsSummary(JsonNode? toolArgs)
     {
-        if (toolArgs == null)
+        if (toolArgs is not JsonObject obj)
             return string.Empty;
-        var obj = toolArgs.AsObject();
         if (obj.Count == 0)
             return string.Empty;
         var parts = new List<string>(obj.Count);
