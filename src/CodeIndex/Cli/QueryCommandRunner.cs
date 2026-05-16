@@ -59,6 +59,7 @@ public static class QueryCommandRunner
         "--after",
         "--name",
         "--snippet-lines",
+        "--snippet-focus",
         "--path",
         "--exclude-path",
         "--depth",
@@ -226,7 +227,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                     Console.WriteLine(JsonSerializer.Serialize(
-                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang),
+                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
                         CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
             }
             else
@@ -234,7 +235,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -3075,6 +3076,7 @@ public static class QueryCommandRunner
         int? focusColumn = null;
         int focusLength = 1;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        var snippetFocus = SearchSnippetFocusMode.Quality;
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
@@ -3482,6 +3484,21 @@ public static class QueryCommandRunner
                     else
                         AddParseError(snippetLinesError!);
                     break;
+                case "--snippet-focus":
+                    if (!TryReadStringOptionValue(args, ref i, "--snippet-focus", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var snippetFocusValue, out var snippetFocusError))
+                    {
+                        AddParseError(snippetFocusError!);
+                    }
+                    else if (TryParseSnippetFocusMode(snippetFocusValue!, out var parsedSnippetFocus))
+                    {
+                        WarnIfDuplicateSingleValueOption("--snippet-focus", snippetFocusValue!);
+                        snippetFocus = parsedSnippetFocus;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: invalid --snippet-focus value '{snippetFocusValue}'. Use leftmost, quality, or proximity.");
+                    }
+                    break;
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
@@ -3533,6 +3550,7 @@ public static class QueryCommandRunner
             FocusColumn = focusColumn,
             FocusLength = focusLength,
             SnippetLines = snippetLines,
+            SnippetFocus = snippetFocus,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
             ExcludePaths = excludePaths,
@@ -3606,6 +3624,20 @@ public static class QueryCommandRunner
 
     internal static IReadOnlyList<string> GetLanguageAliases(string lang)
         => LanguageDisplayAliases.TryGetValue(lang, out var aliases) ? aliases : [];
+
+    internal static bool TryParseSnippetFocusMode(string value, out SearchSnippetFocusMode mode)
+    {
+        mode = value.Trim().ToLowerInvariant() switch
+        {
+            "leftmost" => SearchSnippetFocusMode.Leftmost,
+            "quality" => SearchSnippetFocusMode.Quality,
+            "proximity" => SearchSnippetFocusMode.Proximity,
+            _ => default,
+        };
+        return value.Trim().Equals("leftmost", StringComparison.OrdinalIgnoreCase)
+            || value.Trim().Equals("quality", StringComparison.OrdinalIgnoreCase)
+            || value.Trim().Equals("proximity", StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static IReadOnlyCollection<string> GetCompletionLanguageAliases()
         => LanguageDisplayAliases.Values.SelectMany(aliases => aliases).ToArray();
@@ -5145,6 +5177,7 @@ public static class QueryCommandRunner
         ["--focus-length"] = "pass a positive integer for the focused span width, e.g. `--focus-length 1` (default 1).",
         ["--name"] = "pass a literal symbol name, e.g. `--name UserService`. Repeat `--name` to add more names.",
         ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
+        ["--snippet-focus"] = "pass one of `leftmost`, `quality`, or `proximity`, e.g. `--snippet-focus quality` (default quality).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
     };
@@ -5414,6 +5447,7 @@ public sealed class QueryCommandOptions
     public int? FocusColumn { get; init; }
     public int FocusLength { get; init; } = 1;
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
+    public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];

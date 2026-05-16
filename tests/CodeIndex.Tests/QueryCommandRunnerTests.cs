@@ -42,6 +42,7 @@ public class QueryCommandRunnerTests
             "--focus-column", "33",
             "--focus-length", "6",
             "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}",
+            "--snippet-focus", "proximity",
             "--max-line-width", "77",
         ], jsonDefault: true);
 
@@ -64,6 +65,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(33, options.FocusColumn);
         Assert.Equal(6, options.FocusLength);
         Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
+        Assert.Equal(SearchSnippetFocusMode.Proximity, options.SnippetFocus);
         Assert.Equal(77, options.MaxLineWidth);
     }
 
@@ -1994,6 +1996,7 @@ jobs:
     [InlineData(new[] { "QueryCommandRunner", "--path" }, "search", "--path", "pass a glob-style path pattern", "--path src/**")]
     [InlineData(new[] { "QueryCommandRunner", "--exclude-path" }, "search", "--exclude-path", "pass a glob-style path pattern to exclude", "--exclude-path tests/**")]
     [InlineData(new[] { "QueryCommandRunner", "--snippet-lines" }, "search", "--snippet-lines", "pass an integer between 1 and 20", "--snippet-lines 8")]
+    [InlineData(new[] { "QueryCommandRunner", "--snippet-focus" }, "search", "--snippet-focus", "pass one of `leftmost`, `quality`, or `proximity`", "--snippet-focus quality")]
     [InlineData(new[] { "QueryCommandRunner", "--max-line-width" }, "search", "--max-line-width", "pass a non-negative integer", "--max-line-width 512")]
     public void RunSearch_MissingOptionValueAppendsPerFlagHint_Issue1507(
         string[] args,
@@ -2819,6 +2822,7 @@ jobs:
     [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.")]
     [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.")]
     [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.")]
+    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.")]
     [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.")]
     [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.")]
     [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.")]
