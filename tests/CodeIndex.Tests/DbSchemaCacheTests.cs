@@ -194,6 +194,37 @@ public sealed class DbSchemaCacheTests : IDisposable
     }
 
     [Fact]
+    public void StaleSentinel_DiscardsEntriesLoadedDuringFailedVersionWindow()
+    {
+        // Codex review (#1565, second pass): if `PRAGMA schema_version` fails
+        // (transient lock during external DDL), entries the cache loads in
+        // that window have no version guarantee. The next successful version
+        // read MUST clear them, regardless of whether the read returns a new
+        // value or a "first observation" value — otherwise they would be
+        // version-stamped as current and outlive the DDL.
+
+        // Prime the cache so we have an entry that simulates "loaded during
+        // failure window" (the production path would set this via the
+        // exception branch, but we use the internal test seam to keep the
+        // test free of contrived locking choreography).
+        var stale = _db.SchemaCache.GetColumns("files");
+        _db.SchemaCache.MarkVersionStaleForTest();
+
+        // Next lookup: EnsureFreshUnlocked sees the stale sentinel and must
+        // drop the existing entry even though no DDL has actually happened
+        // and the schema_version equals whatever was last observed.
+        var refreshed = _db.SchemaCache.GetColumns("files");
+
+        Assert.NotSame(stale, refreshed);
+        Assert.Equal(stale, refreshed);
+
+        // Sentinel must clear after the successful read so further calls in
+        // the steady state do not pay the discard cost on every lookup.
+        var steady = _db.SchemaCache.GetColumns("files");
+        Assert.Same(refreshed, steady);
+    }
+
+    [Fact]
     public void DbReader_LegacyConstructor_StillWorksWithoutCache()
     {
         // The (SqliteConnection, bool) overload is the legacy path used by

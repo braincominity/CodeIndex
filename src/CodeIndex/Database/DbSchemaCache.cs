@@ -29,6 +29,16 @@ public sealed class DbSchemaCache
     private readonly Dictionary<string, HashSet<string>> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _tableExists = new(StringComparer.OrdinalIgnoreCase);
     private long? _lastSchemaVersion;
+    // Set when `EnsureFreshUnlocked` could not read `PRAGMA schema_version`
+    // and we therefore cannot trust that entries loaded during this window are
+    // current. The next successful version read must drop cached entries
+    // unconditionally, regardless of whether the read returns a "new" or
+    // "first-observation" value — otherwise stale data loaded between a failed
+    // check and the next successful one would be version-stamped as current
+    // and outlive the migration.
+    // PRAGMA schema_version 取得に失敗した直後はキャッシュ整合性が信頼できないため、
+    // この sentinel が立っている間に追加されたエントリは次の成功時に必ず破棄する。
+    private bool _versionStale;
 
     public DbSchemaCache(SqliteConnection connection)
     {
@@ -88,6 +98,7 @@ public sealed class DbSchemaCache
         _indexes.Clear();
         _tableExists.Clear();
         _lastSchemaVersion = null;
+        _versionStale = false;
     }
 
     /// <summary>
@@ -115,11 +126,29 @@ public sealed class DbSchemaCache
         catch (SqliteException)
         {
             // Could not read schema_version (e.g. transient lock during DDL on
-            // another connection). Treat as a forced refresh: drop cache so the
-            // caller's PRAGMA actually re-reads fresh, rather than silently
-            // serving potentially-stale entries.
-            // PRAGMA schema_version 取得に失敗した場合は安全側に倒してキャッシュを破棄する。
-            ClearUnlocked();
+            // another connection). Drop whatever was cached and mark the
+            // cache stale so the next successful version read clears anything
+            // we load during this failure window — that load may have read the
+            // DB mid-DDL and would otherwise get version-stamped as current.
+            // PRAGMA schema_version 取得に失敗した場合は安全側に倒し、現エントリを破棄して
+            // sentinel を立てる。失敗中に読み込んだ値は次回成功時に必ず破棄される。
+            _columns.Clear();
+            _indexes.Clear();
+            _tableExists.Clear();
+            _versionStale = true;
+            return;
+        }
+
+        // Always clear if the prior failure path set the stale sentinel, even
+        // when the version equals the last known value — entries cached after
+        // the failed read carry no version guarantee at all.
+        if (_versionStale)
+        {
+            _columns.Clear();
+            _indexes.Clear();
+            _tableExists.Clear();
+            _lastSchemaVersion = current;
+            _versionStale = false;
             return;
         }
 
@@ -136,6 +165,14 @@ public sealed class DbSchemaCache
         _tableExists.Clear();
         _lastSchemaVersion = current;
     }
+
+    /// <summary>
+    /// Test seam: simulates the post-failed-`PRAGMA schema_version` state by
+    /// pretending the cache holds entries that were populated during a
+    /// failure window. Production code never calls this; only the regression
+    /// test for the stale-sentinel path uses it.
+    /// </summary>
+    internal void MarkVersionStaleForTest() { lock (_lock) { _versionStale = true; } }
 
     private bool HasTableUnlocked(string tableName)
     {
