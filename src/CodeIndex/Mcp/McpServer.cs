@@ -1347,12 +1347,18 @@ public partial class McpServer : IDisposable
 
     /// <summary>
     /// Create a tool error response (MCP format with isError flag).
-    /// ツールエラーレスポンスを作成（isErrorフラグ付きMCP形式）。
+    /// Optional <paramref name="similarValues"/> attach a structured
+    /// <c>data.similar_values</c> array to the result so MCP clients can offer
+    /// recovery alternatives without parsing the human-readable message (#1582).
+    /// ツールエラーレスポンスを作成（isError フラグ付き MCP 形式）。
+    /// <paramref name="similarValues"/> を渡すと結果に構造化された
+    /// <c>data.similar_values</c> 配列を添えるので、MCP クライアントは
+    /// 人間向けメッセージを解析せずに代替候補を提示できる (#1582)。
     /// </summary>
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message)
-        => CreateToolErrorResponse(id is not null, id, message);
+    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message, IReadOnlyList<string>? similarValues = null)
+        => CreateToolErrorResponse(id is not null, id, message, similarValues);
 
-    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message)
+    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message, IReadOnlyList<string>? similarValues = null)
     {
         var result = new JsonObject
         {
@@ -1366,6 +1372,16 @@ public partial class McpServer : IDisposable
             },
             ["isError"] = true
         };
+        if (similarValues != null && similarValues.Count > 0)
+        {
+            var similarArray = new JsonArray();
+            foreach (var value in similarValues)
+                similarArray.Add(JsonValue.Create(value));
+            result["data"] = new JsonObject
+            {
+                ["similar_values"] = similarArray,
+            };
+        }
         return CreateSuccessResponse(hasId, id, result);
     }
 

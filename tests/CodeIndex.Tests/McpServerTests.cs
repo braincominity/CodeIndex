@@ -6896,6 +6896,27 @@ public class McpServerTests : IDisposable
         Assert.Contains("Invalid category", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
+    // Regression pin for issue #1582: typo'd category should surface a "Did you mean: ..." hint and
+    // expose machine-readable similar values via `result.data.similar_values` for MCP clients.
+    // #1582 回帰テスト: タイポしたカテゴリは "Did you mean: ..." ヒントを返し、MCP クライアント向けに
+    // `result.data.similar_values` で類似候補を構造化して提供する。
+    [Fact]
+    public void SuggestImprovement_InvalidCategoryTypo_ReturnsDidYouMeanWithSimilarValues_Issue1582()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"symbol_extractoin","description":"Some description"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Invalid category", text);
+        Assert.Contains("Did you mean: symbol_extraction", text);
+
+        var data = result["data"]!.AsObject();
+        var similar = data["similar_values"]!.AsArray();
+        Assert.Contains(similar, n => n!.GetValue<string>() == "symbol_extraction");
+    }
+
     [Fact]
     public void SuggestImprovement_MissingDescription_ReturnsError()
     {

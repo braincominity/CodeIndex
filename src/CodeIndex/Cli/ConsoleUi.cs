@@ -573,27 +573,76 @@ public static class ConsoleUi
     /// Short commands use a stricter threshold to avoid unrelated suggestions.
     /// Damerau-Levenshtein距離で最も近いコマンド名を返す。短いコマンドは無関係な推薦を避けるため閾値を厳しくする。
     /// </summary>
-    public static string? FindClosestCommand(string input)
+    public static string? FindClosestCommand(string input) =>
+        FindClosestMatch(input, Commands);
+
+    /// <summary>
+    /// Find the closest match for <paramref name="input"/> from <paramref name="candidates"/>
+    /// using Damerau-Levenshtein distance with the same length-aware threshold the
+    /// command suggester uses (#1582). Comparison is case-insensitive. Returns the original
+    /// (cased) candidate string, or <c>null</c> when no candidate is within the threshold.
+    /// 任意の候補集合に対して Damerau-Levenshtein 距離で最も近い候補を返す (#1582)。
+    /// 短い入力には厳しめの距離閾値を適用し、無関係な推薦を避ける。比較は case-insensitive。
+    /// </summary>
+    public static string? FindClosestMatch(string? input, IEnumerable<string> candidates)
     {
         if (string.IsNullOrWhiteSpace(input))
             return null;
 
-        input = input.ToLowerInvariant();
+        var normalized = input.ToLowerInvariant();
         string? best = null;
         var bestDist = int.MaxValue;
-        foreach (var cmd in Commands)
+        foreach (var candidate in candidates)
         {
-            var dist = DamerauLevenshteinDistance(input, cmd);
-            if (dist > GetSuggestionDistanceThreshold(input.Length, cmd.Length))
+            if (string.IsNullOrEmpty(candidate))
                 continue;
-
+            var candidateNormalized = candidate.ToLowerInvariant();
+            if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
+                return candidate;
+            var dist = DamerauLevenshteinDistance(normalized, candidateNormalized);
+            if (dist > GetSuggestionDistanceThreshold(normalized.Length, candidateNormalized.Length))
+                continue;
             if (dist < bestDist)
             {
                 bestDist = dist;
-                best = cmd;
+                best = candidate;
             }
         }
         return best;
+    }
+
+    /// <summary>
+    /// Return up to <paramref name="maxResults"/> closest candidates for <paramref name="input"/>,
+    /// ordered by Damerau-Levenshtein distance. Useful for structured suggestions in MCP
+    /// error payloads (#1582). Returns an empty list when no candidate is within the threshold.
+    /// Damerau-Levenshtein 距離で近い候補を最大 <paramref name="maxResults"/> 件まで返す。
+    /// MCP の structured error payload で `similar_values` を返す用途を想定する (#1582)。
+    /// </summary>
+    public static IReadOnlyList<string> FindClosestMatches(string? input, IEnumerable<string> candidates, int maxResults = 3)
+    {
+        if (string.IsNullOrWhiteSpace(input) || maxResults <= 0)
+            return Array.Empty<string>();
+
+        var normalized = input.ToLowerInvariant();
+        var matches = new List<(string Candidate, int Distance)>();
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrEmpty(candidate))
+                continue;
+            var candidateNormalized = candidate.ToLowerInvariant();
+            if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
+                continue;
+            var dist = DamerauLevenshteinDistance(normalized, candidateNormalized);
+            if (dist > GetSuggestionDistanceThreshold(normalized.Length, candidateNormalized.Length))
+                continue;
+            matches.Add((candidate, dist));
+        }
+        return matches
+            .OrderBy(m => m.Distance)
+            .ThenBy(m => m.Candidate, StringComparer.Ordinal)
+            .Select(m => m.Candidate)
+            .Take(maxResults)
+            .ToList();
     }
 
     private static int GetSuggestionDistanceThreshold(int inputLength, int commandLength)

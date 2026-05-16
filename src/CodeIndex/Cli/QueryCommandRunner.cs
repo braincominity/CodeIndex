@@ -3366,6 +3366,15 @@ public static class QueryCommandRunner
                 i++;
 
             Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
+            // Suggest the closest accepted flag for this command when the user mistypes
+            // a flag name (e.g. `--paht` → `--path`). Built on the same suggester used for
+            // subcommand typos so the recovery experience is consistent (#1582).
+            // ユーザーがフラグ名をミスタイプしたとき (例: `--paht` → `--path`) に
+            // そのコマンドで受理される最も近いフラグを提案する。サブコマンドの did-you-mean と
+            // 同じ suggester を共用し、回復体験を統一する (#1582)。
+            var suggestion = ConsoleUi.FindClosestMatch(normalizedArg, supported.Where(o => o != "--"));
+            if (suggestion != null)
+                Console.Error.WriteLine($"Did you mean: {suggestion}?");
             Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
             Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
             return true;
@@ -3832,7 +3841,19 @@ public static class QueryCommandRunner
         if (lang == null) return;
         var status = reader.GetStatus();
         if (status.Languages.Count > 0 && !status.Languages.ContainsKey(lang))
+        {
             Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
+            // Recover from `--lang pythno` / `--lang csarp` typos by suggesting the
+            // closest indexed language (#1582). Fall back to the full supported set when
+            // the typo does not match anything currently in the DB.
+            // `--lang pythno` / `--lang csarp` のようなタイプミスから回復させるため、
+            // インデックスに存在する言語の中から最も近いものを提案する (#1582)。
+            // インデックスに無ければ extractor がサポートする全言語集合から探す。
+            var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
+                             ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
+            if (suggestion != null)
+                Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
+        }
     }
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
@@ -3860,6 +3881,9 @@ public static class QueryCommandRunner
         if (!AllValidKinds.Contains(kind))
         {
             Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", AllValidKinds)}");
+            var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidKinds);
+            if (suggestion != null)
+                Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
             return;
         }
         // Kind is valid but not found in this index — hint that no symbols of this kind exist
@@ -3889,6 +3913,9 @@ public static class QueryCommandRunner
         }
 
         Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
+        var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
     }
 
     // Reference kinds that are valid `references --kind` values but NOT valid

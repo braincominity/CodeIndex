@@ -2509,6 +2509,21 @@ jobs:
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    // `--paht` should surface as `--path` so MCP/CLI users do not have to read full help
+    // text to recover from a single-letter swap (#1582).
+    // `--paht` のような 1 文字入れ替えミスから `--path` を提案できることを確認する (#1582)。
+    [Fact]
+    public void RunSearch_UnsupportedFlagTypo_SuggestsClosestFlag()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--paht", "src/**"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --paht is not supported for search.", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
     [Theory]
     [InlineData("search-limit", "search", "--limit requires a positive integer")]
     [InlineData("search-top", "search", "--limit requires a positive integer")]
