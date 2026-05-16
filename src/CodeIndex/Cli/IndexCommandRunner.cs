@@ -105,6 +105,17 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (options.ChangedBetweenSpecified && options.ChangedBetweenRefs.Count != 2)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "--changed-between requires exactly two refs",
+                CommandExitCodes.UsageError,
+                "Rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
+                CommandErrorCodes.UsageError);
+        }
+
         if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(dbPath))
         {
             return WriteCommandError(
@@ -818,17 +829,6 @@ public static class IndexCommandRunner
 
         if (options.ChangedBetweenSpecified)
         {
-            if (options.ChangedBetweenRefs.Count != 2)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    "--changed-between requires exactly two refs",
-                    CommandExitCodes.UsageError,
-                    "Rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
-                    CommandErrorCodes.UsageError);
-            }
-
             CancellationTokenSource? spinnerCts = null;
             try
             {

@@ -2966,6 +2966,26 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithChangedBetweenMissingRef_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "HEAD", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--changed-between requires exactly two refs", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_RemovesIndexedScriptThatLosesShebang()
     {
         var projectRoot = CreateTempProject();
