@@ -1311,10 +1311,13 @@ public partial class DbReader
         {
             while (reader.TrackedRead())
             {
+                var name = reader.GetString(1);
+                var containerName = GetNullableString(reader, 9);
+                var containerQualifiedName = GetNullableString(reader, 10);
                 symbols.Add(new OutlineSymbol
                 {
                     Kind = reader.GetString(0),
-                    Name = reader.GetString(1),
+                    Name = name,
                     Line = reader.GetInt32(2),
                     StartLine = GetInt32OrFallback(reader, 3, 2),
                     EndLine = GetInt32OrFallback(reader, 4, 2),
@@ -1322,8 +1325,8 @@ public partial class DbReader
                     BodyEndLine = GetNullableInt32(reader, 6),
                     Signature = GetNullableString(reader, 7),
                     ContainerKind = GetNullableString(reader, 8),
-                    ContainerName = GetNullableString(reader, 9),
-                    Path = BuildOutlineSymbolPath(GetNullableString(reader, 10), reader.GetString(1)),
+                    ContainerName = containerName,
+                    Path = BuildOutlineSymbolPath(containerQualifiedName ?? containerName, name),
                     Visibility = GetNullableString(reader, 11),
                     ReturnType = GetNullableString(reader, 12),
                 });

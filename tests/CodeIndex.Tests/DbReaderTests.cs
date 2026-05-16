@@ -11130,6 +11130,58 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_PathFallsBackToContainerNameWhenQualifiedContainerIsUnavailable()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy-container.cs",
+            Lang = "csharp",
+            Size = 64,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 3,
+            Content = "class Worker { void Process(int count) { } }",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Worker",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "class Worker",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Process",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "void Process(int count)",
+                ContainerKind = "class",
+                ContainerName = "Worker",
+            }
+        ]);
+
+        var outline = _reader.GetOutline("src/legacy-container.cs");
+
+        Assert.NotNull(outline);
+        var method = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "Process"));
+        Assert.Equal("Worker.Process", method.Path);
+        Assert.Equal("Process(int)", method.DisplayName);
+    }
+
+    [Fact]
     public void GetOutline_AddsPathsForPythonShadowedMethods()
     {
         InsertIndexedFile(
