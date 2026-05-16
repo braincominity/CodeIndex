@@ -1208,6 +1208,18 @@ public partial class McpServer
                 continue;
             }
 
+            // Reject nested batch_query before the rate-limit consumption so the per-(tool,
+            // caller) bucket cannot be drained by recursive expansion (and so the failure
+            // message is clear instead of the generic "Unknown tool: batch_query") (#1560).
+            // 再帰展開でバケットを消費させないため、レート制限消費の前に内側 batch_query を
+            // 明示的に拒否する。エラーメッセージも "Unknown tool: batch_query" の汎用ではなく
+            // ネスト禁止の明示文に揃える（#1560）。
+            if (toolName == "batch_query")
+            {
+                AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.");
+                continue;
+            }
+
             // Throttle each inner slot too, otherwise a single allowed batch_query call could
             // still drive N inner searches through and defeat the per-(tool, caller) limiter
             // the outer dispatch enforces. The decision is per (inner-tool, caller) so an

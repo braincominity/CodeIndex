@@ -67,12 +67,30 @@ internal sealed class RateLimiter
 
         public RateLimiterDecision TryAcquire(DateTimeOffset now, double refillRate, double capacity)
         {
+            // Defense in depth: the public surface gates on RateLimiterOptions.IsEnabled
+            // (which requires refillRate > 0), so this guard only fires if a future caller
+            // bypasses that gate. Without it, `deficit / refillRate` would silently become
+            // ±Infinity, and `(long)Infinity` is implementation-defined in .NET.
+            // 上位の IsEnabled で refillRate > 0 は保証されるが、将来 IsEnabled を経由しない
+            // 経路が増えた場合に `deficit / refillRate` が ±Infinity になり (long) 化で
+            // 実装依存の値になるのを防ぐための内部 guard。
+            if (refillRate <= 0)
+                throw new ArgumentOutOfRangeException(nameof(refillRate), "refillRate must be positive when TryAcquire is invoked.");
+
             var elapsedSeconds = (now - _lastUpdate).TotalSeconds;
             if (elapsedSeconds > 0)
             {
                 _tokens = Math.Min(capacity, _tokens + elapsedSeconds * refillRate);
                 _lastUpdate = now;
             }
+            // When elapsedSeconds <= 0 (clock drift / repeated tick / backwards step) we
+            // intentionally do NOT touch _lastUpdate. The bucket stays anchored to its
+            // previous base, so the next forward tick computes elapsed against the older
+            // anchor and refills correctly. The Math.Min clamp still caps at BurstCapacity
+            // so even a large forward jump cannot grow the bucket beyond burst.
+            // elapsedSeconds <= 0（時計逆行・同一 tick・ドリフト）の場合は _lastUpdate を
+            // あえて更新せず、次回 forward tick で旧アンカーから経過時間を計算する。
+            // Math.Min による burst clamp により、大きく前進しても burst を超える補充は起きない。
 
             if (_tokens >= 1.0)
             {

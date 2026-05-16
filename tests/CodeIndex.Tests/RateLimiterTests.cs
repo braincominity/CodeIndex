@@ -105,6 +105,58 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void Refill_ClampsAtBurstCapacityAfterLongIdle()
+    {
+        // After draining the bucket, a long idle gap could refill `elapsed * rps` tokens
+        // (10 seconds * 1 token/sec = 10) — the Math.Min(capacity, ...) clamp must cap
+        // refill at BurstCapacity so a starved limiter cannot become a 10x burst window.
+        // バケット枯渇後の長い無アクセス区間で `elapsed * rps`（10 秒 × 1 token/sec = 10）が
+        // 流入しても、Math.Min による burst clamp により BurstCapacity を超えないことを検証する。
+        var clock = new TestClock();
+        var options = new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 2.0 };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.False(limiter.TryAcquire("search", "client-a").Allowed);
+
+        // 10 seconds elapse — would refill 10 tokens without clamping / clamp 無しなら 10 補充。
+        clock.Now = clock.Now.AddSeconds(10);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        // Third consecutive call would succeed if the clamp were ignored / clamp 無視時のみ成功する。
+        Assert.False(limiter.TryAcquire("search", "client-a").Allowed);
+    }
+
+    [Fact]
+    public void Clock_GoingBackwards_DoesNotOverRefill()
+    {
+        // If the injected clock returns a value earlier than (or equal to) the last update
+        // — possible during NTP step / DST adjustments with wall-clock time — the bucket
+        // must not silently refill, and the original anchor must be preserved so the next
+        // forward tick computes elapsed from the older anchor (issue #1560 review).
+        // NTP / DST 補正等で時計が逆行または同一 tick を返した場合に、勝手な補充が起きず
+        // anchor が保持され、次の forward tick で正しく経過時間が算出されることを検証する。
+        var clock = new TestClock();
+        var options = new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.False(limiter.TryAcquire("search", "client-a").Allowed);
+
+        // Clock steps backwards — must not refill / 逆行: 補充禁止。
+        clock.Now = clock.Now.AddMilliseconds(-500);
+        Assert.False(limiter.TryAcquire("search", "client-a").Allowed);
+
+        // Forward to one second after the original anchor — should refill exactly one
+        // token (anchor was preserved at the original timestamp).
+        // 元の anchor から 1 秒経過: ちょうど 1 トークン補充される（anchor が保持されている）。
+        clock.Now = clock.Now.AddMilliseconds(1500);
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+    }
+
+    [Fact]
     public void FromEnvironment_NoVars_ReturnsDisabled()
     {
         var opts = RateLimiterOptions.FromEnvironment(_ => null, _ => { });

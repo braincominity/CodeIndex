@@ -268,7 +268,23 @@ public partial class McpServer : IDisposable
     /// </summary>
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
-        _caller = ResolveCallerIdentity(_params);
+        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
+        // identity, but reject re-initialize attempts that swap one named identity for
+        // another. Otherwise a single networked session could reset its rate-limit bucket
+        // mid-flight by re-initializing under a fresh name (issue #1560 evidence — DoS
+        // surface for networked MCP deployments).
+        // caller の sticky 制御: 既定の "unknown" バケットからは名前付き ID への昇格を許すが、
+        // 名前付き ID 同士のスワップは拒否する。これを許すと 1 セッション内で再 initialize により
+        // 新しい名前でレート制限バケットをリセットできてしまい、#1560 が指摘する DoS 経路になる。
+        var resolved = ResolveCallerIdentity(_params);
+        if (_caller == "unknown")
+        {
+            _caller = resolved;
+        }
+        else if (resolved != _caller && resolved != "unknown")
+        {
+            Console.Error.WriteLine(BuildCallerSwapRejectionLog(_caller, resolved));
+        }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
         {
@@ -588,6 +604,9 @@ public partial class McpServer : IDisposable
     // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
     internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
         $"[cdidx-mcp] Rate limit exceeded: tool='{toolName}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+
+    internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
+        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";

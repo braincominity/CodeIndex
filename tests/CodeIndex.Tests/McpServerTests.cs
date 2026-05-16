@@ -6678,16 +6678,80 @@ public class McpServerTests : IDisposable
         Assert.Equal("unknown", _server.CurrentCaller);
 
         _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"my-client"}}}""")!);
-        Assert.Equal("my-client", _server.CurrentCaller);
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"my-client","version":"1.2.3"}}}""")!);
+        Assert.Equal("my-client/1.2.3", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void Initialize_UpgradesFromUnknownToNamedCaller()
+    {
+        // The first initialize() with a named clientInfo upgrades the caller out of the
+        // anonymous `"unknown"` bucket, so subsequent calls are throttled per client
+        // rather than under a shared anonymous bucket (#1560).
+        // 最初の名前付き initialize で `"unknown"` から昇格し、以降は client 単位で計量される。
+        Assert.Equal("unknown", _server.CurrentCaller);
 
         _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"my-client","version":"2.0"}}}""")!);
-        Assert.Equal("my-client/2.0", _server.CurrentCaller);
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"named-client"}}}""")!);
+        Assert.Equal("named-client", _server.CurrentCaller);
+    }
 
+    [Fact]
+    public void Initialize_NamedCallerIsSticky_RejectsReIdentifySwap()
+    {
+        // Once a named caller has been captured, re-initialize() under a *different* name
+        // is ignored so a networked MCP session cannot reset its rate-limit bucket simply
+        // by re-initializing under a fresh identity. The retained name continues to key
+        // all subsequent (tool, caller) buckets (#1560 DoS vector).
+        // 名前付き caller の取得後は、別名での再 initialize() を無視し、レート制限バケットを
+        // リセットする経路を塞ぐ（#1560 DoS）。
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"first-client"}}}""")!);
+        Assert.Equal("first-client", _server.CurrentCaller);
+
+        // Re-init under a different name is ignored / 別名は無視
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"second-client"}}}""")!);
+        Assert.Equal("first-client", _server.CurrentCaller);
+
+        // Re-init with empty clientInfo (resolves to "unknown") also cannot downgrade /
+        // 空の clientInfo（"unknown" に解決）でも降格しない。
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}""")!);
-        Assert.Equal("unknown", _server.CurrentCaller);
+        Assert.Equal("first-client", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void BuildCallerSwapRejectionLog_IsActionable()
+    {
+        var log = McpServer.BuildCallerSwapRejectionLog("first-client", "second-client");
+        Assert.Contains("Ignoring re-initialize", log);
+        Assert.Contains("first-client", log);
+        Assert.Contains("second-client", log);
+    }
+
+    [Fact]
+    public void BatchQuery_RejectsNestedBatchQuerySlots()
+    {
+        // batch_query slots that themselves request `batch_query` are rejected before
+        // rate-limit token consumption so the per-(tool, caller) bucket cannot be drained
+        // by recursive expansion, and the error message names the constraint explicitly
+        // instead of bubbling up the generic "Unknown tool" error (#1560 nesting vector).
+        // 内側で batch_query を呼ぶスロットは、トークン消費の前に明示的に拒否し、再帰展開で
+        // バケットを枯渇させる経路を塞ぐ。エラーメッセージもネスト禁止を明示する（#1560）。
+        var request = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[
+            {"tool":"batch_query","args":{"queries":[]}}
+        ]}}}
+        """)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        var nested = results[0]!;
+        Assert.Equal("batch_query cannot be nested inside batch_query.", nested["error"]!.GetValue<string>());
+        Assert.Null(nested["error_category"]);
     }
 
     [Fact]
