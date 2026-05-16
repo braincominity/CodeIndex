@@ -1420,6 +1420,69 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_ZeroResultsHumanOutputIncludesQueryFilterContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_zero_context_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public sealed class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found. (query: \"missing-token\", path: src/**, lang: csharp, limit: 7)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultsJsonIncludesStructuredQueryContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_zero_context_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public sealed class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var queryContext = root.GetProperty("query_context");
+
+            Assert.Equal(0, root.GetProperty("count").GetInt32());
+            Assert.Equal("missing-token", root.GetProperty("query").GetString());
+            Assert.Equal("missing-token", queryContext.GetProperty("text").GetString());
+            Assert.Equal("src/**", queryContext.GetProperty("path")[0].GetString());
+            Assert.Equal("csharp", queryContext.GetProperty("lang").GetString());
+            Assert.Equal(7, queryContext.GetProperty("limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AllowsPathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_preview_like_path_value");
@@ -31538,5 +31601,104 @@ jobs:
             SqliteConnection.ClearAllPools();
             try { File.Delete(dbPath); } catch { }
         }
+    }
+
+    [Fact]
+    public void RunFiles_HumanOutputFormatsSizesAndBytesFlagKeepsRawCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_size_units");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/big.cs", "csharp", "class Big {}\n");
+            SetIndexedFileSize(dbPath, "src/big.cs", 5L * 1024 * 1024 * 1024);
+
+            var (formattedExit, formattedStdout, formattedStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath],
+                _jsonOptions));
+            var (rawExit, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--bytes"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, formattedExit);
+            Assert.Equal(CommandExitCodes.Success, rawExit);
+            Assert.Contains("5.0 GiB", formattedStdout);
+            Assert.DoesNotContain("5368709120 bytes", formattedStdout);
+            Assert.Contains("5368709120 bytes", rawStdout);
+            Assert.Equal("(1 files)" + Environment.NewLine, formattedStderr);
+            Assert.Equal("(1 files)" + Environment.NewLine, rawStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_JsonOutputKeepsRawSizeInteger()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_size_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/big.cs", "csharp", "class Big {}\n");
+            SetIndexedFileSize(dbPath, "src/big.cs", 5L * 1024 * 1024 * 1024);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(5L * 1024 * 1024 * 1024, document.RootElement.GetProperty("size").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_HumanLargestFilesFormatsSizesAndBytesFlagKeepsRawCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_size_units");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/big.cs", "csharp", "class Big {}\n");
+            SetIndexedFileSize(dbPath, "src/big.cs", 5L * 1024 * 1024 * 1024);
+
+            var (formattedExit, formattedStdout, formattedStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath],
+                _jsonOptions));
+            var (rawExit, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--bytes"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, formattedExit);
+            Assert.Equal(CommandExitCodes.Success, rawExit);
+            Assert.Equal(string.Empty, formattedStderr);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Contains("Largest files:", formattedStdout);
+            Assert.Contains("src/big.cs", formattedStdout);
+            Assert.Contains("5.0 GiB", formattedStdout);
+            Assert.Contains("5368709120 bytes", rawStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void SetIndexedFileSize(string dbPath, string path, long size)
+    {
+        using var db = new DbContext(dbPath);
+        using var command = db.Connection.CreateCommand();
+        command.CommandText = "UPDATE files SET size = $size WHERE path = $path";
+        command.Parameters.AddWithValue("$size", size);
+        command.Parameters.AddWithValue("$path", path);
+        command.ExecuteNonQuery();
     }
 }

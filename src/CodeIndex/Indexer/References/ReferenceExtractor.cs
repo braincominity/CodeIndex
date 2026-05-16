@@ -534,6 +534,12 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpTypeKeywordIntroRegex = new(
         @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(",
         RegexOptions.Compiled);
+    // Reflection member-name lookups such as `GetMethod("Run")` carry a real member reference
+    // even though the symbol name appears as string data. Emit only literal or literal-concat
+    // first arguments so dynamic names stay conservative.
+    private static readonly Regex CSharpReflectionNameApiIntroRegex = new(
+        @"(?<![\w$])(?<name>GetMethod|GetField|GetProperty|GetEvent|GetMember|GetNestedType)\s*\(",
+        RegexOptions.Compiled);
     // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
     // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
@@ -1667,6 +1673,8 @@ public static partial class ReferenceExtractor
                         references, seen, fileId, preparedLine, parenIndex + 1,
                         context, lineNumber, container, language, csharpGenericParameterNames);
                 }
+                ExtractCSharpReflectionNameLiteralReferences(
+                    references, seen, fileId, preparedLine, originalLine, context, lineNumber, container);
             }
             else if (language is "java")
             {
@@ -3343,6 +3351,263 @@ public static partial class ReferenceExtractor
             // 解釈できないトークンが来たら、このキーワード引数の走査を打ち切る。
             return;
         }
+    }
+
+    private static void ExtractCSharpReflectionNameLiteralReferences(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string preparedLine,
+        string originalLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (!CSharpReflectionNameApiIntroRegex.IsMatch(preparedLine))
+            return;
+
+        var codeLine = SanitizeCSharpCommentsForReflectionNameScan(originalLine);
+        foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(codeLine))
+        {
+            if (IsInsideCSharpStringLiteral(codeLine, match.Index))
+                continue;
+            if (!preparedLine.Contains(match.Groups["name"].Value, StringComparison.Ordinal))
+                continue;
+
+            var argStart = match.Index + match.Length;
+            if (!TryReadCSharpReflectionNameLiteral(originalLine, argStart, out var symbolName, out var nameIndex))
+                continue;
+            if (!IsValidCSharpReflectionSymbolName(symbolName))
+                continue;
+
+            AddReference(references, seen, fileId, symbolName, nameIndex, "type_reference", context, lineNumber, container);
+        }
+    }
+
+    private static bool TryReadCSharpReflectionNameLiteral(string line, int startIndex, out string symbolName, out int nameIndex)
+    {
+        symbolName = string.Empty;
+        nameIndex = -1;
+        var builder = new StringBuilder();
+        var i = startIndex;
+        var sawLiteral = false;
+        var firstLiteralIndex = -1;
+
+        while (i < line.Length)
+        {
+            SkipWhitespace(line, ref i);
+            if (!TryReadCSharpStringLiteral(line, ref i, out var value, out var literalContentIndex))
+                return false;
+
+            if (!sawLiteral)
+                firstLiteralIndex = literalContentIndex;
+            sawLiteral = true;
+            builder.Append(value);
+
+            SkipWhitespace(line, ref i);
+            if (i >= line.Length)
+                return false;
+            if (line[i] == ',' || line[i] == ')')
+            {
+                symbolName = builder.ToString();
+                nameIndex = firstLiteralIndex;
+                return sawLiteral && symbolName.Length > 0;
+            }
+            if (line[i] != '+')
+                return false;
+
+            i++;
+        }
+
+        return false;
+    }
+
+    private static string SanitizeCSharpCommentsForReflectionNameScan(string line)
+    {
+        var chars = line.ToCharArray();
+        var inRegularString = false;
+        var inVerbatimString = false;
+        var inChar = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inRegularString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '"')
+                    inRegularString = false;
+                continue;
+            }
+            if (inVerbatimString)
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                    i++;
+                else if (c == '"')
+                    inVerbatimString = false;
+                continue;
+            }
+            if (inChar)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '\'')
+                    inChar = false;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '/')
+                return line[..i];
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i += 2;
+                while (i < line.Length)
+                {
+                    chars[i] = ' ';
+                    if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                    {
+                        chars[i + 1] = ' ';
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+            if (c == '@' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inVerbatimString = true;
+                i++;
+                continue;
+            }
+            if (c == '$' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inRegularString = true;
+                i++;
+                continue;
+            }
+            if (c == '"')
+                inRegularString = true;
+            else if (c == '\'')
+                inChar = true;
+        }
+
+        return new string(chars);
+    }
+
+    private static bool IsInsideCSharpStringLiteral(string line, int targetIndex)
+    {
+        var inRegularString = false;
+        var inVerbatimString = false;
+        for (var i = 0; i < line.Length && i < targetIndex; i++)
+        {
+            var c = line[i];
+            if (inRegularString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '"')
+                    inRegularString = false;
+                continue;
+            }
+            if (inVerbatimString)
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                    i++;
+                else if (c == '"')
+                    inVerbatimString = false;
+                continue;
+            }
+
+            if (c == '@' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inVerbatimString = true;
+                i++;
+            }
+            else if (c == '$' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inRegularString = true;
+                i++;
+            }
+            else if (c == '"')
+            {
+                inRegularString = true;
+            }
+        }
+
+        return inRegularString || inVerbatimString;
+    }
+
+    private static bool TryReadCSharpStringLiteral(string line, ref int index, out string value, out int contentIndex)
+    {
+        value = string.Empty;
+        contentIndex = -1;
+        var verbatim = false;
+        if (index + 1 < line.Length && line[index] == '@' && line[index + 1] == '"')
+        {
+            verbatim = true;
+            index++;
+        }
+        else if (index < line.Length && line[index] == '$')
+        {
+            return false;
+        }
+
+        if (index >= line.Length || line[index] != '"')
+            return false;
+
+        contentIndex = index + 1;
+        index++;
+        var builder = new StringBuilder();
+        while (index < line.Length)
+        {
+            var c = line[index];
+            if (c == '"')
+            {
+                if (verbatim && index + 1 < line.Length && line[index + 1] == '"')
+                {
+                    builder.Append('"');
+                    index += 2;
+                    continue;
+                }
+
+                index++;
+                value = builder.ToString();
+                return true;
+            }
+
+            if (!verbatim && c == '\\' && index + 1 < line.Length)
+            {
+                builder.Append(line[index + 1]);
+                index += 2;
+                continue;
+            }
+
+            builder.Append(c);
+            index++;
+        }
+
+        return false;
+    }
+
+    private static void SkipWhitespace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+    }
+
+    private static bool IsValidCSharpReflectionSymbolName(string symbolName)
+    {
+        if (symbolName.Length == 0 || !IsCSharpIdentifierStart(symbolName[0]))
+            return false;
+        for (var i = 1; i < symbolName.Length; i++)
+        {
+            if (!IsCSharpIdentifierPart(symbolName[i]))
+                return false;
+        }
+        return true;
     }
 
     internal static void EmitCSharpTypePositionReferences(
