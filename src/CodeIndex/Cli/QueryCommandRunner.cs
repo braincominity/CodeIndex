@@ -2177,9 +2177,9 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !sqlGraphSignal.Ready, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal)).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !sqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal)).ToJsonString(jsonOptions));
                 else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No file dependencies found", options));
@@ -2248,7 +2248,7 @@ public static class QueryCommandRunner
                     {
                         if (options.Json)
                         {
-                            var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable);
+                            var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable, queryOptions: options);
                             AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                             Console.WriteLine(payload.ToJsonString(jsonOptions));
                         }
@@ -2257,13 +2257,13 @@ public static class QueryCommandRunner
                     }
                     else if (options.Json)
                     {
-                        var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable);
+                        var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable, queryOptions: options);
                         AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
                     {
-                        Console.Error.WriteLine("No symbol hotspots found.");
+                        Console.Error.WriteLine(BuildZeroResultLine("No symbol hotspots found", options));
                         WriteZeroResultHints(options, reader);
                         WriteKindHint(options.Kind, reader);
                         WriteLangHint(options.Lang, reader);
@@ -2373,7 +2373,7 @@ public static class QueryCommandRunner
                     }
                 }
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, extraFields: payload =>
+                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload =>
                     {
                         AddHotspotFamilyJsonFields(payload, hotspotSignal);
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2540,7 +2540,8 @@ public static class QueryCommandRunner
                         graphSupportReason,
                         sqlGraphSignal,
                         reader._hasReferencesTable,
-                        jsonOptions));
+                        jsonOptions,
+                        options));
                 }
                 else
                 {
@@ -2609,7 +2610,7 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -2629,6 +2630,8 @@ public static class QueryCommandRunner
         }
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        if (queryOptions != null)
+            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         return payload.ToJsonString(jsonOptions);
     }
 
@@ -3786,7 +3789,7 @@ public static class QueryCommandRunner
         return payload;
     }
 
-    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable)
+    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable, QueryCommandOptions? queryOptions = null)
     {
         var payload = BuildJsonZeroResultPayload(
             reader,
@@ -3795,6 +3798,7 @@ public static class QueryCommandRunner
             includeFiles: countOnly,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,
+            queryOptions: queryOptions,
             extraFields: static zeroPayload =>
             {
                 zeroPayload["definition_site_total"] = 0;
@@ -4275,12 +4279,12 @@ public static class QueryCommandRunner
     // read-only DB apart from a DB that genuinely has no callers for the query.
     // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
     private static void WriteDegradedGraphZeroResult(DbReader reader, string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions,
-        ExactQuerySignal? exactSignal = null, Action<JsonObject>? extraFields = null)
+        ExactQuerySignal? exactSignal = null, QueryCommandOptions? queryOptions = null, Action<JsonObject>? extraFields = null)
     {
         if (graphAvailable) return;
         if (json)
         {
-            var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: false, degraded: true, exactSignal: exactSignal, extraFields: extraFields);
+            var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: false, degraded: true, exactSignal: exactSignal, queryOptions: queryOptions, extraFields: extraFields);
             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
             Console.WriteLine(payload.ToJsonString(jsonOptions));
         }
