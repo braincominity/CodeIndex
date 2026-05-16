@@ -144,6 +144,45 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void Format_ClampsLongMatchLine_AroundFullQueryBeforeLeftmostToken()
+    {
+        var content = "alpha " + new string('x', 1_000) + " alpha beta gamma " + new string('y', 1_000);
+
+        var formatted = SearchSnippetFormatter.Format(content, "alpha beta gamma", maxLines: 1, maxLineWidth: 96);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Contains("alpha beta gamma", joined);
+        Assert.DoesNotContain(new string('x', 120), joined);
+        Assert.Contains("...(+", joined);
+    }
+
+    [Fact]
+    public void Format_LeftmostFocusMode_KeepsLegacyEarliestToken()
+    {
+        var content = "alpha " + new string('x', 1_000) + " alpha beta gamma " + new string('y', 1_000);
+
+        var formatted = SearchSnippetFormatter.Format(content, "alpha beta gamma", maxLines: 1, maxLineWidth: 96, focusMode: SearchSnippetFocusMode.Leftmost);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Contains("alpha", joined);
+        Assert.DoesNotContain("alpha beta gamma", joined);
+        Assert.Contains("...(+", joined);
+    }
+
+    [Fact]
+    public void Format_ClampsLongMatchLine_AroundTokenClusterBeforeLeftmostToken()
+    {
+        var content = "alpha " + new string('x', 1_000) + " beta gamma " + new string('y', 1_000);
+
+        var formatted = SearchSnippetFormatter.Format(content, "alpha beta gamma", maxLines: 1, maxLineWidth: 96);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Contains("beta gamma", joined);
+        Assert.DoesNotContain(new string('x', 120), joined);
+        Assert.Contains("...(+", joined);
+    }
+
+    [Fact]
     public void Format_ClampsLongLines_EvenWhenMaxLineWidthExplicit()
     {
         // A non-match long line should still be clamped, bounded by maxLineWidth.
