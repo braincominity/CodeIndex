@@ -73,7 +73,7 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
-        ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]]"),
+        ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--explain <field>]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
@@ -513,7 +513,7 @@ public static class ConsoleUi
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
-        Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match");
+        Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match or --explain <field> for readiness help");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
