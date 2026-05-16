@@ -11,13 +11,89 @@ namespace CodeIndex.Database;
 public class DbWriter
 {
     private readonly SqliteConnection _conn;
+    private readonly PreparedCommandCache? _commandCache;
     private const int BatchSize = 500;
     private int _transactionDepth;
+    // Outermost SqliteTransaction currently held open by this writer (null when no
+    // transaction is active OR after the outermost transaction has been committed /
+    // rolled back). Tracked so cached prepared commands can be re-pointed at the live
+    // transaction on every lease — SqliteCommand validates Transaction against the
+    // connection's current transaction at execute time and would throw
+    // TransactionRequired / TransactionConnectionMismatch after a transaction boundary
+    // if we kept a stale reference. Cleared on Commit / Rollback (and at depth-0
+    // Dispose as a safety net) so a subsequent lease outside any transaction sets the
+    // cached command's Transaction back to null. Issue #1566.
+    // 現在 writer が保持している最外 SqliteTransaction。キャッシュ済み prepared command の
+    // Transaction を毎回その時点の active transaction に同期させるため保持する。
+    // Commit / Rollback / Dispose で必ず null に戻し、トランザクション外で借用したときに
+    // cached command の Transaction を null に再同期できるようにする。Issue #1566.
+    private SqliteTransaction? _activeTransaction;
     internal SqliteConnection Connection => _conn;
 
     public DbWriter(SqliteConnection connection)
+        : this(connection, commandCache: null)
+    {
+    }
+
+    /// <summary>
+    /// Construct a writer that shares its owning <see cref="DbContext"/>'s
+    /// <see cref="PreparedCommandCache"/>. Hot per-file paths (`GetUnchangedFileId`,
+    /// `UpsertFile`, file-data cleanup) then reuse one prepared statement per SQL text
+    /// instead of constructing a fresh command per call. Issue #1566.
+    /// 所属 <see cref="DbContext"/> の <see cref="PreparedCommandCache"/> を共有する writer
+    /// を構築する。ファイル単位のホットパスは SQL ごとに 1 つの prepared statement を再利用する。
+    /// Issue #1566.
+    /// </summary>
+    public DbWriter(DbContext context)
+        : this(
+            (context ?? throw new ArgumentNullException(nameof(context))).Connection,
+            context.IsReadOnly ? null : context.PreparedCommands)
+    {
+    }
+
+    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache)
     {
         _conn = connection;
+        _commandCache = commandCache;
+    }
+
+    /// <summary>
+    /// Lease a command for <paramref name="sql"/>. When the writer is wired to a
+    /// <see cref="PreparedCommandCache"/> the cache returns a reused prepared command
+    /// (with parameter placeholders already added by <paramref name="configureSchema"/>),
+    /// otherwise a fresh per-call command is constructed for backwards compatibility
+    /// with callers built against the legacy <see cref="SqliteConnection"/>-only ctor.
+    /// Always pair with <see cref="ReleaseCommand"/> in a try/finally so the per-call
+    /// path disposes its command.
+    /// SQL に対する command を借りる。キャッシュ付きならパラメータプレースホルダ追加済みの
+    /// prepared command を再利用し、未付与なら毎回 fresh な command を生成する。
+    /// 必ず try/finally で <see cref="ReleaseCommand"/> と対にする。
+    /// </summary>
+    private SqliteCommand RentCommand(string sql, Action<SqliteCommand> configureSchema)
+    {
+        if (_commandCache != null)
+        {
+            var cached = _commandCache.GetOrAdd(sql, configureSchema);
+            // Re-sync the transaction reference because the cached command may have been
+            // bound to a previous (now-committed/rolled-back) transaction. SqliteCommand
+            // throws TransactionRequired / TransactionConnectionMismatch on execute when
+            // its Transaction does not equal the connection's current transaction.
+            // キャッシュ済み command は前回別 transaction にバインドされている可能性があるため、
+            // SqliteCommand の transaction 整合性検証を満たすよう毎回同期する。
+            cached.Transaction = _activeTransaction;
+            return cached;
+        }
+
+        var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        configureSchema(cmd);
+        return cmd;
+    }
+
+    private void ReleaseCommand(SqliteCommand cmd)
+    {
+        if (_commandCache == null)
+            cmd.Dispose();
     }
 
     /// <summary>
@@ -32,6 +108,7 @@ public class DbWriter
         {
             _transactionDepth++;
             var txn = _conn.BeginTransaction();
+            _activeTransaction = txn;
             return new TransactionScope(txn, this);
         }
         else
@@ -84,6 +161,17 @@ public class DbWriter
             // Set _committed after success so Dispose() will rollback if Commit/Release throws
             // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
             _committed = true;
+            // Clear the writer's cached active-transaction reference immediately after a
+            // real-transaction commit. Otherwise a subsequent RentCommand between Commit
+            // and Dispose would bind a cached prepared command to the now-committed (and
+            // detached from the connection) SqliteTransaction and throw at execute time.
+            // Savepoint Commit (RELEASE) does not affect the outer SqliteTransaction.
+            // real transaction の commit 直後に writer 側の active transaction 参照を解除する。
+            // commit と Dispose の間に RentCommand が走った場合、commit 済み(connection から
+            // 外れている) transaction を cached command に再バインドして execute 時に例外を
+            // 投げるため。savepoint の RELEASE は外側 SqliteTransaction に影響しない。
+            if (_transaction != null)
+                _writer._activeTransaction = null;
         }
 
         public void Rollback()
@@ -93,6 +181,11 @@ public class DbWriter
                 _transaction.Rollback();
             else
                 ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+            // Same rationale as Commit: drop the stale reference so cached commands
+            // re-bind correctly after the transaction boundary.
+            // Commit と同じ理由で stale 参照を解除する。
+            if (_transaction != null)
+                _writer._activeTransaction = null;
         }
 
         public void Dispose()
@@ -115,6 +208,12 @@ public class DbWriter
 
             _transaction?.Dispose();
             if (_writer._transactionDepth > 0) _writer._transactionDepth--;
+            // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
+            // disposed after an exception), make sure the outer-transaction reference is
+            // cleared before the next RentCommand sees it.
+            // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
+            if (_writer._transactionDepth == 0)
+                _writer._activeTransaction = null;
         }
 
         private void ExecuteSql(string sql)
@@ -146,39 +245,74 @@ public class DbWriter
         if (!allowReuse)
             return null;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT id, modified, checksum FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", relativePath);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        if (reader.TrackedRead())
+        var cmd = RentCommand(
+            "SELECT id, modified, checksum FROM files WHERE path = @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        long? unchangedId = null;
+        long? touchId = null;
+        DateTime touchModified = default;
+        try
         {
-            var id = reader.GetInt64(0);
-            var existingModified = reader.GetDateTime(1);
+            cmd.Parameters["@path"].Value = relativePath;
 
-            // Fast path: timestamp unchanged / 高速パス: タイムスタンプ一致
-            if (existingModified == modified)
-                return id;
-
-            // Slow path: timestamp changed but content may be the same (e.g. git checkout)
-            // 低速パス: タイムスタンプは変わったが内容は同じ可能性（例: git checkout）
-            if (checksum != null && !reader.IsDBNull(2))
+            using var reader = cmd.ExecuteTrackedReader();
+            if (reader.TrackedRead())
             {
-                var existingChecksum = reader.GetString(2);
-                if (existingChecksum == checksum)
+                var id = reader.GetInt64(0);
+                var existingModified = reader.GetDateTime(1);
+
+                // Fast path: timestamp unchanged / 高速パス: タイムスタンプ一致
+                if (existingModified == modified)
                 {
-                    // Update timestamp so next run takes the fast path
-                    // 次回実行で高速パスを通るようタイムスタンプを更新
-                    using var updateCmd = _conn.CreateCommand();
-                    updateCmd.CommandText = "UPDATE files SET modified = @modified WHERE id = @id";
-                    updateCmd.Parameters.AddWithValue("@modified", modified);
-                    updateCmd.Parameters.AddWithValue("@id", id);
-                    updateCmd.ExecuteNonQuery();
-                    return id;
+                    unchangedId = id;
+                }
+                // Slow path: timestamp changed but content may be the same (e.g. git checkout)
+                // 低速パス: タイムスタンプは変わったが内容は同じ可能性（例: git checkout）
+                else if (checksum != null && !reader.IsDBNull(2))
+                {
+                    var existingChecksum = reader.GetString(2);
+                    if (existingChecksum == checksum)
+                    {
+                        // Defer the UPDATE until after the reader is closed so a cached
+                        // SELECT command can be reused without colliding with an open
+                        // result set on the same connection.
+                        // SELECT 用キャッシュ command の result set を閉じてから UPDATE を発行する。
+                        touchId = id;
+                        touchModified = modified;
+                    }
                 }
             }
         }
-        return null;
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        if (touchId is long id2)
+        {
+            // Update timestamp so next run takes the fast path
+            // 次回実行で高速パスを通るようタイムスタンプを更新
+            var updateCmd = RentCommand(
+                "UPDATE files SET modified = @modified WHERE id = @id",
+                static c =>
+                {
+                    c.Parameters.Add("@modified", SqliteType.Text);
+                    c.Parameters.Add("@id", SqliteType.Integer);
+                });
+            try
+            {
+                updateCmd.Parameters["@modified"].Value = touchModified;
+                updateCmd.Parameters["@id"].Value = id2;
+                updateCmd.ExecuteNonQuery();
+            }
+            finally
+            {
+                ReleaseCommand(updateCmd);
+            }
+            return id2;
+        }
+
+        return unchangedId;
     }
 
     /// <summary>
@@ -199,10 +333,19 @@ public class DbWriter
     /// </summary>
     public void CleanExistingFileData(string relativePath)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", relativePath);
-        var result = cmd.ExecuteScalar();
+        var cmd = RentCommand(
+            "SELECT id FROM files WHERE path = @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        object? result;
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            result = cmd.ExecuteScalar();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
         if (result != null)
             DeleteFileData((long)result);
     }
@@ -213,10 +356,18 @@ public class DbWriter
     /// </summary>
     public bool HasFileAtPath(string relativePath)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path LIMIT 1";
-        cmd.Parameters.AddWithValue("@path", relativePath);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM files WHERE path = @path LIMIT 1",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -235,10 +386,10 @@ public class DbWriter
         // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
         CleanExistingFileData(file.Path);
 
-        using var cmd = _conn.CreateCommand();
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             INSERT INTO files (path, lang, size, lines, checksum, modified, indexed_at)
             VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
             ON CONFLICT(path) DO UPDATE SET
@@ -248,14 +399,30 @@ public class DbWriter
                 checksum = excluded.checksum,
                 modified = excluded.modified,
                 indexed_at = CURRENT_TIMESTAMP
-            RETURNING id";
-        cmd.Parameters.AddWithValue("@path", file.Path);
-        cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@size", file.Size);
-        cmd.Parameters.AddWithValue("@lines", file.Lines);
-        cmd.Parameters.AddWithValue("@checksum", (object?)file.Checksum ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@modified", file.Modified);
-        return (long)cmd.ExecuteScalar()!;
+            RETURNING id",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@lang", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = file.Path;
+            cmd.Parameters["@lang"].Value = (object?)file.Lang ?? DBNull.Value;
+            cmd.Parameters["@size"].Value = file.Size;
+            cmd.Parameters["@lines"].Value = file.Lines;
+            cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
+            cmd.Parameters["@modified"].Value = file.Modified;
+            return (long)cmd.ExecuteScalar()!;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -266,25 +433,24 @@ public class DbWriter
     {
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
-        using var cmd1 = _conn.CreateCommand();
-        cmd1.CommandText = "DELETE FROM chunks WHERE file_id = @fid";
-        cmd1.Parameters.AddWithValue("@fid", fileId);
-        cmd1.ExecuteNonQuery();
+        ExecuteFileIdDelete("DELETE FROM chunks WHERE file_id = @fid", fileId);
+        ExecuteFileIdDelete("DELETE FROM symbols WHERE file_id = @fid", fileId);
+        ExecuteFileIdDelete("DELETE FROM symbol_references WHERE file_id = @fid", fileId);
+        ExecuteFileIdDelete("DELETE FROM reference_lines WHERE file_id = @fid", fileId);
+    }
 
-        using var cmd2 = _conn.CreateCommand();
-        cmd2.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
-        cmd2.Parameters.AddWithValue("@fid", fileId);
-        cmd2.ExecuteNonQuery();
-
-        using var cmd3 = _conn.CreateCommand();
-        cmd3.CommandText = "DELETE FROM symbol_references WHERE file_id = @fid";
-        cmd3.Parameters.AddWithValue("@fid", fileId);
-        cmd3.ExecuteNonQuery();
-
-        using var cmd4 = _conn.CreateCommand();
-        cmd4.CommandText = "DELETE FROM reference_lines WHERE file_id = @fid";
-        cmd4.Parameters.AddWithValue("@fid", fileId);
-        cmd4.ExecuteNonQuery();
+    private void ExecuteFileIdDelete(string sql, long fileId)
+    {
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@fid", SqliteType.Integer));
+        try
+        {
+            cmd.Parameters["@fid"].Value = fileId;
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -546,10 +712,18 @@ public class DbWriter
     /// </summary>
     public bool DeleteFileByPath(string relativePath)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", relativePath);
-        return cmd.ExecuteNonQuery() > 0;
+        var cmd = RentCommand(
+            "DELETE FROM files WHERE path = @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            return cmd.ExecuteNonQuery() > 0;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
