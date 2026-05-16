@@ -60,6 +60,7 @@ public static class ConsoleUi
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json] [--duration-format <auto|seconds|hms>] [--watch [--debounce <ms>]]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
+        ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
@@ -518,8 +519,10 @@ public static class ConsoleUi
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
+        Console.WriteLine("  --changed-between <old-ref> <new-ref>");
+        Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
-        Console.WriteLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --files / --dry-run");
+        Console.WriteLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
         Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
@@ -531,6 +534,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         Console.WriteLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
+        Console.WriteLine("  Use --changed-between <old-ref> <new-ref> after switching branches to refresh only changed files.");
         Console.WriteLine("  Use --files only for known in-place edits or new files; old rename/delete paths stay indexed unless also listed.");
         Console.WriteLine();
         Console.WriteLine("Query options:");
@@ -566,6 +570,8 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index ./myproject --commits abc123      Update DB from one commit");
         Console.WriteLine("  cdidx index ./myproject --commits abc123 def456");
         Console.WriteLine("                                              Update DB from multiple commits");
+        Console.WriteLine("  cdidx index ./myproject --changed-between main feature");
+        Console.WriteLine("                                              Update DB from files changed between two refs");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx index ./myproject --watch               Run an initial scan, then keep the index live as files change (Ctrl+C to stop)");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
