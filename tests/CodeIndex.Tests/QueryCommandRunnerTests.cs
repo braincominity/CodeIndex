@@ -28290,6 +28290,7 @@ jobs:
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--check", "--json"],
@@ -28325,6 +28326,7 @@ jobs:
             File.WriteAllText(sourcePath, "class App {}\n");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            MarkStatusReadinessReady(dbPath);
             File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -28335,9 +28337,10 @@ jobs:
             var json = document.RootElement;
             var check = json.GetProperty("workspace_check");
 
-            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(1, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("workspace_stale", json.GetProperty("failed_checks")[0].GetString());
             Assert.True(check.GetProperty("checked").GetBoolean());
             Assert.False(check.GetProperty("matches_workspace").GetBoolean());
             Assert.Equal("changed_files", check.GetProperty("reason").GetString());
@@ -28361,6 +28364,7 @@ jobs:
             File.WriteAllText(Path.Combine(projectRoot, "src", "new.cs"), "class NewFile {}\n");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/old.cs", "csharp", "class OldFile {}\n");
+            MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--check", "--json"],
@@ -28369,9 +28373,10 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var check = document.RootElement.GetProperty("workspace_check");
 
-            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(1, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("workspace_stale", document.RootElement.GetProperty("failed_checks")[0].GetString());
             Assert.Equal(1, check.GetProperty("missing_file_count").GetInt32());
             Assert.Equal(1, check.GetProperty("unindexed_file_count").GetInt32());
             Assert.Equal("src/old.cs", check.GetProperty("missing_files")[0].GetString());
@@ -28409,6 +28414,7 @@ jobs:
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/inside.cs", "csharp", "class Inside {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/outside.cs", "csharp", "class Outside {}\n");
+            MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--check", "--json"],
@@ -28457,6 +28463,7 @@ jobs:
             TestProjectHelper.InsertIndexedFile(dbPath, "src/kept.cs", "csharp", "class Kept {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/sparse.cs", "csharp", "class Sparse {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/deleted.cs", "csharp", "class Deleted {}\n");
+            MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--check", "--json"],
@@ -28465,9 +28472,10 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var check = document.RootElement.GetProperty("workspace_check");
 
-            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(1, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("workspace_stale", document.RootElement.GetProperty("failed_checks")[0].GetString());
             Assert.Equal(1, check.GetProperty("missing_file_count").GetInt32());
             Assert.Equal("src/deleted.cs", check.GetProperty("missing_files")[0].GetString());
             Assert.Equal(1, check.GetProperty("outside_sparse_cone_file_count").GetInt32());
@@ -28481,7 +28489,7 @@ jobs:
     }
 
     [Fact]
-    public void RunStatus_CheckHuman_PrintsOutsideSparseConeRow()
+    public void RunStatus_CheckHuman_SuccessKeepsOutputSilent()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_sparse_human");
         try
@@ -28497,6 +28505,7 @@ jobs:
 
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/sparse.cs", "csharp", "class Sparse {}\n");
+            MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--check"],
@@ -28504,9 +28513,135 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains("Outside sparse cone : 1", stdout);
-            Assert.Contains("src/sparse.cs", stdout);
-            Assert.DoesNotContain("Missing indexed files", stdout);
+            Assert.Equal(string.Empty, stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckHuman_WritesStaleDiagnosticToStderr()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_stderr");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            MarkStatusReadinessReady(dbPath);
+            File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check"],
+                _jsonOptions));
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("[stale] workspace_check reason=changed_files", stderr);
+            Assert.Contains("changed=1", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJsonScopedFold_ReportsOnlyFoldDegradation()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_fold_scope");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check=fold", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var failedChecks = json.GetProperty("failed_checks");
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Single(failedChecks.EnumerateArray());
+            Assert.Equal("fold_ready", failedChecks[0].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("graph", "graph_table_available")]
+    [InlineData("issues", "issues_table_available")]
+    [InlineData("hotspot", "hotspot_family_ready")]
+    [InlineData("csharp", "csharp_symbol_name_ready")]
+    [InlineData("sql", "sql_graph_contract_ready")]
+    [InlineData("newer", "index_newer_than_reader")]
+    public void RunStatus_CheckJsonScopedReadiness_ReportsOnlyRequestedSubsystem(string scope, string expectedFailure)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_status_check_scope_{scope}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "query.sql"), "SELECT run_me();\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/query.sql", "sql", "SELECT run_me();\n");
+            MarkStatusReadinessReady(dbPath);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                switch (scope)
+                {
+                    case "graph":
+                        ExecuteNonQuery(db, $"PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.GraphReadyFlag}");
+                        break;
+                    case "issues":
+                        ExecuteNonQuery(db, $"PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.IssuesReadyFlag}");
+                        break;
+                    case "hotspot":
+                        writer.ClearHotspotFamilyReady();
+                        break;
+                    case "csharp":
+                        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
+                        break;
+                    case "sql":
+                        writer.SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
+                        break;
+                    case "newer":
+                        writer.SetMeta("fold_key_version", (NameFold.Version + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                }
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, $"--check={scope}", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var failedChecks = document.RootElement.GetProperty("failed_checks").EnumerateArray().Select(e => e.GetString()).ToArray();
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal([expectedFailure], failedChecks);
         }
         finally
         {
@@ -29411,6 +29546,26 @@ jobs:
         using var db = new DbContext(dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
+    }
+
+    private static void MarkStatusReadinessReady(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkIssuesReady();
+        Assert.True(writer.MarkFoldReady());
+        writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkMetadataTargetReady("csharp");
+        writer.MarkSqlGraphContractReady();
+        writer.MarkHotspotFamilyReady("csharp", "test");
+    }
+
+    private static void ExecuteNonQuery(DbContext db, string sql)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     // --- TryParseIso8601Since tests / TryParseIso8601Sinceテスト ---

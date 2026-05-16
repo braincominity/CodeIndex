@@ -1754,11 +1754,22 @@ public static class QueryCommandRunner
                 : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
+            IReadOnlyList<StatusCheckFailure> checkFailures = options.CheckWorkspace
+                ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
+                : Array.Empty<StatusCheckFailure>();
+            if (options.CheckWorkspace)
+                status.FailedChecks = checkFailures.Select(f => f.Name).ToList();
+
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
                     status,
                     CliJsonSerializerContextFactory.Create(jsonOptions).StatusResult));
+            }
+            else if (options.CheckWorkspace)
+            {
+                if (checkFailures.Count > 0)
+                    WriteStatusCheckDiagnostics(checkFailures);
             }
             else
             {
@@ -1874,11 +1885,7 @@ public static class QueryCommandRunner
 
             if (!options.CheckWorkspace)
                 return CommandExitCodes.Success;
-            if (status.WorkspaceCheck?.Checked != true)
-                return CommandExitCodes.FeatureUnavailable;
-            return status.WorkspaceCheck.MatchesWorkspace
-                ? CommandExitCodes.Success
-                : CommandExitCodes.StaleIndex;
+            return GetStatusCheckExitCode(checkFailures);
         });
     }
 
@@ -2854,6 +2861,7 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool checkWorkspace = false;
+        HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
         string? statusExplainField = null;
         var extraNames = new List<string>();
@@ -2862,6 +2870,40 @@ public static class QueryCommandRunner
         {
             parseErrors ??= [];
             parseErrors.Add(error);
+        }
+
+        void AddStatusCheckScopes(string rawScopes)
+        {
+            if (string.IsNullOrWhiteSpace(rawScopes))
+            {
+                AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
+                return;
+            }
+
+            statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var scope = rawScope.ToLowerInvariant();
+                switch (scope)
+                {
+                    case "workspace":
+                    case "fold":
+                    case "graph":
+                    case "issues":
+                    case "hotspot":
+                    case "csharp":
+                    case "sql":
+                    case "newer":
+                        statusCheckScopes.Add(scope);
+                        break;
+                    default:
+                        AddParseError($"Error: unsupported --check scope '{rawScope}'. Use one or more of workspace, fold, graph, issues, hotspot, csharp, sql, newer.");
+                        break;
+                }
+            }
+
+            if (statusCheckScopes.Count == 0)
+                AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
         }
 
         // Track non-repeatable value-taking options that have already been observed and warn on
@@ -2881,6 +2923,13 @@ public static class QueryCommandRunner
         for (int i = 0; i < args.Length; i++)
         {
             var currentArg = args[i];
+            if (allowStatusCheck && currentArg.StartsWith("--check=", StringComparison.Ordinal))
+            {
+                checkWorkspace = true;
+                AddStatusCheckScopes(currentArg["--check=".Length..]);
+                continue;
+            }
+
             var inlineValue = TrySplitInlineOptionValue(currentArg, out var inlineOptionName)
                 ? currentArg[(inlineOptionName!.Length + 1)..]
                 : null;
@@ -3232,6 +3281,7 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
+            StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
             StatusExplainField = statusExplainField,
             ExtraNames = extraNames,
@@ -3427,6 +3477,8 @@ public static class QueryCommandRunner
             var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
                 ? inlineOptionName!
                 : arg;
+            if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
+                normalizedArg = "--check";
 
             if (supported.Contains(normalizedArg))
             {
@@ -3825,6 +3877,69 @@ public static class QueryCommandRunner
            || !status.CSharpMetadataTargetReady
            || !status.FoldReady
            || status.IndexNewerThanReader;
+
+    private sealed record StatusCheckFailure(string Name, bool IsStale, string Diagnostic);
+
+    private static IReadOnlyList<StatusCheckFailure> BuildStatusCheckFailures(StatusResult status, IReadOnlySet<string>? scopedChecks)
+    {
+        var failures = new List<StatusCheckFailure>();
+        var checkAll = scopedChecks is not { Count: > 0 };
+        bool Includes(string scope) => checkAll || scopedChecks!.Contains(scope);
+
+        if (Includes("workspace"))
+        {
+            if (status.WorkspaceCheck?.Checked != true)
+            {
+                failures.Add(new StatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
+            }
+            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            {
+                var check = status.WorkspaceCheck;
+                failures.Add(new StatusCheckFailure(
+                    "workspace_stale",
+                    true,
+                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+            }
+        }
+
+        if (Includes("graph") && !status.GraphTableAvailable)
+            failures.Add(new StatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
+        if (Includes("issues") && !status.IssuesTableAvailable)
+            failures.Add(new StatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
+        if (Includes("sql") && !status.SqlGraphContractReady)
+            failures.Add(new StatusCheckFailure("sql_graph_contract_ready", false, $"[degraded] sql_graph_contract_ready=false reason={status.SqlGraphContractDegradedReason ?? "unknown"}"));
+        if (Includes("hotspot") && !status.HotspotFamilyReady)
+            failures.Add(new StatusCheckFailure("hotspot_family_ready", false, $"[degraded] hotspot_family_ready=false reason={status.HotspotFamilyDegradedReason ?? "unknown"}"));
+        if (Includes("csharp") && !status.CSharpSymbolNameReady)
+            failures.Add(new StatusCheckFailure("csharp_symbol_name_ready", false, "[degraded] csharp_symbol_name_ready=false"));
+        if (Includes("csharp") && !status.CSharpMetadataTargetReady)
+            failures.Add(new StatusCheckFailure("csharp_metadata_target_ready", false, "[degraded] csharp_metadata_target_ready=false"));
+        if (Includes("fold") && !status.FoldReady)
+            failures.Add(new StatusCheckFailure("fold_ready", false, $"[degraded] fold_ready=false reason={status.FoldReadyReason ?? "unknown"}"));
+        if (Includes("newer") && status.IndexNewerThanReader)
+            failures.Add(new StatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
+
+        return failures;
+    }
+
+    private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
+    {
+        foreach (var failure in failures)
+            Console.Error.WriteLine(failure.Diagnostic);
+    }
+
+    private static int GetStatusCheckExitCode(IReadOnlyList<StatusCheckFailure> failures)
+    {
+        var stale = failures.Any(f => f.IsStale);
+        var degraded = failures.Any(f => !f.IsStale);
+        return (stale, degraded) switch
+        {
+            (false, false) => CommandExitCodes.Success,
+            (true, false) => 1,
+            (false, true) => 2,
+            _ => 3,
+        };
+    }
 
     private static bool IsFoldOnlyReadinessDegraded(StatusResult status)
         => !status.FoldReady
@@ -4728,6 +4843,7 @@ public sealed class QueryCommandOptions
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
+    public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
     public string? StatusExplainField { get; init; }
     public List<string> ExtraNames { get; init; } = [];
