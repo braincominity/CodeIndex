@@ -35,10 +35,11 @@ public class FileIndexer
         IReadOnlyList<string> Files,
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> UnknownExtensionFiles,
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories,
-        IReadOnlyList<string> SymlinkPrunedDirectories)
+        IReadOnlyList<string> AttributePrunedDirectories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -380,6 +381,10 @@ public class FileIndexer
 
     // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)
     private const long MaxFileSize = 10 * 1024 * 1024;
+    // Extensionless shebang detection reads at most the first physical line within this
+    // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
+    // unsupported so binary executables and minified data are not parsed as scripts.
+    private const int ShebangProbeByteLimit = 256;
 
     private readonly string _projectRoot;
     private readonly string _ignoreRuleRoot;
@@ -1081,18 +1086,29 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
-    // Detect symbolic links / reparse points so the scanner can skip them.
-    // Treats probe failures (e.g. dangling symlinks whose target is gone) as reparse points
+    internal static bool HasSkippedAttributes(FileAttributes attributes, bool isWindows)
+    {
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            return true;
+
+        return isWindows && (attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0;
+    }
+
+    private static bool HasSkippedAttributes(FileAttributes attributes)
+        => HasSkippedAttributes(attributes, OperatingSystem.IsWindows());
+
+    // Detect symbolic links / reparse points and Windows Hidden/System paths so the scanner can skip them.
+    // Treats probe failures (e.g. dangling symlinks whose target is gone) as skipped attributes
     // so the scanner skips them instead of trying to read the missing target.
-    // symlink / reparse point を検出し、スキャナでスキップできるようにする。
-    // プロバ失敗（例: target が消えた dangling symlink）は missing target を読もうとせずスキップするため、
-    // reparse point 扱いにする。
-    private static bool IsReparsePoint(string path)
+    // symlink / reparse point と Windows の Hidden/System 属性を検出し、スキャナでスキップできるようにする。
+    // プローブ失敗（例: target が消えた dangling symlink）は missing target を読もうとせずスキップするため、
+    // skip 対象属性扱いにする。
+    private static bool HasSkippedAttributes(string path)
     {
         try
         {
             var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
-            return (attributes & FileAttributes.ReparsePoint) != 0;
+            return HasSkippedAttributes(attributes);
         }
         catch (FileNotFoundException)
         {
@@ -1115,16 +1131,19 @@ public class FileIndexer
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
         // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
-        // dry-run) gets the same symlink skip behavior. Using File.GetAttributes uses lstat-like semantics
-        // on .NET (does not follow the symlink target), which is what we need on both Windows and Unix.
+        // dry-run) gets the same skip behavior. On Windows, Hidden/System paths are also rejected to avoid
+        // indexing OS-owned caches such as System Volume Information and $Recycle.Bin during broad scans.
+        // Using File.GetAttributes uses lstat-like semantics on .NET (does not follow the symlink target),
+        // which is what we need on both Windows and Unix.
         // The Unix stat() path below follows symlinks, so without this guard a symlink-to-regular-file
         // would otherwise slip through as Supported.
         // ここで symlink / reparse point を弾くことで、フルスキャン・--files/--commits の update モード・
-        // dry-run など全呼び出し元に同じ symlink skip 挙動を効かせる。File.GetAttributes は .NET 上で
-        // lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
+        // dry-run など全呼び出し元に同じ skip 挙動を効かせる。Windows では Hidden/System 属性も弾き、
+        // broad scan で System Volume Information や $Recycle.Bin などの OS 管理 cache を索引しない。
+        // File.GetAttributes は .NET 上で lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
         // Unix 側の stat() は symlink を辿るため、このガードが無いと symlink→通常ファイルが
         // Supported として通過してしまう。
-        if (IsReparsePoint(filePath))
+        if (HasSkippedAttributes(filePath))
             return FileProbeStatus.Unsupported;
 
         if (OperatingSystem.IsWindows())
@@ -1234,8 +1253,11 @@ public class FileIndexer
         var count = 0;
         foreach (var pattern in patterns)
         {
-            foreach (var _ in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+            foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
             {
+                if (HasSkippedAttributes(LongPath.RemoveWindowsPrefix(file)))
+                    continue;
+
                 count++;
                 if (count > 1)
                     return count;
@@ -1253,13 +1275,17 @@ public class FileIndexer
             foreach (var pattern in patterns)
             {
                 foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
-                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, LongPath.RemoveWindowsPrefix(file))));
+                {
+                    var markerFile = LongPath.RemoveWindowsPrefix(file);
+                    if (!HasSkippedAttributes(markerFile))
+                        projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
+                }
             }
 
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
             {
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (SkipDirs.Contains(Path.GetFileName(subDir)))
+                if (SkipDirs.Contains(Path.GetFileName(subDir)) || HasSkippedAttributes(subDir))
                     continue;
 
                 CollectProjectMarkerFiles(subDir, patterns, projectMarkers);
@@ -1412,24 +1438,26 @@ public class FileIndexer
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
+        var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        var symlinkPrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, preloadResult.Rules, isProjectRoot: true);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, preloadResult.Rules, isProjectRoot: true);
         }
         return new ScanFilesResult(
             files,
             errors,
             nonIndexablePaths.ToList(),
+            unknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
             probeFailedFilePaths.ToList(),
             listedDirectories.ToList(),
             fullyScannedDirectories.ToList(),
-            symlinkPrunedDirectories.ToList());
+            attributePrunedDirectories.ToList());
     }
 
     private bool ScanDirectory(
@@ -1437,10 +1465,11 @@ public class FileIndexer
         List<string> results,
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
+        HashSet<string> unknownExtensionFiles,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
-        HashSet<string> symlinkPrunedDirectories,
+        HashSet<string> attributePrunedDirectories,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false)
     {
@@ -1454,7 +1483,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -1462,10 +1491,11 @@ public class FileIndexer
         List<string> results,
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
+        HashSet<string> unknownExtensionFiles,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
-        HashSet<string> symlinkPrunedDirectories,
+        HashSet<string> attributePrunedDirectories,
         IgnoreRuleSet inheritedIgnoreRules)
     {
         var fullyScanned = true;
@@ -1536,7 +1566,12 @@ public class FileIndexer
                     if (language.Status == FileProbeStatus.Supported)
                         results.Add(file);
                     else
-                        nonIndexablePaths.Add(ToRelativePath(file));
+                    {
+                        var relativePath = ToRelativePath(file);
+                        nonIndexablePaths.Add(relativePath);
+                        if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativePath))
+                            unknownExtensionFiles.Add(relativePath);
+                    }
                 }
             }
 
@@ -1563,24 +1598,26 @@ public class FileIndexer
                 }
 
                 // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
-                // and duplicate indexing when a symlink points inside the same tree. Record the symlink
-                // itself as listed (for the immediate-parent purge path) AND as a prune prefix so the
-                // purge walker can authoritatively drop deep descendants that earlier symlink-following
-                // runs left behind.
+                // and duplicate indexing when a symlink points inside the same tree. On Windows, also
+                // skip Hidden/System directories so drive-root scans do not descend into OS-owned caches.
+                // Record the skipped directory itself as listed (for the immediate-parent purge path) AND
+                // as a prune prefix so the purge walker can authoritatively drop deep descendants that
+                // earlier runs left behind.
                 // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
-                // ツリー内を指す symlink での二重 index を防ぐためスキップする。symlink 自身を
-                // listed 扱い（immediate parent purge 用）かつ prune prefix として記録することで、
-                // 以前の symlink 追従でできた深い子孫エントリも purge walker が確実に削除できる。
-                if (IsReparsePoint(subDir))
+                // ツリー内を指す symlink での二重 index を防ぐためスキップする。Windows では
+                // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
+                // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
+                // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
+                if (HasSkippedAttributes(subDir))
                 {
                     var subRelative = ToRelativePath(subDir);
                     listedDirectories.Add(subRelative);
                     fullyScannedDirectories.Add(subRelative);
-                    symlinkPrunedDirectories.Add(subRelative);
+                    attributePrunedDirectories.Add(subRelative);
                     continue;
                 }
 
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)
@@ -1601,6 +1638,16 @@ public class FileIndexer
 
         return fullyScanned;
     }
+
+    private static bool HasUnknownExtension(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        return !string.IsNullOrEmpty(extension) && !LangMap.ContainsKey(extension);
+    }
+
+    private static bool IsInternalIndexArtifactPath(string relativePath)
+        => relativePath.Equals(".cdidx", StringComparison.Ordinal)
+            || relativePath.StartsWith(".cdidx/", StringComparison.Ordinal);
 
     private PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
     {
@@ -2451,6 +2498,8 @@ public class FileIndexer
     /// <summary>
     /// Try to infer a language from an extensionless script shebang.
     /// This is a cheap fallback used only after extension and exact-filename checks fail.
+    /// It reads at most <see cref="ShebangProbeByteLimit"/> bytes from the first line;
+    /// NUL bytes and over-cap first lines are treated as non-scripts.
     /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
     /// </summary>
     private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
@@ -2464,13 +2513,24 @@ public class FileIndexer
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
-            Span<byte> buffer = stackalloc byte[256];
+            Span<byte> buffer = stackalloc byte[ShebangProbeByteLimit];
             var bytesRead = stream.Read(buffer);
             if (bytesRead <= 0)
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var firstLine = Encoding.UTF8.GetString(buffer[..bytesRead])
-                .Split(['\r', '\n'], 2)[0];
+            var bytes = buffer[..bytesRead];
+            if (bytes.Contains((byte)0))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var lineEnd = bytes.IndexOfAny((byte)'\r', (byte)'\n');
+            if (lineEnd < 0)
+            {
+                if (bytesRead == ShebangProbeByteLimit)
+                    return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+                lineEnd = bytesRead;
+            }
+
+            var firstLine = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes[..lineEnd]);
 
             if (firstLine.StartsWith('\uFEFF'))
                 firstLine = firstLine[1..];
@@ -2503,6 +2563,10 @@ public class FileIndexer
         catch (UnauthorizedAccessException)
         {
             return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
     }
 

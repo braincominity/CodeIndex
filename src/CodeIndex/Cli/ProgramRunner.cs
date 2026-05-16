@@ -160,6 +160,7 @@ internal static class ProgramRunner
                 exitCode = commandName switch
                 {
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
@@ -621,18 +622,12 @@ internal static class ProgramRunner
         try
         {
             using var cts = new CancellationTokenSource();
-            ConsoleCancelEventHandler? cancelHandler = (_, e) =>
-            {
-                if (cts.IsCancellationRequested)
-                    return;
-                // Treat Ctrl+C as a graceful shutdown signal: cancel the listener so the loop
-                // exits and the HTTP socket is released for the next invocation.
-                // Ctrl+C は graceful shutdown として扱い、listener を解除して socket を解放する。
-                e.Cancel = true;
-                cts.Cancel();
-            };
-            Console.CancelKeyPress += cancelHandler;
-            try
+            // Treat SIGINT (Ctrl+C) AND SIGTERM as graceful shutdown signals so orchestrators
+            // (systemd, launchd, supervisord) can drain the listener and release the HTTP socket
+            // instead of force-killing the process (#1573).
+            // SIGINT (Ctrl+C) と SIGTERM を graceful shutdown として扱い、systemd / launchd /
+            // supervisord が socket を解放して再起動できるようにする（#1573）。
+            using (McpServer.RegisterShutdownHandlers(cts))
             {
                 if (resolved.IsLoopback && bearerToken is null)
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
@@ -640,10 +635,6 @@ internal static class ProgramRunner
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
 
                 server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
-            }
-            finally
-            {
-                Console.CancelKeyPress -= cancelHandler;
             }
         }
         finally

@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 
@@ -41,6 +42,13 @@ public enum ColorPalette
     Truecolor = 2,
 }
 
+public enum DurationOutputFormat
+{
+    Auto = 0,
+    Seconds = 1,
+    Hms = 2,
+}
+
 /// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
@@ -49,10 +57,11 @@ public static class ConsoleUi
 {
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--duration-format <auto|seconds|hms>] [--watch [--debounce <ms>]]"),
+        ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
-        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
-        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
+        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
+        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
@@ -65,7 +74,7 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
-        ("status", "cdidx status [--db <path>] [--json] [--check]"),
+        ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--explain <field>]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
@@ -89,6 +98,55 @@ public static class ConsoleUi
     ];
 
     // --- Spinner / スピナー ---
+
+    public static string FormatDuration(TimeSpan duration, DurationOutputFormat format = DurationOutputFormat.Auto)
+    {
+        if (duration < TimeSpan.Zero)
+            duration = TimeSpan.Zero;
+
+        return format switch
+        {
+            DurationOutputFormat.Seconds => FormatDurationAsSeconds(duration),
+            DurationOutputFormat.Hms => FormatDurationAsHms(duration),
+            _ => FormatDurationAuto(duration),
+        };
+    }
+
+    private static string FormatDurationAuto(TimeSpan duration)
+    {
+        if (duration < TimeSpan.FromSeconds(1))
+            return string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(duration.TotalMilliseconds):0}ms");
+
+        if (duration < TimeSpan.FromMinutes(1))
+            return string.Create(CultureInfo.InvariantCulture, $"{duration.TotalSeconds:0.0}s");
+
+        var totalSeconds = (long)Math.Floor(duration.TotalSeconds);
+        if (duration < TimeSpan.FromHours(1))
+        {
+            var minutes = totalSeconds / 60;
+            var seconds = totalSeconds % 60;
+            return string.Create(CultureInfo.InvariantCulture, $"{minutes}m {seconds}s");
+        }
+
+        var hours = totalSeconds / 3600;
+        var remainder = totalSeconds % 3600;
+        var remMinutes = remainder / 60;
+        var remSeconds = remainder % 60;
+        return string.Create(CultureInfo.InvariantCulture, $"{hours}h {remMinutes}m {remSeconds}s");
+    }
+
+    private static string FormatDurationAsSeconds(TimeSpan duration)
+        => string.Create(CultureInfo.InvariantCulture, $"{duration.TotalSeconds:0.0}s");
+
+    private static string FormatDurationAsHms(TimeSpan duration)
+    {
+        var totalSeconds = (long)Math.Floor(duration.TotalSeconds);
+        var hours = totalSeconds / 3600;
+        var remainder = totalSeconds % 3600;
+        var minutes = remainder / 60;
+        var seconds = remainder % 60;
+        return string.Create(CultureInfo.InvariantCulture, $"{hours:00}:{minutes:00}:{seconds:00}");
+    }
 
     /// <summary>
     /// Start spinner on a background thread, returns CancellationTokenSource to stop it.
@@ -440,7 +498,7 @@ public static class ConsoleUi
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
-        Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match");
+        Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match or --explain <field> for readiness help");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
@@ -459,8 +517,11 @@ public static class ConsoleUi
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
+        Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
+        Console.WriteLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --files / --dry-run");
+        Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
@@ -507,6 +568,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index ./myproject --commits abc123 def456");
         Console.WriteLine("                                              Update DB from multiple commits");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
+        Console.WriteLine("  cdidx index ./myproject --watch               Run an initial scan, then keep the index live as files change (Ctrl+C to stop)");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx search \"auth*\"                          Prefix shorthand in literal-safe mode");
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
@@ -573,27 +635,76 @@ public static class ConsoleUi
     /// Short commands use a stricter threshold to avoid unrelated suggestions.
     /// Damerau-Levenshtein距離で最も近いコマンド名を返す。短いコマンドは無関係な推薦を避けるため閾値を厳しくする。
     /// </summary>
-    public static string? FindClosestCommand(string input)
+    public static string? FindClosestCommand(string input) =>
+        FindClosestMatch(input, Commands);
+
+    /// <summary>
+    /// Find the closest match for <paramref name="input"/> from <paramref name="candidates"/>
+    /// using Damerau-Levenshtein distance with the same length-aware threshold the
+    /// command suggester uses (#1582). Comparison is case-insensitive. Returns the original
+    /// (cased) candidate string, or <c>null</c> when no candidate is within the threshold.
+    /// 任意の候補集合に対して Damerau-Levenshtein 距離で最も近い候補を返す (#1582)。
+    /// 短い入力には厳しめの距離閾値を適用し、無関係な推薦を避ける。比較は case-insensitive。
+    /// </summary>
+    public static string? FindClosestMatch(string? input, IEnumerable<string> candidates)
     {
         if (string.IsNullOrWhiteSpace(input))
             return null;
 
-        input = input.ToLowerInvariant();
+        var normalized = input.ToLowerInvariant();
         string? best = null;
         var bestDist = int.MaxValue;
-        foreach (var cmd in Commands)
+        foreach (var candidate in candidates)
         {
-            var dist = DamerauLevenshteinDistance(input, cmd);
-            if (dist > GetSuggestionDistanceThreshold(input.Length, cmd.Length))
+            if (string.IsNullOrEmpty(candidate))
                 continue;
-
+            var candidateNormalized = candidate.ToLowerInvariant();
+            if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
+                return candidate;
+            var dist = DamerauLevenshteinDistance(normalized, candidateNormalized);
+            if (dist > GetSuggestionDistanceThreshold(normalized.Length, candidateNormalized.Length))
+                continue;
             if (dist < bestDist)
             {
                 bestDist = dist;
-                best = cmd;
+                best = candidate;
             }
         }
         return best;
+    }
+
+    /// <summary>
+    /// Return up to <paramref name="maxResults"/> closest candidates for <paramref name="input"/>,
+    /// ordered by Damerau-Levenshtein distance. Useful for structured suggestions in MCP
+    /// error payloads (#1582). Returns an empty list when no candidate is within the threshold.
+    /// Damerau-Levenshtein 距離で近い候補を最大 <paramref name="maxResults"/> 件まで返す。
+    /// MCP の structured error payload で `similar_values` を返す用途を想定する (#1582)。
+    /// </summary>
+    public static IReadOnlyList<string> FindClosestMatches(string? input, IEnumerable<string> candidates, int maxResults = 3)
+    {
+        if (string.IsNullOrWhiteSpace(input) || maxResults <= 0)
+            return Array.Empty<string>();
+
+        var normalized = input.ToLowerInvariant();
+        var matches = new List<(string Candidate, int Distance)>();
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrEmpty(candidate))
+                continue;
+            var candidateNormalized = candidate.ToLowerInvariant();
+            if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
+                continue;
+            var dist = DamerauLevenshteinDistance(normalized, candidateNormalized);
+            if (dist > GetSuggestionDistanceThreshold(normalized.Length, candidateNormalized.Length))
+                continue;
+            matches.Add((candidate, dist));
+        }
+        return matches
+            .OrderBy(m => m.Distance)
+            .ThenBy(m => m.Candidate, StringComparer.Ordinal)
+            .Select(m => m.Candidate)
+            .Take(maxResults)
+            .ToList();
     }
 
     private static int GetSuggestionDistanceThreshold(int inputLength, int commandLength)
