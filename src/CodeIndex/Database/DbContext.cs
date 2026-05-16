@@ -18,10 +18,28 @@ public class DbContext : IDisposable
 
     private readonly SqliteConnection _connection;
     private readonly bool _isReadOnly;
+    private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
+
+    /// <summary>
+    /// Connection-scoped schema cache. Created lazily so a `DbContext` that
+    /// never opens a reader pays nothing. Subsequent `DbReader` instances on
+    /// the same `DbContext` reuse the cached `PRAGMA table_info` /
+    /// `PRAGMA index_list` / `sqlite_master` results instead of re-running
+    /// the scan on every construction (issue #1565).
+    /// </summary>
+    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection);
+
+    /// <summary>
+    /// Drop cached schema state so subsequent reads observe DDL that ran
+    /// outside this `DbContext`. Migrations performed by this instance
+    /// (`InitializeSchema`, `TryMigrateForRead`, `DropAll`) already invalidate
+    /// the cache automatically.
+    /// </summary>
+    public void RefreshSchemaCache() => _schemaCache?.Refresh();
 
     /// <summary>
     /// Lazily-initialized LRU cache of prepared <see cref="SqliteCommand"/> instances shared
@@ -843,6 +861,7 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
+        _schemaCache?.Refresh();
     }
 
     /// <summary>
@@ -861,6 +880,7 @@ public class DbContext : IDisposable
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
         Execute("DROP TABLE IF EXISTS files");
+        _schemaCache?.Refresh();
     }
 
     private void Execute(string sql)
@@ -899,36 +919,46 @@ public class DbContext : IDisposable
 
         LastMigrationFailure = null;
 
-        foreach (var (description, action) in BuildReadMigrationSteps())
+        try
         {
-            try
+            foreach (var (description, action) in BuildReadMigrationSteps())
             {
-                action();
-            }
-            catch (SqliteException ex)
-            {
-                var failure = new DbMigrationFailure(
-                    description,
-                    ex.SqliteErrorCode,
-                    ex.Message,
-                    BuildMigrationSuggestedAction(ex.SqliteErrorCode));
-                LastMigrationFailure = failure;
-                EmitMigrationFailureWarning(failure);
+                try
+                {
+                    action();
+                }
+                catch (SqliteException ex)
+                {
+                    var failure = new DbMigrationFailure(
+                        description,
+                        ex.SqliteErrorCode,
+                        ex.Message,
+                        BuildMigrationSuggestedAction(ex.SqliteErrorCode));
+                    LastMigrationFailure = failure;
+                    EmitMigrationFailureWarning(failure);
 
-                // Read-only DB / filesystem / sandbox — stop further steps and degrade.
-                // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
-                // some restricted environments report CANTOPEN when SQLite tries to create
-                // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
-                // will drive the degraded read path; later read queries that hit a still-
-                // missing column will now have a single clear preceding diagnostic to refer to.
-                // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
-                if (IsReadOnlyOpenError(ex)) return;
+                    // Read-only DB / filesystem / sandbox — stop further steps and degrade.
+                    // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                    // some restricted environments report CANTOPEN when SQLite tries to create
+                    // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
+                    // will drive the degraded read path; later read queries that hit a still-
+                    // missing column will now have a single clear preceding diagnostic to refer to.
+                    // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
+                    if (IsReadOnlyOpenError(ex)) return;
 
-                // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
-                // migration concerns — preserve the existing surface-the-exception behavior.
-                // それ以外の SQLite エラーは従来通り上位に伝播させる。
-                throw;
+                    // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
+                    // migration concerns — preserve the existing surface-the-exception behavior.
+                    // それ以外の SQLite エラーは従来通り上位に伝播させる。
+                    throw;
+                }
             }
+        }
+        finally
+        {
+            // Migration may have added columns or indexes the schema cache had already
+            // resolved as missing; drop the cache so the next DbReader sees the new shape.
+            // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
+            _schemaCache?.Refresh();
         }
     }
 
