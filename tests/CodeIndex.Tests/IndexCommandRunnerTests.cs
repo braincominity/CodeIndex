@@ -34,7 +34,9 @@ public class IndexCommandRunnerTests
     {
         var options = IndexCommandRunner.ParseArgs([".", "--force"]);
         Assert.True(options.Force);
-        Assert.Equal(".", options.ProjectPath);
+        Assert.NotNull(options.ProjectPath);
+        Assert.True(Path.IsPathRooted(options.ProjectPath));
+        Assert.Equal(Path.GetFullPath("."), options.ProjectPath);
     }
 
     [Fact]
@@ -42,6 +44,57 @@ public class IndexCommandRunnerTests
     {
         var options = IndexCommandRunner.ParseArgs(["."]);
         Assert.False(options.Force);
+    }
+
+    [Fact]
+    public void ParseArgs_AbsolutizesRelativeProjectPath()
+    {
+        var options = IndexCommandRunner.ParseArgs(["./sub/path"]);
+        Assert.NotNull(options.ProjectPath);
+        Assert.True(Path.IsPathRooted(options.ProjectPath));
+        Assert.Equal(Path.GetFullPath("./sub/path"), options.ProjectPath);
+    }
+
+    [Fact]
+    public void ParseArgs_AbsolutizesRelativeDbPath()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--db", "./.cdidx/codeindex.db"]);
+        Assert.NotNull(options.DbPath);
+        Assert.True(Path.IsPathRooted(options.DbPath));
+        Assert.Equal(Path.GetFullPath("./.cdidx/codeindex.db"), options.DbPath);
+    }
+
+    [Fact]
+    public void ParseArgs_PreservesFileUriDbPath()
+    {
+        var uri = "file:///tmp/example.db?immutable=1";
+        var options = IndexCommandRunner.ParseArgs([".", "--db", uri]);
+        Assert.Equal(uri, options.DbPath);
+    }
+
+    [Fact]
+    public void BuildCwdDriftNotice_ReturnsNullWhenCwdUnchanged()
+    {
+        var notice = IndexCommandRunner.BuildCwdDriftNotice("/tmp/project", "/tmp/project");
+        Assert.Null(notice);
+    }
+
+    [Fact]
+    public void BuildCwdDriftNotice_ReturnsNullWhenEitherSnapshotMissing()
+    {
+        Assert.Null(IndexCommandRunner.BuildCwdDriftNotice(null, "/tmp/project"));
+        Assert.Null(IndexCommandRunner.BuildCwdDriftNotice("/tmp/project", null));
+        Assert.Null(IndexCommandRunner.BuildCwdDriftNotice(string.Empty, "/tmp/project"));
+    }
+
+    [Fact]
+    public void BuildCwdDriftNotice_DescribesDriftWhenCwdChanged()
+    {
+        var notice = IndexCommandRunner.BuildCwdDriftNotice("/tmp/project", "/tmp/other");
+        Assert.NotNull(notice);
+        Assert.Contains("/tmp/project", notice);
+        Assert.Contains("/tmp/other", notice);
+        Assert.Contains("working directory changed", notice);
     }
 
     [Fact]
@@ -206,6 +259,34 @@ public class IndexCommandRunnerTests
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_VerboseReportsUnknownExtensionCountAndStatusJsonStampsCount()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.mystery"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(projectRoot, "data.unmapped"), "also unknown\n");
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--verbose"]);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Unknown extension files: 2", stdout);
+            Assert.Contains("data.unmapped", stdout);
+            Assert.Contains("notes.mystery", stdout);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(2, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 

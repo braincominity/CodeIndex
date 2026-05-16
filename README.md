@@ -57,6 +57,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
 - Incremental refreshes with `--files` and `--commits`.
 - Exact DB/worktree freshness checks with `status --check`.
+- `status --json` reports the last full-scan unknown-extension count so
+  extension-table gaps are visible.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
 
@@ -165,6 +167,8 @@ cdidx mcp
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
 - `--files` と `--commits` による差分更新。
 - `status --check` による DB と作業ツリーの完全一致確認。
+- `status --json` で直近 full scan の未知拡張子数を返し、拡張子テーブルの
+  抜けを確認可能。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
 
