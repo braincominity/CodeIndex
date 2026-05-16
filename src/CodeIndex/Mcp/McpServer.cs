@@ -44,6 +44,14 @@ public partial class McpServer : IDisposable
     // 実行する。書き込みツールは InitializeSchema で同等以上の DDL を流すため、そこでフラグを立てる。
     private bool _sharedDbReadMigrated;
     private bool _disposed;
+    // Caller identity used to key the per-(tool, caller) rate limiter. Captured from the
+    // `clientInfo.name` field of the `initialize` request when the client supplies it, so
+    // shared / networked MCP deployments can attribute and throttle individual clients
+    // instead of treating the whole server as a single bucket (#1560).
+    // (tool, caller) ごとのレート制限のキーに使う呼び出し元 ID。`initialize` の
+    // `clientInfo.name` から取得し、共有・ネットワーク経由の MCP でクライアント単位の
+    // 計量・スロットルが効くようにする（#1560）。
+    private string _caller = "unknown";
 
     // Preferred MCP protocol version returned when the client does not pin one. This is the
     // newest entry in `SupportedProtocolVersions` and must stay in lockstep with that array.
@@ -114,7 +122,39 @@ public partial class McpServer : IDisposable
         };
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
+        RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
     }
+
+    /// <summary>
+    /// Per-(tool, caller) token bucket throttle for MCP tool calls. Disabled by default so
+    /// stdio single-user sessions are unaffected; operators opt in via
+    /// `CDIDX_MCP_RATE_LIMIT_RPS` (+ optional `CDIDX_MCP_RATE_LIMIT_BURST`) on the MCP server
+    /// process (#1560).
+    /// MCP ツール呼び出し向け (tool, caller) 単位のトークンバケットスロットル。既定では無効で
+    /// stdio 単一ユーザーには影響しない。`CDIDX_MCP_RATE_LIMIT_RPS`（任意で
+    /// `CDIDX_MCP_RATE_LIMIT_BURST`）を MCP サーバープロセスに設定して opt-in する（#1560）。
+    /// </summary>
+    internal RateLimiter RateLimiter { get; private set; }
+
+    /// <summary>
+    /// Replace the rate limiter for tests so they can inject a deterministic clock and
+    /// custom options without going through environment variables.
+    /// テスト用にレート制限器を差し替える。決定論的なクロックや任意のオプションを環境変数
+    /// 経由ではなく直接注入できるようにする。
+    /// </summary>
+    internal void OverrideRateLimiterForTests(RateLimiter limiter)
+    {
+        RateLimiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
+    }
+
+    /// <summary>
+    /// Caller identifier captured from the most recent `initialize` request's
+    /// `clientInfo.name` (issue #1560). Exposed for tests so they can verify the limiter is
+    /// keyed off the negotiated caller.
+    /// 直近の `initialize` の `clientInfo.name` から取得した呼び出し元 ID（#1560）。
+    /// テストがレート制限のキーを検証するために公開する。
+    /// </summary>
+    internal string CurrentCaller => _caller;
 
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
@@ -287,6 +327,23 @@ public partial class McpServer : IDisposable
     /// </summary>
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
+        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
+        // identity, but reject re-initialize attempts that swap one named identity for
+        // another. Otherwise a single networked session could reset its rate-limit bucket
+        // mid-flight by re-initializing under a fresh name (issue #1560 evidence — DoS
+        // surface for networked MCP deployments).
+        // caller の sticky 制御: 既定の "unknown" バケットからは名前付き ID への昇格を許すが、
+        // 名前付き ID 同士のスワップは拒否する。これを許すと 1 セッション内で再 initialize により
+        // 新しい名前でレート制限バケットをリセットできてしまい、#1560 が指摘する DoS 経路になる。
+        var resolved = ResolveCallerIdentity(_params);
+        if (_caller == "unknown")
+        {
+            _caller = resolved;
+        }
+        else if (resolved != _caller && resolved != "unknown")
+        {
+            Console.Error.WriteLine(BuildCallerSwapRejectionLog(_caller, resolved));
+        }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
         {
@@ -339,6 +396,41 @@ public partial class McpServer : IDisposable
     /// それをそのまま返し、未指定なら既定バージョンを返し、重なりが無い場合は構造化エラー
     /// を返す（黙ってダウングレードしないことでクライアントが誤った wire format で進むのを防ぐ）。
     /// </summary>
+    /// <summary>
+    /// Resolve the caller identity used by the per-(tool, caller) rate limiter from an
+    /// `initialize` request's `clientInfo`. Falls back to `"unknown"` when the client did
+    /// not supply a name so anonymous callers still get a coherent bucket of their own
+    /// (instead of accidentally sharing one with named clients) (#1560).
+    /// (tool, caller) ごとのレート制限で使う呼び出し元 ID を `initialize` の `clientInfo` から
+    /// 解決する。`name` が無い場合は `"unknown"` を返し、匿名クライアントが他の名前付きクライアントと
+    /// バケットを共有しないようにする（#1560）。
+    /// </summary>
+    internal static string ResolveCallerIdentity(JsonNode? initializeParams)
+    {
+        if (initializeParams is not JsonObject obj)
+            return "unknown";
+        if (obj["clientInfo"] is not JsonObject clientInfo)
+            return "unknown";
+
+        string? Read(string key)
+        {
+            if (clientInfo.TryGetPropertyValue(key, out var node)
+                && node is JsonValue value
+                && value.TryGetValue<string>(out var s)
+                && !string.IsNullOrWhiteSpace(s))
+            {
+                return s.Trim();
+            }
+            return null;
+        }
+
+        var name = Read("name");
+        if (name == null)
+            return "unknown";
+        var version = Read("version");
+        return version == null ? name : $"{name}/{version}";
+    }
+
     internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out string? requestedVersion)
     {
         requestedVersion = null;
@@ -405,6 +497,39 @@ public partial class McpServer : IDisposable
         return $"[cdidx-mcp] Rejecting initialize: client requested protocolVersion '{requested}', server supports {supported}. Upgrade the server or pin a supported version on the client.";
     }
 
+    /// <summary>
+    /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
+    /// the limit category in `error.data.error_category` (alongside `tool`, `caller`, and
+    /// `retry_after_ms`) lets MCP clients branch on the failure type without parsing the
+    /// human-readable `message` (#1560).
+    /// レート制限で拒否されたツール呼び出し用の構造化 `-32000` JSON-RPC エラーを構築する。
+    /// `error.data.error_category` を併記することでクライアントが `message` 文字列を解析せず
+    /// 失敗カテゴリで分岐できるようにする（#1560）。
+    /// </summary>
+    internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
+    {
+        var data = new JsonObject
+        {
+            ["error_category"] = "rate_limited",
+            ["tool"] = tool,
+            ["caller"] = caller,
+            ["retry_after_ms"] = retryAfterMs,
+        };
+        var error = new JsonObject
+        {
+            ["code"] = -32000,
+            ["message"] = $"Rate limit exceeded for tool '{tool}' (retry after {retryAfterMs} ms).",
+            ["data"] = data,
+        };
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["error"] = error,
+            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+        };
+        return response;
+    }
+
     // Tool definitions are in McpToolDefinitions.cs / ツール定義は McpToolDefinitions.cs に分離
 
 
@@ -436,6 +561,14 @@ public partial class McpServer : IDisposable
         string? metricsError = null;
         try
         {
+            var decision = RateLimiter.TryAcquire(toolName, _caller);
+            if (!decision.Allowed)
+            {
+                metricsError = "rate_limited";
+                Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
+                return CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
+            }
+
             return toolName switch
             {
                 "search" => ExecuteSearch(id, args),
@@ -532,6 +665,17 @@ public partial class McpServer : IDisposable
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
+    // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
+    // can correlate spikes with the structured error returned on the wire (#1560).
+    // レート制限で拒否されたツール呼び出しを stderr に記録する。配線上の JSON-RPC `-32000`
+    // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
+    internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
+        $"[cdidx-mcp] Rate limit exceeded: tool='{toolName}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+
+    internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
+        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
