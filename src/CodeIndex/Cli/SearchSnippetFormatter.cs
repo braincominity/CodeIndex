@@ -223,7 +223,7 @@ public static class SearchSnippetFormatter
             var idx = 0;
             while ((idx = line.IndexOf(normalizedQuery, idx, comparison)) >= 0)
             {
-                best = ChooseBetter(best, new MatchCandidate(idx, normalizedQuery.Length, fullQueryScore + normalizedQuery.Length, null));
+                best = ChooseBetter(best, new MatchCandidate(idx, normalizedQuery.Length, fullQueryScore + ScoreLength(normalizedQuery.Length), null));
                 idx += Math.Max(1, normalizedQuery.Length);
             }
         }
@@ -237,7 +237,7 @@ public static class SearchSnippetFormatter
             var idx = 0;
             while ((idx = line.IndexOf(token, idx, comparison)) >= 0)
             {
-                var occurrence = new MatchCandidate(idx, token.Length, 1_000 + token.Length, token);
+                var occurrence = new MatchCandidate(idx, token.Length, 1_000 + ScoreLength(token.Length), token);
                 tokenOccurrences.Add(occurrence);
                 best = ChooseBetter(best, occurrence);
                 idx += Math.Max(1, token.Length);
@@ -263,7 +263,7 @@ public static class SearchSnippetFormatter
                     continue;
 
                 var clusterEnd = cluster.Max(candidate => candidate.Index + candidate.Length);
-                var totalTokenLength = cluster.Sum(candidate => candidate.Length);
+                var totalTokenLength = cluster.Sum(candidate => ScoreLength(candidate.Length));
                 best = ChooseBetter(best, new MatchCandidate(start, clusterEnd - start, clusterScore + (tokenCount * 100) + totalTokenLength, null));
             }
         }
@@ -319,6 +319,8 @@ public static class SearchSnippetFormatter
             return candidate.Length > current.Length ? candidate : current;
         return candidate.Index < current.Index ? candidate : current;
     }
+
+    private static int ScoreLength(int length) => Math.Min(length, 99);
 
     private readonly record struct MatchCandidate(int Index, int Length, int Score, string? Token)
     {
