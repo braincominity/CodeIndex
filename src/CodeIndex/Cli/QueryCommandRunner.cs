@@ -22,6 +22,9 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
+    private const string HotspotsGroupedBySymbol = "symbol";
+    private const string HotspotsGroupedByFile = "file";
+    private const string HotspotsGroupedByStatement = "statement";
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
@@ -57,6 +60,7 @@ public static class QueryCommandRunner
         "--exclude-path",
         "--depth",
         "--query",
+        "--group-by",
         "--focus-line",
         "--focus-column",
         "--focus-length",
@@ -2229,6 +2233,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
+        if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
+        {
+            Console.Error.WriteLine(groupByError);
+            Console.Error.WriteLine("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -2236,7 +2246,7 @@ public static class QueryCommandRunner
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-            if (groupByName)
+            if (groupBy == HotspotsGroupedByNameKind)
             {
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var effectiveSqlGraphSignal = groupedResults.Count == 0
@@ -2340,6 +2350,145 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
+            if (groupBy == HotspotsGroupedByFile)
+            {
+                var symbolRows = reader.GetSymbolHotspots(int.MaxValue, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var fileResults = symbolRows
+                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
+                    .Select(group =>
+                    {
+                        var first = group.First();
+                        return new
+                        {
+                            Path = first.Symbol.Path,
+                            Lang = first.Symbol.Lang,
+                            ReferenceCount = group.Sum(row => row.ReferenceCount),
+                            SymbolCount = group.Count(),
+                        };
+                    })
+                    .OrderByDescending(row => row.ReferenceCount)
+                    .ThenBy(row => row.Path, StringComparer.Ordinal)
+                    .Take(options.Limit)
+                    .ToList();
+                var effectiveSqlGraphSignal = fileResults.Count == 0
+                    ? zeroResultSqlGraphSignal
+                    : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, fileResults.Select(result => result.Lang), options.Lang);
+                var fileHotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
+
+                if (fileResults.Count == 0)
+                {
+                    if (options.CountOnly)
+                    {
+                        if (options.Json)
+                        {
+                            var payload = new JsonObject
+                            {
+                                ["count"] = 0,
+                                ["files"] = 0,
+                                ["graph_table_available"] = reader._hasReferencesTable,
+                                ["grouped_by"] = groupBy,
+                            };
+                            AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                            AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                            AddFreshnessHint(payload, reader);
+                            Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        }
+                        else
+                        {
+                            Console.WriteLine("0");
+                            WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                            WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                        }
+                    }
+                    else if (options.Json)
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(
+                            reader,
+                            jsonOptions,
+                            resultsKey: "hotspots",
+                            graphTableAvailable: reader._hasReferencesTable,
+                            degraded: !reader._hasReferencesTable || !fileHotspotSignal.Ready,
+                            extraFields: payload =>
+                            {
+                                payload["grouped_by"] = groupBy;
+                                AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                                AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                            }).ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("No symbol hotspots found.");
+                        WriteZeroResultHints(options, reader);
+                        WriteKindHint(options.Kind, reader);
+                        WriteLangHint(options.Lang, reader);
+                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                        WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    }
+                    return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                }
+
+                if (options.CountOnly)
+                {
+                    if (options.Json)
+                    {
+                        var payload = new JsonObject
+                        {
+                            ["count"] = fileResults.Count,
+                            ["files"] = fileResults.Count,
+                            ["graph_table_available"] = reader._hasReferencesTable,
+                            ["grouped_by"] = groupBy,
+                        };
+                        AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                        AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{fileResults.Count}");
+                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                    }
+                    return CommandExitCodes.Success;
+                }
+
+                if (options.Json)
+                {
+                    var hotspots = new JsonArray();
+                    foreach (var result in fileResults)
+                    {
+                        hotspots.Add(new JsonObject
+                        {
+                            ["path"] = result.Path,
+                            ["lang"] = result.Lang,
+                            ["reference_count"] = result.ReferenceCount,
+                            ["symbol_count"] = result.SymbolCount,
+                        });
+                    }
+                    var payload = new JsonObject
+                    {
+                        ["count"] = fileResults.Count,
+                        ["files"] = fileResults.Count,
+                        ["grouped_by"] = groupBy,
+                        ["hotspots"] = hotspots,
+                    };
+                    AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    foreach (var result in fileResults)
+                    {
+                        Console.WriteLine($"{result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
+                    }
+                    Console.Error.WriteLine($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
+                    WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                }
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
@@ -2363,6 +2512,7 @@ public static class QueryCommandRunner
                             ["count"] = 0,
                             ["files"] = 0,
                             ["graph_table_available"] = reader._hasReferencesTable,
+                            ["grouped_by"] = groupBy,
                         };
                         if (!reader._hasReferencesTable)
                             payload["degraded"] = true;
@@ -2375,6 +2525,7 @@ public static class QueryCommandRunner
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, extraFields: payload =>
                     {
+                        payload["grouped_by"] = groupBy;
                         AddHotspotFamilyJsonFields(payload, hotspotSignal);
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     });
@@ -2387,6 +2538,7 @@ public static class QueryCommandRunner
                         degraded: !hotspotSignal.Ready,
                         extraFields: payload =>
                         {
+                            payload["grouped_by"] = groupBy;
                             AddHotspotFamilyJsonFields(payload, hotspotSignal);
                             AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                         }).ToJsonString(jsonOptions));
@@ -2413,6 +2565,7 @@ public static class QueryCommandRunner
                         ["count"] = results.Count,
                         ["files"] = fc,
                         ["graph_table_available"] = reader._hasReferencesTable,
+                        ["grouped_by"] = groupBy,
                     };
                     AddHotspotFamilyJsonFields(payload, hotspotSignal);
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2442,6 +2595,7 @@ public static class QueryCommandRunner
                 var payload = new JsonObject
                 {
                     ["count"] = results.Count,
+                    ["grouped_by"] = groupBy,
                     ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult)
                 };
                 AddHotspotFamilyJsonFields(payload, hotspotSignal);
@@ -2455,7 +2609,7 @@ public static class QueryCommandRunner
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                     Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
-                Console.Error.WriteLine($"({results.Count} symbol hotspots)");
+                Console.Error.WriteLine($"({results.Count} symbol hotspots; grouped_by={groupBy})");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
@@ -2824,6 +2978,7 @@ public static class QueryCommandRunner
         bool checkWorkspace = false;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
+        string? groupBy = null;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -3020,6 +3175,15 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--group-by-name":
+                    break;
+                case "--group-by":
+                    if (TryReadStringOptionValue(args, ref i, "--group-by", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var groupByValue, out var groupByError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--group-by", groupByValue!);
+                        groupBy = groupByValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(groupByError!);
                     break;
                 case "--with-paths":
                     withPaths = true;
@@ -3223,10 +3387,54 @@ public static class QueryCommandRunner
             CheckWorkspace = checkWorkspace,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
+            GroupBy = groupBy,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
+
+    private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
+    {
+        groupBy = string.Empty;
+        error = string.Empty;
+
+        if (groupByName && requestedGroupBy != null)
+        {
+            error = "Error: --group-by-name cannot be combined with --group-by.";
+            return false;
+        }
+
+        if (groupByName)
+        {
+            groupBy = HotspotsGroupedByNameKind;
+            return true;
+        }
+
+        if (requestedGroupBy == null)
+        {
+            groupBy = IsSqlLanguageFilter(lang) ? HotspotsGroupedByStatement : HotspotsGroupedBySymbol;
+            return true;
+        }
+
+        switch (requestedGroupBy)
+        {
+            case HotspotsGroupedBySymbol:
+            case HotspotsGroupedByFile:
+            case HotspotsGroupedByStatement:
+                groupBy = requestedGroupBy;
+                return true;
+            case "name":
+            case HotspotsGroupedByNameKind:
+                groupBy = HotspotsGroupedByNameKind;
+                return true;
+            default:
+                error = $"Error: unsupported hotspots --group-by value '{requestedGroupBy}'. Use symbol, file, or statement.";
+                return false;
+        }
+    }
+
+    private static bool IsSqlLanguageFilter(string? lang) =>
+        string.Equals(lang, "sql", StringComparison.Ordinal);
 
     internal static string? NormalizeLangFilterValue(string? langValue)
     {
@@ -3442,6 +3650,14 @@ public static class QueryCommandRunner
             {
                 Console.Error.WriteLine("Error: --group-by-name is only supported by 'hotspots'.");
                 Console.Error.WriteLine("Hint: remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.");
+                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                return true;
+            }
+
+            if (normalizedArg == "--group-by")
+            {
+                Console.Error.WriteLine("Error: --group-by is only supported by 'hotspots'.");
+                Console.Error.WriteLine("Hint: remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.");
                 Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
                 return true;
             }
@@ -4775,6 +4991,7 @@ public sealed class QueryCommandOptions
     public bool CheckWorkspace { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
+    public string? GroupBy { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

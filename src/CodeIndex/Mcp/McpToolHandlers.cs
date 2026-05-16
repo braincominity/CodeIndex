@@ -1680,23 +1680,50 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
+            ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
+        if (groupBy is not ("symbol" or "file" or "statement"))
+            return CreateToolErrorResponse(id, $"Unsupported symbol_hotspots groupBy '{groupBy}'. Use symbol, file, or statement.");
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var results = reader.GetSymbolHotspots(groupBy == "file" ? int.MaxValue : limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
-            var sqlGraphSignal = results.Count == 0
+            var fileResults = groupBy == "file"
+                ? results
+                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
+                    .Select(group =>
+                    {
+                        var first = group.First();
+                        return new
+                        {
+                            path = first.Symbol.Path,
+                            lang = first.Symbol.Lang,
+                            reference_count = group.Sum(row => row.ReferenceCount),
+                            symbol_count = group.Count(),
+                        };
+                    })
+                    .OrderByDescending(row => row.reference_count)
+                    .ThenBy(row => row.path, StringComparer.Ordinal)
+                    .Take(limit)
+                    .ToList()
+                : null;
+            var resultLangs = fileResults != null
+                ? fileResults.Select(result => result.lang)
+                : results.Select(result => result.Symbol.Lang);
+            var visibleCount = fileResults?.Count ?? results.Count;
+            var sqlGraphSignal = visibleCount == 0
                 ? zeroResultSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                     baseSqlGraphSignal,
-                    results.Select(result => result.Symbol.Lang),
+                    resultLangs,
                     lang);
             var items = results.Select(r => new
             {
@@ -1708,22 +1735,46 @@ public partial class McpServer
                 visibility = r.Symbol.Visibility,
                 container = r.Symbol.ContainerName,
             });
+            JsonNode? hotspotsNode;
+            if (fileResults != null)
+            {
+                var hotspots = new JsonArray();
+                foreach (var result in fileResults)
+                {
+                    hotspots.Add(new JsonObject
+                    {
+                        ["path"] = result.path,
+                        ["lang"] = result.lang,
+                        ["reference_count"] = result.reference_count,
+                        ["symbol_count"] = result.symbol_count,
+                    });
+                }
+                hotspotsNode = hotspots;
+            }
+            else
+            {
+                hotspotsNode = JsonSerializer.SerializeToNode(items, _jsonOptions);
+            }
+
             var payload = new JsonObject
             {
-                ["count"] = results.Count,
-                ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
+                ["count"] = visibleCount,
+                ["grouped_by"] = groupBy,
+                ["hotspots"] = hotspotsNode
             };
+            if (fileResults != null)
+                payload["files"] = fileResults.Count;
             AddHotspotFamilySignal(payload, hotspotSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            var summary = results.Count > 0
-                ? $"Found {results.Count} symbol hotspot(s)."
+            var summary = visibleCount > 0
+                ? $"Found {visibleCount} {groupBy} hotspot(s)."
                 : "No symbol hotspots found.";
             if (!hotspotSignal.Ready)
             {
                 payload["note"] = "cross-file hotspot family grouping is degraded; conservative same-file fallback may hide or undercount hotspot families until the next successful reindex.";
                 summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
             }
-            if (results.Count == 0)
+            if (visibleCount == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
