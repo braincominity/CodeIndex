@@ -3366,7 +3366,7 @@ public static partial class ReferenceExtractor
         if (!CSharpReflectionNameApiIntroRegex.IsMatch(preparedLine))
             return;
 
-        var codeLine = SliceCSharpCodeBeforeLineComment(originalLine);
+        var codeLine = SanitizeCSharpCommentsForReflectionNameScan(originalLine);
         foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(codeLine))
         {
             if (IsInsideCSharpStringLiteral(codeLine, match.Index))
@@ -3422,8 +3422,9 @@ public static partial class ReferenceExtractor
         return false;
     }
 
-    private static string SliceCSharpCodeBeforeLineComment(string line)
+    private static string SanitizeCSharpCommentsForReflectionNameScan(string line)
     {
+        var chars = line.ToCharArray();
         var inRegularString = false;
         var inVerbatimString = false;
         var inChar = false;
@@ -3457,6 +3458,24 @@ public static partial class ReferenceExtractor
 
             if (c == '/' && i + 1 < line.Length && line[i + 1] == '/')
                 return line[..i];
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i += 2;
+                while (i < line.Length)
+                {
+                    chars[i] = ' ';
+                    if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                    {
+                        chars[i + 1] = ' ';
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
             if (c == '@' && i + 1 < line.Length && line[i + 1] == '"')
             {
                 inVerbatimString = true;
@@ -3475,7 +3494,7 @@ public static partial class ReferenceExtractor
                 inChar = true;
         }
 
-        return line;
+        return new string(chars);
     }
 
     private static bool IsInsideCSharpStringLiteral(string line, int targetIndex)
