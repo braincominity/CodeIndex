@@ -11,7 +11,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -24,11 +24,17 @@ public partial class DbReader
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var supportedLangPredicate = BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang");
 
+        var groupedReferenceKindSql = rawKinds
+            ? GetGroupedCallerReferenceKindSql("r.reference_kind")
+            : GetGroupedCallerLogicalReferenceKindSql("r.reference_kind");
+        var groupedReferenceKindGroupSql = rawKinds
+            ? GetRawReferenceKindSql("r.reference_kind")
+            : GetLogicalReferenceKindSql("r.reference_kind");
         var sql = referenceKind == null
             ? @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
+                       " + groupedReferenceKindSql + @" AS reference_kind,
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
@@ -85,10 +91,10 @@ public partial class DbReader
         if (referenceKind == null)
         {
             sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @"
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
+                   " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
                    MIN(line) AS first_line, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM logical_references r
@@ -151,7 +157,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -209,7 +215,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -239,7 +245,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -295,7 +301,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
@@ -327,7 +333,7 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
@@ -336,11 +342,17 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
+        var preferredCalleeKindSql = rawKinds
+            ? GetPreferredReferenceKindSql("r.reference_kind")
+            : GetPreferredLogicalReferenceKindSql("r.reference_kind");
+        var calleeGroupKindSql = rawKinds
+            ? GetRawReferenceKindSql("r.reference_kind")
+            : GetLogicalReferenceKindSql("r.reference_kind");
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       {preferredCalleeKindSql} AS reference_kind,
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
@@ -461,7 +473,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -475,7 +487,7 @@ public partial class DbReader
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
                        " + (referenceKind == null
-                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
                            : "r.reference_kind") + @" AS reference_kind
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
@@ -516,7 +528,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -549,7 +561,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable)
@@ -562,7 +574,7 @@ public partial class DbReader
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
                        " + (referenceKind == null
-                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
                            : "r.reference_kind") + @" AS reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
@@ -603,7 +615,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";

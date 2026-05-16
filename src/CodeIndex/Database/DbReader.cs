@@ -123,12 +123,13 @@ public partial class DbReader
             ELSE 0
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
+    private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe')";
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
     // with non-call edges (issue #293).
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
-    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
+    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 
@@ -209,15 +210,29 @@ public partial class DbReader
             ELSE 1
         END";
     private static string GetLogicalReferenceKindSql(string referenceKindSql)
-        => $"CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 'invoke' ELSE {referenceKindSql} END";
+        => $"CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 'invoke' " +
+           $"WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 'event' " +
+           $"ELSE {referenceKindSql} END";
+
+    private static string GetRawReferenceKindSql(string referenceKindSql)
+        => referenceKindSql;
 
     private static string GetPreferredReferenceKindSql(string referenceKindSql)
         => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
 
+    private static string GetPreferredLogicalReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 1 ELSE 0 END) > 0 THEN 'invoke' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 1 ELSE 0 END) > 0 THEN 'event' " +
+           $"ELSE MIN({referenceKindSql}) END";
+
     private static string GetGroupedCallerReferenceKindSql(string referenceKindSql)
         => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' " +
            $"WHEN SUM(CASE WHEN {referenceKindSql} = 'subscribe' THEN 1 ELSE 0 END) > 0 THEN 'subscribe' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} = 'unsubscribe' THEN 1 ELSE 0 END) > 0 THEN 'unsubscribe' " +
            $"ELSE MIN({referenceKindSql}) END";
+
+    private static string GetGroupedCallerLogicalReferenceKindSql(string referenceKindSql)
+        => GetPreferredLogicalReferenceKindSql(referenceKindSql);
 
     private static string GetPathBucketOrderSql(string pathSql)
         => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
