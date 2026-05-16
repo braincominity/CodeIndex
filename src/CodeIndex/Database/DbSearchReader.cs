@@ -19,7 +19,7 @@ public partial class DbReader
     /// <paramref name="prefix"/> が true の場合、すべてのトークンを FTS5 prefix phrase として扱い、
     /// unicode61 が単一トークンにまとめる CJK のようなスクリプトでも opt-in で wildcard マッチさせる。
     /// </summary>
-    private static string SanitizeFtsQuery(string query, bool prefix)
+    internal static string SanitizeFtsQuery(string query, bool prefix)
     {
         // Escape double quotes inside the query, then wrap each whitespace-separated
         // token in double quotes so FTS5 treats them as literal phrases. A trailing
