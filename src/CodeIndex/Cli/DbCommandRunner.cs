@@ -69,7 +69,7 @@ public static class DbCommandRunner
                 Console.WriteLine($"  result  : {(ok ? "ok" : "corrupted")}");
                 if (!ok)
                 {
-                    Console.WriteLine($"  issues  : {issues.Count} row(s)");
+                    Console.WriteLine($"  issues  : {ConsoleUi.Counted(issues.Count, "row")}");
                     foreach (var line in issues)
                         Console.WriteLine($"    - {line}");
                     Console.WriteLine();

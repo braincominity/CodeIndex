@@ -2129,8 +2129,8 @@ jobs:
     }
 
     [Theory]
-    [InlineData("search-extra", "unexpected extra positional argument(s) for search")]
-    [InlineData("excerpt-extra", "unexpected extra positional argument(s) for excerpt")]
+    [InlineData("search-extra", "unexpected extra positional 1 argument for search")]
+    [InlineData("excerpt-extra", "unexpected extra positional 1 argument for excerpt")]
     [InlineData("map-extra", "map does not accept positional arguments")]
     [InlineData("outline-extra", "outline does not accept positional arguments")]
     [InlineData("status-extra", "status does not accept positional arguments")]
@@ -25373,7 +25373,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.DoesNotContain("file_dependency_hints", stdout);
-            Assert.Contains("2 definition(s) across 1 file(s)", stderr);
+            Assert.Contains("2 definitions across 1 file", stderr);
         }
         finally
         {
