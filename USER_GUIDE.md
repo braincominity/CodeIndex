@@ -705,6 +705,42 @@ Example output:
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
 ```
 
+### MCP audit log
+
+`cdidx mcp` can opt in to a per-tool-call audit log so compliance reviewers can answer *"who called which tool with what shape of arguments and when did it fail?"* without re-running the index. Audit emission is off by default; pass `--audit-log <path>` to the `cdidx mcp` invocation to enable it. The destination file is opened append-only and rotated through `<path>.1` and `<path>.2` when the active file exceeds the configured size cap, dropping the oldest slot rather than spilling further.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
+| `--audit-log-include-values` | off | Echo the full argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be ≥ 4096. |
+
+Each record is a single JSON object on its own line with these fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `timestamp` | string (ISO 8601 with offset) | When the tool call started |
+| `tool` | string | MCP tool name (`search`, `definition`, …) or `(missing)` for malformed `tools/call` |
+| `caller` | string (optional) | `initialize.clientInfo.name` from the connected MCP client |
+| `caller_version` | string (optional) | `initialize.clientInfo.version` from the connected MCP client |
+| `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
+| `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
+| `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
+| `arg_values` | object (optional) | Full argument payload. Present only when `--audit-log-include-values` is enabled |
+| `result_count` | number (optional) | `structuredContent.count` or `structuredContent.results.length` for successful calls; omitted otherwise |
+| `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
+| `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
+| `error` | string (optional) | Short error category (`jsonrpc_error`, `tool_error`, `missing_tool_name`, or sanitized exception type name) |
+
+Emission is best-effort: any IO failure (read-only mount, deleted target, etc.) is swallowed silently and never breaks the underlying tool call.
+
+Example output:
+
+```jsonl
+{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"7","arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
+{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"(missing)","arg_keys":[],"arg_lengths":{},"elapsed_ms":0.412,"error_code":-32602,"error":"missing_tool_name"}
+```
+
 ## How it works
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
@@ -1869,6 +1905,42 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 ```jsonl
 {"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","source":"cli","elapsed_ms":221.574,"exit_code":0,"language":"csharp"}
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
+```
+
+### MCP 監査ログ
+
+`cdidx mcp` に `--audit-log <path>` を渡すと、ツール呼び出しごとに 1 レコードの JSONL 監査ログを出力できます。「誰が・どんな引数形で・いつ呼び出して失敗したか」を後追いするためのコンプライアンス用途を想定しており、既定では無効です。出力先は append 専用で開かれ、サイズ上限を超えると `<path>.1` → `<path>.2` の順にローテーションされ、最古スロットは破棄されます（`<path>.3` 以降は決して残りません）。
+
+| フラグ | 既定 | 効果 |
+|---|---|---|
+| `--audit-log <path>` | (無効) | 監査出力を有効化し `<path>` に JSONL を書き出す。親ディレクトリは無ければ自動作成 |
+| `--audit-log-include-values` | off | 引数の値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。最小値は 4096 |
+
+各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
+
+| フィールド | 型 | 意味 |
+|---|---|---|
+| `timestamp` | string（オフセット付き ISO 8601） | ツール呼び出しの開始時刻 |
+| `tool` | string | MCP ツール名（`search`、`definition` …）。`tools/call` が壊れていた場合は `(missing)` |
+| `caller` | string（任意） | 接続中クライアントの `initialize.clientInfo.name` |
+| `caller_version` | string（任意） | 接続中クライアントの `initialize.clientInfo.version` |
+| `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
+| `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
+| `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
+| `arg_values` | object（任意） | 引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `result_count` | number（任意） | 成功時の `structuredContent.count` または `structuredContent.results.length`。それ以外は省略 |
+| `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
+| `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32602`） |
+| `error` | string（任意） | エラー種別の短いタグ（`jsonrpc_error`、`tool_error`、`missing_tool_name`、またはサニタイズ済み例外型名） |
+
+出力は best-effort で、ディレクトリ不在・読み取り専用マウント・対象ファイル削除などの IO 失敗は黙って握り潰し、本体ツール呼び出しを壊しません。
+
+出力例:
+
+```jsonl
+{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"7","arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
+{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"(missing)","arg_keys":[],"arg_lengths":{},"elapsed_ms":0.412,"error_code":-32602,"error":"missing_tool_name"}
 ```
 
 ## 動作の仕組み

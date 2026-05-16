@@ -383,6 +383,16 @@ internal static class ProgramRunner
 
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {
+        // Strip audit-log opt-in flags first so the strict mcp parser below does not see them
+        // and raise an unknown-flag error. Keeps `--db` and `--` passthrough intact (#1562).
+        // audit-log オプションフラグは厳格パーサに渡る前に除去し、未知フラグ扱いされるのを防ぐ (#1562)。
+        if (!TryConsumeAuditLogFlags(ref cmdArgs, out var auditOptions, out var auditError))
+        {
+            Console.Error.WriteLine(auditError);
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
         if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
             Console.Error.WriteLine(transportError);
@@ -415,7 +425,7 @@ internal static class ProgramRunner
             }
 
             Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
-            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, or `--http-listen host:port` for HTTP.");
+            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -436,13 +446,35 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
+        AuditLogSink? auditLog = null;
+        if (auditOptions.Path != null)
+        {
+            try
+            {
+                auditLog = new AuditLogSink(auditOptions.Path, auditOptions.MaxBytes, auditOptions.IncludeValues);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
+                Console.Error.WriteLine("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
+                return CommandExitCodes.UsageError;
+            }
+        }
 
-        if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
-            return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
+        try
+        {
+            using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit, auditLog);
 
-        server.RunAsync().GetAwaiter().GetResult();
-        return CommandExitCodes.Success;
+            if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+                return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
+
+            server.RunAsync().GetAwaiter().GetResult();
+            return CommandExitCodes.Success;
+        }
+        finally
+        {
+            auditLog?.Dispose();
+        }
     }
 
     private static int RunMcpHttp(McpServer server, string listenSpec)
@@ -524,7 +556,7 @@ internal static class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>]");
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>]");
     }
 
     internal static bool TryExtractMcpTransportFlags(string[] cmdArgs, out string? transport, out string? listen, out string error)
@@ -586,6 +618,129 @@ internal static class ProgramRunner
         }
         return kept.ToArray();
     }
+
+    /// <summary>
+    /// Strip the MCP audit-log opt-in flags (`--audit-log[=<path>]`,
+    /// `--audit-log-include-values`, `--audit-log-max-bytes[=<n>]`) from `cmdArgs` before
+    /// the strict `cdidx mcp` parser runs. Keeps `--db` and everything after `--`
+    /// untouched so existing escape semantics survive (#1562).
+    /// `cdidx mcp` の厳格パーサが走る前に audit-log 用フラグを取り除く。`--db` と
+    /// `--` 以降はそのまま残し既存意味論を保つ (#1562)。
+    /// </summary>
+    internal static bool TryConsumeAuditLogFlags(ref string[] args, out AuditLogOptions options, out string error)
+    {
+        options = new AuditLogOptions(null, AuditLogSink.DefaultMaxBytes, false);
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        string? path = null;
+        long maxBytes = AuditLogSink.DefaultMaxBytes;
+        var includeValues = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            // Pass `--db` and its value through together so a dash-prefixed DB path
+            // (e.g. `cdidx mcp --db --some-uri`) is not mis-consumed as the start of
+            // an audit-log flag. The strict mcp parser downstream supports both
+            // `--db <value>` and `--db=value`; here we only need to guard the spaced form.
+            // `--db` とその値はまとめて通過させ、ダッシュ始まりの DB パス
+            // (例: `cdidx mcp --db --some-uri`) を audit-log フラグの先頭と
+            // 誤認しないようにする。`--db=value` 形式は値が同じトークンに含まれるため
+            // 既存ループでそのまま `kept` に流れる。
+            if (arg == "--db")
+            {
+                kept.Add(arg);
+                if (i + 1 < args.Length)
+                    kept.Add(args[++i]);
+                continue;
+            }
+
+            if (arg == "--audit-log")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --audit-log requires a path value (use `--audit-log <path>` or `--audit-log=<path>`).";
+                    return false;
+                }
+                path = args[++i];
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    error = "Error: --audit-log requires a non-empty path value.";
+                    return false;
+                }
+                continue;
+            }
+            if (arg.StartsWith("--audit-log=", StringComparison.Ordinal))
+            {
+                path = arg.Substring("--audit-log=".Length);
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    error = "Error: --audit-log requires a non-empty path value.";
+                    return false;
+                }
+                continue;
+            }
+            if (arg == "--audit-log-include-values")
+            {
+                includeValues = true;
+                continue;
+            }
+            if (arg == "--audit-log-max-bytes" || arg.StartsWith("--audit-log-max-bytes=", StringComparison.Ordinal))
+            {
+                string raw;
+                if (arg == "--audit-log-max-bytes")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        error = "Error: --audit-log-max-bytes requires a byte count.";
+                        return false;
+                    }
+                    raw = args[++i];
+                }
+                else
+                {
+                    raw = arg.Substring("--audit-log-max-bytes=".Length);
+                }
+                if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                    || parsed < AuditLogSink.MinMaxBytes)
+                {
+                    error = $"Error: --audit-log-max-bytes must be an integer >= {AuditLogSink.MinMaxBytes}.";
+                    return false;
+                }
+                maxBytes = parsed;
+                continue;
+            }
+            kept.Add(arg);
+        }
+
+        if (includeValues && path == null)
+        {
+            error = "Error: --audit-log-include-values requires --audit-log <path>.";
+            return false;
+        }
+
+        options = new AuditLogOptions(path, maxBytes, includeValues);
+        args = kept.ToArray();
+        return true;
+    }
+
+    internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues);
+
 
     // `--version` is now build-aware so dev builds from main are not
     // indistinguishable from tagged releases in bug reports (#1550). Human
