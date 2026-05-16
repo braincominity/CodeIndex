@@ -873,18 +873,19 @@ public class FileIndexer
         {
             var normalizedRoot = Path.GetFullPath(projectRoot);
             if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
-                return Directory.Exists(rootVariant);
+                return Directory.Exists(LongPath.EnsureWindowsPrefix(rootVariant));
 
             var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
-            File.WriteAllText(probePath, string.Empty);
+            var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
+            File.WriteAllText(prefixedProbePath, string.Empty);
             try
             {
-                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(probeVariant);
+                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
             }
             finally
             {
-                if (File.Exists(probePath))
-                    File.Delete(probePath);
+                if (File.Exists(prefixedProbePath))
+                    File.Delete(prefixedProbePath);
             }
         }
         catch
@@ -1062,7 +1063,7 @@ public class FileIndexer
     {
         try
         {
-            var attributes = File.GetAttributes(path);
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
             return (attributes & FileAttributes.ReparsePoint) != 0;
         }
         catch (FileNotFoundException)
@@ -1201,10 +1202,11 @@ public class FileIndexer
 
     private static int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
+        var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         var count = 0;
         foreach (var pattern in patterns)
         {
-            foreach (var _ in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
+            foreach (var _ in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
             {
                 count++;
                 if (count > 1)
@@ -1219,14 +1221,16 @@ public class FileIndexer
     {
         try
         {
+            var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
             foreach (var pattern in patterns)
             {
-                foreach (var file in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
-                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, file)));
+                foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, LongPath.RemoveWindowsPrefix(file))));
             }
 
-            foreach (var subDir in Directory.EnumerateDirectories(dir))
+            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
             {
+                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                 if (SkipDirs.Contains(Path.GetFileName(subDir)))
                     continue;
 
@@ -1465,8 +1469,14 @@ public class FileIndexer
 
             if (!passthrough)
             {
-                foreach (var file in Directory.EnumerateFiles(dir))
+                foreach (var enumeratedFile in Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)))
                 {
+                    // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
+                    // directory, so downstream relative-path math (which compares against the
+                    // un-prefixed _projectRoot) still produces the canonical project-relative key.
+                    // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
+                    // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
+                    var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
                     var fileName = Path.GetFileName(file);
 
                     // Skip excluded file names / 除外ファイル名をスキップ
@@ -1519,8 +1529,9 @@ public class FileIndexer
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
             listedDirectories.Add(ToRelativePath(dir));
 
-            foreach (var subDir in Directory.EnumerateDirectories(dir))
+            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
+                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                 // In passthrough mode, only descend into subdirectories that are themselves
                 // submodules or submodule ancestors. Treat siblings the same way SkipDirs
                 // would have treated them at this point.
@@ -1643,13 +1654,14 @@ public class FileIndexer
         foreach (var ignoreFileName in IgnoreFileNames)
         {
             var ignorePath = Path.Combine(dir, ignoreFileName);
-            if (!File.Exists(ignorePath))
+            var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
+            if (!File.Exists(prefixedIgnorePath))
                 continue;
 
             try
             {
                 var lineNumber = 0;
-                foreach (var line in File.ReadLines(ignorePath))
+                foreach (var line in File.ReadLines(prefixedIgnorePath))
                 {
                     lineNumber++;
                     if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
@@ -1740,13 +1752,14 @@ public class FileIndexer
         var ancestorPaths = new HashSet<string>(pathComparer);
 
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
-        if (!File.Exists(gitmodulesPath))
+        var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
+        if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths);
 
         string[] lines;
         try
         {
-            lines = File.ReadAllLines(gitmodulesPath);
+            lines = File.ReadAllLines(prefixedGitmodulesPath);
         }
         catch (IOException)
         {
@@ -1903,8 +1916,9 @@ public class FileIndexer
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
+        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         using (var stream = new FileStream(
-            absolutePath,
+            ioPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
@@ -1933,7 +1947,7 @@ public class FileIndexer
             }
             bytes = accumulator.ToArray();
             sizeBytes = total;
-            modifiedUtc = File.GetLastWriteTimeUtc(absolutePath);
+            modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
         }
 
         // Compute the checksum on the byte stream after collapsing CRLF / CR to LF so
@@ -2378,7 +2392,7 @@ public class FileIndexer
 
         try
         {
-            using var stream = File.OpenRead(filePath);
+            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(filePath));
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
