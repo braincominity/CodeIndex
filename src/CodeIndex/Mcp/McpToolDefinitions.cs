@@ -416,8 +416,10 @@ public partial class McpServer
                 "unused_symbols",
                 "Find symbols that are defined but never referenced in the indexed codebase. "
                 + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects, and the lowest-confidence bucket is reserved for config-bound properties or C#-style attribute-adjacent reflection surfaces. Only meaningful for languages with reference extraction support. "
+                + "C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed as references; dynamically constructed reflection names can still require manual review. "
                 + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
-                + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config-bound な property または C# 風 attribute 隣接の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。",
+                + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config-bound な property または C# 風 attribute 隣接の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。"
+                + "C# の nameof/typeof と GetMethod(\"Foo\") のような直接の reflection member-name literal は参照として index されるが、動的に組み立てた reflection 名は手動確認が必要な場合がある。",
                 new JsonObject
                 {
                     ["type"] = "object",

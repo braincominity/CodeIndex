@@ -1146,6 +1146,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. For noisy generated, minified, or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
 - Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
 - Use `deps --reverse` for file-level impact, `impact` for callable symbol ripple checks, `unused` for potentially dead definitions, and `hotspots` for central symbols. These commands are only as strong as the current graph support and freshness metadata, so keep `languages` and `status --check --json` in the loop.
+- `unused` treats indexed references as authoritative suppression signals. C# `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as `GetMethod("Foo")` or literal concatenations like `GetProperty("Display" + "Name")` are indexed, but dynamically constructed reflection names may still require manual review.
 - Use `files --since <datetime>` or `search --since <datetime>` to focus on recent changes, `index --dry-run` to preview index scope, and `--count` to size result sets before fetching full payloads.
 - If you encounter a bug, unexpected behavior, or an improvement idea, file an issue at https://github.com/Widthdom/CodeIndex/issues with the observed behavior, expected behavior, and the command you ran.
 
@@ -2595,6 +2596,7 @@ system では、同じ `cdidx index . --quiet` を step として追加してく
 - 広い検索は早い段階で `--path <text>`、繰り返し指定できる `--exclude-path <text>`、テストが目的でない場合の `--exclude-tests` で絞る。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
 - 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
 - ファイル単位の影響確認には `deps --reverse`、callable symbol の波及確認には `impact`、潜在的な未使用定義には `unused`、中心的なシンボルの把握には `hotspots` を使う。これらは現在の graph 対応とインデックス鮮度に依存するため、`languages` と `status --check --json` を併用する。
+- `unused` はインデックス済み参照を抑制シグナルとして扱う。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような直接の reflection member-name literal や `GetProperty("Display" + "Name")` のような literal 連結は index されるが、動的に組み立てられる reflection 名は引き続き手動確認が必要になることがある。
 - 最近の変更に絞るときは `files --since <datetime>` または `search --since <datetime>`、インデックス対象の事前確認には `index --dry-run`、大きな結果を取る前の見積もりには `--count` を使う。
 - cdidx のバグ、予期しない動作、改善アイデアを見つけた場合は、https://github.com/Widthdom/CodeIndex/issues に、実際の挙動、期待する挙動、実行したコマンドを書いて issue を作成してください。
 
