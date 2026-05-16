@@ -705,6 +705,38 @@ Example output:
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
 ```
 
+### MCP rate limiting
+
+`cdidx mcp` ships an opt-in token-bucket rate limiter keyed by `(tool, caller)` so a misbehaving client cannot exhaust CPU or memory by spamming MCP tool calls (e.g. `batch_query` carrying multiple `search --limit 200`). It is disabled by default so single-user stdio sessions are unaffected.
+
+| Environment variable | Meaning |
+|---|---|
+| `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. |
+
+Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
+
+Over-quota tool calls receive a structured JSON-RPC `-32000` error:
+
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "error": {
+    "code": -32000,
+    "message": "Rate limit exceeded for tool 'search' (retry after 250 ms).",
+    "data": {
+      "error_category": "rate_limited",
+      "tool": "search",
+      "caller": "claude-code/1.2.3",
+      "retry_after_ms": 250
+    }
+  }
+}
+```
+
+Inside `batch_query`, each inner slot is also checked against the inner tool's bucket. Over-quota slots surface `error_category: "rate_limited"` and `retry_after_ms` directly in the per-slot result without failing the rest of the batch.
+
 ## How it works
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
@@ -1870,6 +1902,38 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 {"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","source":"cli","elapsed_ms":221.574,"exit_code":0,"language":"csharp"}
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
 ```
+
+### MCP レート制限
+
+`cdidx mcp` には `(tool, caller)` をキーとする opt-in のトークンバケット型レート制限があり、`batch_query` に複数の `search --limit 200` を詰めて CPU/メモリを枯渇させるような誤動作クライアントを抑止できます。既定では無効で stdio 単一ユーザーには影響しません。
+
+| 環境変数 | 意味 |
+|---|---|
+| `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。 |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。 |
+
+呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
+
+超過したツール呼び出しには構造化された JSON-RPC `-32000` エラーを返します:
+
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "error": {
+    "code": -32000,
+    "message": "Rate limit exceeded for tool 'search' (retry after 250 ms).",
+    "data": {
+      "error_category": "rate_limited",
+      "tool": "search",
+      "caller": "claude-code/1.2.3",
+      "retry_after_ms": 250
+    }
+  }
+}
+```
+
+`batch_query` の内側スロットも各内側ツールのバケットで判定されます。超過したスロットはバッチ全体を失敗させずに、スロット結果に `error_category: "rate_limited"` と `retry_after_ms` を含めて返します。
 
 ## 動作の仕組み
 
