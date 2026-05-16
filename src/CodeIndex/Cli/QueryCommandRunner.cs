@@ -14,6 +14,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
+    internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
@@ -65,6 +68,7 @@ public static class QueryCommandRunner
         "--focus-column",
         "--focus-length",
         "--max-line-width",
+        "--stale-after",
         "--explain",
     ];
     private sealed record StatusReadinessField(
@@ -144,6 +148,7 @@ public static class QueryCommandRunner
         "-V",
         "--group-by-name",
         "--with-paths",
+        "--bytes",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -192,7 +197,7 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -207,10 +212,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No results found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
@@ -303,7 +308,7 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -339,7 +344,7 @@ public static class QueryCommandRunner
             {
                 if (!options.Json)
                 {
-                    Console.Error.WriteLine("No definitions found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No definitions found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -472,10 +477,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No references found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No references found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -596,10 +601,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No callers found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No callers found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -720,10 +725,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No callees found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No callees found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -848,7 +853,7 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -892,7 +897,7 @@ public static class QueryCommandRunner
             {
                 if (!options.Json)
                 {
-                    Console.Error.WriteLine("No symbols found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No symbols found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -966,10 +971,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files").ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files", queryOptions: options).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No files found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No files found", options));
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
@@ -984,7 +989,10 @@ public static class QueryCommandRunner
             else
             {
                 foreach (var r in results)
-                    Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {r.Path}");
+                {
+                    var size = options.RawBytes ? $"{r.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(r.Size);
+                    Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {size,12}  {r.Path}");
+                }
                 Console.Error.WriteLine($"({results.Count} files)");
             }
             return CommandExitCodes.Success;
@@ -1157,7 +1165,7 @@ public static class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, extraFields: static payload =>
+                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, queryOptions: options, extraFields: static payload =>
                         {
                             payload["file_count"] = 0;
                         });
@@ -1181,7 +1189,7 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", extraFields: payload =>
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
                     {
                         payload["query"] = options.Query;
                         payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
@@ -1195,7 +1203,7 @@ public static class QueryCommandRunner
                 }
                 else
                 {
-                    Console.Error.WriteLine("No matches found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No matches found", options));
                     WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                 }
                 return CommandExitCodes.NotFound;
@@ -1418,7 +1426,11 @@ public static class QueryCommandRunner
                 WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
-                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item => $"{item.Path}  [{item.Lines} lines, {item.Size} bytes]"));
+                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
+                {
+                    var size = options.RawBytes ? $"{item.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(item.Size);
+                    return $"{item.Path}  [{item.Lines} lines, {size}]";
+                }));
                 WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                 WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
                 WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}]"));
@@ -1746,6 +1758,17 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            var staleAfter = (Value: DefaultStaleAfter, Error: (string?)null);
+            if (options.CheckWorkspace || options.StaleAfter.HasValue)
+            {
+                staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+                if (staleAfter.Error != null)
+                {
+                    Console.Error.WriteLine(staleAfter.Error);
+                    return CommandExitCodes.UsageError;
+                }
+            }
+
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
             if (options.CheckWorkspace)
@@ -1754,6 +1777,9 @@ public static class QueryCommandRunner
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
+                status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
+                if (status.IndexedAt.HasValue)
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((DateTime.UtcNow - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
@@ -1791,6 +1817,8 @@ public static class QueryCommandRunner
             }
             else if (options.CheckWorkspace)
             {
+                if (options.StaleAfter.HasValue)
+                    WriteStatusAge(status, staleAfter.Value);
                 if (checkFailures.Count > 0)
                     WriteStatusCheckDiagnostics(checkFailures);
             }
@@ -1833,7 +1861,10 @@ public static class QueryCommandRunner
                 if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
                     Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
+                {
+                    WriteStatusAge(status, staleAfter.Value);
                     WriteWorkspaceCheck(status.WorkspaceCheck);
+                }
                 if (status.Languages.Count > 0)
                 {
                     Console.WriteLine("Languages:");
@@ -2252,12 +2283,12 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !sqlGraphSignal.Ready, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal)).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !sqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal)).ToJsonString(jsonOptions));
                 else
                 {
-                    Console.Error.WriteLine("No file dependencies found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No file dependencies found", options));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "edges", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -2329,7 +2360,7 @@ public static class QueryCommandRunner
                     {
                         if (options.Json)
                         {
-                            var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable);
+                            var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable, queryOptions: options);
                             AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                             Console.WriteLine(payload.ToJsonString(jsonOptions));
                         }
@@ -2338,13 +2369,13 @@ public static class QueryCommandRunner
                     }
                     else if (options.Json)
                     {
-                        var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable);
+                        var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable, queryOptions: options);
                         AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
                     {
-                        Console.Error.WriteLine("No symbol hotspots found.");
+                        Console.Error.WriteLine(BuildZeroResultLine("No symbol hotspots found", options));
                         WriteZeroResultHints(options, reader);
                         WriteKindHint(options.Kind, reader);
                         WriteLangHint(options.Lang, reader);
@@ -2594,7 +2625,7 @@ public static class QueryCommandRunner
                     }
                 }
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, extraFields: payload =>
+                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload =>
                     {
                         payload["grouped_by"] = groupBy;
                         AddHotspotFamilyJsonFields(payload, hotspotSignal);
@@ -2615,7 +2646,7 @@ public static class QueryCommandRunner
                         }).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No symbol hotspots found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No symbol hotspots found", options));
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -2765,11 +2796,12 @@ public static class QueryCommandRunner
                         graphSupportReason,
                         sqlGraphSignal,
                         reader._hasReferencesTable,
-                        jsonOptions));
+                        jsonOptions,
+                        options));
                 }
                 else
                 {
-                    Console.Error.WriteLine("No unused symbols found.");
+                    Console.Error.WriteLine(BuildZeroResultLine("No unused symbols found", options));
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -2834,7 +2866,7 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -2854,6 +2886,8 @@ public static class QueryCommandRunner
         }
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        if (queryOptions != null)
+            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         return payload.ToJsonString(jsonOptions);
     }
 
@@ -3047,9 +3081,11 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool checkWorkspace = false;
+        TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
         string? groupBy = null;
+        bool rawBytes = false;
         string? statusExplainField = null;
         var extraNames = new List<string>();
 
@@ -3260,6 +3296,9 @@ public static class QueryCommandRunner
                 case "--with-paths":
                     withPaths = true;
                     break;
+                case "--bytes":
+                    rawBytes = true;
+                    break;
                 case "--check":
                     if (allowStatusCheck)
                     {
@@ -3272,6 +3311,27 @@ public static class QueryCommandRunner
                     else
                     {
                         AddParseError("Error: --check is not supported by this command.");
+                    }
+                    break;
+                case "--stale-after":
+                    if (allowStatusCheck)
+                    {
+                        if (TryReadStringOptionValue(args, ref i, "--stale-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var staleAfterValue, out var staleAfterError))
+                        {
+                            WarnIfDuplicateSingleValueOption("--stale-after", staleAfterValue!);
+                            if (TryParseStaleAfter(staleAfterValue!, out var parsedStaleAfter, out var parseStaleAfterError))
+                                staleAfter = parsedStaleAfter;
+                            else
+                                AddParseError(parseStaleAfterError!);
+                        }
+                        else
+                        {
+                            AddParseError(staleAfterError!);
+                        }
+                    }
+                    else
+                    {
+                        AddParseError("Error: --stale-after is not supported by this command.");
                     }
                     break;
                 case "--explain":
@@ -3477,9 +3537,11 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
+            StaleAfter = staleAfter,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
             GroupBy = groupBy,
+            RawBytes = rawBytes,
             StatusExplainField = statusExplainField,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -3539,6 +3601,74 @@ public static class QueryCommandRunner
 
     internal static IReadOnlyCollection<string> GetCompletionLanguageAliases()
         => LanguageDisplayAliases.Values.SelectMany(aliases => aliases).ToArray();
+
+    internal static bool TryParseStaleAfter(string value, out TimeSpan staleAfter, out string? error)
+    {
+        staleAfter = default;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = "Error: --stale-after requires a duration like 30m, 2h, or 7d.";
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        var suffix = trimmed[^1];
+        var numberText = trimmed[..^1];
+        TimeSpan unit;
+        switch (suffix)
+        {
+            case 'm':
+            case 'M':
+                unit = TimeSpan.FromMinutes(1);
+                break;
+            case 'h':
+            case 'H':
+                unit = TimeSpan.FromHours(1);
+                break;
+            case 'd':
+            case 'D':
+                unit = TimeSpan.FromDays(1);
+                break;
+            default:
+                error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+                return false;
+        }
+
+        if (!double.TryParse(numberText, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var number) ||
+            !double.IsFinite(number) ||
+            number <= 0)
+        {
+            error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+            return false;
+        }
+
+        var ticks = number * unit.Ticks;
+        if (ticks > TimeSpan.MaxValue.Ticks)
+        {
+            error = $"Error: stale-after value '{value}' is too large.";
+            return false;
+        }
+
+        staleAfter = TimeSpan.FromTicks((long)Math.Round(ticks, MidpointRounding.AwayFromZero));
+        return true;
+    }
+
+    private static (TimeSpan Value, string? Error) ResolveStaleAfter(QueryCommandOptions options, string? envValue)
+    {
+        if (options.StaleAfter.HasValue)
+            return (options.StaleAfter.Value, null);
+
+        if (!string.IsNullOrWhiteSpace(envValue))
+        {
+            if (TryParseStaleAfter(envValue, out var parsed, out var error))
+                return (parsed, null);
+            return (DefaultStaleAfter, error!.Replace("--stale-after", StaleAfterEnvironmentVariable, StringComparison.Ordinal));
+        }
+
+        return (DefaultStaleAfter, null);
+    }
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
     {
@@ -3914,8 +4044,99 @@ public static class QueryCommandRunner
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
 
-        if (freshness.IndexedAt.HasValue && (DateTime.UtcNow - freshness.IndexedAt.Value).TotalHours > 24)
-            Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
+        var staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+        if (staleAfter.Error != null)
+        {
+            Console.Error.WriteLine(staleAfter.Error);
+            return;
+        }
+
+        if (freshness.IndexedAt.HasValue)
+        {
+            var age = DateTime.UtcNow - freshness.IndexedAt.Value;
+            if (age > staleAfter.Value)
+                Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
+        }
+    }
+
+    private static string BuildZeroResultLine(string message, QueryCommandOptions options)
+    {
+        var context = BuildQueryContextParts(options, includeDefaultLimit: true).ToList();
+        if (context.Count == 0)
+            return message + ".";
+
+        return $"{message}. ({string.Join(", ", context)})";
+    }
+
+    private static IEnumerable<string> BuildQueryContextParts(QueryCommandOptions options, bool includeDefaultLimit)
+    {
+        if (!string.IsNullOrWhiteSpace(options.Query))
+            yield return $"query: \"{options.Query}\"";
+        if (options.PathPatterns.Count > 0)
+            yield return $"path: {string.Join(", ", options.PathPatterns)}";
+        if (options.ExcludePaths.Count > 0)
+            yield return $"exclude-path: {string.Join(", ", options.ExcludePaths)}";
+        if (options.Lang != null)
+            yield return $"lang: {options.Lang}";
+        if (options.Kind != null)
+            yield return $"kind: {options.Kind}";
+        if (options.ExcludeTests)
+            yield return "exclude-tests: true";
+        if (options.Since.HasValue)
+            yield return $"since: {options.Since.Value:O}";
+        if (options.CountOnly)
+            yield return "count: true";
+        if (options.RawFts)
+            yield return "fts: true";
+        if (options.Exact)
+            yield return "exact: true";
+        if (options.Prefix)
+            yield return "prefix: true";
+        if (options.NoDedup)
+            yield return "dedup: false";
+        if (options.ContextBefore > 0)
+            yield return $"before: {options.ContextBefore}";
+        if (options.ContextAfter > 0)
+            yield return options.ContextAfterExplicit ? $"depth: {options.ContextAfter}" : $"after: {options.ContextAfter}";
+        if (includeDefaultLimit || options.Limit != 20)
+            yield return $"limit: {options.Limit}";
+    }
+
+    private static JsonObject BuildQueryContextJson(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var query = new JsonObject
+        {
+            ["limit"] = options.Limit,
+        };
+        if (!string.IsNullOrWhiteSpace(options.Query))
+            query["text"] = options.Query;
+        if (options.PathPatterns.Count > 0)
+            query["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.ExcludePaths.Count > 0)
+            query["exclude_path"] = JsonSerializer.SerializeToNode(options.ExcludePaths, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.Lang != null)
+            query["lang"] = options.Lang;
+        if (options.Kind != null)
+            query["kind"] = options.Kind;
+        if (options.ExcludeTests)
+            query["exclude_tests"] = true;
+        if (options.Since.HasValue)
+            query["since"] = options.Since.Value;
+        if (options.CountOnly)
+            query["count"] = true;
+        if (options.RawFts)
+            query["fts"] = true;
+        if (options.Exact)
+            query["exact"] = true;
+        if (options.Prefix)
+            query["prefix"] = true;
+        if (options.NoDedup)
+            query["dedup"] = false;
+        if (options.ContextBefore > 0)
+            query["before"] = options.ContextBefore;
+        if (options.ContextAfter > 0)
+            query[options.ContextAfterExplicit ? "depth" : "after"] = options.ContextAfter;
+        return query;
     }
 
     internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
@@ -3981,6 +4202,7 @@ public static class QueryCommandRunner
         bool? graphTableAvailable = null,
         bool? degraded = null,
         ExactQuerySignal? exactSignal = null,
+        QueryCommandOptions? queryOptions = null,
         Action<JsonObject>? extraFields = null)
     {
         var payload = new JsonObject
@@ -4006,13 +4228,15 @@ public static class QueryCommandRunner
         }
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
+        if (queryOptions != null)
+            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         extraFields?.Invoke(payload);
         AddFreshnessHint(payload, reader);
 
         return payload;
     }
 
-    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable)
+    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable, QueryCommandOptions? queryOptions = null)
     {
         var payload = BuildJsonZeroResultPayload(
             reader,
@@ -4021,6 +4245,7 @@ public static class QueryCommandRunner
             includeFiles: countOnly,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,
+            queryOptions: queryOptions,
             extraFields: static zeroPayload =>
             {
                 zeroPayload["definition_site_total"] = 0;
@@ -4273,6 +4498,37 @@ public static class QueryCommandRunner
             Console.WriteLine($"  Unverifiable DB rows : {check.UnverifiableFileCount:N0}{FormatSamples(check.UnverifiableFiles)}");
         if (check.ScanErrorCount > 0)
             Console.WriteLine($"  Scan errors : {check.ScanErrorCount:N0}{FormatSamples(check.ScanErrors)}");
+    }
+
+    private static void WriteStatusAge(StatusResult status, TimeSpan staleAfter)
+    {
+        if (!status.IndexedAt.HasValue)
+            return;
+
+        var age = DateTime.UtcNow - status.IndexedAt.Value;
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+
+        Console.WriteLine($"Age     : index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter)})");
+    }
+
+    internal static string FormatDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero)
+            duration = TimeSpan.Zero;
+
+        var totalDays = (int)duration.TotalDays;
+        var hours = duration.Hours;
+        var minutes = duration.Minutes;
+        var seconds = duration.Seconds;
+
+        if (totalDays > 0)
+            return hours > 0 ? $"{totalDays}d{hours}h" : $"{totalDays}d";
+        if (duration.TotalHours >= 1)
+            return minutes > 0 ? $"{(int)duration.TotalHours}h{minutes}m" : $"{(int)duration.TotalHours}h";
+        if (duration.TotalMinutes >= 1)
+            return seconds > 0 ? $"{(int)duration.TotalMinutes}m{seconds}s" : $"{(int)duration.TotalMinutes}m";
+        return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
 
     private static string FormatSamples(IReadOnlyList<string> samples)
@@ -4580,12 +4836,12 @@ public static class QueryCommandRunner
     // read-only DB apart from a DB that genuinely has no callers for the query.
     // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
     private static void WriteDegradedGraphZeroResult(DbReader reader, string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions,
-        ExactQuerySignal? exactSignal = null, Action<JsonObject>? extraFields = null)
+        ExactQuerySignal? exactSignal = null, QueryCommandOptions? queryOptions = null, Action<JsonObject>? extraFields = null)
     {
         if (graphAvailable) return;
         if (json)
         {
-            var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: false, degraded: true, exactSignal: exactSignal, extraFields: extraFields);
+            var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: false, degraded: true, exactSignal: exactSignal, queryOptions: queryOptions, extraFields: extraFields);
             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
             Console.WriteLine(payload.ToJsonString(jsonOptions));
         }
@@ -4679,9 +4935,9 @@ public static class QueryCommandRunner
     }
 
     private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
-        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null, Action<JsonObject>? extraFields = null)
+        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null, QueryCommandOptions? queryOptions = null, Action<JsonObject>? extraFields = null)
     {
-        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable);
+        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable, queryOptions: queryOptions);
         if (!graphAvailable)
         {
             payload["degraded"] = true;
@@ -4882,6 +5138,7 @@ public static class QueryCommandRunner
         ["--name"] = "pass a literal symbol name, e.g. `--name UserService`. Repeat `--name` to add more names.",
         ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
+        ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
     };
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
@@ -5161,9 +5418,11 @@ public sealed class QueryCommandOptions
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
+    public TimeSpan? StaleAfter { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
     public string? GroupBy { get; init; }
+    public bool RawBytes { get; init; }
     public string? StatusExplainField { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }

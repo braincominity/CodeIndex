@@ -572,6 +572,7 @@ csharp           42 lines  src/Models/User.cs
 ```bash
 cdidx status
 cdidx status --check --json
+cdidx status --check --stale-after 30m
 cdidx status --explain fold_ready
 ```
 
@@ -902,6 +903,7 @@ Supported schema (snake_case keys; every key is optional):
   "metrics_path": "./.cdidx/metrics.jsonl", // → CDIDX_METRICS
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
+  "stale_after": "2h",                   // → CDIDX_STALE_AFTER
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -915,7 +917,7 @@ Supported schema (snake_case keys; every key is optional):
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`.
 
 ## How it works
 
@@ -1043,6 +1045,10 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 | **Linux** | Usually pre-installed. If not: `sudo apt install sqlite3` |
 | **Windows** | `winget install SQLite.SQLite` or `scoop install sqlite` |
 
+## Output formats
+
+Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
+
 ## AI Integration
 
 cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local index.
@@ -1111,6 +1117,7 @@ Before searching, check whether the index already matches the workspace:
 
 ```bash
 cdidx status --check --json
+cdidx status --check --stale-after 30m
 ```
 
 If it exits `0` with `index_matches_workspace: true`, skip reindexing. Otherwise update the index so results are accurate:
@@ -1118,6 +1125,8 @@ If it exits `0` with `index_matches_workspace: true`, skip reindexing. Otherwise
 ```bash
 cdidx .   # incremental update (skips unchanged files)
 ```
+
+`status --check` uses a 24-hour index-age threshold by default when explaining stale-index hints. Override it per invocation with `--stale-after <duration>` (`30m`, `2h`, `7d`), for a process or CI job with `CDIDX_STALE_AFTER`, or per repository with `.cdidxrc.json` (`"stale_after": "2h"`). The effective threshold is shown in human output and as `stale_after_seconds` in JSON.
 
 ## Keeping the index up to date (requires cdidx)
 
@@ -1143,6 +1152,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. For noisy generated, minified, or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
 - Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
 - Use `deps --reverse` for file-level impact, `impact` for callable symbol ripple checks, `unused` for potentially dead definitions, and `hotspots` for central symbols. These commands are only as strong as the current graph support and freshness metadata, so keep `languages` and `status --check --json` in the loop.
+- `unused` treats indexed references as authoritative suppression signals. C# `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as `GetMethod("Foo")` or literal concatenations like `GetProperty("Display" + "Name")` are indexed, but dynamically constructed reflection names may still require manual review.
 - Use `files --since <datetime>` or `search --since <datetime>` to focus on recent changes, `index --dry-run` to preview index scope, and `--count` to size result sets before fetching full payloads.
 - If you encounter a bug, unexpected behavior, or an improvement idea, file an issue at https://github.com/Widthdom/CodeIndex/issues with the observed behavior, expected behavior, and the command you ran.
 
@@ -2031,6 +2041,8 @@ Languages:
 - `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`outside_sparse_cone_files`、`unindexed_files`、`unverifiable_files`、`scan_errors`、`head_changed` を返します（前回 full scan 時から worktree の HEAD が動いている場合は `indexed_head_commit` と `workspace_head_commit` も併記します）。git index で skip-worktree ビットが立っているパス (sparse-checkout cone/non-cone、partial clone、`git update-index --skip-worktree`) は `outside_sparse_cone_files` に分類され、freshness の判定を失敗させません。
 - DB が現在の workspace と完全一致するときだけ終了コード `0`、stale な index では終了コード `5` です。
 
+`status --check` は既定で 24 時間の index-age しきい値を使って stale-index hint を説明します。呼び出しごとに `--stale-after <duration>`（`30m` / `2h` / `7d`）、プロセスや CI 単位で `CDIDX_STALE_AFTER`、リポジトリ単位で `.cdidxrc.json` の `"stale_after": "2h"` により上書きできます。有効なしきい値は human 出力に表示され、JSON では `stale_after_seconds` として返ります。
+
 `cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `cdidx index <projectPath> --rebuild` を推奨する `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。`--commits` / `--files` の部分更新は記録 HEAD を意図的に維持するため、次の full scan が worktree を再インデックスするまで stale 通知が継続します。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
@@ -2340,6 +2352,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
   "metrics_path": "./.cdidx/metrics.jsonl", // → CDIDX_METRICS
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
+  "stale_after": "2h",                   // → CDIDX_STALE_AFTER
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -2353,7 +2366,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。
 
 ## 動作の仕組み
 
@@ -2481,6 +2494,10 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 | **Linux** | 通常プリインストール済み。未導入時: `sudo apt install sqlite3` |
 | **Windows** | `winget install SQLite.SQLite` または `scoop install sqlite` |
 
+## 出力形式
+
+人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
+
 ## AIとの連携
 
 cdidx が AI ワークフローで効く最大の理由は、毎ターン同じリポジトリを読み直さずに済むことです。
@@ -2589,6 +2606,7 @@ system では、同じ `cdidx index . --quiet` を step として追加してく
 - 広い検索は早い段階で `--path <text>`、繰り返し指定できる `--exclude-path <text>`、テストが目的でない場合の `--exclude-tests` で絞る。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
 - 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
 - ファイル単位の影響確認には `deps --reverse`、callable symbol の波及確認には `impact`、潜在的な未使用定義には `unused`、中心的なシンボルの把握には `hotspots` を使う。これらは現在の graph 対応とインデックス鮮度に依存するため、`languages` と `status --check --json` を併用する。
+- `unused` はインデックス済み参照を抑制シグナルとして扱う。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような直接の reflection member-name literal や `GetProperty("Display" + "Name")` のような literal 連結は index されるが、動的に組み立てられる reflection 名は引き続き手動確認が必要になることがある。
 - 最近の変更に絞るときは `files --since <datetime>` または `search --since <datetime>`、インデックス対象の事前確認には `index --dry-run`、大きな結果を取る前の見積もりには `--count` を使う。
 - cdidx のバグ、予期しない動作、改善アイデアを見つけた場合は、https://github.com/Widthdom/CodeIndex/issues に、実際の挙動、期待する挙動、実行したコマンドを書いて issue を作成してください。
 
