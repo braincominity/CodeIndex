@@ -183,11 +183,14 @@ internal static class CdidxConfigFile
                 }
             }
 
-            // Apply only when the matching env var is not already set, preserving the
-            // documented precedence (real env wins over config-file value).
+            // Apply only when the matching env var is not present (null), preserving the
+            // documented precedence (real env wins over config-file value). An explicit
+            // empty string still counts as "set" because several existing consumers
+            // (e.g. RateLimiterOptions.FromEnvironment) treat empty as "feature off",
+            // so a user clearing a checked-in value must be able to override with `export FOO=`.
             foreach (var (name, value) in pending)
             {
-                if (string.IsNullOrEmpty(envReader(name)))
+                if (envReader(name) is null)
                     envWriter(name, value);
             }
 

@@ -78,6 +78,27 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_EmptyEnvVarStillCountsAsSet()
+    {
+        // Empty-string env vars are not "unset" — RateLimiterOptions.FromEnvironment and
+        // similar consumers treat empty as "feature off", so an explicit `export FOO=`
+        // must defeat a checked-in config value (real env wins, per documented precedence).
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"),
+                """{ "metrics_path": "/from/config.jsonl" }""");
+
+            var env = new TestEnvironment(initial: new() { ["CDIDX_METRICS"] = "" });
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Loaded);
+            Assert.False(env.Writes.ContainsKey("CDIDX_METRICS"));
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_WalksUpwardFromStartingDirectory()
     {
         var root = CreateTempDir();
