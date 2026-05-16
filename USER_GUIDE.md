@@ -137,6 +137,29 @@ with `cdidx . --verbose` to see `[OK  ]`, `[SKIP]`, `[DEL ]`, and `[ERR ]`
 file statuses. Use incremental refreshes after the first run; see
 [Options](#options) for `--files` and `--commits`.
 
+## CI integration
+
+Use `cdidx status --check` when a script needs one command that verifies both
+workspace freshness and readiness of query subsystems. On success, non-JSON
+`--check` exits 0 and writes no stdout. On failure, it writes one diagnostic line
+per failed check to stderr, such as `[stale] workspace_check ...` or
+`[degraded] fold_ready=false ...`.
+
+Exit codes for `status --check` are command-specific:
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | stale workspace/index |
+| 2 | degraded readiness |
+| 3 | both stale and degraded |
+
+For structured automation, use `cdidx status --check --json`. The JSON payload
+includes the full status object plus `failed_checks`, an array of the checks that
+made the command fail. To check only selected readiness areas, pass
+`--check=fold,graph,hotspot,csharp`; `workspace`, `issues`, `sql`, and `newer`
+are also accepted scopes.
+
 ## Installation
 
 ### Option A: One-liner install (no .NET required)
@@ -1562,6 +1585,27 @@ cdidx search "handleRequest"
 場合は `cdidx . --verbose` で再実行すると、`[OK  ]`、`[SKIP]`、`[DEL ]`、`[ERR ]`
 のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
 `--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
+
+## CI 連携
+
+スクリプトから workspace の鮮度と query subsystem の readiness を一度に確認したい場合は
+`cdidx status --check` を使います。成功時、非 JSON の `--check` は exit 0 で stdout に
+何も出力しません。失敗時は `[stale] workspace_check ...` や
+`[degraded] fold_ready=false ...` のように、失敗した check ごとに stderr へ 1 行出力します。
+
+`status --check` の exit code はこのコマンド専用です:
+
+| Exit | 意味 |
+|---|---|
+| 0 | ok |
+| 1 | workspace / index が stale |
+| 2 | readiness が degraded |
+| 3 | stale と degraded の両方 |
+
+構造化された自動化では `cdidx status --check --json` を使ってください。JSON には
+完全な status object に加えて、失敗原因の配列 `failed_checks` が含まれます。
+特定の readiness だけを確認する場合は `--check=fold,graph,hotspot,csharp` を指定できます。
+`workspace`、`issues`、`sql`、`newer` も scope として受け付けます。
 
 ## インストール
 
