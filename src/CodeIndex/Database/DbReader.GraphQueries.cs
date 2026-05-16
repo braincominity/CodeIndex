@@ -814,6 +814,9 @@ public partial class DbReader
         // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
         // 見つからなければユーザ入力をフォールバック使用。
         var resolvedName = ResolveSymbolName(symbolName, lang);
+        var rootDefinitionPaths = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests)
+            .Select(definition => definition.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var results = new List<ImpactResult>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -880,7 +883,8 @@ public partial class DbReader
                     }
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
-                    if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
+                        && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path)))
                         continue;
                     var key = $"{caller.Path}:{callerName}";
 
