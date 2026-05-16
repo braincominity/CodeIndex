@@ -75,6 +75,17 @@ internal sealed class IndexDryRunJsonResult
     public List<CliJsonMessage>? Errors { get; init; }
 }
 
+internal sealed class IndexWatchEventJsonResult
+{
+    public string Status { get; init; } = string.Empty;
+    public string? ProjectRoot { get; init; }
+    public string? Db { get; init; }
+    public int? DebounceMs { get; init; }
+    public int? BatchSize { get; init; }
+    public long? ElapsedMs { get; init; }
+    public string? Reason { get; init; }
+}
+
 internal sealed class IndexUpdateSummaryJsonResult
 {
     public long FilesTotal { get; init; }
@@ -213,6 +224,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
+[JsonSerializable(typeof(IndexWatchEventJsonResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(List<CalleeResult>))]
