@@ -129,6 +129,28 @@ public class QueryCommandRunnerTests
         Assert.Equal("myquery", options.Query);
     }
 
+    [Theory]
+    [InlineData("weighted", ReferenceRankMode.Weighted)]
+    [InlineData("count", ReferenceRankMode.Count)]
+    [InlineData("kind", ReferenceRankMode.Kind)]
+    public void ParseArgs_RankByFlagParsed(string value, ReferenceRankMode expected)
+    {
+        var options = QueryCommandRunner.ParseArgs(["Target", "--rank-by", value], jsonDefault: false);
+
+        Assert.Equal(expected, options.RankMode);
+        Assert.Equal("Target", options.Query);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidRankByReportsParseError()
+    {
+        var options = QueryCommandRunner.ParseArgs(["Target", "--rank-by", "frequency"], jsonDefault: false);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--rank-by", options.ParseError);
+        Assert.Contains("weighted", options.ParseError);
+    }
+
     [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidthForNoTruncation()
     {
