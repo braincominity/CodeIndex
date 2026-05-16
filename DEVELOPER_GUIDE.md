@@ -27,7 +27,8 @@ For test suite structure, shared helpers, and test-writing conventions, see [TES
 | Reference orchestration | `Indexer/References/ReferenceExtractor.cs` | Dispatches regex/state-machine reference extraction across graph-supported languages. |
 | Reference support | `Indexer/References/Support/*.cs` | Shared masking, type-position scanning, trailing-lambda handling, JVM method references, and SQL name resolution. |
 | Language extractors | `Indexer/References/Languages/*ReferenceExtractor.cs` | Language-specific reference extraction for C#, Java, Python, SQL, Rust, Swift, Terraform, and other graph-supported languages. |
-| MCP server | `Mcp/McpServer.cs` | stdin/stdout JSON-RPC 2.0 server for AI coding tools, including batch queries. |
+| MCP server | `Mcp/McpServer.cs` | JSON-RPC 2.0 server for AI coding tools, including batch queries. Transport is pluggable via `IMcpTransport`. |
+| MCP transports | `Mcp/IMcpTransport.cs`, `Mcp/StdioMcpTransport.cs`, `Mcp/HttpMcpTransport.cs` | Stdio (default) and optional HTTP `POST /` transports for the MCP server (#1558). |
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
@@ -1121,6 +1122,68 @@ the .NET host, `Program.Main`, CLI routing, and
 `ConsoleUi.LoadVersion()`, but not SQLite. (MCP tool *calls* like
 `search` do hit SQLite; `initialize` alone does not.)
 
+#### Pluggable transports (`IMcpTransport`) — issue #1558
+
+`McpServer.RunAsync` is split in two: a public stdio entrypoint that
+constructs `StdioMcpTransport` and the legacy stdin/stdout pair, and an
+internal `RunAsync(IMcpTransport, CancellationToken)` overload that owns
+the JSON-RPC loop and is transport-agnostic. The `IMcpTransport` contract
+is:
+
+- `Task<string?> ReadFrameAsync(CancellationToken)` returns one
+  request-frame string, or `null` to signal end-of-stream (closed stdin,
+  cancelled HTTP listener, etc.). The MCP loop exits cleanly on `null`.
+- `Task WriteFrameAsync(string?, CancellationToken)` writes one response
+  frame. `null` means "this was a notification" — stdio drops it; HTTP
+  closes the in-flight request with `204 No Content`.
+- The contract is strictly one read followed by one write. Transports
+  reject re-entrancy explicitly so the request/response pairing
+  invariant the rest of the server depends on is enforced at the seam.
+- `IAsyncDisposable` lets each transport release its kernel-side
+  resources (file handles, listener prefixes) without coupling to
+  `McpServer`.
+
+`StdioMcpTransport` preserves the pre-#1558 byte-for-byte stdio behavior
+(UTF-8, BOM detection on input, BOM-less UTF-8 on output, 64 KiB buffer,
+`AutoFlush = true`), so existing client configs are unaffected.
+
+`HttpMcpTransport` (also #1558) wraps `System.Net.HttpListener`:
+
+- One JSON-RPC frame per HTTP POST; the matching response is the HTTP
+  response body (`200 OK` / `application/json; charset=utf-8`) or
+  `204 No Content` for notifications. Non-POST verbs return
+  `405 Method Not Allowed`. Empty / whitespace bodies are treated like
+  a closed stdio line and return `204 No Content` *without* killing the
+  loop, so a misbehaving client cannot pin the server on a junk frame.
+- Single-session by design: one in-flight request at a time. SSE /
+  multi-client fan-out is deferred until the underlying handler grows
+  unsolicited server→client messages.
+- `ResolveListenSpec("host:port")` resolves the prefix up-front so the
+  CLI can log the bound port to stderr (`Listening on http://...`).
+  Port `0` is resolved by probing a temporary `TcpListener`; the
+  TOCTOU window between probe and `HttpListener.Start()` is accepted
+  because the transport is documented as local-only / single-tenant.
+  The wildcard hosts `+` / `*` are rejected at parse time.
+- Optional shared-secret auth: when `CDIDX_MCP_HTTP_TOKEN` is set the
+  listener requires `Authorization: Bearer <token>` on every request
+  and compares the token in constant time. The CLI refuses to bind to
+  a non-loopback host without a token to keep the MCP catalog off the
+  LAN by default.
+- Cancellation hooks the `CancellationToken` into
+  `_listener.Stop()` so `GetContextAsync()` unblocks on shutdown;
+  `HttpListenerException` / `ObjectDisposedException` are treated as
+  end-of-stream so the MCP loop exits the same way as a closed stdin.
+
+Wire selection happens in `ProgramRunner.RunMcp`:
+`--transport stdio|http` and `--http-listen <host:port>` are stripped
+from the args before downstream parsing, the bearer token is read from
+`CDIDX_MCP_HTTP_TOKEN`, and the dispatch lands in either the legacy
+stdio path or `RunMcpHttp`. The pluggable seam keeps the JSON-RPC
+ordering invariant identical across both transports, so the existing
+McpServer test surface (which exercises `ProcessLineAsync`) continues
+to cover the per-method behavior, while `HttpMcpTransportTests` cover
+the wire-level contract for the new transport.
+
 ### Release `--json` policy and trimmed fallback
 
 `release.yml` publishes the self-contained binaries with
@@ -1223,7 +1286,8 @@ dotnet run --project src/CodeIndex -- <command> [options]
 | reference orchestration | `Indexer/References/ReferenceExtractor.cs` | graph 対応言語の regex / state-machine reference extraction を dispatch。 |
 | reference support | `Indexer/References/Support/*.cs` | masking、type-position scan、trailing lambda、JVM method reference、SQL name resolution の共有処理。 |
 | language extractors | `Indexer/References/Languages/*ReferenceExtractor.cs` | C#、Java、Python、SQL、Rust、Swift、Terraform などの言語別 reference extraction。 |
-| MCP server | `Mcp/McpServer.cs` | AI coding tool 向け stdin/stdout JSON-RPC 2.0 server。batch query も含む。 |
+| MCP server | `Mcp/McpServer.cs` | AI coding tool 向け JSON-RPC 2.0 server。batch query も含む。トランスポートは `IMcpTransport` で差し替え可能。 |
+| MCP トランスポート | `Mcp/IMcpTransport.cs`, `Mcp/StdioMcpTransport.cs`, `Mcp/HttpMcpTransport.cs` | MCP サーバー向けの stdio（既定）と任意の HTTP `POST /` トランスポート（#1558）。 |
 | DTO | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | indexing、storage、query、MCP layers で共有する record。 |
 | tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | chunking、extraction、DB read/write、CLI、MCP、git helper、共有 test harness の focused unit / integration coverage。 |
 
@@ -2094,6 +2158,27 @@ sequenceDiagram
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
+
+#### プラガブルなトランスポート（`IMcpTransport`）— issue #1558
+
+`McpServer.RunAsync` は 2 つに分かれている。public な stdio エントリポイント（`StdioMcpTransport` と legacy な stdin/stdout のペアを構築する）と、JSON-RPC ループ本体を持つ internal な `RunAsync(IMcpTransport, CancellationToken)` で、後者はトランスポート非依存。`IMcpTransport` 契約は以下のとおり:
+
+- `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。MCP ループは `null` を見たら正常終了する。
+- `Task WriteFrameAsync(string?, CancellationToken)` は応答フレームを 1 件書く。`null` は「これは通知だった」を意味し、stdio は何も書かず、HTTP は処理中のリクエストを `204 No Content` でクローズする。
+- 契約は厳密に「1 read → 1 write」。再入は明示的に拒否し、サーバーの他部分が依存している request/response 順序不変条件をシーム部で強制する。
+- `IAsyncDisposable` により、各トランスポートが自身のカーネル側リソース（ファイルハンドル、listener プレフィックス）を `McpServer` と結合せずに解放できる。
+
+`StdioMcpTransport` は #1558 以前と同じバイト単位の挙動（UTF-8、入力 BOM 検出、出力 BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）を維持しているため、既存クライアント設定への影響は無い。
+
+`HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
+
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`、POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。
+- 設計上シングルセッション（同時に処理するリクエストは 1 件）。SSE / マルチクライアント fan-out は、現サーバーが自発的なサーバー→クライアントメッセージを発生させるようになるまで保留。
+- `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
+- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。
+- キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
+
+ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http` と `--http-listen <host:port>` は下流の引数解析より前に取り除かれ、bearer token は `CDIDX_MCP_HTTP_TOKEN` から読み、ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
 
 ### release の `--json` 方針と trimmed fallback
 

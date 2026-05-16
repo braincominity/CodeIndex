@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
@@ -377,36 +378,213 @@ internal static class ProgramRunner
         TypeInfoResolver = CliJsonSerializerContext.Default,
     };
 
+    private const string DefaultMcpHttpListen = "127.0.0.1:38080";
+    private const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
+
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {
-        var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
-        if (options.ParseError != null)
+        if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
-            Console.Error.WriteLine(options.ParseError);
-            Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+            Console.Error.WriteLine(transportError);
+            PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
 
-        for (var i = 0; i < cmdArgs.Length; i++)
+        // Strip the transport flags from the args before delegating to QueryCommandRunner.ParseArgs
+        // and the unknown-flag guard below, both of which only understand the historic `--db` shape.
+        // Transport フラグは ParseArgs / 未知フラグガードが知らないため、両者に渡す前に除去する。
+        var residualArgs = RemoveMcpTransportFlags(cmdArgs);
+
+        var options = QueryCommandRunner.ParseArgs(residualArgs, jsonDefault: true);
+        if (options.ParseError != null)
         {
-            if (cmdArgs[i].StartsWith("--db=", StringComparison.Ordinal))
+            Console.Error.WriteLine(options.ParseError);
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        for (var i = 0; i < residualArgs.Length; i++)
+        {
+            if (residualArgs[i].StartsWith("--db=", StringComparison.Ordinal))
                 continue;
 
-            if (cmdArgs[i] == "--db")
+            if (residualArgs[i] == "--db")
             {
                 i++;
                 continue;
             }
 
-            Console.Error.WriteLine($"Error: {cmdArgs[i]} is not supported for mcp.");
-            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, or run `cdidx mcp` to use the default DB.");
-            Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+            Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
+            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, or `--http-listen host:port` for HTTP.");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        var transport = transportSpec ?? "stdio";
+        if (!string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"Error: --transport '{transport}' is not supported. Use `stdio` (default) or `http`.");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        if (listenSpec != null && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Error: --http-listen requires `--transport http`.");
+            PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
 
         using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
+
+        if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+            return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
+
         server.RunAsync().GetAwaiter().GetResult();
         return CommandExitCodes.Success;
+    }
+
+    private static int RunMcpHttp(McpServer server, string listenSpec)
+    {
+        HttpMcpTransport.HttpListenSpec resolved;
+        try
+        {
+            resolved = HttpMcpTransport.ResolveListenSpec(listenSpec);
+        }
+        catch (FormatException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        // Require a shared-secret bearer token when the user opts into a non-loopback bind so the
+        // MCP catalog is not exposed to the local network unauthenticated. Loopback binds skip the
+        // requirement because they're indistinguishable from the existing stdio threat model.
+        // 非 loopback への bind 時は共有秘密トークンを必須にし、認証なしの LAN 露出を防ぐ。
+        // loopback bind は stdio と同等の脅威モデルとみなしてトークン要件を緩める。
+        var bearerToken = Environment.GetEnvironmentVariable(McpHttpTokenEnvVar);
+        if (string.IsNullOrEmpty(bearerToken))
+            bearerToken = null;
+
+        if (!resolved.IsLoopback && bearerToken is null)
+        {
+            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` environment variable or bind to a loopback address.");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        HttpMcpTransport transport;
+        try
+        {
+            transport = new HttpMcpTransport(resolved.Prefix, resolved.Host, resolved.Port, bearerToken);
+        }
+        catch (HttpListenerException ex)
+        {
+            Console.Error.WriteLine($"Error: failed to bind HTTP listener on {resolved.Prefix}: {ex.Message}");
+            return CommandExitCodes.UsageError;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            ConsoleCancelEventHandler? cancelHandler = (_, e) =>
+            {
+                if (cts.IsCancellationRequested)
+                    return;
+                // Treat Ctrl+C as a graceful shutdown signal: cancel the listener so the loop
+                // exits and the HTTP socket is released for the next invocation.
+                // Ctrl+C は graceful shutdown として扱い、listener を解除して socket を解放する。
+                e.Cancel = true;
+                cts.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            try
+            {
+                if (resolved.IsLoopback && bearerToken is null)
+                    Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
+                else
+                    Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
+
+                server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+        }
+        finally
+        {
+            transport.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static void PrintMcpUsage()
+    {
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>]");
+    }
+
+    internal static bool TryExtractMcpTransportFlags(string[] cmdArgs, out string? transport, out string? listen, out string error)
+    {
+        transport = null;
+        listen = null;
+        error = string.Empty;
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            var arg = cmdArgs[i];
+            if (arg == "--transport")
+            {
+                if (i + 1 >= cmdArgs.Length)
+                {
+                    error = "Error: --transport requires a value (`stdio` or `http`).";
+                    return false;
+                }
+                transport = cmdArgs[++i];
+            }
+            else if (arg.StartsWith("--transport=", StringComparison.Ordinal))
+            {
+                transport = arg.Substring("--transport=".Length);
+            }
+            else if (arg == "--http-listen")
+            {
+                if (i + 1 >= cmdArgs.Length)
+                {
+                    error = "Error: --http-listen requires a host:port value.";
+                    return false;
+                }
+                listen = cmdArgs[++i];
+            }
+            else if (arg.StartsWith("--http-listen=", StringComparison.Ordinal))
+            {
+                listen = arg.Substring("--http-listen=".Length);
+            }
+        }
+        return true;
+    }
+
+    private static string[] RemoveMcpTransportFlags(string[] cmdArgs)
+    {
+        var kept = new List<string>(cmdArgs.Length);
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            var arg = cmdArgs[i];
+            if (arg == "--transport" || arg == "--http-listen")
+            {
+                if (i + 1 < cmdArgs.Length)
+                    i++;
+                continue;
+            }
+            if (arg.StartsWith("--transport=", StringComparison.Ordinal)
+                || arg.StartsWith("--http-listen=", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            kept.Add(arg);
+        }
+        return kept.ToArray();
     }
 
     // `--version` is now build-aware so dev builds from main are not

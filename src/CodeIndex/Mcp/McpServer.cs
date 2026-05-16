@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -9,8 +8,14 @@ using CodeIndex.Indexer;
 namespace CodeIndex.Mcp;
 
 /// <summary>
-/// MCP (Model Context Protocol) server over stdin/stdout using JSON-RPC 2.0.
-/// stdin/stdout上のJSON-RPC 2.0によるMCPサーバー。
+/// MCP (Model Context Protocol) server speaking JSON-RPC 2.0 over a pluggable transport. The
+/// default <see cref="StdioMcpTransport"/> preserves the historic stdin/stdout wire path, and
+/// <see cref="HttpMcpTransport"/> exposes the same JSON-RPC catalog over POST so AI clients can
+/// share a warm server across sessions (issue #1558).
+/// プラガブルな <see cref="IMcpTransport"/> 上で JSON-RPC 2.0 を話す MCP サーバー。既定の
+/// <see cref="StdioMcpTransport"/> は従来通り stdin/stdout を使い、<see cref="HttpMcpTransport"/>
+/// は同じ JSON-RPC カタログを POST で公開して、複数クライアントから暖機済みサーバーを共有できるようにする
+/// (issue #1558)。
 /// Supported protocol versions: see <see cref="SupportedProtocolVersions"/> (negotiated per
 /// `initialize` request, #1554).
 /// 対応プロトコルバージョン: <see cref="SupportedProtocolVersions"/> 参照（`initialize` ごとに交渉, #1554）。
@@ -100,40 +105,81 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Run the MCP server loop, reading JSON-RPC messages from stdin and writing responses to stdout.
-    /// MCPサーバーループを実行。stdinからJSON-RPCメッセージを読み、stdoutにレスポンスを書く。
+    /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
+    /// <see cref="RunAsync(IMcpTransport, CancellationToken)"/> so existing callers stay
+    /// source-compatible after the #1558 transport refactor.
+    /// 既定の stdio トランスポートで MCP ループを動かす。#1558 のトランスポート抽象化後も
+    /// 既存呼び出しがソース互換となるよう <see cref="RunAsync(IMcpTransport, CancellationToken)"/>
+    /// のラッパとして残す。
     /// </summary>
     public async Task RunAsync()
     {
+        await using var transport = new StdioMcpTransport(StdioBufferSize);
+        await RunAsync(transport, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Run the MCP server loop on the supplied transport (issue #1558). The contract is one
+    /// read followed by one write — the loop honours notifications (write-null) and ends when
+    /// the transport reports end-of-stream.
+    /// 指定トランスポート上で MCP ループを動かす (issue #1558)。「読み 1 回 → 書き 1 回」を
+    /// 守り、通知は null 書き込みで吸収し、EOS でループを終える。
+    /// </summary>
+    internal async Task RunAsync(IMcpTransport transport, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath})");
-
-        using var stdin = Console.OpenStandardInput();
-        using var stdout = Console.OpenStandardOutput();
-        using var reader = new StreamReader(stdin, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: StdioBufferSize);
-        using var writer = new StreamWriter(stdout, new UTF8Encoding(false), bufferSize: StdioBufferSize) { AutoFlush = true };
+        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint})");
 
         while (_running)
         {
-            var line = await reader.ReadLineAsync().ConfigureAwait(false);
-            if (line == null)
-                break; // stdin closed / stdinが閉じられた
+            string? frame;
+            try
+            {
+                frame = await transport.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
 
-            await ProcessLineAsync(line, writer).ConfigureAwait(false);
+            if (frame == null)
+                break; // transport closed / トランスポートが閉じられた
+
+            var response = ProcessFrame(frame);
+            await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
     /// <summary>
-    /// Process one MCP JSON-RPC line and write any response to the provided writer.
-    /// 1行分のMCP JSON-RPCを処理し、必要ならwriterにレスポンスを書き込む。
+    /// Process one MCP JSON-RPC line and write any response to the provided writer. Kept as a
+    /// thin wrapper around <see cref="ProcessFrameAsync"/> so existing tests that drive a
+    /// <see cref="TextWriter"/> directly stay source-compatible after the #1558 transport refactor.
+    /// 1 行分の MCP JSON-RPC を処理して writer に書き込む薄いラッパ。#1558 のトランスポート抽象化後も
+    /// 既存テストがソース互換となるよう、<see cref="ProcessFrameAsync"/> をそのまま呼び出す。
     /// </summary>
     internal async Task ProcessLineAsync(string line, TextWriter writer)
     {
+        var response = ProcessFrame(line);
+        if (response != null)
+            await writer.WriteLineAsync(response).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
+    /// the request was a notification or otherwise yields no response). This is the
+    /// transport-neutral seam used by <see cref="IMcpTransport"/> implementations (issue #1558).
+    /// 1 フレーム分の MCP JSON-RPC を処理し、ワイヤー応答文字列を返す（通知などで応答なしの場合は null）。
+    /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
+    /// </summary>
+    internal string? ProcessFrame(string line)
+    {
         if (string.IsNullOrWhiteSpace(line))
-            return;
+            return null;
 
         // Reject oversized messages to prevent memory exhaustion
         // メモリ枯渇を防ぐため巨大メッセージを拒否
@@ -141,8 +187,7 @@ public partial class McpServer : IDisposable
         {
             Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
             var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
-            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
-            return;
+            return errorResponse.ToJsonString(_jsonOptions);
         }
 
         JsonNode? request = null;
@@ -150,20 +195,17 @@ public partial class McpServer : IDisposable
         {
             request = JsonNode.Parse(line);
             if (request == null)
-                return;
+                return null;
 
             var response = HandleMessage(request);
-            if (response != null)
-            {
-                await writer.WriteLineAsync(_serializeResponse(response)).ConfigureAwait(false);
-            }
+            return response != null ? _serializeResponse(response) : null;
         }
         catch (JsonException ex)
         {
             // Parse error / パースエラー
             Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
             var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
-            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
+            return errorResponse.ToJsonString(_jsonOptions);
         }
         catch (Exception ex)
         {
@@ -178,8 +220,9 @@ public partial class McpServer : IDisposable
             if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
             {
                 var errorResponse = CreateErrorResponse(true, requestId, -32603, BuildSanitizedLoopErrorMessage(ex));
-                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
+                return errorResponse.ToJsonString(_jsonOptions);
             }
+            return null;
         }
     }
 
