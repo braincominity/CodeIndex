@@ -1278,10 +1278,11 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)

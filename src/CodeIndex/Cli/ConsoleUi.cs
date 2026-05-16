@@ -45,7 +45,7 @@ public static class ConsoleUi
         ("status", "cdidx status [--db <path>] [--json] [--check]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
-        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--depth <n>] [--count]"),
+        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--depth <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by-name]"),
@@ -423,6 +423,7 @@ public static class ConsoleUi
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis, inclusive (default: 5; --depth 2 returns callers at depth 1 and 2; --depth 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
+        Console.WriteLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
         Console.WriteLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
         Console.WriteLine();
         Console.WriteLine("Examples:");

@@ -79,6 +79,7 @@ public static class QueryCommandRunner
         "--version",
         "-V",
         "--group-by-name",
+        "--with-paths",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -1821,7 +1822,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"], options.Query))
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth", "--with-paths"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
             return CommandExitCodes.UsageError;
@@ -1849,7 +1850,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --depth is parsed into ContextAfter; 0 means resolve-only
-            var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -2088,6 +2089,13 @@ public static class QueryCommandRunner
                         {
                             var indent = new string(' ', (r.Depth - 1) * 2);
                             Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                            if (options.WithPaths && r.Paths != null)
+                            {
+                                foreach (var p in r.Paths)
+                                    Console.WriteLine($"  {indent}  via: {string.Join(" -> ", p)}");
+                                if (r.PathsTruncated)
+                                    Console.WriteLine($"  {indent}  via: ... (more paths exist, truncated by per-row cap)");
+                            }
                         }
                     }
                 }
@@ -2765,6 +2773,7 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool checkWorkspace = false;
+        bool withPaths = false;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -2920,6 +2929,9 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--group-by-name":
+                    break;
+                case "--with-paths":
+                    withPaths = true;
                     break;
                 case "--check":
                     if (allowStatusCheck)
@@ -3118,6 +3130,7 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
+            WithPaths = withPaths,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
@@ -4530,6 +4543,7 @@ public sealed class QueryCommandOptions
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }
+    public bool WithPaths { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

@@ -779,19 +779,32 @@ public partial class DbReader
         return results;
     }
 
+    // Per-result cap on the number of distinct shortest paths surfaced by impact --with-paths.
+    // Each call chain row may carry multiple converging paths from the resolved root through
+    // distinct intermediates; the cap keeps JSON output bounded for diamond-heavy graphs and
+    // is signaled by ImpactResult.PathsTruncated when exceeded.
+    // impact --with-paths が 1 caller につき保持する経路数の上限。ダイヤモンド型で多経路が
+    // 収束する場合に JSON 膨張を抑える役割があり、超過時は PathsTruncated で通知する。
+    private const int DefaultImpactPathsPerResult = 10;
+
     /// <summary>
     /// Compute transitive callers of a symbol using BFS with exact matching.
     /// Returns each unique caller in the call chain with its depth from the root symbol.
     /// The <paramref name="maxDepth"/> bound is inclusive: when <paramref name="maxDepth"/> is N,
     /// callers at depth 1 through N are returned (so a chain A→B→C→D queried against D with
     /// <c>maxDepth: 2</c> yields C at depth 1 and B at depth 2). Truncation is signaled via the
-    /// Truncated property in results.
+    /// Truncated property in results. When <paramref name="withPaths"/> is true, each
+    /// ImpactResult is populated with the distinct shortest call paths from the resolved root
+    /// through any intermediates to that caller (issue #1536); converging diamond chains
+    /// surface every shortest route up to <paramref name="maxPathsPerResult"/>.
     /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
     /// <paramref name="maxDepth"/> は inclusive で、N を指定すると depth 1〜N の caller を返す
     /// (例: A→B→C→D のチェーンで D を <c>maxDepth: 2</c> 検索すると C(depth=1) と B(depth=2) を返す)。
-    /// 結果が切り詰められた場合は Truncated フラグで通知する。
+    /// 結果が切り詰められた場合は Truncated フラグで通知する。<paramref name="withPaths"/> を
+    /// true にすると、各 caller に対してルートからの推移経路（ダイヤモンド収束時は複数）を
+    /// <paramref name="maxPathsPerResult"/> 件まで付与する（issue #1536）。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -807,6 +820,23 @@ public partial class DbReader
         var truncated = false;
         // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
         const int maxFetchIterations = 1000;
+
+        // Path tracking state is allocated only when callers opt in. We collapse parent edges by
+        // caller name (rather than path:name) so that diamond chains converging on the same name
+        // across files share the same node when emitting paths — the issue example asks for
+        // ["foo", "B", "A"], not file-qualified entries.
+        // path 追跡は opt-in 時のみ確保する。同名 caller が複数ファイルにあっても経路上は同名
+        // ノードとして畳む（issue #1536 の例 ["foo", "B", "A"] と整合）。
+        Dictionary<string, HashSet<string>>? parentsByName = null;
+        Dictionary<string, int>? depthByName = null;
+        var resultIndicesByName = withPaths
+            ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (withPaths)
+        {
+            parentsByName = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            depthByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
 
         while (queue.Count > 0 && results.Count < limit)
         {
@@ -843,7 +873,20 @@ public partial class DbReader
                     var key = $"{caller.Path}:{callerName}";
 
                     if (!visited.Add(key))
+                    {
+                        // Same-depth convergence: record the additional parent so path
+                        // enumeration can discover this alternate route. Other-depth re-arrivals
+                        // are intentionally dropped — BFS already keeps the shortest route.
+                        // 同 depth で再到達した場合のみ親辺を追加し、別 depth の到達は破棄。
+                        // BFS により最短経路だけが残る。
+                        if (withPaths
+                            && depthByName!.TryGetValue(callerName, out var existingDepth)
+                            && existingDepth == depth + 1)
+                        {
+                            parentsByName![callerName].Add(currentSymbol);
+                        }
                         continue;
+                    }
 
                     results.Add(new ImpactResult
                     {
@@ -856,6 +899,24 @@ public partial class DbReader
                         FirstLine = caller.FirstLine,
                         ReferenceCount = caller.ReferenceCount,
                     });
+
+                    if (withPaths)
+                    {
+                        if (!depthByName!.ContainsKey(callerName))
+                            depthByName[callerName] = depth + 1;
+                        if (!parentsByName!.TryGetValue(callerName, out var parentSet))
+                        {
+                            parentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            parentsByName[callerName] = parentSet;
+                        }
+                        parentSet.Add(currentSymbol);
+                        if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
+                        {
+                            idxList = new List<int>();
+                            resultIndicesByName[callerName] = idxList;
+                        }
+                        idxList.Add(results.Count - 1);
+                    }
 
                     // Only recurse if the just-added caller (at depth + 1) is strictly below
                     // maxDepth, so that the next BFS step can reach depth + 2 ≤ maxDepth.
@@ -885,7 +946,77 @@ public partial class DbReader
         if (queue.Count > 0 && results.Count >= limit)
             truncated = true;
 
+        if (withPaths)
+        {
+            var effectiveCap = maxPathsPerResult > 0 ? maxPathsPerResult : DefaultImpactPathsPerResult;
+            foreach (var (callerName, indices) in resultIndicesByName!)
+            {
+                var (paths, more) = EnumerateImpactPaths(callerName, parentsByName!, resolvedName, effectiveCap);
+                foreach (var idx in indices)
+                {
+                    results[idx].Paths = paths;
+                    results[idx].PathsTruncated = more;
+                }
+            }
+        }
+
         return (results, truncated);
+    }
+
+    private static (List<List<string>> Paths, bool Truncated) EnumerateImpactPaths(
+        string callerName,
+        Dictionary<string, HashSet<string>> parentsByName,
+        string resolvedRoot,
+        int maxPathsPerResult)
+    {
+        // DFS upward from `callerName` to `resolvedRoot` through parent edges. The Stack<T>
+        // enumerator yields top-first, so a stack of [callerName, ..., resolvedRoot] (pushed
+        // bottom→top) materializes directly to [resolvedRoot, ..., callerName] without an
+        // explicit reverse — matching the order in the issue example ["foo", "B", "A"].
+        // 親辺を辿って callerName → resolvedRoot を DFS で列挙する。Stack<T> の列挙は top→bottom
+        // なので、push 順 [callerName, ..., resolvedRoot] がそのまま [resolvedRoot, ..., callerName]
+        // で取り出せる（issue #1536 の例 ["foo", "B", "A"] に一致）。
+        var paths = new List<List<string>>();
+        var stack = new Stack<string>();
+        var onStack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var truncatedRef = new bool[1];
+
+        stack.Push(callerName);
+        onStack.Add(callerName);
+        Dfs(callerName);
+        stack.Pop();
+        onStack.Remove(callerName);
+        return (paths, truncatedRef[0]);
+
+        void Dfs(string node)
+        {
+            if (string.Equals(node, resolvedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                paths.Add(stack.ToList());
+                return;
+            }
+            if (!parentsByName.TryGetValue(node, out var parents))
+                return;
+            foreach (var p in parents)
+            {
+                if (onStack.Contains(p))
+                    continue;
+                // Only mark truncated when the cap forces us to *skip* a still-unexplored parent;
+                // hitting cap exactly as the foreach drains naturally is not a truncation.
+                // 残りの parent を探索できなくなった瞬間にのみ truncated を立てる。foreach が
+                // 自然に終わるタイミングと一致しただけでは truncation 扱いしない。
+                if (paths.Count >= maxPathsPerResult)
+                {
+                    truncatedRef[0] = true;
+                    return;
+                }
+                stack.Push(p);
+                onStack.Add(p);
+                Dfs(p);
+                stack.Pop();
+                onStack.Remove(p);
+            }
+        }
     }
 
     /// <summary>
@@ -897,7 +1028,7 @@ public partial class DbReader
     /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
     /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
     /// </summary>
-    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false)
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
@@ -945,7 +1076,7 @@ public partial class DbReader
             };
         }
 
-        var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
