@@ -135,21 +135,25 @@ public partial class McpServer : IDisposable
 
         while (_running)
         {
-            string? frame;
+            // The full read/process/write iteration is wrapped in the same cancellation guard so
+            // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
+            // exits the loop cleanly instead of bubbling OperationCanceledException out of the
+            // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
+            // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
+            // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
             try
             {
-                frame = await transport.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+                var frame = await transport.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+                if (frame == null)
+                    break; // transport closed / トランスポートが閉じられた
+
+                var response = ProcessFrame(frame);
+                await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
             }
-
-            if (frame == null)
-                break; // transport closed / トランスポートが閉じられた
-
-            var response = ProcessFrame(frame);
-            await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");

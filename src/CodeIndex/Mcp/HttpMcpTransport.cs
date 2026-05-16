@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace CodeIndex.Mcp;
@@ -175,6 +176,11 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
             if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
             {
+                // RFC 9110 §15.5.6: a 405 response MUST generate an `Allow` header listing the
+                // methods the resource supports so generic HTTP clients can react without parsing
+                // the response body.
+                // RFC 9110 §15.5.6 に従い 405 にはサポートメソッドを示す `Allow` ヘッダを付ける。
+                context.Response.AddHeader("Allow", "POST");
                 await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
                 continue;
             }
@@ -279,12 +285,21 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
     private static bool ConstantTimeEquals(string a, string b)
     {
-        if (a.Length != b.Length)
-            return false;
-        var diff = 0;
-        for (var i = 0; i < a.Length; i++)
-            diff |= a[i] ^ b[i];
-        return diff == 0;
+        // Compare SHA-256 hashes of both tokens via CryptographicOperations.FixedTimeEquals so
+        // the comparison length is independent of the configured secret. A naive
+        // length-then-bytes compare leaks the configured token length through timing even when
+        // the byte-loop itself is constant time; hashing to a fixed 32-byte digest first
+        // eliminates that side channel. The hashes are unsalted on purpose — the goal here is
+        // constant-time equality of two same-length arrays, not password storage.
+        // 設定トークンの長さが timing で漏れないよう、両入力を SHA-256 ハッシュへ畳んで
+        // CryptographicOperations.FixedTimeEquals で比較する。素朴な length-then-bytes は
+        // バイト比較ループが定数時間でも長さが漏れる。salt を付けないのはあくまで「同じ長さの
+        // 配列の定数時間比較」が目的で、パスワード保存ではないため。
+        Span<byte> aHash = stackalloc byte[32];
+        Span<byte> bHash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(a), aHash);
+        SHA256.HashData(Encoding.UTF8.GetBytes(b), bHash);
+        return CryptographicOperations.FixedTimeEquals(aHash, bHash);
     }
 
     public ValueTask DisposeAsync()

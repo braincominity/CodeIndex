@@ -67,6 +67,10 @@ public class HttpMcpTransportTests : IDisposable
         using var response = await client.GetAsync(harness.Endpoint);
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        // RFC 9110 §15.5.6: 405 responses must advertise the supported methods so generic
+        // clients can react without parsing the body.
+        // RFC 9110 §15.5.6 により 405 はサポートメソッドを `Allow` で示す必要がある。
+        Assert.Contains("POST", response.Content.Headers.Allow);
     }
 
     [Fact]
@@ -154,6 +158,30 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Contains(response.Headers.WwwAuthenticate, h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HttpTransport_BearerToken_RejectsSameLengthWrongToken()
+    {
+        // Same-length wrong token: covers the constant-time-compare branch *after* the SHA-256
+        // hashing seam, since an early length-mismatch return would still allow this to pass on
+        // pre-fix code. The behavior change is observable as "401, not 200" — the timing
+        // invariant itself cannot be asserted from a unit test.
+        // 同じ長さの不一致トークン: SHA-256 経由の定数時間比較分岐をカバーする。
+        // 旧実装の length-mismatch 早期 return が消えていることを 401/200 で観察する。
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        Assert.Equal(token.Length, "wrongTokenAa".Length);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrongTokenAa");
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
