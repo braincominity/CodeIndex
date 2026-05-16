@@ -35,6 +35,7 @@ public class FileIndexer
         IReadOnlyList<string> Files,
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> UnknownExtensionFiles,
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories,
@@ -1405,6 +1406,7 @@ public class FileIndexer
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
+        var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
@@ -1413,12 +1415,13 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, preloadResult.Rules, isProjectRoot: true);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, preloadResult.Rules, isProjectRoot: true);
         }
         return new ScanFilesResult(
             files,
             errors,
             nonIndexablePaths.ToList(),
+            unknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
             probeFailedFilePaths.ToList(),
             listedDirectories.ToList(),
             fullyScannedDirectories.ToList(),
@@ -1430,6 +1433,7 @@ public class FileIndexer
         List<string> results,
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
+        HashSet<string> unknownExtensionFiles,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
@@ -1447,7 +1451,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -1455,6 +1459,7 @@ public class FileIndexer
         List<string> results,
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
+        HashSet<string> unknownExtensionFiles,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
@@ -1529,7 +1534,12 @@ public class FileIndexer
                     if (language.Status == FileProbeStatus.Supported)
                         results.Add(file);
                     else
-                        nonIndexablePaths.Add(ToRelativePath(file));
+                    {
+                        var relativePath = ToRelativePath(file);
+                        nonIndexablePaths.Add(relativePath);
+                        if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativePath))
+                            unknownExtensionFiles.Add(relativePath);
+                    }
                 }
             }
 
@@ -1575,7 +1585,7 @@ public class FileIndexer
                     continue;
                 }
 
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)
@@ -1596,6 +1606,16 @@ public class FileIndexer
 
         return fullyScanned;
     }
+
+    private static bool HasUnknownExtension(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        return !string.IsNullOrEmpty(extension) && !LangMap.ContainsKey(extension);
+    }
+
+    private static bool IsInternalIndexArtifactPath(string relativePath)
+        => relativePath.Equals(".cdidx", StringComparison.Ordinal)
+            || relativePath.StartsWith(".cdidx/", StringComparison.Ordinal);
 
     private PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
     {

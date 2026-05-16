@@ -1940,6 +1940,9 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            writer.SetMeta(
+                DbContext.UnknownExtensionFileCountMetaKey,
+                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // We deliberately only stamp on full scans (rebuild or default incremental). Update
             // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
@@ -1995,6 +1998,7 @@ public static class IndexCommandRunner
                     FilesScanned = files.Count,
                     FilesSkipped = skipped,
                     FilesPurged = purged,
+                    UnknownExtensionFileCount = scanResult.UnknownExtensionFiles.Count,
                     Warnings = warnings,
                     Errors = errors,
                 },
@@ -2034,6 +2038,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Symbols  : {totalSymbols:N0}");
             Console.WriteLine($"  Refs     : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped  : {skipped:N0} (unchanged)");
+            if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
+            {
+                Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
+                foreach (var relPath in scanResult.UnknownExtensionFiles.Take(5))
+                    Console.WriteLine($"    {relPath}");
+                if (scanResult.UnknownExtensionFiles.Count > 5)
+                    Console.WriteLine($"    ... {scanResult.UnknownExtensionFiles.Count - 5:N0} more");
+            }
             if (warnings > 0) Console.WriteLine($"  Warnings : {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors   : {errors:N0}");
             Console.WriteLine($"  Graph    : {(graphTableAvailableAfter ? "ready" : "degraded")}");
