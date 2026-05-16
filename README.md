@@ -71,6 +71,23 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
 
+## Verifying releases
+
+Every GitHub release ships the following supply-chain artifacts next to
+the per-platform `CodeIndex-<rid>.tar.gz` / `.zip` binaries:
+
+| Asset | Purpose |
+|---|---|
+| `sha256sums.txt` | SHA-256 of every release asset (including the SBOM). `install.sh` uses it to verify the downloaded tarball before placing anything under `$HOME/.local/bin/`. |
+| `cdidx.sbom.cdx.json` | CycloneDX 1.x JSON Software Bill of Materials covering every NuGet dependency (including the bundled `SQLitePCLRaw` native asset) so compliance reviewers (SOC2, FedRAMP-style) and scanners (Snyk, Trivy, Grype) can audit transitive dependencies without re-deriving them from `.deps.json`. |
+
+Quick check after downloading both files from the release page:
+
+```bash
+sha256sum --check sha256sums.txt --ignore-missing
+jq '.metadata.component.name, .components | length' cdidx.sbom.cdx.json
+```
+
 ## License and Fair Source Use
 
 CodeIndex and official `cdidx` binaries are source-available / Fair Source-style software
@@ -152,6 +169,24 @@ cdidx mcp
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
+
+## リリース成果物の検証
+
+各 GitHub release では、プラットフォーム別の
+`CodeIndex-<rid>.tar.gz` / `.zip` バイナリと並んで、サプライチェーン関連の
+成果物を同梱しています。
+
+| アセット | 用途 |
+|---|---|
+| `sha256sums.txt` | 各リリースアセット（SBOM を含む）の SHA-256。`install.sh` は `$HOME/.local/bin/` に何も書き込む前に tarball をこのファイルで検証します。 |
+| `cdidx.sbom.cdx.json` | CycloneDX 1.x JSON 形式の Software Bill of Materials。同梱の `SQLitePCLRaw` ネイティブアセットを含む全 NuGet 依存を列挙するため、SOC2 / FedRAMP 系のコンプライアンスレビューや Snyk / Trivy / Grype などのスキャナーが `.deps.json` から再構築せずに推移的依存を監査できます。 |
+
+リリースページから両ファイルをダウンロードしたあとの簡易チェック例:
+
+```bash
+sha256sum --check sha256sums.txt --ignore-missing
+jq '.metadata.component.name, .components | length' cdidx.sbom.cdx.json
+```
 
 ## ライセンスと Fair Source の扱い
 
