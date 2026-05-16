@@ -72,6 +72,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 | [Testing Guide](TESTING_GUIDE.md) | Test conventions and validation commands. |
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
+| [Security Policy](SECURITY.md) | Private vulnerability reporting and coordinated disclosure policy. |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | Community standards and reporting expectations. |
 
 ## Supported Surfaces
 
@@ -182,6 +184,8 @@ cdidx mcp
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
+| [セキュリティポリシー](SECURITY.md) | 非公開の脆弱性報告と協調的開示の方針。 |
+| [行動規範](CODE_OF_CONDUCT.md) | コミュニティ標準と報告時の期待事項。 |
 
 ## サポート対象の利用面
 
