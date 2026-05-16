@@ -28517,6 +28517,68 @@ jobs:
         }
     }
 
+    [Theory]
+    [InlineData("graph", "graph_table_available")]
+    [InlineData("issues", "issues_table_available")]
+    [InlineData("hotspot", "hotspot_family_ready")]
+    [InlineData("csharp", "csharp_symbol_name_ready")]
+    [InlineData("sql", "sql_graph_contract_ready")]
+    [InlineData("newer", "index_newer_than_reader")]
+    public void RunStatus_CheckJsonScopedReadiness_ReportsOnlyRequestedSubsystem(string scope, string expectedFailure)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_status_check_scope_{scope}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "query.sql"), "SELECT run_me();\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/query.sql", "sql", "SELECT run_me();\n");
+            MarkStatusReadinessReady(dbPath);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                switch (scope)
+                {
+                    case "graph":
+                        ExecuteNonQuery(db, $"PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.GraphReadyFlag}");
+                        break;
+                    case "issues":
+                        ExecuteNonQuery(db, $"PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.IssuesReadyFlag}");
+                        break;
+                    case "hotspot":
+                        writer.ClearHotspotFamilyReady();
+                        break;
+                    case "csharp":
+                        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
+                        break;
+                    case "sql":
+                        writer.SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
+                        break;
+                    case "newer":
+                        writer.SetMeta("fold_key_version", (NameFold.Version + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                }
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, $"--check={scope}", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var failedChecks = document.RootElement.GetProperty("failed_checks").EnumerateArray().Select(e => e.GetString()).ToArray();
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal([expectedFailure], failedChecks);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunStatus_CheckJson_UsesRepositoryRootIgnoreRulesForSubdirectoryIndex()
     {
@@ -29427,6 +29489,13 @@ jobs:
         writer.MarkMetadataTargetReady("csharp");
         writer.MarkSqlGraphContractReady();
         writer.MarkHotspotFamilyReady("csharp", "test");
+    }
+
+    private static void ExecuteNonQuery(DbContext db, string sql)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     // --- TryParseIso8601Since tests / TryParseIso8601Sinceテスト ---
