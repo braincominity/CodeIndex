@@ -447,14 +447,17 @@ flowchart LR
 
 ### Partial update mode
 
-Use `--commits` or `--files` to update only specific files instead of scanning the entire project:
+Use `--commits`, `--changed-between`, or `--files` to update only specific files instead of scanning the entire project:
 
 ```bash
 cdidx ./myproject --commits abc123 def456   # files changed in these commits
+cdidx ./myproject --changed-between main feature
+                                             # files changed between two refs
 cdidx ./myproject --files src/app.cs        # specific files only
 ```
 
 `--commits` uses `git diff-tree --no-commit-id -r --name-only` to resolve changed file paths.
+`--changed-between` uses `git diff --name-status -M <old-ref> <new-ref>` and includes both old and new rename paths so stale indexed paths can be purged.
 
 ## AI integration
 
@@ -1848,14 +1851,17 @@ flowchart LR
 
 ### 部分更新モード
 
-`--commits` や `--files` で、プロジェクト全体をスキャンせずに特定ファイルのみ更新できます:
+`--commits`、`--changed-between`、`--files` で、プロジェクト全体をスキャンせずに特定ファイルのみ更新できます:
 
 ```bash
 cdidx ./myproject --commits abc123 def456   # これらのコミットの変更ファイル
+cdidx ./myproject --changed-between main feature
+                                             # 2つのref間の変更ファイル
 cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 ```
 
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
+`--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
 
 VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBasicEnd` ベースの範囲追跡を使うため、`Partial` の大小文字差や複数ファイルにまたがる型ファミリーでも、安定した定義範囲と `hotspots` 集計用メタデータを維持できる。
 
