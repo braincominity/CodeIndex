@@ -382,7 +382,10 @@ public partial class McpServer : IDisposable
         if (line.Length > MaxLineLength)
         {
             Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
-            var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
+            var errorResponse = CreateErrorResponse(null, -32700, "Message too large",
+                category: McpErrorEnvelope.CategoryMessageTooLarge,
+                suggestion: $"JSON-RPC frame exceeds the {MaxLineLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
+                retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
 
@@ -400,7 +403,10 @@ public partial class McpServer : IDisposable
         {
             // Parse error / パースエラー
             Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
-            var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
+            var errorResponse = CreateErrorResponse(null, -32700, "Parse error",
+                category: McpErrorEnvelope.CategoryParseError,
+                suggestion: "Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON.",
+                retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
         catch (Exception ex)
@@ -415,7 +421,12 @@ public partial class McpServer : IDisposable
             Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
             if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
             {
-                var errorResponse = CreateErrorResponse(true, requestId, -32603, BuildSanitizedLoopErrorMessage(ex));
+                var classification = McpErrorEnvelope.ClassifyException(ex);
+                var errorResponse = CreateErrorResponse(true, requestId, classification.JsonRpcCode,
+                    BuildSanitizedLoopErrorMessage(ex),
+                    category: classification.Category,
+                    suggestion: classification.Suggestion,
+                    retrySafe: classification.RetrySafe);
                 return errorResponse.ToJsonString(_jsonOptions);
             }
             return null;
@@ -429,7 +440,10 @@ public partial class McpServer : IDisposable
     internal JsonNode? HandleMessage(JsonNode request)
     {
         if (request is not JsonObject obj)
-            return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object");
+            return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
+                retrySafe: false);
 
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
@@ -440,7 +454,10 @@ public partial class McpServer : IDisposable
         // 内部まで届いた事実が漏れる (#1559)。
         var method = TryGetStringMember(obj, "method");
         if (!TryGetRequestId(obj, out var hasId, out var id))
-            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null");
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
+                retrySafe: false);
 
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
         if (method == "notifications/initialized" || method == "notifications/cancelled")
@@ -492,12 +509,18 @@ public partial class McpServer : IDisposable
         if (!authResult.IsAuthenticated)
         {
             Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
-            return CreateErrorResponse(hasId: true, id: id, code: -32001, message: "Unauthorized");
+            return CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeUnauthorized, message: "Unauthorized",
+                category: McpErrorEnvelope.CategoryPermissionDenied,
+                suggestion: "Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token (or an `Authorization: Bearer <token>` header for HTTP) on each request.",
+                retrySafe: false);
         }
 
         if (method == null)
         {
-            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method");
+            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "JSON-RPC 2.0 requires a string `method` field.",
+                retrySafe: false);
         }
 
         return method switch
@@ -506,7 +529,10 @@ public partial class McpServer : IDisposable
             "tools/list" => HandleToolsList(id),
             "tools/call" => HandleToolsCall(id, request["params"]),
             "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
-            _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}"),
+            _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
+                category: McpErrorEnvelope.CategoryMethodNotFound,
+                suggestion: "Supported methods: initialize, tools/list, tools/call, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                retrySafe: false),
         };
     }
 
@@ -797,13 +823,22 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
     {
-        var data = new JsonObject
+        // #1560 contract preserved: `error_category`, `tool`, `caller`, `retry_after_ms`.
+        // #1581 adds the canonical envelope (`category`, `suggestion`, `retry_safe`) alongside.
+        // #1560 の契約（`error_category`, `tool`, `caller`, `retry_after_ms`）を維持しつつ、
+        // #1581 で導入した canonical envelope（`category`, `suggestion`, `retry_safe`）を併記する。
+        var extraData = new JsonObject
         {
             ["error_category"] = "rate_limited",
             ["tool"] = tool,
             ["caller"] = caller,
             ["retry_after_ms"] = retryAfterMs,
         };
+        var data = McpErrorEnvelope.BuildData(
+            category: McpErrorEnvelope.CategoryRateLimited,
+            suggestion: $"Back off for at least {retryAfterMs} ms before retrying this tool, or raise {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server.",
+            retrySafe: true,
+            extraData: extraData);
         var error = new JsonObject
         {
             ["code"] = -32000,
@@ -833,7 +868,10 @@ public partial class McpServer : IDisposable
 
         if (toolName == null)
         {
-            var missingNameResponse = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
+            var missingNameResponse = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name",
+                category: McpErrorEnvelope.CategoryMissingParameter,
+                suggestion: "tools/call requires `params.name`. Send the tool identifier (e.g. \"search\", \"definition\") as a string.",
+                retrySafe: false);
             // Even malformed tool-call requests are audited so a misbehaving client cannot
             // hide its activity by sending invalid params on every call (#1562).
             // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
@@ -850,7 +888,18 @@ public partial class McpServer : IDisposable
         // 既存の `-32602 Unknown tool` 経路に流し、オペレータによる無効化と typo を区別する。
         if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
         {
-            var disabledResponse = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}");
+            // Wire code stays at -32601 (#1561 contract) so existing clients keep working;
+            // the `data.category = "tool_disabled"` envelope (#1581) is what new clients should
+            // branch on to distinguish operator-disabled tools from typos (`tool_unknown`) and
+            // missing methods (`method_not_found`).
+            // ワイヤコードは #1561 契約に従い -32601 のまま維持し、既存クライアントを壊さない。
+            // 新クライアントは `data.category = "tool_disabled"` で typo (`tool_unknown`) や
+            // 未知メソッド (`method_not_found`) と区別する（#1581）。
+            var disabledResponse = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}",
+                category: McpErrorEnvelope.CategoryToolDisabled,
+                suggestion: "This tool is disabled on the server (CDIDX_MCP_TOOLS_ALLOW / CDIDX_MCP_TOOLS_DENY). Ask the operator to enable it or use a different tool.",
+                retrySafe: false,
+                extraData: new JsonObject { ["tool"] = toolName });
             // Audit operator-disabled attempts so the policy can be reviewed after the fact;
             // skipping them would let a deny-listed caller silently retry without trace
             // even though missing/unknown tools are captured (#1562 review).
@@ -909,7 +958,11 @@ public partial class McpServer : IDisposable
                 "index" => ExecuteIndex(id, args),
                 "backfill_fold" => ExecuteBackfillFold(id),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
-                _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}"),
+                _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
+                    category: McpErrorEnvelope.CategoryToolUnknown,
+                    suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["tool"] = toolName }),
             };
             }
         }
@@ -928,7 +981,16 @@ public partial class McpServer : IDisposable
             Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
             metricsError = ex.GetType().Name;
-            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex));
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe,
+                extraData: new JsonObject
+                {
+                    ["tool"] = toolName,
+                    ["exception_type"] = ex.GetType().Name,
+                });
         }
         finally
         {
@@ -1188,7 +1250,10 @@ public partial class McpServer : IDisposable
             // file lookup would leave a closed/disposed handle blocking later open attempts.
             // ユーザーが後から DB を作った場合に再オープンできるよう、キャッシュをここで破棄。
             CloseSharedDb();
-            return CreateToolErrorResponse(true, id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+            return CreateToolErrorResponse(true, id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.",
+                category: McpErrorEnvelope.CategoryIndexMissing,
+                suggestion: "Run `cdidx index <projectPath>` to build the index before retrying. The DB lives at `.cdidx/codeindex.db` by default.",
+                retrySafe: true);
         }
 
         var db = GetOrOpenSharedDb();
@@ -1304,10 +1369,19 @@ public partial class McpServer : IDisposable
         return response;
     }
 
-    private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message)
-        => CreateErrorResponse(id is not null, id, code, message);
+    private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message,
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
+        => CreateErrorResponse(id is not null, id, code, message, category, suggestion, retrySafe, extraData);
 
-    private static JsonObject CreateErrorResponse(bool hasId, JsonNode? id, int code, string message)
+    // Issue #1581: every MCP error response carries a structured `data` envelope
+    // (`category` / `suggestion` / `retry_safe`) so clients can branch on a stable
+    // category instead of parsing the human-readable `message`. Category-specific
+    // extras (e.g. rate-limited's `retry_after_ms`) merge in via `extraData`.
+    // #1581: すべての MCP エラー応答に `category` / `suggestion` / `retry_safe` を含む
+    // 構造化 `data` を載せ、クライアントが文字列解析せず分岐できるようにする。カテゴリ
+    // 固有フィールド（rate-limited の `retry_after_ms` 等）は `extraData` で合流する。
+    private static JsonObject CreateErrorResponse(bool hasId, JsonNode? id, int code, string message,
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
     {
         var response = new JsonObject
         {
@@ -1315,7 +1389,8 @@ public partial class McpServer : IDisposable
             ["error"] = new JsonObject
             {
                 ["code"] = code,
-                ["message"] = message
+                ["message"] = message,
+                ["data"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
             }
         };
         if (hasId)
@@ -1349,10 +1424,32 @@ public partial class McpServer : IDisposable
     /// Create a tool error response (MCP format with isError flag).
     /// ツールエラーレスポンスを作成（isErrorフラグ付きMCP形式）。
     /// </summary>
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message)
-        => CreateToolErrorResponse(id is not null, id, message);
+    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
+        => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData);
 
-    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message)
+    // Backward-compatible overload for tool handlers that return argument-validation
+    // failures (#1581). These were all "missing parameter / invalid argument" call sites
+    // before the envelope was introduced, so the default classification is `invalid_argument`
+    // / retry_safe=false. Sites that have richer context should call the explicit overload.
+    // 引数バリデーション失敗を返す既存ツールハンドラ向けの互換オーバーロード（#1581）。
+    // envelope 導入前の呼び出しは全て「引数不正」系だったため既定カテゴリを `invalid_argument`
+    // / retry_safe=false とする。より具体的なカテゴリを持てる呼び出し元は明示オーバーロードを使う。
+    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message)
+        => CreateToolErrorResponse(id, message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Tool argument validation failed. Inspect the tool's `inputSchema` via tools/list and adjust the call.",
+            retrySafe: false);
+
+    // Issue #1581: tool-result errors mirror the JSON-RPC error envelope by including
+    // the same `category` / `suggestion` / `retry_safe` triple under `result.structuredContent`.
+    // Existing clients that only read `content[0].text` + `isError` keep working; new clients
+    // can read `structuredContent` to branch on the category.
+    // #1581: ツール結果エラーにも JSON-RPC エラーと同じ `category` / `suggestion` / `retry_safe`
+    // を `result.structuredContent` に載せる。既存の `content[0].text` + `isError` だけを読む
+    // クライアントは互換のまま、新規クライアントは `structuredContent` でカテゴリ分岐できる。
+    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
     {
         var result = new JsonObject
         {
@@ -1364,7 +1461,8 @@ public partial class McpServer : IDisposable
                     ["text"] = message
                 }
             },
-            ["isError"] = true
+            ["isError"] = true,
+            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
         };
         return CreateSuccessResponse(hasId, id, result);
     }
