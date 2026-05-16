@@ -3366,8 +3366,11 @@ public static partial class ReferenceExtractor
         if (!CSharpReflectionNameApiIntroRegex.IsMatch(preparedLine))
             return;
 
-        foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(originalLine))
+        var codeLine = SliceCSharpCodeBeforeLineComment(originalLine);
+        foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(codeLine))
         {
+            if (IsInsideCSharpStringLiteral(codeLine, match.Index))
+                continue;
             if (!preparedLine.Contains(match.Groups["name"].Value, StringComparison.Ordinal))
                 continue;
 
@@ -3417,6 +3420,105 @@ public static partial class ReferenceExtractor
         }
 
         return false;
+    }
+
+    private static string SliceCSharpCodeBeforeLineComment(string line)
+    {
+        var inRegularString = false;
+        var inVerbatimString = false;
+        var inChar = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inRegularString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '"')
+                    inRegularString = false;
+                continue;
+            }
+            if (inVerbatimString)
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                    i++;
+                else if (c == '"')
+                    inVerbatimString = false;
+                continue;
+            }
+            if (inChar)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '\'')
+                    inChar = false;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '/')
+                return line[..i];
+            if (c == '@' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inVerbatimString = true;
+                i++;
+                continue;
+            }
+            if (c == '$' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inRegularString = true;
+                i++;
+                continue;
+            }
+            if (c == '"')
+                inRegularString = true;
+            else if (c == '\'')
+                inChar = true;
+        }
+
+        return line;
+    }
+
+    private static bool IsInsideCSharpStringLiteral(string line, int targetIndex)
+    {
+        var inRegularString = false;
+        var inVerbatimString = false;
+        for (var i = 0; i < line.Length && i < targetIndex; i++)
+        {
+            var c = line[i];
+            if (inRegularString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                    i++;
+                else if (c == '"')
+                    inRegularString = false;
+                continue;
+            }
+            if (inVerbatimString)
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                    i++;
+                else if (c == '"')
+                    inVerbatimString = false;
+                continue;
+            }
+
+            if (c == '@' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inVerbatimString = true;
+                i++;
+            }
+            else if (c == '$' && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                inRegularString = true;
+                i++;
+            }
+            else if (c == '"')
+            {
+                inRegularString = true;
+            }
+        }
+
+        return inRegularString || inVerbatimString;
     }
 
     private static bool TryReadCSharpStringLiteral(string line, ref int index, out string value, out int contentIndex)
