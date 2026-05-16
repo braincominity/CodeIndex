@@ -3174,6 +3174,43 @@ jobs:
         }
     }
 
+    // `--lang java` against a repo with no Java files used to print a confusing
+    // "Did you mean: --lang java?" because the fallback ReferenceExtractor match returned
+    // the exact input. Regression coverage for the round-3 fix that suppresses
+    // self-suggestions in WriteLangHint (#1582).
+    // Java を含まないリポジトリで `--lang java` を指定した際、フォールバックの
+    // ReferenceExtractor が入力と同じ値を返すため "Did you mean: --lang java?" という
+    // 紛らわしいメッセージが出ていた。round-3 で WriteLangHint が自己提案を抑止する
+    // ようにしたことの回帰ロック (#1582)。
+    [Fact]
+    public void RunSearch_LangNotIndexedButSupported_DoesNotSelfSuggest_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_no_self_suggest");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "java"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found.", stderr);
+            Assert.Contains("'java' not found in index", stderr);
+            Assert.DoesNotContain("Did you mean: --lang java?", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
     {

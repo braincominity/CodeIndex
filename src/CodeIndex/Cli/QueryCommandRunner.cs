@@ -3899,9 +3899,16 @@ public static class QueryCommandRunner
         // インデックスに無い、もしくは languages が空の場合は
         // `ReferenceExtractor.GetSupportedLanguages()` 全体から候補を探し、
         // 空のインデックスでも did-you-mean が機能するようにする (#1582)。
+        // Skip the suggestion entirely if the closest candidate is the exact value the user
+        // already supplied (case-insensitive). FindClosestMatch returns the input verbatim when
+        // it is a member of the candidate set — e.g. `--lang java` against a Java-supported but
+        // unindexed repo would otherwise self-suggest "Did you mean: --lang java?".
+        // 提案候補がユーザー指定値そのものと一致する場合は提案を出さない。
+        // FindClosestMatch は候補集合に同名がいれば入力をそのまま返すため、例えば Java は
+        // サポート対象だが index 済みでない場合の `--lang java` で自己提案を出してしまう。
         var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
                          ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
-        if (suggestion != null)
+        if (suggestion != null && !string.Equals(suggestion, lang, StringComparison.OrdinalIgnoreCase))
             Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
     }
 
