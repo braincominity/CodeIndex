@@ -20,6 +20,28 @@ public enum ColorMode
 }
 
 /// <summary>
+/// ANSI color palette to use when color output is enabled. <see cref="Basic"/>
+/// stays within the 8 standard SGR colors (30–37) and avoids the bright-black
+/// dim escape (<c>\x1b[90m</c>), which is unreadable on many SSH/CI terminals.
+/// <see cref="Color256"/> uses 256-color codes (`\x1b[38;5;Nm`) for higher
+/// contrast on capable terminals. <see cref="Truecolor"/> uses 24-bit RGB
+/// (`\x1b[38;2;R;G;Bm`) for terminals that advertise truecolor via
+/// <c>COLORTERM=truecolor|24bit</c>.
+/// 色出力で使用する ANSI パレット。Basic は標準8色のみで `\x1b[90m`（dim）を
+/// 避け、SSH / CI 端末でも可読性を確保する。Color256 / Truecolor はそれぞれ
+/// 256色 / 24ビットRGB を用い、対応端末で高コントラストを実現する。
+/// </summary>
+public enum ColorPalette
+{
+    /// <summary>Standard 8-color ANSI palette (30–37); avoids dim (`\x1b[90m`).</summary>
+    Basic = 0,
+    /// <summary>256-color ANSI palette (`\x1b[38;5;Nm`).</summary>
+    Color256 = 1,
+    /// <summary>24-bit RGB / truecolor palette (`\x1b[38;2;R;G;Bm`).</summary>
+    Truecolor = 2,
+}
+
+/// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
 /// </summary>
@@ -286,31 +308,41 @@ public static class ConsoleUi
     // --- Easter eggs / イースターエッグ ---
 
     /// <summary>
-    /// Print easter egg message (standalone mode).
-    /// イースターエッグメッセージを表示（単体実行時）。
+    /// Print easter egg message (standalone mode). Renders the catalog entry for
+    /// <paramref name="flag"/> in the language chosen by <see cref="UiLanguageResolver"/>
+    /// (<c>CDIDX_LANG</c> env > <see cref="System.Globalization.CultureInfo.CurrentUICulture"/>
+    /// > English fallback). Unknown flags print two blank lines for legacy compatibility.
+    /// Pass <paramref name="languageOverride"/> to bypass env/culture resolution (used by
+    /// tests so they do not mutate the live process environment).
+    /// イースターエッグメッセージを表示（単体実行時）。<see cref="UiLanguageResolver"/>
+    /// が選んだ言語（<c>CDIDX_LANG</c> 環境変数 &gt; カルチャ &gt; 英語）でカタログ
+    /// エントリを描画する。未知フラグは従来互換で空行を2つ出力。
+    /// <paramref name="languageOverride"/> を指定すると環境変数/カルチャ判定をスキップする
+    /// （テストがプロセス環境を書き換えずに済むようにするためのフック）。
     /// </summary>
-    public static void PrintEasterEggMessage(string flag)
+    public static void PrintEasterEggMessage(string flag, UiLanguage? languageOverride = null)
     {
-        var (en, ja) = flag switch
+        var pair = flag switch
         {
-            "--sushi"  => ("\U0001f363 Indexing is like making sushi \u2014 patience yields perfection.",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u5bff\u53f8\u4f5c\u308a\u306e\u3088\u3046\u306b \u2014 \u5fcd\u8010\u304c\u5b8c\u74a7\u3092\u751f\u3080\u3002"),
-            "--coffee" => ("\u2615 Leave the indexing to me and go grab a coffee!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u4efb\u305b\u3066\u3001\u30b3\u30fc\u30d2\u30fc\u3067\u3082\u98f2\u3093\u3067\u304d\u3066\uff01"),
-            "--ramen"  => ("\U0001f35c Indexing in progress... perfect time for a bowl of ramen!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u4e2d\u2026\u30e9\u30fc\u30e1\u30f3\u4e00\u676f\u3044\u304b\u304c\uff1f"),
-            "--wine"   => ("\U0001f377 Crushing... Aging... Pouring... Sant\u00e9!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30ef\u30a4\u30f3\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u3092\u5f85\u3064\u4fa1\u5024\u304c\u3042\u308b\u3002"),
-            "--beer"   => ("\U0001f37a Tapping... Pouring... Foaming... Cheers!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u5b8c\u4e86\u307e\u3067\u3001\u4e7e\u676f\uff01"),
-            "--matcha" => ("\U0001f375 Sifting... Pouring... Whisking... \u3069\u3046\u305e\uff01",
-                           "   \u4e00\u670d\u306e\u62b9\u8336\u3067\u3082\u3044\u304b\u304c\u3067\u3059\u304b\uff1f"),
-            "--whisky" => ("\U0001f943 Mashing... Distilling... Aging... Slainte!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30a6\u30a4\u30b9\u30ad\u30fc\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u304c\u5927\u4e8b\u3002"),
-            _ => ("", ""),
+            "--sushi"  => UiMessages.EasterEggSushi,
+            "--coffee" => UiMessages.EasterEggCoffee,
+            "--ramen"  => UiMessages.EasterEggRamen,
+            "--wine"   => UiMessages.EasterEggWine,
+            "--beer"   => UiMessages.EasterEggBeer,
+            "--matcha" => UiMessages.EasterEggMatcha,
+            "--whisky" => UiMessages.EasterEggWhisky,
+            _ => null,
         };
-        Console.WriteLine(en);
-        Console.WriteLine(ja);
+        if (pair is null)
+        {
+            Console.WriteLine();
+            Console.WriteLine();
+            return;
+        }
+
+        var lang = languageOverride ?? UiLanguageResolver.Resolve();
+        foreach (var line in UiMessages.Render(pair, lang))
+            Console.WriteLine(line);
     }
 
     // --- Version loading / バージョン読み込み ---
@@ -430,6 +462,7 @@ public static class ConsoleUi
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
+        Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -646,198 +679,221 @@ public static class ConsoleUi
             .Distinct()
             .OrderBy(l => l));
 
+    // Commands that get their own per-command completion branch (bash/zsh). Order matters: the
+    // `else` generic branch is the catch-all, and `search` must remain the last `elif` so the
+    // tests `PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch` can isolate it.
+    // bash / zsh の専用ブランチを持つコマンド。順序は意図的で、`search` が最終 elif、`else` が
+    // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
+    private static readonly string[] EnumeratedCompletionCommands =
+    [
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "search",
+    ];
+
+    // Generic-branch representative set: union of completion flags from these commands populates
+    // the bash/zsh `else` branch. Excludes find/excerpt/etc. which have their own branches, and
+    // intentionally omits commands whose flags would surface in their own branches.
+    // generic ブランチを構成する代表コマンド集合。専用ブランチを持つコマンドは除外。
+    private static readonly string[] GenericBranchRepresentativeCommands =
+    [
+        "definition", "callers", "callees", "symbols", "files", "map", "impact", "deps", "unused",
+    ];
+
     private static string GetBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
-        return $@"_cdidx() {{
-    local cur prev commands
-    local cmd
-    cur=""${{COMP_WORDS[COMP_CWORD]}}""
-    prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
-    cmd=""${{COMP_WORDS[1]}}""
-    commands=""{cmds}""
-
-    if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=($(compgen -W ""$commands --help --version --license"" -- ""$cur""))
-        return
-    fi
-
-    case ""$prev"" in
-        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
-        --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
-        --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *)
-            if [ ""$cmd"" = ""find"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --max-line-width --exact --count --query --help --"" -- ""$cur""))
-            elif [ ""$cmd"" = ""excerpt"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --before --after --max-line-width --focus-line --focus-column --focus-length --start --end --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""references"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --max-line-width --exact --exact-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""inspect"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --body --max-line-width --exact --exact-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""hotspots"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""status"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --check --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""db"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --integrity-check --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""search"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --top --lang --path --exclude-path --exclude-tests --count --fts --snippet-lines --max-line-width --since --no-dedup --exact --exact-substring --help"" -- ""$cur""))
-            else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --since --depth --reverse --exact --exact-name --help"" -- ""$cur""))
-            fi
-            ;;
-    esac
-}}
-complete -F _cdidx cdidx";
+        var sb = new StringBuilder();
+        sb.Append("_cdidx() {\n");
+        sb.Append("    local cur prev commands\n");
+        sb.Append("    local cmd\n");
+        sb.Append("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+        sb.Append("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n");
+        sb.Append("    cmd=\"${COMP_WORDS[1]}\"\n");
+        sb.Append($"    commands=\"{cmds}\"\n");
+        sb.Append("\n");
+        sb.Append("    if [ $COMP_CWORD -eq 1 ]; then\n");
+        sb.Append("        COMPREPLY=($(compgen -W \"$commands --help --version --license\" -- \"$cur\"))\n");
+        sb.Append("        return\n");
+        sb.Append("    fi\n");
+        sb.Append("\n");
+        sb.Append("    case \"$prev\" in\n");
+        sb.Append("        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
+        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
+        sb.Append("        *)\n");
+        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        {
+            var command = EnumeratedCompletionCommands[i];
+            var keyword = i == 0 ? "if" : "elif";
+            sb.Append($"            {keyword} [ \"$cmd\" = \"{command}\" ]; then\n");
+            sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList(command)}\" -- \"$cur\"))\n");
+        }
+        sb.Append("            else\n");
+        sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashGenericFlagList()}\" -- \"$cur\"))\n");
+        sb.Append("            fi\n");
+        sb.Append("            ;;\n");
+        sb.Append("    esac\n");
+        sb.Append("}\n");
+        sb.Append("complete -F _cdidx cdidx");
+        return sb.ToString();
     }
+
+    private static string BuildBashFlagList(string command)
+    {
+        // Per-command branch: schema flags + universal --help. `find` additionally surfaces
+        // `--` as the end-of-options marker so users can pass literal queries starting with `-`.
+        // schema のフラグに `--help` を加え、`find` のみ `--` end-of-options マーカーも露出させる。
+        var tokens = new List<string>();
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            tokens.Add(flag.Name);
+        tokens.Add("--help");
+        if (command == "find")
+            tokens.Add("--");
+        return string.Join(" ", tokens);
+    }
+
+    private static string BuildBashGenericFlagList()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var tokens = new List<string>();
+        foreach (var command in GenericBranchRepresentativeCommands)
+        {
+            foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                // Skip flags that are scoped to the enumerated per-command branches; the generic
+                // branch is the catch-all for "everything else".
+                if (IsEnumeratedBranchScopedFlag(flag.Name))
+                    continue;
+                if (seen.Add(flag.Name))
+                    tokens.Add(flag.Name);
+            }
+        }
+        tokens.Add("--help");
+        return string.Join(" ", tokens);
+    }
+
+    private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
+        flagName is "--max-line-width" or "--snippet-lines" or "--fts" or "--no-dedup"
+            or "--prefix" or "--exact-substring" or "--integrity-check" or "--check"
+            or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
+            or "--before" or "--after" or "--group-by-name";
 
     private static string GetZshCompletions()
     {
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
-        return $@"#compdef cdidx
-_cdidx() {{
-    local -a commands
-    commands=(
-        {cmds}
-    )
+        var langs = GetCompletionLangs();
+        var sb = new StringBuilder();
+        sb.Append("#compdef cdidx\n");
+        sb.Append("_cdidx() {\n");
+        sb.Append("    local -a commands\n");
+        sb.Append("    commands=(\n");
+        sb.Append($"        {cmds}\n");
+        sb.Append("    )\n");
+        sb.Append("\n");
+        sb.Append("    _arguments -C \\\n");
+        sb.Append("        '1:command:->cmds' \\\n");
+        sb.Append("        '*::arg:->args'\n");
+        sb.Append("\n");
+        sb.Append("    case $state in\n");
+        sb.Append("        cmds) _describe 'command' commands ;;\n");
+        sb.Append("        args)\n");
+        sb.Append("            local subcmd\n");
+        sb.Append("            subcmd=$words[2]\n");
+        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        {
+            var command = EnumeratedCompletionCommands[i];
+            var keyword = i == 0 ? "if" : "elif";
+            sb.Append($"            {keyword} [[ $subcmd == {command} ]]; then\n");
+            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs));
+        }
+        sb.Append("            else\n");
+        AppendZshArguments(sb, BuildZshGenericArgs(langs));
+        sb.Append("            fi\n");
+        sb.Append("            ;;\n");
+        sb.Append("    esac\n");
+        sb.Append("}\n");
+        sb.Append("_cdidx");
+        return sb.ToString();
+    }
 
-    _arguments -C \
-        '1:command:->cmds' \
-        '*::arg:->args'
+    private static List<string> BuildZshArgsForCommand(string command, string langs)
+    {
+        var args = new List<string>();
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            args.Add(FormatZshArgument(flag, langs));
+        // Append a trailing positional placeholder so zsh suggests path/query completion after
+        // the flags — but only for commands that actually accept a positional argument. `status`,
+        // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
+        // matches the original hand-written script's behavior.
+        // 末尾 positional は path / query を受け付けるコマンドにのみ付ける。
+        var positional = command switch
+        {
+            "excerpt" => "'*:path'",
+            "find" or "search" or "references" or "inspect" => "'*:query'",
+            _ => null,
+        };
+        if (positional is not null)
+            args.Add(positional);
+        return args;
+    }
 
-    case $state in
-        cmds) _describe 'command' commands ;;
-        args)
-            local subcmd
-            subcmd=$words[2]
-            if [[ $subcmd == find ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--no-json[Disable JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--top[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                      '--path[Path filter]:glob' \
-                      '--exclude-path[Exclude path]:glob' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--before[Context lines before]:number' \
-                    '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number' \
-                    '--exact[Exact match]' \
-                    '--count[Count only]' \
-                    '--query[Literal query]' \
-                    '*:query'
-            elif [[ $subcmd == excerpt ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--start[Start line]:number' \
-                    '--end[End line]:number' \
-                    '--before[Context lines before]:number' \
-                    '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line excerpts]:number' \
-                    '--focus-line[excerpt: focused line number]:number' \
-                    '--focus-column[excerpt: focused column]:number' \
-                    '--focus-length[excerpt: focused span width]:number' \
-                    '*:path'
-            elif [[ $subcmd == references ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            elif [[ $subcmd == inspect ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--body[Include body]' \
-                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            elif [[ $subcmd == hotspots ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--group-by-name[Hotspots: collapse same-name rows across files]' \
-                    '*:query'
-            elif [[ $subcmd == status ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--check[Verify index matches current workspace]'
-            elif [[ $subcmd == db ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--integrity-check[Run PRAGMA integrity_check on the database]'
-            elif [[ $subcmd == search ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--top[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--fts[Raw FTS5 syntax]' \
-                    '--snippet-lines[Snippet length]:number' \
-                    '--max-line-width[Clamp long single-line snippets]:number' \
-                    '--since[Filter by modified-since timestamp]:datetime' \
-                    '--no-dedup[Show duplicate chunks]' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-substring[Search-only exact substring match]' \
-                    '*:query'
-            else
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--body[Include body]' \
-                    '--count[Count only]' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            fi
-            ;;
-    esac
-}}
-_cdidx";
+    private static List<string> BuildZshGenericArgs(string langs)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var args = new List<string>();
+        foreach (var command in GenericBranchRepresentativeCommands)
+        {
+            foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                if (IsEnumeratedBranchScopedFlag(flag.Name))
+                    continue;
+                if (seen.Add(flag.Name))
+                    args.Add(FormatZshArgument(flag, langs));
+            }
+        }
+        args.Add("'*:query'");
+        return args;
+    }
+
+    private static string FormatZshArgument(CliFlag flag, string langs)
+    {
+        var desc = flag.Description.Replace("'", "''");
+        if (!flag.IsValueBearing)
+            return $"'{flag.Name}[{desc}]'";
+
+        var valueSpec = flag.ValuePlaceholder switch
+        {
+            "<path>" => "file:_files",
+            "<glob>" => "pattern",
+            "<n>" => "number",
+            "<line>" => "number",
+            "<id>" => "id",
+            "<datetime>" => "datetime",
+            "<lang>" => $"language:({langs})",
+            "<kind>" => "kind:(function class struct interface enum property event delegate namespace import)",
+            "<query>" => "query",
+            "<name>" => "name",
+            "<host:port>" => "address",
+            "<stdio|http>" => "transport:(stdio http)",
+            _ => "value",
+        };
+        return $"'{flag.Name}[{desc}]:{valueSpec}'";
+    }
+
+    private static void AppendZshArguments(StringBuilder sb, IReadOnlyList<string> args)
+    {
+        sb.Append("                _arguments");
+        for (var i = 0; i < args.Count; i++)
+        {
+            sb.Append(" \\\n                    ");
+            sb.Append(args[i]);
+        }
+        sb.Append('\n');
     }
 
     private static string GetFishCompletions()
     {
+        var langs = GetCompletionLangs();
         var lines = new List<string>
         {
             "# cdidx fish completions",
@@ -848,41 +904,44 @@ _cdidx";
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
 
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from status' -l check -d 'Verify index matches current workspace'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l db -r -d 'Database path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l json -d 'JSON output'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l integrity-check -d 'Run PRAGMA integrity_check on the database'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l limit -r -d 'Max results'");
-        lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l lang -r -a '{GetCompletionLangs()}' -d 'Filter by language'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l count -d 'Count only'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l start -r -d 'Start line'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l end -r -d 'End line'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from hotspots' -l group-by-name -d 'Collapse same-name rows across files'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
+        // Emit one `complete` line per schema flag, joining the applicable command list into the
+        // fish `__fish_seen_subcommand_from` predicate. Hotspots' `--group-by-name` description is
+        // shortened to match the legacy "Collapse same-name rows across files" tooltip that the
+        // existing test pins (the schema description is fuller and still appears in zsh).
+        // schema 1 行 = fish の 1 行 (`complete -c cdidx -n '__fish_seen_subcommand_from <cmds>' -l <name> ...`)
+        // という対応で生成する。`--group-by-name` のみ既存テストが期待する短い tooltip を維持。
+        foreach (var flag in CliFlagSchema.All)
+        {
+            var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
+            var name = flag.Name.TrimStart('-');
+            // Token order is `-l name (-r)? (-a 'values')? -d 'description'` — matches the
+            // pre-refactor hand-written script so the ConsoleUiTests fish-extractor regex
+            // (`'  -l <flag>`) keeps working for value-bearing flags too.
+            // トークン順は旧スクリプトと同じ `-l name (-r)? (-a) -d` を維持する。
+            // ConsoleUiTests の fish 抽出正規表現が -l の直前に値マーカーを期待していないため。
+            var requiresArg = flag.IsValueBearing ? " -r" : "";
+            var description = name switch
+            {
+                "group-by-name" => "Collapse same-name rows across files",
+                _ => flag.Description,
+            };
+            var argSpec = flag.ValuePlaceholder switch
+            {
+                "<lang>" => $" -a '{langs}'",
+                "<kind>" => " -a 'function class struct interface enum property event delegate namespace import'",
+                "<stdio|http>" => " -a 'stdio http'",
+                _ => "",
+            };
+            description = description.Replace("'", "\\'");
+            lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {commands}' -l {name}{requiresArg}{argSpec} -d '{description}'");
+        }
         return string.Join(Environment.NewLine, lines);
     }
 
     // --- Helpers / ヘルパー ---
 
     private static ColorMode _colorMode = ColorMode.Auto;
+    private static ColorPalette? _explicitPalette;
 
     /// <summary>
     /// Set the active color-output mode. <see cref="ColorMode.Always"/> and
@@ -894,6 +953,94 @@ _cdidx";
     public static void SetColorMode(ColorMode mode) => _colorMode = mode;
 
     internal static ColorMode GetColorMode() => _colorMode;
+
+    /// <summary>
+    /// Override the active ANSI palette. <c>null</c> restores auto-detection
+    /// via <c>COLORTERM</c> / <c>TERM</c> / <c>CDIDX_COLOR_PALETTE</c>.
+    /// </summary>
+    public static void SetColorPalette(ColorPalette? palette) => _explicitPalette = palette;
+
+    internal static ColorPalette? GetExplicitColorPalette() => _explicitPalette;
+
+    /// <summary>
+    /// Parse a user-supplied `--palette` value. Accepts `basic`, `256`,
+    /// `color256`, `truecolor`, and `24bit` (case-insensitive). Returns false
+    /// on any other value.
+    /// `--palette` 値を解析する。`basic` / `256` / `truecolor` などを許可する。
+    /// </summary>
+    public static bool TryParseColorPalette(string? value, out ColorPalette palette)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "basic":
+            case "8":
+            case "16":
+            case "ansi":
+                palette = ColorPalette.Basic;
+                return true;
+            case "256":
+            case "color256":
+            case "8bit":
+                palette = ColorPalette.Color256;
+                return true;
+            case "truecolor":
+            case "24bit":
+            case "rgb":
+                palette = ColorPalette.Truecolor;
+                return true;
+            default:
+                palette = ColorPalette.Basic;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Resolve the palette to use. Honors the explicit override set via
+    /// <see cref="SetColorPalette"/> first, then falls back to the
+    /// <c>CDIDX_COLOR_PALETTE</c> environment variable, then to capability
+    /// detection from <c>COLORTERM</c> / <c>TERM</c>.
+    /// </summary>
+    public static ColorPalette ResolveColorPalette()
+    {
+        if (_explicitPalette is { } explicitPalette)
+            return explicitPalette;
+
+        var envPalette = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+        if (!string.IsNullOrWhiteSpace(envPalette) && TryParseColorPalette(envPalette, out var parsed))
+            return parsed;
+
+        return DetectColorPalette();
+    }
+
+    /// <summary>
+    /// Detect the terminal palette from the <c>COLORTERM</c> and <c>TERM</c>
+    /// environment variables. <c>COLORTERM=truecolor</c> / <c>COLORTERM=24bit</c>
+    /// → <see cref="ColorPalette.Truecolor"/>. <c>TERM</c> containing
+    /// <c>256color</c> (e.g. <c>xterm-256color</c>, <c>screen-256color</c>) →
+    /// <see cref="ColorPalette.Color256"/>. Otherwise <see cref="ColorPalette.Basic"/>.
+    /// </summary>
+    internal static ColorPalette DetectColorPalette()
+    {
+        var colorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+        if (!string.IsNullOrEmpty(colorTerm))
+        {
+            var ct = colorTerm.Trim().ToLowerInvariant();
+            if (ct == "truecolor" || ct == "24bit")
+                return ColorPalette.Truecolor;
+        }
+
+        var term = Environment.GetEnvironmentVariable("TERM");
+        if (!string.IsNullOrEmpty(term))
+        {
+            var t = term.ToLowerInvariant();
+            if (t.Contains("256color", StringComparison.Ordinal))
+                return ColorPalette.Color256;
+            if (t.Contains("truecolor", StringComparison.Ordinal) || t.Contains("direct", StringComparison.Ordinal))
+                return ColorPalette.Truecolor;
+        }
+
+        return ColorPalette.Basic;
+    }
 
     /// <summary>
     /// Parse a user-supplied `--color` value. Accepts `auto`, `always`, and
@@ -931,25 +1078,64 @@ _cdidx";
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
         if (ShouldUseColor())
         {
-            var color = kind switch
-            {
-                "class" => "\x1b[36m",      // cyan / シアン
-                "struct" => "\x1b[36m",     // cyan / シアン
-                "interface" => "\x1b[34m",  // blue / 青
-                "enum" => "\x1b[35m",       // magenta / マゼンタ
-                "function" => "\x1b[33m",   // yellow / 黄
-                "property" => "\x1b[32m",   // green / 緑
-                "event" => "\x1b[31m",      // red / 赤
-                "delegate" => "\x1b[35m",   // magenta / マゼンタ
-                "namespace" => "\x1b[90m",  // dim / 暗灰
-                "import" => "\x1b[90m",     // dim / 暗灰
-                _ => "",
-            };
+            var color = GetKindColorCode(kind, ResolveColorPalette());
             if (color.Length > 0)
                 return $"{color}{padded}\x1b[0m";
         }
         return padded;
     }
+
+    // Per-palette SGR introducer for a given symbol kind. Basic stays within
+    // the 8 standard ANSI colors (30–37) and intentionally avoids
+    // `\x1b[90m` (bright-black / dim), which is unreadable on many minimal
+    // SSH / CI terminals; namespace / import fall back to plain white (37).
+    // 各パレットでのシンボル種別ごとの SGR コード。Basic は標準8色のみで
+    // dim (`\x1b[90m`) を避け、SSH/CI 端末でも可読性を確保する。
+    internal static string GetKindColorCode(string kind, ColorPalette palette) => palette switch
+    {
+        ColorPalette.Truecolor => kind switch
+        {
+            "class" => "\x1b[38;2;102;217;239m",     // bright cyan
+            "struct" => "\x1b[38;2;102;217;239m",
+            "interface" => "\x1b[38;2;102;160;255m",  // bright blue
+            "enum" => "\x1b[38;2;215;110;215m",       // bright magenta
+            "function" => "\x1b[38;2;255;215;75m",    // gold yellow
+            "property" => "\x1b[38;2;160;230;100m",   // bright green
+            "event" => "\x1b[38;2;255;100;100m",      // bright red
+            "delegate" => "\x1b[38;2;215;110;215m",
+            "namespace" => "\x1b[38;2;180;180;180m",  // light gray (readable on dark + light bg)
+            "import" => "\x1b[38;2;180;180;180m",
+            _ => "",
+        },
+        ColorPalette.Color256 => kind switch
+        {
+            "class" => "\x1b[38;5;81m",     // cyan
+            "struct" => "\x1b[38;5;81m",
+            "interface" => "\x1b[38;5;75m",  // blue
+            "enum" => "\x1b[38;5;213m",      // magenta
+            "function" => "\x1b[38;5;221m",  // gold
+            "property" => "\x1b[38;5;120m",  // green
+            "event" => "\x1b[38;5;203m",     // salmon red
+            "delegate" => "\x1b[38;5;213m",
+            "namespace" => "\x1b[38;5;245m", // medium gray (not as dim as 90m)
+            "import" => "\x1b[38;5;245m",
+            _ => "",
+        },
+        _ => kind switch
+        {
+            "class" => "\x1b[36m",      // cyan / シアン
+            "struct" => "\x1b[36m",     // cyan / シアン
+            "interface" => "\x1b[34m",  // blue / 青
+            "enum" => "\x1b[35m",       // magenta / マゼンタ
+            "function" => "\x1b[33m",   // yellow / 黄
+            "property" => "\x1b[32m",   // green / 緑
+            "event" => "\x1b[31m",      // red / 赤
+            "delegate" => "\x1b[35m",   // magenta / マゼンタ
+            "namespace" => "\x1b[37m",  // white (instead of dim 90m) / 白（dim 回避）
+            "import" => "\x1b[37m",     // white (instead of dim 90m) / 白（dim 回避）
+            _ => "",
+        },
+    };
 
     internal static bool ShouldUseInteractiveConsole()
     {

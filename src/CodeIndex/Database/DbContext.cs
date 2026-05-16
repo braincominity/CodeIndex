@@ -19,6 +19,7 @@ public class DbContext : IDisposable
     private readonly SqliteConnection _connection;
     private readonly bool _isReadOnly;
     private DbSchemaCache? _schemaCache;
+    private PreparedCommandCache? _preparedCommands;
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -39,6 +40,14 @@ public class DbContext : IDisposable
     /// the cache automatically.
     /// </summary>
     public void RefreshSchemaCache() => _schemaCache?.Refresh();
+
+    /// <summary>
+    /// Lazily-initialized LRU cache of prepared <see cref="SqliteCommand"/> instances shared
+    /// by hot read/write paths (e.g. <see cref="DbWriter"/>'s per-file lookups). Issue #1566.
+    /// ホットパス共有の prepared command LRU キャッシュ。Issue #1566.
+    /// </summary>
+    internal PreparedCommandCache PreparedCommands
+        => _preparedCommands ??= new PreparedCommandCache(_connection);
 
     public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
@@ -1137,6 +1146,12 @@ public class DbContext : IDisposable
 
     public void Dispose()
     {
+        // Dispose cached prepared statements before closing the connection so each
+        // SqliteCommand's finalizer does not race the connection teardown.
+        // connection を閉じる前にキャッシュ済み command を dispose し、finalizer と
+        // connection teardown の競合を防ぐ。
+        _preparedCommands?.Dispose();
+        _preparedCommands = null;
         _connection.Dispose();
     }
 }

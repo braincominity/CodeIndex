@@ -38,6 +38,7 @@ public partial class DbReader
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly DbSchemaCache? _schemaCache;
+    private readonly CancellationToken _cancellation;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _referenceColumns;
@@ -255,7 +256,7 @@ public partial class DbReader
     }
 
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
-        : this(connection, isReadOnly, schemaCache: null)
+        : this(connection, isReadOnly, schemaCache: null, cancellation: CancellationToken.None)
     {
     }
 
@@ -268,11 +269,43 @@ public partial class DbReader
     public DbReader(DbContext context)
         : this(context?.Connection ?? throw new ArgumentNullException(nameof(context)),
                context.IsReadOnly,
-               context.SchemaCache)
+               context.SchemaCache,
+               CancellationToken.None)
+    {
+    }
+
+    /// <summary>
+    /// Combined constructor for callers that need both the connection-scoped
+    /// schema cache (#1565) and per-request cancellation (#1567) — i.e. the
+    /// MCP `WithDbReader` hot path that runs against the shared
+    /// <see cref="DbContext"/> while a client request is in flight.
+    /// </summary>
+    public DbReader(DbContext context, CancellationToken cancellation)
+        : this(context?.Connection ?? throw new ArgumentNullException(nameof(context)),
+               context.IsReadOnly,
+               context.SchemaCache,
+               cancellation)
     {
     }
 
     public DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache)
+        : this(connection, isReadOnly, schemaCache, CancellationToken.None)
+    {
+    }
+
+    // Per-request CancellationToken plumbed in from MCP / CLI callers so long-running
+    // queries can be cancelled when the client disconnects or the server is shutting
+    // down (#1567). Defaults to `CancellationToken.None` so existing call sites stay
+    // source-compatible — only the MCP server wires a live token today.
+    // MCP / CLI 呼び出し側から渡される per-request CancellationToken。クライアント切断や
+    // サーバー shutdown 時にクエリを中断できるようにする (#1567)。既定値 None で既存の
+    // 呼び出し元はそのまま動く。
+    public DbReader(SqliteConnection connection, bool isReadOnly, CancellationToken cancellation)
+        : this(connection, isReadOnly, schemaCache: null, cancellation: cancellation)
+    {
+    }
+
+    public DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache, CancellationToken cancellation)
     {
         _conn = connection;
         // SQL user functions are registered once per connection by `DbContext` when the
@@ -282,6 +315,7 @@ public partial class DbReader
         // ここでの再登録は不要 (#1564)。
         _isReadOnly = isReadOnly;
         _schemaCache = schemaCache;
+        _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
@@ -343,6 +377,23 @@ public partial class DbReader
         _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
     }
+
+    /// <summary>
+    /// Per-request CancellationToken plumbed in by the caller (e.g. the MCP server). Methods
+    /// that loop over SQLite rows can check this between batches to bail out promptly on
+    /// shutdown or client disconnect (#1567).
+    /// 呼び出し側から渡される per-request CancellationToken (#1567)。SQLite 行を反復処理する
+    /// メソッドはバッチ境界でこれを参照し、shutdown / 切断時に速やかに中断する。
+    /// </summary>
+    public CancellationToken Cancellation => _cancellation;
+
+    /// <summary>
+    /// Convenience wrapper for <c>_cancellation.ThrowIfCancellationRequested()</c> so partial
+    /// classes do not need to reach into the private field (#1567).
+    /// `_cancellation.ThrowIfCancellationRequested()` の薄いラッパ (#1567)。partial class から
+    /// プライベートフィールドに触れずに済むようにする。
+    /// </summary>
+    public void ThrowIfCancellationRequested() => _cancellation.ThrowIfCancellationRequested();
 
     private static (bool Newer, string? Reason) DetectNewerThanReaderContracts(SqliteConnection conn, int userVersion)
     {

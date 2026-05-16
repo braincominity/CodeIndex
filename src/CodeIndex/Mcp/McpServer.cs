@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -27,7 +28,29 @@ public partial class McpServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
+    private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
+    // Bounds the number of MCP tool calls in flight at once so an unbounded burst of
+    // requests cannot exhaust memory or wedge the SQLite reader lock (#1567). The
+    // stdio / HTTP loop today only ever has one frame in flight, but the gate
+    // documents the contract and is the seam future async dispatch will use.
+    // 同時 in-flight ツール呼び出しの上限 (#1567)。stdio / HTTP ループは現状単一スレッド
+    // だが、将来の並列ディスパッチに備えて契約を明示し、testable な seam を残す。
+    private readonly SemaphoreSlim _concurrencyGate;
+    // Server-wide shutdown signal. Cancelled by `notifications/shutdown` (and the
+    // `notifications/exit` alias) so the read loop unblocks and exits cleanly even
+    // when the transport itself has not closed (#1567).
+    // サーバー全体の shutdown シグナル。`notifications/shutdown` (および
+    // `notifications/exit`) を受けると cancel され、トランスポート未クローズでも
+    // 読み取りループが unblock して正常終了する (#1567)。
+    private readonly CancellationTokenSource _shutdownCts = new();
+    // Token observed by the currently executing tool call. Set just before
+    // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
+    // cancellation token to `DbReader` for SQLite work (#1567).
+    // 現在実行中のツール呼び出しが観測するトークン。`ProcessFrame` 実行直前にセットし、
+    // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
+    // を渡せるようにするため (#1567)。
+    private CancellationToken _currentRequestToken = CancellationToken.None;
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -44,6 +67,19 @@ public partial class McpServer : IDisposable
     // 実行する。書き込みツールは InitializeSchema で同等以上の DDL を流すため、そこでフラグを立てる。
     private bool _sharedDbReadMigrated;
     private bool _disposed;
+    // Per-call MCP audit log (#1562). Null when no `--audit-log` path was supplied. Captured
+    // from the constructor so the AuditLogSink lifecycle (file handle / rotation) is owned by
+    // ProgramRunner, not by every tool dispatch site.
+    // ツール呼び出し監査ログ (#1562)。`--audit-log` 未指定時は null。AuditLogSink のライフサイクル
+    // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
+    private readonly AuditLogSink? _auditLog;
+    // `initialize.clientInfo` echoed into every audit record so the trail can answer
+    // "which client issued this call?" without a second log source. Updated on every
+    // `initialize` so a single-session reconnection picks up the new caller identity.
+    // `initialize.clientInfo` を audit に転写し、別ログを引かなくても呼び出し元を辿れるよう
+    // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
+    private string? _clientName;
+    private string? _clientVersion;
     // Caller identity used to key the per-(tool, caller) rate limiter. Captured from the
     // `clientInfo.name` field of the `initialize` request when the client supplies it, so
     // shared / networked MCP deployments can attribute and throttle individual clients
@@ -93,24 +129,77 @@ public partial class McpServer : IDisposable
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
     // StreamReaderのデフォルト1KBから繰り返し拡張されるのを避けるサイズ。
     private const int StdioBufferSize = 64 * 1024;
+    // Default ceiling on concurrent in-flight tool calls. Matches the issue's suggested
+    // default and is generous enough for typical AI clients without letting a burst of
+    // tool calls wedge the SQLite reader lock or balloon memory (#1567).
+    // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
+    internal const int DefaultMaxConcurrency = 8;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null, null)
+        : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
+    {
+    }
+
+    public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, null, DefaultMaxConcurrency)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, null, toolFilter)
+        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, null, DefaultMaxConcurrency)
     {
     }
 
+    // Legacy internal entry point retained for the existing serializer-injection tests that
+    // do not need a custom authenticator or tool filter.
+    // serializer 注入だけが必要な既存テスト向けの内部互換 entry。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, null)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, null, DefaultMaxConcurrency)
     {
     }
 
-    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, McpToolFilter? toolFilter)
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, AuditLogSink? auditLog)
+        : this(dbPath, version, dbPathExplicit, null, null, null, auditLog, DefaultMaxConcurrency)
     {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, null, DefaultMaxConcurrency)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, DefaultMaxConcurrency)
+    {
+    }
+
+    // Concurrency-cap injection overload preserved from #1567. Maps to the master constructor
+    // with a null AuditLogSink so the maxConcurrency tests do not need to thread an audit log.
+    // #1567 由来の maxConcurrency 注入用 overload。auditLog は null 固定で master に流す。
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, int maxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, maxConcurrency)
+    {
+    }
+
+    // Combined entry point used by ProgramRunner so a single MCP session can carry both an
+    // optional authenticator (#1559) and an optional audit log (#1562). Other combinations
+    // already have dedicated convenience overloads above.
+    // ProgramRunner が authenticator (#1559) と audit log (#1562) を同時に注入できる
+    // 経路。それ以外の組み合わせは上の個別 overload で済む。
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator? authenticator, AuditLogSink? auditLog)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, auditLog, DefaultMaxConcurrency)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, DefaultMaxConcurrency)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog, int maxConcurrency)
+    {
+        if (maxConcurrency < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxConcurrency), maxConcurrency, "MCP concurrency cap must be at least 1.");
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
         _version = version;
@@ -121,8 +210,12 @@ public partial class McpServer : IDisposable
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
+        _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
+        _auditLog = auditLog;
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
+        _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        MaxConcurrency = maxConcurrency;
     }
 
     /// <summary>
@@ -157,6 +250,13 @@ public partial class McpServer : IDisposable
     internal string CurrentCaller => _caller;
 
     /// <summary>
+    /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
+    /// the bound can be verified without poking at internals.
+    /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
+    /// </summary>
+    internal int MaxConcurrency { get; }
+
+    /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
     /// <see cref="RunAsync(IMcpTransport, CancellationToken)"/> so existing callers stay
     /// source-compatible after the #1558 transport refactor.
@@ -181,9 +281,18 @@ public partial class McpServer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(transport);
 
+        // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
+        // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
+        // The MCP spec leaves shutdown to the transport, but real deployments need a wire-level
+        // way to drain in-flight work without killing the process (#1567).
+        // Ctrl+C 等の外部 token と内部 shutdown signal をリンクし、`notifications/shutdown` でも
+        // pending な `ReadFrameAsync` を unblock できるようにする (#1567)。
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        var loopToken = linkedCts.Token;
+
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint})");
+        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         while (_running)
         {
@@ -195,14 +304,45 @@ public partial class McpServer : IDisposable
             // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
             try
             {
-                var frame = await transport.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+                var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
                 if (frame == null)
                     break; // transport closed / トランスポートが閉じられた
 
-                var response = ProcessFrame(frame);
-                await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
+                // Acquire the concurrency gate before doing any work so a future async dispatch
+                // mode (multiple frames in flight) can never run more than `MaxConcurrency` tool
+                // calls at once. Today the loop is sequential so the gate is effectively a no-op
+                // at runtime, but it documents the contract and gives tests a verifiable bound
+                // (#1567).
+                // 並列ディスパッチ時に in-flight 数が `MaxConcurrency` を超えないよう、ProcessFrame
+                // の手前で gate を取得する (#1567)。
+                await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
+                string? response;
+                try
+                {
+                    // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
+                    // off can observe shutdown / client-disconnect cancellation through
+                    // `DbReader.Cancellation` (#1567).
+                    // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
+                    // token を `WithDbReader` に渡す (#1567)。
+                    _currentRequestToken = loopToken;
+                    response = ProcessFrame(frame);
+                }
+                finally
+                {
+                    _currentRequestToken = CancellationToken.None;
+                    _concurrencyGate.Release();
+                }
+
+                await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+
+                // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
+                // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
+                // of a server that has been asked to stop.
+                // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
+                if (!_running)
+                    break;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
             {
                 break;
             }
@@ -291,7 +431,14 @@ public partial class McpServer : IDisposable
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object");
 
-        var method = obj["method"]?.GetValue<string>();
+        // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
+        // throw before the auth gate runs, otherwise a token-protected server would surface
+        // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
+        // "Unauthorized"`, leaking that the request reached dispatch internals (#1559).
+        // `method` は防御的に取り出す。`"method":42` のような非文字列が GetValue<string>()
+        // で例外を投げると、認証ゲート前に -32603 が返ってしまい、未認証呼び出し元に dispatch
+        // 内部まで届いた事実が漏れる (#1559)。
+        var method = TryGetStringMember(obj, "method");
         if (!TryGetRequestId(obj, out var hasId, out var id))
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null");
 
@@ -299,11 +446,53 @@ public partial class McpServer : IDisposable
         if (method == "notifications/initialized" || method == "notifications/cancelled")
             return null;
 
+        // Graceful shutdown via JSON-RPC notification (#1567). Without this, the only way to
+        // stop a long-lived `cdidx mcp` server was to close the transport (stdin EOF / HTTP
+        // listener stop), which races with in-flight work and forces clients to send SIGINT.
+        // Treating both `notifications/shutdown` (the MCP spec-aligned name) and the legacy
+        // LSP-style `notifications/exit` alias as graceful-stop signals lets clients drain the
+        // current request and exit cleanly. Cancelling `_shutdownCts` unblocks any pending
+        // `ReadFrameAsync` in the loop.
+        // JSON-RPC 通知による graceful shutdown (#1567)。`_shutdownCts.Cancel()` でループ側の
+        // `ReadFrameAsync` を unblock し、`_running = false` で次のイテレーション開始を抑止する。
+        if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
+            || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
+            _running = false;
+            try
+            {
+                if (!_shutdownCts.IsCancellationRequested)
+                    _shutdownCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Server is already disposing — nothing more to cancel.
+                // dispose 中なので追加 cancel は不要。
+            }
+            return null;
+        }
+
         if (!hasId)
         {
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine(BuildUnknownNotificationLog(method));
             return null;
+        }
+
+        // Authenticate every responded request before dispatch so the auth contract is
+        // uniform across `initialize`, `tools/list`, `tools/call`, and `ping`. Run auth even
+        // when `method` is missing or malformed so a token-protected server cannot be probed
+        // for method-shape errors without credentials (#1559). Notifications already
+        // short-circuited above because they produce no response and cannot leak an error code.
+        // すべての応答対象リクエストを dispatch 前に認証する。`method` が欠落・不正でも
+        // 認証は走らせ、トークン保護下のサーバーで未認証呼び出し元に method 形式エラーを
+        // 漏らさない (#1559)。通知は応答が無いため上のブランチで先に return している。
+        var authResult = _authenticator.Authenticate(request);
+        if (!authResult.IsAuthenticated)
+        {
+            Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
+            return CreateErrorResponse(hasId: true, id: id, code: -32001, message: "Unauthorized");
         }
 
         if (method == null)
@@ -321,12 +510,78 @@ public partial class McpServer : IDisposable
         };
     }
 
+    // Safe accessor that returns null instead of throwing when `name` is missing OR present
+    // with a non-string value. JsonNode's `GetValue<string>()` throws InvalidOperationException
+    // on non-string scalars, which would bubble out of HandleMessage and turn into -32603
+    // before the auth gate runs.
+    // `name` が無いケースと文字列以外で存在するケースのどちらでも null を返す安全アクセサ。
+    // JsonNode の `GetValue<string>()` は非文字列で例外を投げ、認証ゲート前に -32603 化して
+    // しまう。
+    private static string? TryGetStringMember(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        try
+        {
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Cap on the logged `method` label. Long enough for every spec method (`notifications/cancelled`
+    // is 23 chars) and any plausible client extension, short enough to keep one log line readable.
+    // ログ出力する `method` の長さ上限。仕様メソッド全てと拡張も収まる長さで、1 行を読みやすく保つ。
+    private const int LoggedMethodMaxLength = 64;
+
+    // Strip caller-controlled control characters from `method` and clamp its length before
+    // interpolating into a stderr log line. Prevents log forging: a malicious client could
+    // otherwise send `"method":"evil\n[forged]"` and split the diagnostic across two lines
+    // (#1559).
+    // stderr 行に method を埋め込む前に制御文字を除去し、長さを切る。これをしないと
+    // `"method":"evil\n[forged]"` で診断ログを 2 行に分割するログ偽造ができてしまう (#1559)。
+    internal static string SanitizeMethodForLog(string? method)
+    {
+        if (string.IsNullOrEmpty(method))
+            return "(none)";
+        var sb = new StringBuilder(Math.Min(method.Length, LoggedMethodMaxLength));
+        var truncated = false;
+        foreach (var ch in method)
+        {
+            if (sb.Length >= LoggedMethodMaxLength)
+            {
+                truncated = true;
+                break;
+            }
+            if (ch < 0x20 || ch == 0x7F)
+                sb.Append('?');
+            else
+                sb.Append(ch);
+        }
+        if (truncated)
+            sb.Append('…');
+        return sb.ToString();
+    }
+
+    // Stderr log for an auth failure. Mirrors the #1530 sanitization pattern: keep the
+    // wire response generic and put the detail on stderr for local diagnostics. The method
+    // label is run through SanitizeMethodForLog because it is caller-controlled and reaches
+    // stderr before any allow-list check (#1559).
+    // 認証失敗の stderr ログ。#1530 のサニタイズ方針に倣い、ワイヤ応答は一般化したまま
+    // 詳細だけを stderr に残す。method は認証前に通るため SanitizeMethodForLog で
+    // 制御文字除去と長さ切詰めを行う (#1559)。
+    internal static string BuildAuthFailureLog(string? method, string? reason) =>
+        $"[cdidx-mcp] Auth failed for method {SanitizeMethodForLog(method)}: {reason ?? "(unspecified)"}. Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token on each request.";
+
     /// <summary>
     /// Handle the initialize handshake.
     /// initializeハンドシェイクを処理。
     /// </summary>
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
+        CaptureClientInfo(_params);
         // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
         // identity, but reject re-initialize attempts that swap one named identity for
         // another. Otherwise a single networked session could reset its rate-limit bucket
@@ -396,6 +651,40 @@ public partial class McpServer : IDisposable
     /// それをそのまま返し、未指定なら既定バージョンを返し、重なりが無い場合は構造化エラー
     /// を返す（黙ってダウングレードしないことでクライアントが誤った wire format で進むのを防ぐ）。
     /// </summary>
+    /// <summary>
+    /// Capture `initialize.clientInfo.{name,version}` onto the per-session caller fields so
+    /// audit records (#1562) can identify the requester without a parallel log source. Best-
+    /// effort: malformed shapes leave the fields unset rather than failing the handshake.
+    /// `initialize.clientInfo.{name,version}` をセッションの caller フィールドに記録し、
+    /// audit ログ (#1562) で別ソースを引かなくても呼び出し元を辿れるようにする。形が壊れていても
+    /// handshake は失敗させない（ベストエフォート）。
+    /// </summary>
+    private void CaptureClientInfo(JsonNode? initializeParams)
+    {
+        // Every initialize reseats caller identity so a reconnect that omits or malforms
+        // clientInfo cannot inherit the previous client's name/version. Leaving the stale
+        // values would mis-attribute later audit records to the wrong caller (#1562 review).
+        // initialize ごとに caller を再設定する。clientInfo を省略 / 不正型で送ってきた
+        // 再接続が前回のクライアント名/version を引き継がないようにするため。
+        _clientName = null;
+        _clientVersion = null;
+        if (initializeParams is not JsonObject obj)
+            return;
+        if (obj["clientInfo"] is not JsonObject info)
+            return;
+        _clientName = TryReadStringMember(info, "name");
+        _clientVersion = TryReadStringMember(info, "version");
+    }
+
+    private static string? TryReadStringMember(JsonObject obj, string key)
+    {
+        if (!obj.TryGetPropertyValue(key, out var node))
+            return null;
+        if (node is JsonValue value && value.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s))
+            return s;
+        return null;
+    }
+
     /// <summary>
     /// Resolve the caller identity used by the per-(tool, caller) rate limiter from an
     /// `initialize` request's `clientInfo`. Falls back to `"unknown"` when the client did
@@ -543,7 +832,14 @@ public partial class McpServer : IDisposable
         var args = callParams?["arguments"];
 
         if (toolName == null)
-            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
+        {
+            var missingNameResponse = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
+            // Even malformed tool-call requests are audited so a misbehaving client cannot
+            // hide its activity by sending invalid params on every call (#1562).
+            // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
+            TryEmitAudit("(missing)", id, args, missingNameResponse, DateTimeOffset.UtcNow, 0.0, errorType: "missing_tool_name");
+            return missingNameResponse;
+        }
 
         // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
         // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
@@ -553,23 +849,41 @@ public partial class McpServer : IDisposable
         // を返し、クライアントが構造化 code で判定できるようにする。サーバーに無い名前は
         // 既存の `-32602 Unknown tool` 経路に流し、オペレータによる無効化と typo を区別する。
         if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
-            return CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}");
+        {
+            var disabledResponse = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}");
+            // Audit operator-disabled attempts so the policy can be reviewed after the fact;
+            // skipping them would let a deny-listed caller silently retry without trace
+            // even though missing/unknown tools are captured (#1562 review).
+            // オペレータ拒否された呼び出しも audit する。missing/unknown は記録されるのに
+            // disabled だけ消えると、deny リストの効果を後から検証できなくなる。
+            TryEmitAudit(toolName, id, args, disabledResponse, DateTimeOffset.UtcNow, 0.0, errorType: "tool_disabled");
+            return disabledResponse;
+        }
 
         Database.DbDebug.ResetContext();
         var metricsStartedAt = DateTimeOffset.UtcNow;
         var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
         string? metricsError = null;
+        JsonNode response;
         try
         {
+            // Per-(tool, caller) rate limiter check (#1560). Disabled by default; when an
+            // operator opts in via CDIDX_MCP_RATE_LIMIT_RPS we still keep the assignment-then-
+            // emit pattern so the rate-limit refusal lands in the audit log (#1562) instead of
+            // disappearing into a direct return.
+            // (tool, caller) ごとのレート制限 (#1560)。既定は無効。opt-in 時もアサインしてから
+            // 監査出力する構造を保ち、refusal が audit log (#1562) から消えないようにする。
             var decision = RateLimiter.TryAcquire(toolName, _caller);
             if (!decision.Allowed)
             {
                 metricsError = "rate_limited";
                 Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
-                return CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
+                response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
             }
+            else
+            {
+                response = toolName switch
 
-            return toolName switch
             {
                 "search" => ExecuteSearch(id, args),
                 "definition" => ExecuteDefinition(id, args),
@@ -597,6 +911,7 @@ public partial class McpServer : IDisposable
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
                 _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}"),
             };
+            }
         }
         catch (Exception ex)
         {
@@ -613,7 +928,7 @@ public partial class McpServer : IDisposable
             Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
             metricsError = ex.GetType().Name;
-            return CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex));
+            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex));
         }
         finally
         {
@@ -630,6 +945,166 @@ public partial class McpServer : IDisposable
                     Language: TryReadStringArg(args, "language") ?? TryReadStringArg(args, "lang"),
                     Error: metricsError));
             }
+        }
+
+        // Audit observes both the wire response (for result_count / error_code / isError)
+        // and any sanitized exception type, so emission happens after the metrics finally
+        // block. Stop the stopwatch idempotently — the metrics path may have already
+        // stopped it. TryEmitAudit is best-effort internally (#1562).
+        // audit はワイヤーレスポンスと例外型の両方を参照するため metrics finally の後で
+        // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
+        metricsStopwatch.Stop();
+        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
+        return response;
+    }
+
+    /// <summary>
+    /// Emit a single audit record for the just-executed tool call. Inspects the wire
+    /// response to derive the result count and error code so the audit trail matches what
+    /// the client actually observed (#1562). Failures are swallowed because audit emission
+    /// must never break the underlying tool call.
+    /// 直前に実行したツール呼び出しを 1 レコード分監査出力する。クライアントが実際に観測する
+    /// 値と一致させるため、wire response から result count / error code を抽出する (#1562)。
+    /// audit 失敗で本体ツール呼び出しを壊さないようベストエフォート化する。
+    /// </summary>
+    private void TryEmitAudit(string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    {
+        if (_auditLog is null)
+            return;
+
+        try
+        {
+            var (errorCode, observedErrorType) = ExtractErrorCode(response);
+            var resultCount = ExtractResultCount(response);
+            var (argKeys, argLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var evt = new AuditLogSink.AuditEvent(
+                Timestamp: startedAt,
+                Tool: toolName,
+                CallerName: _clientName,
+                CallerVersion: _clientVersion,
+                RequestId: SerializeRequestId(id),
+                ArgKeys: argKeys,
+                ArgLengths: argLengths,
+                ArgValues: argValuesEcho,
+                ResultCount: resultCount,
+                ElapsedMs: elapsedMs,
+                ErrorCode: errorCode,
+                ErrorType: errorType ?? observedErrorType);
+            _auditLog.Record(evt);
+        }
+        catch
+        {
+            // Best-effort: an audit failure must not break the tool call.
+            // ベストエフォート: audit 失敗で本体ツール呼び出しを壊さない。
+        }
+    }
+
+    /// <summary>
+    /// Translate the wire response into `(error_code, error_type)` for the audit record.
+    /// 0 means success, positive means a tool-level error (isError=true), and negative is
+    /// the verbatim JSON-RPC error code (e.g. -32602 invalid params).
+    /// レスポンスを audit 用の `(error_code, error_type)` に変換する。0=成功、正値=
+    /// tool エラー (isError=true)、負値=JSON-RPC エラーコード（例: -32602）。
+    /// </summary>
+    internal static (int Code, string? Type) ExtractErrorCode(JsonNode response)
+    {
+        if (response is not JsonObject obj)
+            return (0, null);
+        if (obj.TryGetPropertyValue("error", out var errorNode) && errorNode is JsonObject errorObj)
+        {
+            var code = -32603;
+            if (errorObj.TryGetPropertyValue("code", out var codeNode) && codeNode is JsonValue codeValue
+                && codeValue.TryGetValue<int>(out var parsed))
+                code = parsed;
+            return (code, "jsonrpc_error");
+        }
+        if (obj.TryGetPropertyValue("result", out var resultNode) && resultNode is JsonObject resultObj)
+        {
+            if (resultObj.TryGetPropertyValue("isError", out var isErrorNode)
+                && isErrorNode is JsonValue isErrorValue
+                && isErrorValue.TryGetValue<bool>(out var isError)
+                && isError)
+                return (1, "tool_error");
+        }
+        return (0, null);
+    }
+
+    /// <summary>
+    /// Extract the result count from a successful tool response. Prefers
+    /// `structuredContent.count`, falls back to the length of `structuredContent.results`,
+    /// and returns null when neither shape is present (e.g. ping). Tool errors and JSON-RPC
+    /// errors return null because there is no meaningful result-set count for those cases.
+    /// 成功レスポンスから result count を抽出する。`structuredContent.count` を優先、
+    /// `structuredContent.results` の長さに fallback。どちらも無い場合（例: ping）と
+    /// tool/JSON-RPC エラー時は null を返す。
+    /// </summary>
+    internal static int? ExtractResultCount(JsonNode response)
+    {
+        if (response is not JsonObject obj)
+            return null;
+        if (obj["result"] is not JsonObject result)
+            return null;
+        if (result["isError"] is JsonValue isErrorValue
+            && isErrorValue.TryGetValue<bool>(out var isError) && isError)
+            return null;
+        if (result["structuredContent"] is not JsonObject structured)
+            return null;
+        if (structured["count"] is JsonValue countValue && countValue.TryGetValue<int>(out var count))
+            return count;
+        if (structured["results"] is JsonArray results)
+            return results.Count;
+        return null;
+    }
+
+    /// <summary>
+    /// Build the `(arg_keys, arg_lengths, arg_values?)` audit triple. Values are echoed
+    /// only when the operator has opted in via `--audit-log-include-values`; otherwise we
+    /// keep keys + per-key length so AI argument shapes can be reconstructed without
+    /// persisting query bodies that may contain sensitive substrings (#1562).
+    /// audit 用の `(arg_keys, arg_lengths, arg_values?)` を組み立てる。値は
+    /// `--audit-log-include-values` がオンの場合のみ転写し、それ以外はキーと長さだけ残す
+    /// （secret 風の検索クエリを取り込まないため）。
+    /// </summary>
+    internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, JsonNode? ValuesEcho)
+        SanitizeArgs(JsonNode? args, bool includeValues)
+    {
+        if (args is not JsonObject argsObj)
+            return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), null);
+
+        var keys = new List<string>(argsObj.Count);
+        var lengths = new List<KeyValuePair<string, int>>(argsObj.Count);
+        foreach (var (key, value) in argsObj)
+        {
+            keys.Add(key);
+            lengths.Add(new KeyValuePair<string, int>(key, AuditLogSink.MeasureArgLength(value)));
+        }
+
+        JsonNode? echo = null;
+        if (includeValues)
+        {
+            try
+            {
+                echo = argsObj.DeepClone();
+            }
+            catch
+            {
+                echo = null;
+            }
+        }
+        return (keys, lengths, echo);
+    }
+
+    private static string? SerializeRequestId(JsonNode? id)
+    {
+        if (id is null)
+            return null;
+        try
+        {
+            return id.ToJsonString();
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -723,9 +1198,18 @@ public partial class McpServer : IDisposable
             _sharedDbReadMigrated = true;
         }
         // Reuse the connection-scoped schema cache so each MCP tool call no longer
-        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565).
-        // MCP ツール呼び出しごとの schema 再走査を排除する (issue #1565)。
-        var reader = new DbReader(db);
+        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
+        // and hand the per-request cancellation token to the reader so SQLite work
+        // the tool kicks off can observe shutdown / client-disconnect cancellation
+        // (#1567). The token is `CancellationToken.None` outside an in-flight request,
+        // preserving the existing behaviour for ad-hoc callers like tests that drive
+        // `WithDbReader` through internals.
+        // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
+        // per-request cancellation token を reader に渡して SQLite 作業が
+        // shutdown / 切断を観測できるようにする (#1567)。
+        var requestToken = _currentRequestToken;
+        requestToken.ThrowIfCancellationRequested();
+        var reader = new DbReader(db, requestToken);
         return action(reader);
     }
 
@@ -770,6 +1254,17 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // already disposed / 既に dispose 済み
+        }
+        _shutdownCts.Dispose();
+        _concurrencyGate.Dispose();
         GC.SuppressFinalize(this);
     }
 

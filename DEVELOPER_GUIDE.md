@@ -12,6 +12,25 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+### NuGet lock files
+
+`Directory.Build.props` sets `RestorePackagesWithLockFile=true`, so every project under this solution writes a `packages.lock.json` next to its `.csproj`. The lock file pins exact resolved versions and `contentHash` for every direct **and transitive** package, including the native-bearing `SQLitePCLRaw.bundle_e_sqlite3` that ships under `Microsoft.Data.Sqlite`. This keeps builds reproducible across machines, CI lanes, and release artifacts, and turns a silent transitive bump (or downgrade attack) into a loud, build-breaking diff.
+
+CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
+
+The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
+
+When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
+
+```bash
+dotnet restore CodeIndex.sln --force-evaluate
+git status --short -- '**/packages.lock.json'
+```
+
+If CI fails with `NU1004 The packages lock file is inconsistent with the project dependencies`, that is exactly this signal: rerun `dotnet restore --force-evaluate` locally, review the lock-file diff, and commit it. Do **not** delete the lock files to "make CI pass" — that re-opens the supply-chain hole this contract closes.
+
+The lock files for projects with zero direct `PackageReference` entries (e.g. `tools/CodeIndex.Changelog/`) intentionally contain an empty `net8.0: {}` dependency map. That is normal and proves the project is participating in the locked-mode contract.
+
 ## Architecture
 
 | Area | Key files | Responsibility |
@@ -1121,6 +1140,23 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   MCP spec bumps visible as actionable handshake failures instead of
   silently desynced wire formats. Bump the array deliberately and keep
   `ProtocolVersion` aligned with its first entry.
+- **Authentication middleware** (#1559). `McpServer` runs every parsed
+  JSON-RPC request through an `IMcpAuthenticator` *after* the method is
+  extracted but *before* dispatch. The default `LocalStdioAuthenticator`
+  is permissive (matches the historical stdio behaviour and tags every
+  caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
+  `TokenMcpAuthenticator`, which requires every responded request to
+  carry a matching `params.auth.token` and compares it in constant time
+  via `CryptographicOperations.FixedTimeEquals`. Failures uniformly
+  return JSON-RPC `-32001 "Unauthorized"` (per #1530 sanitization — the
+  wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
+  emits the detailed reason to stderr. Notifications
+  (`notifications/initialized`, `notifications/cancelled`) short-circuit
+  *before* the gate because they produce no response and cannot signal
+  an error code. The middleware is the seam for future transports — a
+  networked listener supplies a different `IMcpAuthenticator` while the
+  `McpCallerIdentity` shape (`Source` + `Subject`) stays stable for the
+  audit log (#1562).
 
 Because MCP uses a distinct serialization strategy, it is the most
 robust smoke test for "is the binary runnable at all?" — it stresses
@@ -1245,6 +1281,22 @@ bootstrap prompt, the smoke tests, and this section exist so that any
 regression in the user-facing install flow is caught by the next person
 who opens a cloud session, not by a real user after release.
 
+## MCP audit log emission
+
+`AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) is the opt-in per-MCP-server JSONL audit (#1562). It is owned by `ProgramRunner.RunMcp` and threaded into `McpServer` through an internal constructor overload; no other dispatch site participates. Each `tools/call` produces exactly one record — including malformed requests (`tool="(missing)"`) and unknown tools (`error_code=-32602`) — so a misbehaving client cannot hide its activity by varying the request shape.
+
+Contract guarantees that downstream consumers can rely on:
+
+- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `arg_values`, `result_count`, `error` are emitted only when non-null; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
+- **Error code semantics.** `0` = success, `1` = MCP tool error (`isError: true`), negative = the verbatim JSON-RPC error code (e.g. `-32602` for invalid params, `-32603` for internal error). The companion `error` string is one of `jsonrpc_error`, `tool_error`, `missing_tool_name`, or the sanitized exception type name (`McpServer.BuildSanitizedToolErrorMessage` keeps `ex.Message` out of the wire and out of the audit, #1530).
+- **Result count.** `ExtractResultCount` prefers `structuredContent.count` over `structuredContent.results.length`; tool errors and JSON-RPC errors omit the field. Tools that return no count-shaped payload (e.g. `ping`) leave `result_count` absent rather than emitting `0`.
+- **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a `DeepClone` so later mutation of the request payload cannot retroactively change the audit trail.
+- **Caller identity.** `_clientName` / `_clientVersion` are captured from every `initialize.clientInfo` and overwrite on reconnection within the same session, so a long-running MCP loop with multiple `initialize` handshakes attributes records to the *currently connected* client rather than the first one.
+- **Rotation.** Writes go through an open-append-close cycle so external `tail -F` consumers follow rotations and so the file is closed during the rename. When `_bytesWritten >= MaxBytes`, `RotateLocked` drops `<path>.(RotationKeep-1)` (currently `<path>.2`), cascades surviving slots up by one, and moves `<path>` to `<path>.1`. `RotationKeep = 3`, so `<path>.3` is never created — exercised by `AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow`.
+- **Best effort.** Serialization failures, IO failures, and rotation failures are swallowed (the audit must not crash the underlying tool call). The constructor still fails fast on impossible paths so the operator sees the misconfiguration before any tool dispatch happens.
+
+The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCommandRunner.ParseArgs` and consumes only the audit-specific tokens — `--db` and anything after `--` is left intact so existing escape semantics survive. `--audit-log-include-values` requires `--audit-log <path>` because echoing values into a destination nobody configured would be a silent footgun.
+
 ## Coding conventions
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
@@ -1276,6 +1328,25 @@ dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
+
+### NuGet lock ファイル
+
+`Directory.Build.props` が `RestorePackagesWithLockFile=true` を設定しているため、本ソリューション配下の各プロジェクトは `.csproj` と並んで `packages.lock.json` を出力します。lock ファイルは直接依存と**推移依存**の双方について解決済みバージョンと `contentHash` を固定し、`Microsoft.Data.Sqlite` 配下にネイティブを含めて出荷する `SQLitePCLRaw.bundle_e_sqlite3` まで対象に含めます。これによりマシン・CI lane・release アーティファクトの再現性が保たれ、推移依存の暗黙バンプ（あるいは downgrade attack）が build を壊す差分として顕在化します。
+
+CI（`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`）はソリューションの restore を `--locked-mode` 付きで実行し、commit 済み lock ファイルと解決結果に差分があるとアーティファクトに混入する前にビルドが失敗します。ローカル開発の通常 restore は従来どおりで、`--locked-mode` は CI でのみ強制されます。
+
+release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet パッケージング）には意図的に `RestoreLockedMode=true` を設定していません。これらは runtime-specific な restore を走らせ、ソリューション restore 時には存在しなかった lock エントリ（`net8.0/<rid>` 等の runtime section や trimming 用の `Microsoft.NET.ILLink.Tasks`）を正当に追加します。それでも `Directory.Build.props` の `RestorePackagesWithLockFile=true` により、その実行マシン上の全 restore は lock ファイル経由で解決されるため版は固定されたままです。`Microsoft.Data.Sqlite` および `SQLitePCLRaw.*` グラフに対する supply-chain 保証は、先行する solution-level の locked restore で担保されます。
+
+依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
+
+```bash
+dotnet restore CodeIndex.sln --force-evaluate
+git status --short -- '**/packages.lock.json'
+```
+
+CI で `NU1004 The packages lock file is inconsistent with the project dependencies` が出る場合は、まさに本契約が発するシグナルです。ローカルで `dotnet restore --force-evaluate` をやり直し、lock ファイルの差分を確認した上で commit してください。CI を通すために lock ファイルを削除してはいけません。それは本契約が塞いだ supply-chain の穴を再び開けます。
+
+直接 `PackageReference` を持たないプロジェクト（例: `tools/CodeIndex.Changelog/`）の lock ファイルは意図的に空の `net8.0: {}` 依存マップを含みます。これは正常な状態で、当該プロジェクトも locked-mode 契約に参加している証拠です。
 
 ## アーキテクチャ
 
@@ -2168,6 +2239,7 @@ sequenceDiagram
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
@@ -2228,6 +2300,22 @@ flowchart TD
 ### なぜこれが重要か
 
 Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
+
+## MCP 監査ログの出力
+
+`AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) は MCP サーバーごとのオプトイン JSONL 監査ログ (#1562)。所有者は `ProgramRunner.RunMcp` で、`McpServer` の internal コンストラクタオーバーロード経由で渡される。ほかの呼び出しサイトは関与しない。`tools/call` ごとに必ず 1 レコード生成し、引数欠落（`tool="(missing)"`) や未知ツール (`error_code=-32602`) も含む — リクエスト形状を変えることで監査から消えるのを防ぐためである。
+
+下流コンシューマが依存できる契約:
+
+- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`arg_values`、`result_count`、`error` は値が non-null のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
+- **エラーコード意味論。** `0`=成功、`1`=MCP ツールエラー (`isError: true`)、負値=JSON-RPC エラーコードそのまま（例: invalid params なら `-32602`、internal error なら `-32603`）。同伴する `error` 文字列は `jsonrpc_error` / `tool_error` / `missing_tool_name` / サニタイズ済み例外型名のいずれか。`McpServer.BuildSanitizedToolErrorMessage` が `ex.Message` をワイヤーと audit から除外している（#1530）。
+- **result count。** `ExtractResultCount` は `structuredContent.count` を優先し、無ければ `structuredContent.results.length`、いずれも無ければ省略する。ツールエラー / JSON-RPC エラー時も省略する（`0` ではなく欠落）。
+- **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できる。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は `DeepClone` で取るので、後段のリクエスト改変が監査記録を遡及的に書き換えることはない。
+- **呼び出し元の特定。** `_clientName` / `_clientVersion` は `initialize.clientInfo` から毎回キャプチャし、同一セッション内で再 `initialize` があれば上書きされる。複数 handshake が走る長寿命 MCP ループでも、*現在接続中の*クライアントに対して記録が紐付く。
+- **ローテーション。** 1 レコードごとに open-append-close する。外部 `tail -F` の追従と rename 時の close-state 維持のため。`_bytesWritten >= MaxBytes` を超えた時点で `RotateLocked` が `<path>.(RotationKeep-1)`（現在は `<path>.2`）を破棄し、生存スロットを 1 つ古い側へ寄せ、`<path>` を `<path>.1` へ移す。`RotationKeep = 3` なので `<path>.3` は決して生成されない（`AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow` で常時検証）。
+- **ベストエフォート。** シリアライズ失敗・IO 失敗・rotation 失敗はすべて握り潰す（監査の失敗で本体ツール呼び出しを壊さない）。一方、構築時の不正パスはコンストラクタが早期失敗させ、ディスパッチ前にオペレーターに気付かせる。
+
+フラグパーサ (`ProgramRunner.TryConsumeAuditLogFlags`) は `QueryCommandRunner.ParseArgs` より前に走り、audit 関連トークンのみを消費する。`--db` と `--` 以降はそのまま残し、既存のエスケープ意味論を保つ。`--audit-log-include-values` は `--audit-log <path>` を必須とする（出力先が設定されていない状況で値を echo する設定をサイレントに許すと、後で「値が記録されているはず」と誤解される footgun になる）。
 
 ## コーディング規約
 

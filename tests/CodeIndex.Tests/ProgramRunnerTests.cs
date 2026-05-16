@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
 
@@ -297,6 +298,123 @@ public class ProgramRunnerTests
         Assert.Contains("Hint:", stderr);
     }
 
+    [Theory]
+    [InlineData(new[] { "--palette=truecolor", "status" }, ColorPalette.Truecolor, new[] { "status" })]
+    [InlineData(new[] { "status", "--palette", "256" }, ColorPalette.Color256, new[] { "status" })]
+    [InlineData(new[] { "search", "--palette=basic", "foo" }, ColorPalette.Basic, new[] { "search", "foo" })]
+    public void TryConsumePaletteFlag_StripsFlagAndSetsPalette(string[] input, ColorPalette expected, string[] expectedKept)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = input;
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(expected, ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(expectedKept, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_NoFlag_ClearsExplicitOverride()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                ConsoleUi.SetColorPalette(ColorPalette.Truecolor);
+                var args = new[] { "status" };
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Null(ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(new[] { "status" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_InvalidValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--palette=fancy" };
+                Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Contains("fancy", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_MissingValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--palette" };
+                Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Contains("requires a value", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_AfterDoubleDash_PreservesQueryEscape()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--", "--palette=truecolor" };
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Null(ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(new[] { "search", "--", "--palette=truecolor" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_InvalidPaletteValue_ReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--palette=fancy", "status"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("invalid --palette value `fancy`", stderr);
+        Assert.Contains("Hint:", stderr);
+    }
+
     [Fact]
     public void Run_Version_HumanOutput_IncludesBuildMetadata()
     {
@@ -470,5 +588,146 @@ public class ProgramRunnerTests
     {
         public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options) =>
             throw new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
+    }
+
+    // --- --audit-log flag parsing (#1562) ---
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_NoFlags_LeavesArgsUntouched()
+    {
+        var args = new[] { "--db", "/tmp/x.db", "--", "foo" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out var error);
+
+        Assert.True(ok);
+        Assert.Equal(string.Empty, error);
+        Assert.Null(options.Path);
+        Assert.False(options.IncludeValues);
+        Assert.Equal(AuditLogSink.DefaultMaxBytes, options.MaxBytes);
+        Assert.Equal(new[] { "--db", "/tmp/x.db", "--", "foo" }, args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_SpaceSeparatedPath_StrippedFromArgs()
+    {
+        var args = new[] { "--audit-log", "/tmp/audit.jsonl", "--db", "/tmp/x.db" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out _);
+
+        Assert.True(ok);
+        Assert.Equal("/tmp/audit.jsonl", options.Path);
+        Assert.Equal(new[] { "--db", "/tmp/x.db" }, args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_EqualsSeparatedPath_StrippedFromArgs()
+    {
+        var args = new[] { "--audit-log=/tmp/audit.jsonl", "--db", "/tmp/x.db" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out _);
+
+        Assert.True(ok);
+        Assert.Equal("/tmp/audit.jsonl", options.Path);
+        Assert.Equal(new[] { "--db", "/tmp/x.db" }, args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_IncludeValues_StrippedFromArgs()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-include-values" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out _);
+
+        Assert.True(ok);
+        Assert.True(options.IncludeValues);
+        Assert.Empty(args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_MaxBytes_SpaceAndEqualsForms()
+    {
+        var argsA = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes", "8192" };
+        Assert.True(ProgramRunner.TryConsumeAuditLogFlags(ref argsA, out var optionsA, out _));
+        Assert.Equal(8192, optionsA.MaxBytes);
+
+        var argsB = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes=16384" };
+        Assert.True(ProgramRunner.TryConsumeAuditLogFlags(ref argsB, out var optionsB, out _));
+        Assert.Equal(16384, optionsB.MaxBytes);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_MissingPath_ReturnsError()
+    {
+        var args = new[] { "--audit-log" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--audit-log requires a path", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_EmptyEqualsPath_ReturnsError()
+    {
+        var args = new[] { "--audit-log=" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("non-empty path", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_IncludeValuesWithoutPath_ReturnsError()
+    {
+        var args = new[] { "--audit-log-include-values" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--audit-log-include-values requires --audit-log", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_MaxBytesBelowMin_ReturnsError()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes", "10" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--audit-log-max-bytes must be an integer", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_NonNumericMaxBytes_ReturnsError()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes=oops" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--audit-log-max-bytes must be an integer", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_PassthroughAfterDoubleDash_PreservesAuditTokens()
+    {
+        // Anything after `--` belongs to the wrapped command and must be left alone.
+        // `--` 以降は後続コマンドに渡るのでパース対象から外す。
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--", "--audit-log-include-values" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out _);
+
+        Assert.True(ok);
+        Assert.False(options.IncludeValues);
+        Assert.Equal(new[] { "--", "--audit-log-include-values" }, args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_DbValueLooksLikeAuditFlag_PreservedAsDbValue()
+    {
+        // Regression for #1562 codex review: `--db <value>` may carry a dash-prefixed
+        // URI/path that happens to share a prefix with an audit flag. The pre-parser
+        // must hand the value through to the strict mcp parser instead of consuming it
+        // as the start of `--audit-log`.
+        // #1562 codex レビュー回帰: `--db --audit-log` などダッシュ始まりの DB 値を
+        // audit-log フラグの先頭と誤認して取り込まないこと。
+        var args = new[] { "--db", "--audit-log" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out var error);
+
+        Assert.True(ok, $"expected success but got error: {error}");
+        Assert.Null(options.Path);
+        Assert.Equal(new[] { "--db", "--audit-log" }, args);
     }
 }
