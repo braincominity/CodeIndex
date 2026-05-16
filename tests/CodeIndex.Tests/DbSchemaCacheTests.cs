@@ -70,27 +70,19 @@ public sealed class DbSchemaCacheTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_ObservesNewColumnAddedOutOfBand()
+    public void Refresh_ForcesReload()
     {
         // Prime the cache.
         var beforeColumns = _db.SchemaCache.GetColumns("files");
-        Assert.DoesNotContain("synthetic_test_column", beforeColumns);
 
-        // Add a column via raw SQL — the cache has no chance to invalidate
-        // automatically because the DDL went directly through the connection.
-        using (var cmd = _db.Connection.CreateCommand())
-        {
-            cmd.CommandText = "ALTER TABLE files ADD COLUMN synthetic_test_column TEXT";
-            cmd.ExecuteNonQuery();
-        }
-
-        // Without Refresh the cache still serves the old set.
-        Assert.DoesNotContain("synthetic_test_column", _db.SchemaCache.GetColumns("files"));
-
+        // Explicit Refresh must drop cached instances even when nothing has
+        // structurally changed, so callers that suspect external mutation can
+        // still force a reload.
         _db.RefreshSchemaCache();
+
         var afterColumns = _db.SchemaCache.GetColumns("files");
-        Assert.Contains("synthetic_test_column", afterColumns);
         Assert.NotSame(beforeColumns, afterColumns);
+        Assert.Equal(beforeColumns, afterColumns);
     }
 
     [Fact]
@@ -135,6 +127,70 @@ public sealed class DbSchemaCacheTests : IDisposable
         var fromCacheAfter = _db.SchemaCache.GetColumns("files");
 
         Assert.Same(fromCacheBefore, fromCacheAfter);
+    }
+
+    [Fact]
+    public void GetColumns_AutoRefreshesWhenSecondConnectionMutatesSchema()
+    {
+        // Simulates the MCP `WithDbReader` scenario flagged by the adversarial
+        // review (#1565): the cache lives on a long-running shared DbContext,
+        // and an external process / second connection (e.g. `cdidx index`)
+        // mutates the schema. Without `PRAGMA schema_version` polling the
+        // cache would serve stale results until the server restarted.
+        var beforeColumns = _db.SchemaCache.GetColumns("files");
+        Assert.DoesNotContain("external_test_column", beforeColumns);
+
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+        using (var external = new SqliteConnection(connectionString))
+        {
+            external.Open();
+            using var cmd = external.CreateCommand();
+            cmd.CommandText = "ALTER TABLE files ADD COLUMN external_test_column TEXT";
+            cmd.ExecuteNonQuery();
+        }
+
+        var afterColumns = _db.SchemaCache.GetColumns("files");
+        Assert.Contains("external_test_column", afterColumns);
+        Assert.NotSame(beforeColumns, afterColumns);
+    }
+
+    [Fact]
+    public void HasTable_AutoRefreshesWhenSecondConnectionAddsTable()
+    {
+        Assert.False(_db.SchemaCache.HasTable("external_test_table"));
+
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+        using (var external = new SqliteConnection(connectionString))
+        {
+            external.Open();
+            using var cmd = external.CreateCommand();
+            cmd.CommandText = "CREATE TABLE external_test_table (id INTEGER PRIMARY KEY)";
+            cmd.ExecuteNonQuery();
+        }
+
+        Assert.True(_db.SchemaCache.HasTable("external_test_table"));
+    }
+
+    [Fact]
+    public void GetIndexes_AutoRefreshesWhenSecondConnectionCreatesIndex()
+    {
+        // Capture the pre-existing index set so the assertion isn't sensitive
+        // to other indexes the schema migration may already have created.
+        var beforeIndexes = _db.SchemaCache.GetIndexes("symbols");
+        Assert.DoesNotContain("idx_external_test_symbols", beforeIndexes);
+
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+        using (var external = new SqliteConnection(connectionString))
+        {
+            external.Open();
+            using var cmd = external.CreateCommand();
+            cmd.CommandText = "CREATE INDEX idx_external_test_symbols ON symbols(name)";
+            cmd.ExecuteNonQuery();
+        }
+
+        var afterIndexes = _db.SchemaCache.GetIndexes("symbols");
+        Assert.Contains("idx_external_test_symbols", afterIndexes);
+        Assert.NotSame(beforeIndexes, afterIndexes);
     }
 
     [Fact]

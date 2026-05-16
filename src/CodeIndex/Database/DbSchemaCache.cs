@@ -12,8 +12,14 @@ namespace CodeIndex.Database;
 /// scan once per session and serves subsequent `DbReader` instances from
 /// memory.
 ///
-/// Migrations (`InitializeSchema`, `TryMigrateForRead`, `DropAll`) call
-/// <see cref="Refresh"/> so cached entries cannot outlive a structural change.
+/// In-process migrations (`InitializeSchema`, `TryMigrateForRead`, `DropAll`)
+/// call <see cref="Refresh"/> directly. To also catch DDL run through a
+/// different connection — for example, a long-running MCP server while
+/// `cdidx index` rebuilds the same DB out of band — every lookup first
+/// consults SQLite's `PRAGMA schema_version`, which is bumped by SQLite on
+/// every schema mutation regardless of which connection issued it. A change
+/// auto-clears the cache before the lookup is served, so the next reader
+/// observes the new shape without restart.
 /// </summary>
 public sealed class DbSchemaCache
 {
@@ -22,6 +28,7 @@ public sealed class DbSchemaCache
     private readonly Dictionary<string, HashSet<string>> _columns = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _tableExists = new(StringComparer.OrdinalIgnoreCase);
+    private long? _lastSchemaVersion;
 
     public DbSchemaCache(SqliteConnection connection)
     {
@@ -32,6 +39,7 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            EnsureFreshUnlocked();
             if (_columns.TryGetValue(tableName, out var cached))
                 return cached;
             var fresh = LoadColumns(_connection, tableName);
@@ -44,6 +52,7 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            EnsureFreshUnlocked();
             if (_indexes.TryGetValue(tableName, out var cached))
                 return cached;
             var fresh = LoadIndexes(_connection, tableName, HasTableUnlocked(tableName));
@@ -56,6 +65,7 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            EnsureFreshUnlocked();
             return HasTableUnlocked(tableName);
         }
     }
@@ -68,10 +78,63 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
-            _columns.Clear();
-            _indexes.Clear();
-            _tableExists.Clear();
+            ClearUnlocked();
         }
+    }
+
+    private void ClearUnlocked()
+    {
+        _columns.Clear();
+        _indexes.Clear();
+        _tableExists.Clear();
+        _lastSchemaVersion = null;
+    }
+
+    /// <summary>
+    /// Detect schema mutations performed through any connection to the same
+    /// database file by comparing `PRAGMA schema_version`. SQLite bumps this
+    /// counter on every CREATE / DROP / ALTER, so a long-lived MCP `DbContext`
+    /// that out-of-process tooling has touched will reload cached entries on
+    /// the next lookup instead of serving stale results until restart.
+    /// </summary>
+    private void EnsureFreshUnlocked()
+    {
+        long current;
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA schema_version";
+            var raw = cmd.ExecuteScalar();
+            current = raw switch
+            {
+                long l => l,
+                int i => i,
+                _ => 0L,
+            };
+        }
+        catch (SqliteException)
+        {
+            // Could not read schema_version (e.g. transient lock during DDL on
+            // another connection). Treat as a forced refresh: drop cache so the
+            // caller's PRAGMA actually re-reads fresh, rather than silently
+            // serving potentially-stale entries.
+            // PRAGMA schema_version 取得に失敗した場合は安全側に倒してキャッシュを破棄する。
+            ClearUnlocked();
+            return;
+        }
+
+        if (_lastSchemaVersion is null)
+        {
+            _lastSchemaVersion = current;
+            return;
+        }
+        if (_lastSchemaVersion.Value == current)
+            return;
+
+        _columns.Clear();
+        _indexes.Clear();
+        _tableExists.Clear();
+        _lastSchemaVersion = current;
     }
 
     private bool HasTableUnlocked(string tableName)
