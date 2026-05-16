@@ -92,6 +92,49 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_WatchFlag_SetsWatch()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--watch"]);
+        Assert.True(options.Watch);
+        Assert.Null(options.WatchDebounceMs);
+    }
+
+    [Fact]
+    public void ParseArgs_NoWatchFlag_DefaultsToFalse()
+    {
+        var options = IndexCommandRunner.ParseArgs(["."]);
+        Assert.False(options.Watch);
+        Assert.Null(options.WatchDebounceMs);
+    }
+
+    [Fact]
+    public void ParseArgs_DebounceFlag_ParsesValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", "250"]);
+        Assert.True(options.Watch);
+        Assert.Equal(250, options.WatchDebounceMs);
+    }
+
+    [Fact]
+    public void ParseArgs_DebounceFlag_InvalidValue_IsIgnored()
+    {
+        var originalErr = Console.Error;
+        using var stderr = new StringWriter();
+        try
+        {
+            Console.SetError(stderr);
+            var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", "not-a-number"]);
+            Assert.True(options.Watch);
+            Assert.Null(options.WatchDebounceMs);
+            Assert.Contains("invalid --debounce value", stderr.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_AbsolutizesRelativeProjectPath()
     {
         var options = IndexCommandRunner.ParseArgs(["./sub/path"]);
@@ -226,6 +269,62 @@ public class IndexCommandRunnerTests
             Assert.Contains("`cdidx index <projectPath> --rebuild`", hint);
             Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", hint);
             Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", hint);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WatchWithCommits_PrintsActionableHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--watch", "--commits", "HEAD"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--watch cannot be combined with --commits, --files, or --dry-run", stderr);
+            Assert.Contains("`cdidx index <projectPath> --watch", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WatchWithFiles_PrintsActionableHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--watch", "--files", "app.py"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--watch cannot be combined with --commits, --files, or --dry-run", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WatchWithDryRun_JsonIncludesHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--watch", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--watch cannot be combined", json.GetProperty("message").GetString());
+            var hint = json.GetProperty("hint").GetString();
+            Assert.NotNull(hint);
+            Assert.Contains("`cdidx index <projectPath> --watch", hint);
         }
         finally
         {

@@ -292,6 +292,46 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("elf", new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F', 0x02, 0x01, 0x01, 0x00 })]
+    [InlineData("macho", new byte[] { 0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01 })]
+    [InlineData("pe", new byte[] { (byte)'M', (byte)'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00 })]
+    [InlineData("data", new byte[] { (byte)'#', (byte)'!', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'s', (byte)'h', 0x00 })]
+    public void DetectLanguage_ExtensionlessBinaryLikeFiles_ReturnsNull(string fileName, byte[] bytes)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, fileName);
+            File.WriteAllBytes(path, bytes);
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessOverCapShebangLine_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "tool");
+            File.WriteAllText(path, "#!/usr/bin/env " + new string('x', 256));
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
     [Fact]
     public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
     {

@@ -12,12 +12,12 @@
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-**AI-native local code search for terminal and MCP workflows.**
+**CLI code indexing and MCP search for local repositories.**
 
-`cdidx` indexes a repository into a local SQLite FTS5 database, then answers
+`cdidx` is a command-line code indexer and MCP server that builds a local
+SQLite index of your repository so humans and AI agents can run fast
 full-text, symbol, dependency, and inspection queries without repeatedly
-rescanning the same tree. It is built for humans and AI agents that need small,
-structured code context from local repositories.
+rescanning the same tree.
 
 ## Why cdidx
 
@@ -38,13 +38,22 @@ and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-
 ## Quick Start
 
 ```bash
+# Install is usually seconds.
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+
+# First index: ~30-60s on small repos; minutes or longer on 100k-file trees.
+# Add --verbose to see each file status while it runs.
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx mcp
 ```
+
+During indexing, the terminal shows `Scanning...`, `Indexing...`, and a
+`67.0% [28/42]`-style progress line. For later edits, refresh incrementally
+with `--files` or `--commits` instead of rebuilding; see
+[Quick Start](USER_GUIDE.md#quick-start).
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -55,7 +64,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
-- Incremental refreshes with `--files` and `--commits`.
+- Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
 - Exact DB/worktree freshness checks with `status --check`.
 - `status --json` reports the last full-scan unknown-extension count so
   extension-table gaps are visible.
@@ -122,12 +131,12 @@ details.
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-**ターミナルと MCP ワークフロー向けの、AI ネイティブなローカルコード検索です。**
+**ローカルリポジトリ向けの CLI コードインデックスと MCP 検索です。**
 
-`cdidx` はリポジトリをローカル SQLite FTS5 データベースにインデックスし、
-同じツリーを何度も読み直さずに全文検索、シンボル、依存関係、inspect
-クエリへ応答します。人間と AI エージェントの両方が、ローカルリポジトリから
-小さく構造化されたコード文脈を取り出すためのツールです。
+`cdidx` はコマンドラインのコードインデクサー兼 MCP サーバーで、リポジトリの
+ローカル SQLite index を作成します。人間と AI エージェントは、同じツリーを
+何度も読み直さずに、高速な全文検索、シンボル、依存関係、inspect クエリを
+実行できます。
 
 ## なぜ cdidx なのか
 
@@ -148,13 +157,22 @@ details.
 ## すぐに試す
 
 ```bash
+# インストールは通常数秒で終わります。
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+
+# 初回 index は小規模 repo で約30-60秒、100kファイル級では数分以上かかることがあります。
+# 実行中のファイル別ステータスを見たい場合は --verbose を付けてください。
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx mcp
 ```
+
+インデックス中は `Scanning...`、`Indexing...`、`67.0% [28/42]` のような
+進捗行が表示されます。編集後は再構築ではなく `--files` や `--commits` で
+差分更新できます。詳細は [クイックスタート](USER_GUIDE.md#クイックスタート)
+を参照してください。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
@@ -165,7 +183,7 @@ cdidx mcp
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
-- `--files` と `--commits` による差分更新。
+- `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `status --check` による DB と作業ツリーの完全一致確認。
 - `status --json` で直近 full scan の未知拡張子数を返し、拡張子テーブルの
   抜けを確認可能。

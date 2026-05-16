@@ -58,6 +58,29 @@ public static class IndexCommandRunner
             return CommandExitCodes.NotFound;
         }
 
+        if (options.Watch)
+        {
+            // --watch is the only mode that holds the process open after the initial scan, so
+            // combining it with --commits, --files, or --dry-run produces ambiguous semantics:
+            // those flags describe a one-shot snapshot. Reject the combination up front with
+            // an actionable hint instead of silently picking one behavior.
+            // --watch のみが初回スキャン後も常駐するため、ワンショット用の --commits / --files /
+            // --dry-run と併用すると挙動が曖昧になる。ヒント付きで早期に拒否する。
+            if (options.Commits.Count > 0 || options.UpdateFiles.Count > 0 || options.DryRun)
+            {
+                const string watchConflictSynopsis =
+                    "`cdidx index <projectPath> --watch [--debounce <ms>]` "
+                    + "(omit --commits / --files / --dry-run; the initial scan plus continuous watch handles incremental refresh)";
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "--watch cannot be combined with --commits, --files, or --dry-run (watch already drives continuous incremental updates)",
+                    CommandExitCodes.UsageError,
+                    "Use " + watchConflictSynopsis + ".",
+                    CommandErrorCodes.UsageError);
+            }
+        }
+
         if (options.Rebuild && isUpdateMode)
         {
             // Enumerate the three mutually-exclusive usage forms so the conflict error
@@ -269,6 +292,7 @@ public static class IndexCommandRunner
             ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
         }
 
+        int initialExitCode;
         using (indexLock)
         {
             using var db = new DbContext(dbPath);
@@ -334,10 +358,20 @@ public static class IndexCommandRunner
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
-        return isUpdateMode
+        initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
         }
+
+        if (!options.Watch || initialExitCode != CommandExitCodes.Success)
+            return initialExitCode;
+
+        // Release the index lock before entering the watch loop so concurrent
+        // `cdidx index` invocations between batches can still acquire it. Each
+        // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
+        // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
+        // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
+        return IndexWatchRunner.Run(options, jsonOptions, Path.GetFullPath(options.ProjectPath), Path.GetFullPath(dbPath));
     }
 
     private static string DescribeLockHolder(IndexLockInfo? holder)
@@ -502,6 +536,8 @@ public static class IndexCommandRunner
         bool json = false;
         bool dryRun = false;
         bool force = false;
+        bool watch = false;
+        int? watchDebounceMs = null;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -529,6 +565,21 @@ public static class IndexCommandRunner
                     break;
                 case "--force":
                     force = true;
+                    break;
+                case "--watch":
+                    watch = true;
+                    break;
+                case "--debounce" when i + 1 < args.Length:
+                    if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
+                    {
+                        watchDebounceMs = parsedDebounce;
+                        i++;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"Warning: invalid --debounce value '{args[i + 1]}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{args[i + 1]}'（無視。ミリ秒の0以上の整数を指定）");
+                        i++;
+                    }
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -592,6 +643,8 @@ public static class IndexCommandRunner
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
+            Watch = watch,
+            WatchDebounceMs = watchDebounceMs,
         };
     }
 
@@ -2414,6 +2467,8 @@ public sealed class IndexCommandOptions
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }
+    public bool Watch { get; init; }
+    public int? WatchDebounceMs { get; init; }
 }
 
 public sealed class BackfillFoldCommandOptions
