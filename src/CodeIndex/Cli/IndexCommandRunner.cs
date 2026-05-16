@@ -497,7 +497,7 @@ public static class IndexCommandRunner
     private static readonly string[] AcceptedIndexFlags =
     [
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
-        "--commits", "--files", "--help",
+        "--watch", "--debounce", "--commits", "--files", "--help",
     ];
 
     private static readonly string[] AcceptedBackfillFoldFlags =
