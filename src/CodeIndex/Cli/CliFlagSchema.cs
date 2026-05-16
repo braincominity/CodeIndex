@@ -103,6 +103,7 @@ internal static class CliFlagSchema
     ];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
+    private static readonly string[] ByteFormatCommands = ["files", "map"];
 
     // `--exact` is the legacy shorthand that every name-resolution command accepts.
     // `--exact` は名前解決系の全コマンドで受け付けるレガシー shorthand。
@@ -163,6 +164,7 @@ internal static class CliFlagSchema
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
+            new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
