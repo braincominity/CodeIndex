@@ -1418,6 +1418,69 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_ZeroResultsHumanOutputIncludesQueryFilterContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_zero_context_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public sealed class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found. (query: \"missing-token\", path: src/**, lang: csharp, limit: 7)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultsJsonIncludesStructuredQueryContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_zero_context_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public sealed class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var queryContext = root.GetProperty("query_context");
+
+            Assert.Equal(0, root.GetProperty("count").GetInt32());
+            Assert.Equal("missing-token", root.GetProperty("query").GetString());
+            Assert.Equal("missing-token", queryContext.GetProperty("text").GetString());
+            Assert.Equal("src/**", queryContext.GetProperty("path")[0].GetString());
+            Assert.Equal("csharp", queryContext.GetProperty("lang").GetString());
+            Assert.Equal(7, queryContext.GetProperty("limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AllowsPathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_preview_like_path_value");
