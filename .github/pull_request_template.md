@@ -16,3 +16,7 @@
 ## Issues
 
 Fixes #
+
+## Follow-up issues
+
+- None
