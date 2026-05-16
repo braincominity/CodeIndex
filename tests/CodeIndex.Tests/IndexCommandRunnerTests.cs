@@ -29,6 +29,51 @@ public class IndexCommandRunnerTests
         Assert.Null(options.ProjectPath);
     }
 
+    // `cdidx index . --rebild` should not just say "unknown option"; surface the closest accepted
+    // flag (`--rebuild`) so MCP callers can self-correct without re-reading docs (#1582).
+    // `cdidx index . --rebild` のような単純なミスタイプから `--rebuild` を提案できることを確認する (#1582)。
+    [Fact]
+    public void ParseArgs_UnknownIndexOption_SuggestsClosestFlag()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                IndexCommandRunner.ParseArgs([".", "--rebild"]);
+                Assert.Contains("Warning: unknown option '--rebild'", stderr.ToString());
+                Assert.Contains("Did you mean: --rebuild?", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_UnknownIndexOption_NoSuggestionWhenFarFromAnyFlag()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                IndexCommandRunner.ParseArgs([".", "--zzzzzzzz"]);
+                Assert.Contains("Warning: unknown option '--zzzzzzzz'", stderr.ToString());
+                Assert.DoesNotContain("Did you mean:", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
     [Fact]
     public void ParseArgs_ForceFlag_SetsForce()
     {
@@ -89,6 +134,40 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("--duration-format", "auto", DurationOutputFormat.Auto)]
+    [InlineData("--duration-format", "seconds", DurationOutputFormat.Seconds)]
+    [InlineData("--duration-format", "hms", DurationOutputFormat.Hms)]
+    [InlineData("--duration-format=hms", null, DurationOutputFormat.Hms)]
+    public void ParseArgs_DurationFormatFlag_ParsesValue(string flag, string? value, DurationOutputFormat expected)
+    {
+        string[] args = value is null
+            ? [".", flag]
+            : [".", flag, value];
+
+        var options = IndexCommandRunner.ParseArgs(args);
+
+        Assert.Equal(expected, options.DurationFormat);
+    }
+
+    [Fact]
+    public void ParseArgs_DurationFormatFlag_InvalidValue_IsIgnored()
+    {
+        var originalErr = Console.Error;
+        using var stderr = new StringWriter();
+        try
+        {
+            Console.SetError(stderr);
+            var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
+            Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
+            Assert.Contains("invalid --duration-format value", stderr.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
     [Fact]
     public void ParseArgs_AbsolutizesRelativeProjectPath()
     {
@@ -138,6 +217,54 @@ public class IndexCommandRunnerTests
         Assert.Contains("/tmp/project", notice);
         Assert.Contains("/tmp/other", notice);
         Assert.Contains("working directory changed", notice);
+    }
+
+    [Fact]
+    public void FormatPerFileErrorLine_OmitsStackTrace_ToKeepStderrSafeForMcpConsumers()
+    {
+        // Issue #1578: the verbose-mode error path previously appended `ex.StackTrace`
+        // to stderr, leaking internal type names, source paths, and line numbers to
+        // anyone capturing the indexer's stderr (notably MCP clients). The shared
+        // formatter must emit a single user-facing line regardless of verbose state.
+        // Issue #1578: verbose 時の stderr に `ex.StackTrace` が乗ると内部型名・パス・
+        // 行番号が MCP クライアントなど stderr 取り込み側へ漏れていた。共通フォーマッタ
+        // は verbose に関係なく 1 行のユーザー向けメッセージのみ出力すること。
+        Exception captured;
+        try
+        {
+            throw new InvalidOperationException("simulated indexing failure");
+        }
+        catch (Exception ex)
+        {
+            captured = ex;
+        }
+
+        Assert.NotNull(captured.StackTrace);
+
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
+
+        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain(captured.StackTrace!, line);
+        Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
+    }
+
+    [Fact]
+    public void FormatPerFileErrorLine_CollapsesNewlinesInPathAndMessage_PreventingInjection()
+    {
+        // Issue #1578 follow-up: even without ex.StackTrace, a multiline exception
+        // message (or a CR/LF-bearing path) could still inject pseudo-stack lines
+        // into stderr that MCP clients then misinterpret. The formatter must keep
+        // the output on a single line.
+        // Issue #1578 派生: ex.StackTrace を外しても、`ex.Message` や `path` に CR/LF が
+        // 含まれると疑似スタック行が stderr に注入されうる。フォーマッタは 1 行に保つこと。
+        var ex = new InvalidOperationException("first line\nat Internal.Type.Method() in /home/secret.cs:42");
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "weird\r\npath.cs", ex);
+
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain("\r", line);
+        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
     }
 
     [Fact]

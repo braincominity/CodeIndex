@@ -51,8 +51,9 @@ cdidx mcp
 ```
 
 During indexing, the terminal shows `Scanning...`, `Indexing...`, and a
-`67.0% [28/42]`-style progress line. For later edits, refresh incrementally
-with `--files` or `--commits` instead of rebuilding; see
+`67.0% [28/42]`-style progress line, then a unit-labelled elapsed time such as
+`2.4s` or `5m 42s`. For later edits, refresh incrementally with `--files` or
+`--commits` instead of rebuilding; see
 [Quick Start](USER_GUIDE.md#quick-start).
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
@@ -81,6 +82,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 | [Testing Guide](TESTING_GUIDE.md) | Test conventions and validation commands. |
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
+| [Security Policy](SECURITY.md) | Private vulnerability reporting and coordinated disclosure policy. |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | Community standards and reporting expectations. |
 
 ## Supported Surfaces
 
@@ -170,8 +173,9 @@ cdidx mcp
 ```
 
 インデックス中は `Scanning...`、`Indexing...`、`67.0% [28/42]` のような
-進捗行が表示されます。編集後は再構築ではなく `--files` や `--commits` で
-差分更新できます。詳細は [クイックスタート](USER_GUIDE.md#クイックスタート)
+進捗行が表示され、最後に `2.4s` や `5m 42s` のような単位付き経過時間が出ます。
+編集後は再構築ではなく `--files` や `--commits` で差分更新できます。詳細は
+[クイックスタート](USER_GUIDE.md#クイックスタート)
 を参照してください。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
@@ -200,6 +204,8 @@ cdidx mcp
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
+| [セキュリティポリシー](SECURITY.md) | 非公開の脆弱性報告と協調的開示の方針。 |
+| [行動規範](CODE_OF_CONDUCT.md) | コミュニティ標準と報告時の期待事項。 |
 
 ## サポート対象の利用面
 

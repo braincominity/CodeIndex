@@ -400,6 +400,9 @@ public class StatusResult
     [JsonPropertyName("workspace_check")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IndexFreshnessCheckResult? WorkspaceCheck { get; set; }
+    [JsonPropertyName("failed_checks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? FailedChecks { get; set; }
     /// <summary>
     /// True when the index exposes the full reference / validation tables. False signals a
     /// degraded read (legacy or read-only DB where TryMigrateForRead could not create

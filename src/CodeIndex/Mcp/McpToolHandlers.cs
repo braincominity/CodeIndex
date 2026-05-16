@@ -1221,7 +1221,8 @@ public partial class McpServer
         int successCount = 0;
         int failureCount = 0;
 
-        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage, int? code = null)
+        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
+            int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
         {
             slotStopwatch.Stop();
             failureCount++;
@@ -1234,6 +1235,17 @@ public partial class McpServer
             };
             if (code.HasValue)
                 entry["code"] = code.Value;
+            // #1581: batch_query slot errors also carry the canonical envelope so clients
+            // get the same `category` / `suggestion` / `retry_safe` decision shape on every
+            // failure path. Defaults stay null when the call site cannot classify safely.
+            // #1581: スロットエラーにも canonical envelope を付与し、失敗経路を問わずクライアント
+            // が同じ判定形状を扱えるようにする。分類できない呼び出し元は null のまま渡す。
+            if (category != null)
+                entry["category"] = category;
+            if (suggestion != null)
+                entry["suggestion"] = suggestion;
+            if (retrySafe.HasValue)
+                entry["retry_safe"] = retrySafe.Value;
             resultsArray.Add(entry);
         }
 
@@ -1252,6 +1264,12 @@ public partial class McpServer
         {
             slotStopwatch.Stop();
             failureCount++;
+            // #1581: emit the canonical envelope (`category`, `suggestion`, `retry_safe`)
+            // next to the legacy #1560 fields so clients have a single decision shape across
+            // top-level and slot-level rate-limit errors.
+            // #1581: 既存の #1560 フィールド（`error_category`, `retry_after_ms`）と並べて
+            // canonical envelope（`category`, `suggestion`, `retry_safe`）も書き、トップレベル
+            // とスロット単位のレート制限エラーで判定形状を揃える。
             resultsArray.Add(new JsonObject
             {
                 ["tool"] = toolName,
@@ -1260,6 +1278,9 @@ public partial class McpServer
                 ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
                 ["error_category"] = "rate_limited",
                 ["retry_after_ms"] = retryAfterMs,
+                ["category"] = McpErrorEnvelope.CategoryRateLimited,
+                ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
+                ["retry_safe"] = true,
             });
         }
 
@@ -1271,7 +1292,10 @@ public partial class McpServer
 
             if (string.IsNullOrEmpty(toolName))
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, "Missing tool name");
+                AppendSlotError(toolName, toolArgs, slotStopwatch, "Missing tool name",
+                    category: McpErrorEnvelope.CategoryMissingParameter,
+                    suggestion: "Each batch_query slot must include a string `tool` field.",
+                    retrySafe: false);
                 continue;
             }
 
@@ -1292,14 +1316,20 @@ public partial class McpServer
             // 前にこのゲートを置く。
             if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601);
+                AppendSlotError(toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
+                    category: McpErrorEnvelope.CategoryToolDisabled,
+                    suggestion: "This tool is disabled on the server. Ask the operator to enable it or remove the slot.",
+                    retrySafe: false);
                 continue;
             }
 
             // Block write operations in batch / バッチ内では書き込み操作をブロック
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)");
+                AppendSlotError(toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Call write tools (index / backfill_fold / suggest_improvement) directly via tools/call, not inside batch_query.",
+                    retrySafe: false);
                 continue;
             }
 
@@ -1311,7 +1341,10 @@ public partial class McpServer
             // ネスト禁止の明示文に揃える（#1560）。
             if (toolName == "batch_query")
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.");
+                AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Flatten the nested batch_query into top-level slots.",
+                    retrySafe: false);
                 continue;
             }
 
@@ -1360,7 +1393,10 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}");
+                    AppendSlotError(toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}",
+                        category: McpErrorEnvelope.CategoryToolUnknown,
+                        suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
+                        retrySafe: false);
                     continue;
                 }
 
@@ -1370,7 +1406,23 @@ public partial class McpServer
                 if (isError)
                 {
                     var errorText = response["result"]?["content"]?[0]?["text"]?.GetValue<string>() ?? "Unknown error";
-                    AppendSlotError(toolName, toolArgs, slotStopwatch, errorText);
+                    // #1581: lift the inner tool's structured envelope into the batch slot so
+                    // the slot carries the same category/suggestion/retry_safe the standalone
+                    // tools/call response would have. Missing fields (older inner tools) fall
+                    // back to AppendSlotError defaults.
+                    // #1581: 内側ツールの structured envelope をスロットに転写し、tools/call
+                    // 単体呼び出しと同じカテゴリ判定をスロットでも提供する。フィールドが無い
+                    // 旧経路は AppendSlotError の既定（null = 未指定）に戻す。
+                    var innerStructured = response["result"]?["structuredContent"] as JsonObject;
+                    var innerCategory = innerStructured?["category"]?.GetValue<string>();
+                    var innerSuggestion = innerStructured?["suggestion"]?.GetValue<string>();
+                    bool? innerRetrySafe = null;
+                    if (innerStructured?["retry_safe"] is JsonValue rv && rv.TryGetValue<bool>(out var rb))
+                        innerRetrySafe = rb;
+                    AppendSlotError(toolName, toolArgs, slotStopwatch, errorText,
+                        category: innerCategory,
+                        suggestion: innerSuggestion,
+                        retrySafe: innerRetrySafe);
                     continue;
                 }
 
@@ -1387,7 +1439,19 @@ public partial class McpServer
             }
             catch (Exception ex)
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, ex.Message);
+                // #1581: classify the exception so the slot carries the same `category`
+                // envelope as a standalone tools/call would. The wire message stays the raw
+                // ex.Message — batch_query slot errors did not pass through the #1530
+                // sanitizer, so keeping it is unchanged behavior; the classification is purely
+                // additive metadata that lets clients branch on retry-safe failures.
+                // #1581: 例外をカテゴリに分類して、独立した tools/call 呼び出しと同じ
+                // envelope を batch_query スロットでも提供する。`ex.Message` の取り扱いは
+                // #1530 サニタイザを通っていない既存挙動を維持し、追加メタデータのみを載せる。
+                var classification = McpErrorEnvelope.ClassifyException(ex);
+                AppendSlotError(toolName, toolArgs, slotStopwatch, ex.Message,
+                    category: classification.Category,
+                    suggestion: classification.Suggestion,
+                    retrySafe: classification.RetrySafe);
             }
         }
 
@@ -2189,7 +2253,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: category");
 
         if (!SuggestionRecord.ValidCategories.Contains(category))
-            return CreateToolErrorResponse(id, $"Invalid category: '{category}'. Must be one of: {string.Join(", ", SuggestionRecord.ValidCategories)}");
+        {
+            var similar = ConsoleUi.FindClosestMatches(category, SuggestionRecord.ValidCategories);
+            var message = $"Invalid category: '{category}'. Must be one of: {string.Join(", ", SuggestionRecord.ValidCategories)}";
+            if (similar.Count > 0)
+                message += $". Did you mean: {string.Join(", ", similar)}?";
+            return CreateToolErrorResponse(id, message, similar);
+        }
 
         var description = args?["description"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(description))
