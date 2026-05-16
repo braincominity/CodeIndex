@@ -147,6 +147,7 @@ public static class QueryCommandRunner
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No results found.");
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -1228,7 +1229,25 @@ public static class QueryCommandRunner
                 continue;
 
             if (rawArg.StartsWith('-'))
-                return $"Error: unsupported option for find: {rawArg}";
+            {
+                var error = $"Error: unsupported option for find: {rawArg}";
+                // Suggest the closest accepted find flag for typos like `--paht` → `--path`
+                // (#1582). Strip any inline `=value` portion before matching, since the prefix
+                // might not have been a recognized value-taking option (TrySplitInlineOptionValue
+                // only splits on known options).
+                // `--paht` → `--path` のようなタイプミスから回復させるため、find が受理する
+                // フラグの中で最も近いものを提案する (#1582)。`--foo=bar` 形では prefix が未知
+                // value-taking option の場合 TrySplitInlineOptionValue が分解しないので、
+                // suggester 用に `=` 前の部分を独自に切り出して照合する。
+                var nameForSuggestion = arg;
+                var eq = nameForSuggestion.IndexOf('=');
+                if (eq > 0)
+                    nameForSuggestion = nameForSuggestion[..eq];
+                var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, allowedWithValues.Concat(allowedFlags).Where(o => o != "--"));
+                if (suggestion != null)
+                    error += $"\nDid you mean: {suggestion}?";
+                return error;
+            }
 
             queryCount++;
             if (queryCount > 1)
@@ -2615,6 +2634,16 @@ public static class QueryCommandRunner
         _ => bucket,
     };
 
+    // Issue kinds emitted by FileIndexer.ValidateFileContent for `validate --kind` filtering.
+    // Keep in sync with `Kind = "..."` assignments in FileIndexer.cs so typos like
+    // `--kind replacement_chra` produce a did-you-mean hint instead of silently filtering
+    // to zero results (#1582).
+    // FileIndexer.ValidateFileContent が出力する file_issues 行の Kind 一覧。
+    // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
+    // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
+    private static readonly string[] AllValidValidateKinds =
+        ["bom", "cr_only_line_endings", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("validate", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
@@ -2648,7 +2677,10 @@ public static class QueryCommandRunner
                 else if (!issuesAvailable)
                     Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
+                {
                     Console.Error.WriteLine("No encoding issues found.");
+                    WriteValidateKindHint(options.Kind);
+                }
                 return CommandExitCodes.Success;
             }
 
@@ -3369,10 +3401,21 @@ public static class QueryCommandRunner
             // Suggest the closest accepted flag for this command when the user mistypes
             // a flag name (e.g. `--paht` → `--path`). Built on the same suggester used for
             // subcommand typos so the recovery experience is consistent (#1582).
+            // TrySplitInlineOptionValue only splits inline `=value` when the prefix is a
+            // known value-taking option, so for an unrecognized `--paht=foo` the normalized
+            // arg keeps the `=value`. Strip any trailing `=value` here so the matcher can
+            // still find `--path` from `--paht=foo`.
             // ユーザーがフラグ名をミスタイプしたとき (例: `--paht` → `--path`) に
             // そのコマンドで受理される最も近いフラグを提案する。サブコマンドの did-you-mean と
             // 同じ suggester を共用し、回復体験を統一する (#1582)。
-            var suggestion = ConsoleUi.FindClosestMatch(normalizedArg, supported.Where(o => o != "--"));
+            // TrySplitInlineOptionValue は prefix が既知の value-taking option のときだけ
+            // inline `=value` を分解するため、`--paht=foo` のように未知のオプションでは
+            // `=value` が残る。matcher のために `=` 以降を除去してから候補を探す。
+            var nameForSuggestion = normalizedArg;
+            var eq = nameForSuggestion.IndexOf('=');
+            if (eq > 0)
+                nameForSuggestion = nameForSuggestion[..eq];
+            var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, supported.Where(o => o != "--"));
             if (suggestion != null)
                 Console.Error.WriteLine($"Did you mean: {suggestion}?");
             Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
@@ -3840,20 +3883,26 @@ public static class QueryCommandRunner
     {
         if (lang == null) return;
         var status = reader.GetStatus();
-        if (status.Languages.Count > 0 && !status.Languages.ContainsKey(lang))
-        {
+        if (status.Languages.Count > 0 && status.Languages.ContainsKey(lang))
+            return;
+
+        if (status.Languages.Count > 0)
             Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
-            // Recover from `--lang pythno` / `--lang csarp` typos by suggesting the
-            // closest indexed language (#1582). Fall back to the full supported set when
-            // the typo does not match anything currently in the DB.
-            // `--lang pythno` / `--lang csarp` のようなタイプミスから回復させるため、
-            // インデックスに存在する言語の中から最も近いものを提案する (#1582)。
-            // インデックスに無ければ extractor がサポートする全言語集合から探す。
-            var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
-                             ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
-            if (suggestion != null)
-                Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
-        }
+
+        // Recover from `--lang pythno` / `--lang csarp` typos by suggesting the
+        // closest indexed language first; if the typo does not match anything currently
+        // in the DB (or the DB has no languages yet) fall back to the full supported set
+        // exposed by `ReferenceExtractor.GetSupportedLanguages()` so the suggester is still
+        // useful against an empty/fresh index (#1582).
+        // `--lang pythno` / `--lang csarp` のようなタイプミスから回復させるため、
+        // インデックスに存在する言語の中から最も近いものを優先的に提案する。
+        // インデックスに無い、もしくは languages が空の場合は
+        // `ReferenceExtractor.GetSupportedLanguages()` 全体から候補を探し、
+        // 空のインデックスでも did-you-mean が機能するようにする (#1582)。
+        var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
+                         ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
     }
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
@@ -3891,6 +3940,25 @@ public static class QueryCommandRunner
         var existingKinds = reader.GetDistinctKinds();
         if (!existingKinds.Contains(kind))
             Console.Error.WriteLine($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
+    }
+
+    private static void WriteValidateKindHint(string? kind)
+    {
+        if (string.IsNullOrEmpty(kind)) return;
+        if (AllValidValidateKinds.Contains(kind, StringComparer.Ordinal))
+            return;
+
+        // `validate --kind` accepts only the file-issue kinds emitted by FileIndexer. A typo
+        // like `--kind replacement_chra` filters to zero rows, which previously printed the
+        // same "No encoding issues found." message as a genuinely clean repo and silently
+        // hid the typo. Surface a hint + suggester for the closest known kind (#1582).
+        // `validate --kind` は FileIndexer が出す file_issues kind のみ受理する。
+        // `--kind replacement_chra` のようなタイプミスは 0 行となり、クリーンな状態と区別が
+        // つかないまま暗黙に握り潰されていた。ヒントと did-you-mean を出すよう改修 (#1582)。
+        Console.Error.WriteLine($"Hint: '{kind}' is not a known validate kind. Available: {string.Join(", ", AllValidValidateKinds)}");
+        var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidValidateKinds);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
     }
 
     private static void WriteGraphReferenceKindHint(string command, string? kind, bool json)

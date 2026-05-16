@@ -2524,6 +2524,56 @@ jobs:
         Assert.Contains("Did you mean: --path?", stderr);
     }
 
+    // Inline `--foo=bar` form must surface the same suggestion as the separated form.
+    // ParseArgs only splits `=value` for known value-taking options, so for `--paht=...`
+    // the suggester previously saw the full `--paht=src/**` token and produced no match;
+    // the round-2 fix strips the `=value` portion before searching for a similar flag.
+    // インライン `--foo=bar` 形式も separated 形式と同じ提案を出すこと。ParseArgs は
+    // 既知の value-taking option でしか `=value` を分解しないため、`--paht=...` は
+    // まるごと matcher に渡され従来は提案が出なかった。round-2 修正で `=value` を
+    // 除去してから候補を探すようにした。
+    [Fact]
+    public void RunSearch_UnsupportedFlagTypoInInlineValueForm_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--paht=src/**"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("is not supported for search", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    // `find` previously emitted only the raw `Error: unsupported option for find: --paht`
+    // line — round-2 fix routes the unknown token through the same suggester so users see
+    // `Did you mean: --path?`. Covers both the separated and inline `=value` forms.
+    // 従来 find は `Error: unsupported option for find: --paht` だけを出していたが、
+    // round-2 修正で同じ suggester を経由するようにし `Did you mean: --path?` を出す。
+    // separated 形式と inline `=value` 形式の両方を確認する。
+    [Fact]
+    public void RunFind_UnsupportedFlagTypo_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--paht", "src/Auth.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --paht", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    [Fact]
+    public void RunFind_UnsupportedFlagTypoInInlineValueForm_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--paht=src/Auth.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --paht=src/Auth.cs", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
     [Theory]
     [InlineData("search-limit", "search", "--limit requires a positive integer")]
     [InlineData("search-top", "search", "--limit requires a positive integer")]
@@ -3041,6 +3091,82 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("bom", json.GetProperty("issues")[0].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // `validate --kind replacement_chra` previously filtered the file_issues table by an
+    // unknown kind, returned zero rows, and printed the same "No encoding issues found."
+    // message a genuinely-clean repo would print — silently masking the typo. Round-2 adds
+    // a known-kind allowlist + did-you-mean hint (#1582).
+    // 従来 `validate --kind replacement_chra` は file_issues を 0 行に絞り込み、本当に
+    // クリーンな状態と同じ "No encoding issues found." を出して typo を握り潰していた。
+    // round-2 で許可された kind 一覧と did-you-mean を追加した (#1582)。
+    [Fact]
+    public void RunValidate_KindTypo_SuggestsClosestKind_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_kind_typo");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "clean.cs"),
+                "class Clean {}\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--kind", "replacement_chra"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("No encoding issues found.", stderr);
+            Assert.Contains("'replacement_chra' is not a known validate kind", stderr);
+            Assert.Contains("Did you mean: --kind replacement_char?", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // `search --lang csarp` previously emitted "No results found." with no language hint
+    // — RunSearch never called WriteLangHint. Round-2 wires WriteLangHint into the zero-
+    // result branch and lets it fall back to ReferenceExtractor.GetSupportedLanguages()
+    // when the typo'd value matches no indexed language (#1582).
+    // 従来 `search --lang csarp` は "No results found." だけ表示し、RunSearch から
+    // WriteLangHint を呼んでいなかった。round-2 で zero-result 分岐に WriteLangHint を
+    // 配線し、index 済み言語にマッチしない場合は ReferenceExtractor.GetSupportedLanguages()
+    // にフォールバックして提案を出すようにした (#1582)。
+    [Fact]
+    public void RunSearch_LangTypo_SuggestsClosestLanguage_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_typo");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "csarp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found.", stderr);
+            Assert.Contains("Did you mean: --lang csharp?", stderr);
         }
         finally
         {
