@@ -2253,7 +2253,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: category");
 
         if (!SuggestionRecord.ValidCategories.Contains(category))
-            return CreateToolErrorResponse(id, $"Invalid category: '{category}'. Must be one of: {string.Join(", ", SuggestionRecord.ValidCategories)}");
+        {
+            var similar = ConsoleUi.FindClosestMatches(category, SuggestionRecord.ValidCategories);
+            var message = $"Invalid category: '{category}'. Must be one of: {string.Join(", ", SuggestionRecord.ValidCategories)}";
+            if (similar.Count > 0)
+                message += $". Did you mean: {string.Join(", ", similar)}?";
+            return CreateToolErrorResponse(id, message, similar);
+        }
 
         var description = args?["description"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(description))

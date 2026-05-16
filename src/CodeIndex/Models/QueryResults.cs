@@ -400,6 +400,9 @@ public class StatusResult
     [JsonPropertyName("workspace_check")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IndexFreshnessCheckResult? WorkspaceCheck { get; set; }
+    [JsonPropertyName("failed_checks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? FailedChecks { get; set; }
     /// <summary>
     /// Effective age threshold, in seconds, used by `status --check` to explain stale-index
     /// warnings. Null when `--check` was not requested.
