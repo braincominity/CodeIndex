@@ -492,6 +492,14 @@ public class DbContext : IDisposable
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
+    // Issue #1585: count of files seen by the most recent successful full-repository scan
+    // whose non-empty extension did not map to a known language. This is a scan coverage
+    // signal, not an indexed-file count, and is omitted by readers until a current index pass
+    // has stamped it.
+    // Issue #1585: 直近成功した全体 scan で、非空の拡張子が既知言語に対応しなかった
+    // ファイル数。index 済み件数ではなく scan coverage の信号であり、現行 index が stamp
+    // するまでは reader 側で省略する。
+    public const string UnknownExtensionFileCountMetaKey = "unknown_extension_file_count";
     // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful
     // index ran on, persisted as the string "true" / "false". Resolved via the probe in
     // `PathCasing` (which honors `core.ignorecase` when the project is a git workspace and

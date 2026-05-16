@@ -215,6 +215,34 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_VerboseReportsUnknownExtensionCountAndStatusJsonStampsCount()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.mystery"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(projectRoot, "data.unmapped"), "also unknown\n");
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--verbose"]);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Unknown extension files: 2", stdout);
+            Assert.Contains("data.unmapped", stdout);
+            Assert.Contains("notes.mystery", stdout);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(2, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_GitRepo_PersistsIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();
