@@ -2509,6 +2509,71 @@ jobs:
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    // `--paht` should surface as `--path` so MCP/CLI users do not have to read full help
+    // text to recover from a single-letter swap (#1582).
+    // `--paht` のような 1 文字入れ替えミスから `--path` を提案できることを確認する (#1582)。
+    [Fact]
+    public void RunSearch_UnsupportedFlagTypo_SuggestsClosestFlag()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--paht", "src/**"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --paht is not supported for search.", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    // Inline `--foo=bar` form must surface the same suggestion as the separated form.
+    // ParseArgs only splits `=value` for known value-taking options, so for `--paht=...`
+    // the suggester previously saw the full `--paht=src/**` token and produced no match;
+    // the round-2 fix strips the `=value` portion before searching for a similar flag.
+    // インライン `--foo=bar` 形式も separated 形式と同じ提案を出すこと。ParseArgs は
+    // 既知の value-taking option でしか `=value` を分解しないため、`--paht=...` は
+    // まるごと matcher に渡され従来は提案が出なかった。round-2 修正で `=value` を
+    // 除去してから候補を探すようにした。
+    [Fact]
+    public void RunSearch_UnsupportedFlagTypoInInlineValueForm_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--paht=src/**"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("is not supported for search", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    // `find` previously emitted only the raw `Error: unsupported option for find: --paht`
+    // line — round-2 fix routes the unknown token through the same suggester so users see
+    // `Did you mean: --path?`. Covers both the separated and inline `=value` forms.
+    // 従来 find は `Error: unsupported option for find: --paht` だけを出していたが、
+    // round-2 修正で同じ suggester を経由するようにし `Did you mean: --path?` を出す。
+    // separated 形式と inline `=value` 形式の両方を確認する。
+    [Fact]
+    public void RunFind_UnsupportedFlagTypo_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--paht", "src/Auth.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --paht", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    [Fact]
+    public void RunFind_UnsupportedFlagTypoInInlineValueForm_SuggestsClosestFlag_Issue1582()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--paht=src/Auth.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --paht=src/Auth.cs", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
     [Theory]
     [InlineData("search-limit", "search", "--limit requires a positive integer")]
     [InlineData("search-top", "search", "--limit requires a positive integer")]
@@ -3026,6 +3091,119 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("bom", json.GetProperty("issues")[0].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // `validate --kind replacement_chra` previously filtered the file_issues table by an
+    // unknown kind, returned zero rows, and printed the same "No encoding issues found."
+    // message a genuinely-clean repo would print — silently masking the typo. Round-2 adds
+    // a known-kind allowlist + did-you-mean hint (#1582).
+    // 従来 `validate --kind replacement_chra` は file_issues を 0 行に絞り込み、本当に
+    // クリーンな状態と同じ "No encoding issues found." を出して typo を握り潰していた。
+    // round-2 で許可された kind 一覧と did-you-mean を追加した (#1582)。
+    [Fact]
+    public void RunValidate_KindTypo_SuggestsClosestKind_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_kind_typo");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "clean.cs"),
+                "class Clean {}\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--kind", "replacement_chra"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("No encoding issues found.", stderr);
+            Assert.Contains("'replacement_chra' is not a known validate kind", stderr);
+            Assert.Contains("Did you mean: --kind replacement_char?", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // `search --lang csarp` previously emitted "No results found." with no language hint
+    // — RunSearch never called WriteLangHint. Round-2 wires WriteLangHint into the zero-
+    // result branch and lets it fall back to ReferenceExtractor.GetSupportedLanguages()
+    // when the typo'd value matches no indexed language (#1582).
+    // 従来 `search --lang csarp` は "No results found." だけ表示し、RunSearch から
+    // WriteLangHint を呼んでいなかった。round-2 で zero-result 分岐に WriteLangHint を
+    // 配線し、index 済み言語にマッチしない場合は ReferenceExtractor.GetSupportedLanguages()
+    // にフォールバックして提案を出すようにした (#1582)。
+    [Fact]
+    public void RunSearch_LangTypo_SuggestsClosestLanguage_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_typo");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "csarp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found.", stderr);
+            Assert.Contains("Did you mean: --lang csharp?", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // `--lang java` against a repo with no Java files used to print a confusing
+    // "Did you mean: --lang java?" because the fallback ReferenceExtractor match returned
+    // the exact input. Regression coverage for the round-3 fix that suppresses
+    // self-suggestions in WriteLangHint (#1582).
+    // Java を含まないリポジトリで `--lang java` を指定した際、フォールバックの
+    // ReferenceExtractor が入力と同じ値を返すため "Did you mean: --lang java?" という
+    // 紛らわしいメッセージが出ていた。round-3 で WriteLangHint が自己提案を抑止する
+    // ようにしたことの回帰ロック (#1582)。
+    [Fact]
+    public void RunSearch_LangNotIndexedButSupported_DoesNotSelfSuggest_Issue1582()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_no_self_suggest");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "java"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found.", stderr);
+            Assert.Contains("'java' not found in index", stderr);
+            Assert.DoesNotContain("Did you mean: --lang java?", stderr);
         }
         finally
         {
@@ -28121,6 +28299,76 @@ jobs:
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_TranslatesReadinessFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_readiness");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Readiness:", stdout);
+            Assert.Contains("Reference graph table", stdout);
+            Assert.Contains("Unicode exact-name fold contract", stdout);
+            Assert.Contains("C# metadata target contract", stdout);
+            Assert.Contains("validate output is degraded to empty", stdout);
+            Assert.Contains("cdidx backfill-fold", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Explain_PrintsReadinessFieldDescriptionWithoutDatabase()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "fold_ready"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Unicode exact-name fold contract (fold_ready)", stdout);
+        Assert.Contains("Ready:", stdout);
+        Assert.Contains("Degraded:", stdout);
+        Assert.Contains("Remediation:", stdout);
+        Assert.Contains("cdidx backfill-fold", stdout);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_RejectsUnknownReadinessField()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown status readiness field", stderr);
+        Assert.Contains("fold_ready", stderr);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_RejectsJsonMode()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "fold_ready", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("cannot be combined with --json", stderr);
+        Assert.Contains("status --json", stderr);
     }
 
     [Fact]

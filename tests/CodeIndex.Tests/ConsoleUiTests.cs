@@ -661,6 +661,68 @@ public class ConsoleUiTests
     }
 
     [Theory]
+    [InlineData("--paht", "--path")]
+    [InlineData("--exclud-path", "--exclude-path")]
+    [InlineData("--limti", "--limit")]
+    [InlineData("--lnag", "--lang")]
+    public void FindClosestMatch_FlagTypo_SuggestsClosestFlag(string input, string expected)
+    {
+        var flags = new[] { "--path", "--exclude-path", "--limit", "--lang", "--kind", "--json", "--query" };
+
+        Assert.Equal(expected, ConsoleUi.FindClosestMatch(input, flags));
+    }
+
+    [Theory]
+    [InlineData("pythno", "python")]
+    [InlineData("csarp", "csharp")]
+    [InlineData("typescritp", "typescript")]
+    public void FindClosestMatch_LanguageTypo_SuggestsClosestLanguage(string input, string expected)
+    {
+        var languages = new[] { "python", "csharp", "typescript", "javascript", "go", "rust" };
+
+        Assert.Equal(expected, ConsoleUi.FindClosestMatch(input, languages));
+    }
+
+    [Fact]
+    public void FindClosestMatch_BlankInput_ReturnsNull()
+    {
+        Assert.Null(ConsoleUi.FindClosestMatch(null, new[] { "csharp" }));
+        Assert.Null(ConsoleUi.FindClosestMatch("", new[] { "csharp" }));
+        Assert.Null(ConsoleUi.FindClosestMatch("  ", new[] { "csharp" }));
+    }
+
+    [Fact]
+    public void FindClosestMatches_ReturnsRankedSuggestions()
+    {
+        var candidates = new[] { "added", "changed", "fixed", "removed", "security", "docs" };
+
+        var matches = ConsoleUi.FindClosestMatches("addd", candidates, maxResults: 2);
+
+        Assert.Contains("added", matches);
+        Assert.True(matches.Count <= 2);
+    }
+
+    [Fact]
+    public void FindClosestMatches_NoMatchesWithinThreshold_ReturnsEmpty()
+    {
+        var candidates = new[] { "added", "changed" };
+
+        var matches = ConsoleUi.FindClosestMatches("absolutelynotrelated", candidates);
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void FindClosestMatches_ZeroMaxResults_ReturnsEmpty()
+    {
+        var candidates = new[] { "added", "changed" };
+
+        var matches = ConsoleUi.FindClosestMatches("addd", candidates, maxResults: 0);
+
+        Assert.Empty(matches);
+    }
+
+    [Theory]
     [InlineData("auto", ColorMode.Auto)]
     [InlineData("Always", ColorMode.Always)]
     [InlineData("NEVER", ColorMode.Never)]
