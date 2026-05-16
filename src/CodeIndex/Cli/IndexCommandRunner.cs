@@ -315,7 +315,7 @@ public static class IndexCommandRunner
         if (options.Rebuild)
         {
             db.ClearReadyFlags();
-            var rebuildWriter = new DbWriter(db.Connection);
+            var rebuildWriter = new DbWriter(db);
             rebuildWriter.ClearHotspotFamilyReady();
             rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
@@ -324,7 +324,7 @@ public static class IndexCommandRunner
         db.InitializeSchema();
         AddToGitExclude(options.ProjectPath, dbPath);
 
-        var writer = new DbWriter(db.Connection);
+        var writer = new DbWriter(db);
         var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
@@ -377,7 +377,7 @@ public static class IndexCommandRunner
         {
             using var db = new DbContext(options.DbPath);
             db.InitializeSchema();
-            var writer = new DbWriter(db.Connection);
+            var writer = new DbWriter(db);
 
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
