@@ -596,7 +596,7 @@ Languages:
 - reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, `scan_errors`, and `head_changed` (with `indexed_head_commit` / `workspace_head_commit` when the worktree HEAD has moved since the last full scan). Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
 - exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
 
-`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning recommending `cdidx index <projectPath> --rebuild` (and exposes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). `--commits` / `--files` partial updates deliberately preserve the captured HEAD so the staleness signal survives until a real full scan reindexes the worktree.
+`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning (also exposed as `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). When a branch-switch workflow knows the previous and current refs, refresh with `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` instead of rebuilding the whole project; it updates only files changed between the refs and includes rename/delete old paths for purging. Use a full `cdidx index <projectPath> --rebuild` or `cdidx <projectPath> --json` refresh when the refs are unavailable, after history-moving operations, or when you need a whole-checkout stale-path purge.
 
 Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
 
@@ -2047,7 +2047,7 @@ Languages:
 
 `status --check` は既定で 24 時間の index-age しきい値を使って stale-index hint を説明します。呼び出しごとに `--stale-after <duration>`（`30m` / `2h` / `7d`）、プロセスや CI 単位で `CDIDX_STALE_AFTER`、リポジトリ単位で `.cdidxrc.json` の `"stale_after": "2h"` により上書きできます。有効なしきい値は human 出力に表示され、JSON では `stale_after_seconds` として返ります。
 
-`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `cdidx index <projectPath> --rebuild` を推奨する `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。`--commits` / `--files` の部分更新は記録 HEAD を意図的に維持するため、次の full scan が worktree を再インデックスするまで stale 通知が継続します。
+`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。ブランチ切り替え workflow が切り替え前後の ref を持っているなら、プロジェクト全体を再構築せず `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` で更新してください。2つの ref 間で変更されたファイルだけを更新し、rename/delete の旧 path も purge 対象に含めます。ref が分からない場合、履歴を動かす操作の後、または checkout 全体の stale path purge が必要な場合は、`cdidx index <projectPath> --rebuild` または `cdidx <projectPath> --json` の full refresh を使います。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
 
