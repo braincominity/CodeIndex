@@ -1276,8 +1276,8 @@ public partial class DbReader
     }
 
     /// <summary>
-    /// Return a structured outline of symbols in a single file, ordered by line.
-    /// 1ファイルのシンボルを行順に構造化アウトラインとして返す。
+    /// Return a structured outline of symbols in a single file, ordered deterministically.
+    /// 1ファイルのシンボルを決定的な順序の構造化アウトラインとして返す。
     /// </summary>
     public OutlineResult? GetOutline(string filePath)
     {
@@ -1297,6 +1297,7 @@ public partial class DbReader
             totalLines = reader.GetInt32(3);
         }
 
+        var startColumnOrderSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
         using var symCmd = _conn.CreateCommand();
         symCmd.CommandText = $@"
             SELECT s.kind, s.name, s.line,
@@ -1312,7 +1313,11 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type
             FROM symbols s
             WHERE s.file_id = @fileId
-            ORDER BY s.line";
+            ORDER BY s.line ASC,
+                     {startColumnOrderSql} ASC,
+                     s.kind COLLATE BINARY ASC,
+                     s.name COLLATE BINARY ASC,
+                     s.id ASC";
         symCmd.Parameters.AddWithValue("@fileId", fileId);
 
         var symbols = new List<OutlineSymbol>();

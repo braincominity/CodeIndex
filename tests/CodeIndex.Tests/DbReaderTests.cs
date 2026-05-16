@@ -11063,6 +11063,38 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_SameLineSymbols_UsesStableTieBreakers()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/same-line.cs",
+            Lang = "csharp",
+            Size = 45,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 1,
+            Content = "public class First { } public class Second { }",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "property", Name = "Zoo", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Second", Line = 1, StartLine = 1, StartColumn = 23, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "property", Name = "Alpha", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "First", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 1 },
+        ]);
+
+        var outline = _reader.GetOutline("src/same-line.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(["First", "Second", "Alpha", "Zoo"], outline!.Symbols.Select(symbol => symbol.Name));
+    }
+
+    [Fact]
     public void GetOutline_ComputesContainerDepthFromSymbolChain()
     {
         InsertIndexedFile(
