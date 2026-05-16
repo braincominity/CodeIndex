@@ -314,6 +314,16 @@ public class StatusResult
     public long Chunks { get; set; }
     public long Symbols { get; set; }
     public long References { get; set; }
+    /// <summary>
+    /// Number of non-indexed files from the most recent successful full-repository scan whose
+    /// non-empty extension did not map to a known language. Null on legacy DBs or before the
+    /// current scanner has stamped this coverage signal (Issue #1585).
+    /// 直近成功した全体 scan で、非空の拡張子が既知言語に対応しなかった未 index ファイル数。
+    /// 旧 DB や現行 scanner による stamp 前は null。
+    /// </summary>
+    [JsonPropertyName("unknown_extension_file_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnknownExtensionFileCount { get; set; }
     public DateTime? IndexedAt { get; set; }
     public DateTime? LatestModified { get; set; }
     public string? ProjectRoot { get; set; }

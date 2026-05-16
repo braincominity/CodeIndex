@@ -1197,16 +1197,19 @@ public partial class McpServer : IDisposable
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        // Hand the per-request cancellation token to the reader so SQLite work the tool
-        // kicks off can observe shutdown / client-disconnect cancellation (#1567). The
-        // token is `CancellationToken.None` outside an in-flight request, preserving the
-        // existing behaviour for ad-hoc callers like tests that drive `WithDbReader`
-        // through internals.
-        // per-request cancellation token を reader に渡し、SQLite 作業が shutdown / 切断を
-        // 観測できるようにする (#1567)。
+        // Reuse the connection-scoped schema cache so each MCP tool call no longer
+        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
+        // and hand the per-request cancellation token to the reader so SQLite work
+        // the tool kicks off can observe shutdown / client-disconnect cancellation
+        // (#1567). The token is `CancellationToken.None` outside an in-flight request,
+        // preserving the existing behaviour for ad-hoc callers like tests that drive
+        // `WithDbReader` through internals.
+        // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
+        // per-request cancellation token を reader に渡して SQLite 作業が
+        // shutdown / 切断を観測できるようにする (#1567)。
         var requestToken = _currentRequestToken;
         requestToken.ThrowIfCancellationRequested();
-        var reader = new DbReader(db.Connection, db.IsReadOnly, requestToken);
+        var reader = new DbReader(db, requestToken);
         return action(reader);
     }
 

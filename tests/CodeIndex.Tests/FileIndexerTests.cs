@@ -1109,6 +1109,48 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_DoesNotMarkParentsFullyScannedWhenNestedDirectoryFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var srcDir = Path.Combine(tempDir, "src");
+        var blockedDir = Path.Combine(srcDir, "blocked");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(blockedDir);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(srcDir, "service.py"), "print('service')");
+            File.WriteAllText(Path.Combine(blockedDir, "secret.py"), "print('secret')");
+            originalMode = File.GetUnixFileMode(blockedDir);
+            SetUnixPermissions(blockedDir, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py", "src/service.py"], files);
+            Assert.Contains(result.Errors, error => error.Path == "src/blocked" && error.Message == "Could not scan directory due to permissions.");
+            Assert.Contains("", result.ListedDirectories);
+            Assert.DoesNotContain("", result.FullyScannedDirectories);
+            Assert.DoesNotContain("src", result.FullyScannedDirectories);
+            Assert.DoesNotContain("src/blocked", result.FullyScannedDirectories);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(blockedDir))
+                SetUnixPermissions(blockedDir, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -1658,6 +1700,35 @@ public class FileIndexerTests
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SeparatesUnknownExtensionsFromOtherNonIndexableFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
+            File.WriteAllText(Path.Combine(tempDir, "app.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
+            File.WriteAllText(Path.Combine(tempDir, "tool"), "plain text without a shebang\n");
+            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.mystery"), "ignored unknown extension\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var scanResult = indexer.ScanFilesDetailed();
+
+            Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+            Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
+            Assert.Contains("tool", scanResult.NonIndexablePaths);
+            Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
+            Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
         }
         finally
         {

@@ -31,6 +31,11 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        // Snapshot cwd alongside the already-absolutized options so the finalize step can
+        // detect mid-run drift (embedded host, signal handler, future plugin) and warn the
+        // operator. Failure to read cwd (e.g. it was deleted out from under us) is best-effort
+        // -- we just skip the drift warning rather than block the run. Issue #1577.
+        var initialCwd = TryCaptureCurrentDirectory();
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
@@ -330,8 +335,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
         }
     }
 
@@ -573,8 +578,12 @@ public static class IndexCommandRunner
 
         return new IndexCommandOptions
         {
-            ProjectPath = projectPath,
-            DbPath = dbPath,
+            // Absolutize critical paths at the option-parsing boundary so a cwd shift after
+            // this point (embedded host, signal handler, future plugin) cannot silently break
+            // relative-path math in FileIndexer / GitHelper / DbPathResolver. Issue #1577.
+            // オプション解析の境界で絶対化し、以降の cwd 変化で相対パス計算が崩れないようにする。
+            ProjectPath = AbsolutizePathOption(projectPath),
+            DbPath = AbsolutizeDbPathOption(dbPath),
             Rebuild = rebuild,
             Verbose = verbose,
             Json = json,
@@ -584,6 +593,61 @@ public static class IndexCommandRunner
             DryRun = dryRun,
             Force = force,
         };
+    }
+
+    private static string? AbsolutizePathOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+        try
+        {
+            return Path.GetFullPath(value);
+        }
+        catch
+        {
+            return value;
+        }
+    }
+
+    private static string? AbsolutizeDbPathOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+        if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return value;
+        return AbsolutizePathOption(value);
+    }
+
+    internal static string? TryCaptureCurrentDirectory()
+    {
+        try
+        {
+            return Environment.CurrentDirectory;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Build a warning message when the process cwd at the final write step differs from
+    /// the cwd captured at the option-parsing boundary. Returns null when the two cwds
+    /// are equal or either snapshot is missing. Issue #1577.
+    /// </summary>
+    internal static string? BuildCwdDriftNotice(string? initialCwd, string? currentCwd)
+    {
+        if (string.IsNullOrEmpty(initialCwd) || string.IsNullOrEmpty(currentCwd))
+            return null;
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(initialCwd, currentCwd, comparison))
+            return null;
+        return $"Process working directory changed during index (was {initialCwd}, now {currentCwd}). "
+            + "Index/query paths were absolutized at the option-parsing boundary so this run "
+            + "is unaffected, but later code paths that depend on Environment.CurrentDirectory "
+            + "may misbehave. Restore the original working directory or re-resolve relative paths.";
     }
 
     private static BackfillFoldCommandOptions ParseBackfillFoldArgs(string[] args)
@@ -647,7 +711,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
-        string? currentHeadCommit)
+        string? currentHeadCommit,
+        string? initialCwd)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -727,7 +792,8 @@ public static class IndexCommandRunner
                 currentHotspotFamilyMarkerFingerprints,
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
-                currentHeadCommit);
+                currentHeadCommit,
+                initialCwd);
         }
 
         if (!options.Json)
@@ -1193,6 +1259,18 @@ public static class IndexCommandRunner
         if (errors == 0)
             StampIndexedHeadMetadata(writer, projectRoot);
         stopwatch.Stop();
+        // Detect cwd drift between option-parsing and finalize. Paths used in this run are
+        // already absolute, but a drifted cwd is a strong signal that an embedded host or
+        // signal handler mutated process state -- surface it so the operator can correct
+        // their hosting code. Issue #1577.
+        var finalCwd = TryCaptureCurrentDirectory();
+        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
+        var cwdDriftDetected = cwdDriftNotice != null;
+        if (cwdDriftDetected)
+        {
+            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
+            warnings++;
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -1248,6 +1326,10 @@ public static class IndexCommandRunner
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
                 RecommendedAction = foldOnlyRemediation?.RecommendedAction,
                 AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                CwdDriftDetected = cwdDriftDetected,
+                CwdAtStart = initialCwd,
+                CwdAtFinalize = finalCwd,
+                CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -1281,6 +1363,8 @@ public static class IndexCommandRunner
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
+            if (cwdDriftDetected)
+                ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
 
         return CommandExitCodes.Success;
@@ -1592,7 +1676,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
-        string? currentHeadCommit)
+        string? currentHeadCommit,
+        string? initialCwd)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -1985,6 +2070,9 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            writer.SetMeta(
+                DbContext.UnknownExtensionFileCountMetaKey,
+                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // We deliberately only stamp on full scans (rebuild or default incremental). Update
             // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
@@ -2004,6 +2092,17 @@ public static class IndexCommandRunner
             StampIndexedHeadMetadata(writer, projectRoot);
         }
         stopwatch.Stop();
+        // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
+        // rationale; the warning is informational because we already absolutized paths.
+        // Issue #1577.
+        var finalCwd = TryCaptureCurrentDirectory();
+        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
+        var cwdDriftDetected = cwdDriftNotice != null;
+        if (cwdDriftDetected)
+        {
+            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
+            warnings++;
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -2063,6 +2162,10 @@ public static class IndexCommandRunner
                 PriorIndexedHeadCommit = priorIndexedHeadCommit,
                 CurrentHeadCommit = currentHeadCommit,
                 HeadChangeNotice = headChangeNotice,
+                CwdDriftDetected = cwdDriftDetected,
+                CwdAtStart = initialCwd,
+                CwdAtFinalize = finalCwd,
+                CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -2079,6 +2182,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Symbols  : {totalSymbols:N0}");
             Console.WriteLine($"  Refs     : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped  : {skipped:N0} (unchanged)");
+            if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
+            {
+                Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
+                foreach (var relPath in scanResult.UnknownExtensionFiles.Take(5))
+                    Console.WriteLine($"    {relPath}");
+                if (scanResult.UnknownExtensionFiles.Count > 5)
+                    Console.WriteLine($"    ... {scanResult.UnknownExtensionFiles.Count - 5:N0} more");
+            }
             if (warnings > 0) Console.WriteLine($"  Warnings : {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors   : {errors:N0}");
             Console.WriteLine($"  Graph    : {(graphTableAvailableAfter ? "ready" : "degraded")}");
@@ -2094,6 +2205,8 @@ public static class IndexCommandRunner
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
+            if (cwdDriftDetected)
+                ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
 
         return CommandExitCodes.Success;
