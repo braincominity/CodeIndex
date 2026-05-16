@@ -28417,6 +28417,76 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_HumanOutput_TranslatesReadinessFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_readiness");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Readiness:", stdout);
+            Assert.Contains("Reference graph table", stdout);
+            Assert.Contains("Unicode exact-name fold contract", stdout);
+            Assert.Contains("C# metadata target contract", stdout);
+            Assert.Contains("validate output is degraded to empty", stdout);
+            Assert.Contains("cdidx backfill-fold", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Explain_PrintsReadinessFieldDescriptionWithoutDatabase()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "fold_ready"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Unicode exact-name fold contract (fold_ready)", stdout);
+        Assert.Contains("Ready:", stdout);
+        Assert.Contains("Degraded:", stdout);
+        Assert.Contains("Remediation:", stdout);
+        Assert.Contains("cdidx backfill-fold", stdout);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_RejectsUnknownReadinessField()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown status readiness field", stderr);
+        Assert.Contains("fold_ready", stderr);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_RejectsJsonMode()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "fold_ready", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("cannot be combined with --json", stderr);
+        Assert.Contains("status --json", stderr);
+    }
+
+    [Fact]
     public void RunStatus_Json_UsesIndexedAndSourceFreshnessInsteadOfClockAge()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_freshness");

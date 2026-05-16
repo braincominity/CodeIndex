@@ -65,7 +65,67 @@ public static class QueryCommandRunner
         "--focus-column",
         "--focus-length",
         "--max-line-width",
+        "--explain",
     ];
+    private sealed record StatusReadinessField(
+        string FieldName,
+        string Label,
+        string ReadyText,
+        string DegradedText,
+        string Remediation);
+
+    private static readonly StatusReadinessField[] StatusReadinessFields =
+    [
+        new(
+            "graph_table_available",
+            "Reference graph table",
+            "reference, caller, callee, impact, unused, and hotspot queries can read indexed reference edges.",
+            "reference graph queries degrade to empty or incomplete results because the symbol_references table is missing.",
+            "Run `cdidx index <projectPath>` to rebuild the graph-capable index."),
+        new(
+            "issues_table_available",
+            "Validation issues table",
+            "validate can read indexed file issue rows.",
+            "validate output degrades to empty because the file_issues table is missing.",
+            "Run `cdidx index <projectPath>` to rebuild the issue table."),
+        new(
+            "sql_graph_contract_ready",
+            "SQL graph contract",
+            "SQL reference/dependency rows were written with the current call-column and qualified-name contract.",
+            "SQL graph/dependency readers may return stale or incomplete results.",
+            "Run `cdidx index <projectPath>` to rewrite SQL graph rows."),
+        new(
+            "hotspot_family_ready",
+            "Hotspot family contract",
+            "cross-file hotspot family grouping is stamped for all supported languages in this index.",
+            "cross-file hotspot grouping may be degraded for one or more languages.",
+            "Run `cdidx index <projectPath>` to restamp authoritative hotspot families."),
+        new(
+            "csharp_symbol_name_ready",
+            "C# symbol-name contract",
+            "C# exact-name lookup uses authoritative persisted names for operators, conversions, and indexers.",
+            "C# exact-name lookup for operators, conversions, and indexers may fall back to older canonical names.",
+            "Run `cdidx index <projectPath>` to upgrade canonical C# symbol names."),
+        new(
+            "csharp_metadata_target_ready",
+            "C# metadata target contract",
+            "deps and impact use authoritative C# metadata-attribute targets.",
+            "deps and impact metadata-attribute edges fall back to legacy signature/name heuristics.",
+            "Run `cdidx index <projectPath>` to restamp authoritative C# metadata targets."),
+        new(
+            "fold_ready",
+            "Unicode exact-name fold contract",
+            "--exact-name can use Unicode NFKC + CaseFold equality.",
+            "--exact-name falls back to ASCII COLLATE NOCASE, so non-ASCII casing pairs may not match.",
+            "Run `cdidx backfill-fold` to restamp folded-name columns in place, or `cdidx index <projectPath> --rebuild` for a full rebuild."),
+        new(
+            "index_newer_than_reader",
+            "Reader compatibility",
+            "this cdidx binary understands all persisted index contract versions.",
+            "this DB was written by a newer cdidx, so older readers may degrade instead of trusting newer contract stamps.",
+            "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use."),
+    ];
+
     private static readonly HashSet<string> FlagOnlyOptions =
     [
         "--json",
@@ -1673,6 +1733,16 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
+        if (options.StatusExplainField != null)
+        {
+            if (options.Json)
+            {
+                Console.Error.WriteLine("Error: status --explain is human-readable only and cannot be combined with --json.");
+                Console.Error.WriteLine("Hint: omit --json, or use plain `status --json` to read machine-oriented readiness fields.");
+                return CommandExitCodes.UsageError;
+            }
+            return WriteStatusReadinessExplanation(options.StatusExplainField);
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1783,6 +1853,7 @@ public static class QueryCommandRunner
                 // #1546: case-sensitivity を診断用に明示する。
                 if (status.PathCaseSensitive != null)
                     Console.WriteLine($"FS Case : {(status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive")}");
+                WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (status.IndexNewerThanReader)
@@ -2979,6 +3050,7 @@ public static class QueryCommandRunner
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
         string? groupBy = null;
+        string? statusExplainField = null;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -3202,6 +3274,26 @@ public static class QueryCommandRunner
                         AddParseError("Error: --check is not supported by this command.");
                     }
                     break;
+                case "--explain":
+                    if (allowStatusCheck)
+                    {
+                        if (TryReadStringOptionValue(args, ref i, "--explain", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var explainValue, out var explainError))
+                        {
+                            WarnIfDuplicateSingleValueOption("--explain", explainValue!);
+                            statusExplainField = explainValue;
+                        }
+                        else
+                            AddParseError(explainError!);
+                    }
+                    else if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --explain is not supported by this command.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
@@ -3388,6 +3480,7 @@ public static class QueryCommandRunner
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
             GroupBy = groupBy,
+            StatusExplainField = statusExplainField,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
@@ -3963,6 +4056,85 @@ public static class QueryCommandRunner
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
            && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static int WriteStatusReadinessExplanation(string fieldName)
+    {
+        var field = FindStatusReadinessField(fieldName);
+        if (field == null)
+        {
+            Console.Error.WriteLine($"Error: unknown status readiness field `{fieldName}`.");
+            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            return CommandExitCodes.UsageError;
+        }
+
+        Console.WriteLine($"{field.Label} ({field.FieldName})");
+        Console.WriteLine();
+        Console.WriteLine($"Ready: {field.ReadyText}");
+        Console.WriteLine($"Degraded: {field.DegradedText}");
+        Console.WriteLine($"Remediation: {field.Remediation}");
+        return CommandExitCodes.Success;
+    }
+
+    private static StatusReadinessField? FindStatusReadinessField(string fieldName)
+        => StatusReadinessFields.FirstOrDefault(
+            field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
+
+    private static void WriteStatusReadinessSummary(StatusResult status, QueryCommandOptions options)
+    {
+        Console.WriteLine("Readiness:");
+        foreach (var field in StatusReadinessFields)
+        {
+            var degraded = IsStatusReadinessFieldDegraded(status, field.FieldName);
+            var state = degraded ? "degraded" : "ready";
+            Console.WriteLine($"  {field.Label,-32} {state}");
+
+            if (degraded)
+            {
+                Console.WriteLine($"    {BuildStatusReadinessDegradedDetail(status, options, field.FieldName, field.DegradedText)}");
+                Console.WriteLine($"    {BuildStatusReadinessRemediation(status, options, field.FieldName, field.Remediation)}");
+            }
+        }
+    }
+
+    private static bool IsStatusReadinessFieldDegraded(StatusResult status, string fieldName)
+        => fieldName switch
+        {
+            "graph_table_available" => !status.GraphTableAvailable,
+            "issues_table_available" => !status.IssuesTableAvailable,
+            "sql_graph_contract_ready" => !status.SqlGraphContractReady,
+            "hotspot_family_ready" => !status.HotspotFamilyReady,
+            "csharp_symbol_name_ready" => !status.CSharpSymbolNameReady,
+            "csharp_metadata_target_ready" => !status.CSharpMetadataTargetReady,
+            "fold_ready" => !status.FoldReady,
+            "index_newer_than_reader" => status.IndexNewerThanReader,
+            _ => false,
+        };
+
+    private static string BuildStatusReadinessDegradedDetail(StatusResult status, QueryCommandOptions options, string fieldName, string fallback)
+        => fieldName switch
+        {
+            "sql_graph_contract_ready" => status.SqlGraphContractDegradedReason ?? fallback,
+            "hotspot_family_ready" => status.HotspotFamilyDegradedReason ?? fallback,
+            "fold_ready" => BuildFoldNotReadyExplanation(status.FoldReadyReason),
+            "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
+            "graph_table_available" => "reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
+            "issues_table_available" => "validate output is degraded to empty because the file_issues table is missing.",
+            "csharp_symbol_name_ready" => "C# exact-name for operators / conversion operators / indexers is degraded.",
+            "csharp_metadata_target_ready" => "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic.",
+            _ => fallback,
+        };
+
+    private static string BuildStatusReadinessRemediation(StatusResult status, QueryCommandOptions options, string fieldName, string fallback)
+        => fieldName switch
+        {
+            "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
+            "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
+            "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
+            "csharp_metadata_target_ready" => "Run `cdidx index .` to re-stamp authoritative is_metadata_target values.",
+            "index_newer_than_reader" => "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use.",
+            _ => fallback,
+        };
 
     private static bool IsStatusDegraded(StatusResult status)
         => !status.GraphTableAvailable
@@ -4992,6 +5164,7 @@ public sealed class QueryCommandOptions
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
     public string? GroupBy { get; init; }
+    public string? StatusExplainField { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }
