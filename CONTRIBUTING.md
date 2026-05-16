@@ -38,6 +38,8 @@ Start from the shared project guidance:
 - `DEVELOPER_GUIDE.md` for architecture, dependency policy, and build basics.
 - `TESTING_GUIDE.md` for test layout, test-writing conventions, and targeted
   test commands.
+- `docs/platform-support.md` for official release asset RIDs and unsupported
+  platform alternatives.
 - `AGENT_GUIDE.md` for repository workflow rules used by coding agents.
 
 For a normal change, create a topic branch from the latest `origin/main`.

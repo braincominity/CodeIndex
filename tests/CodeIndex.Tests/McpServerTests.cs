@@ -5661,6 +5661,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByFileReportsGroupingMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_group_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp",
+                """
+                public class One
+                {
+                    private void A() { A(); A(); }
+                    private void B() { B(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Two.cs", "csharp",
+                """
+                public class Two
+                {
+                    private void C() { C(); }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
+            }
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function","groupBy":"file","limit":1}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            var hotspot = structured["hotspots"]!.AsArray().Single()!;
+            Assert.Equal("file", structured["grouped_by"]!.GetValue<string>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal("src/One.cs", hotspot["path"]!.GetValue<string>());
+            Assert.Equal(3, hotspot["reference_count"]!.GetValue<int>());
+            Assert.Equal(2, hotspot["symbol_count"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())
