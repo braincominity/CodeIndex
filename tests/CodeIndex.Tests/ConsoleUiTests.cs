@@ -219,11 +219,15 @@ public class ConsoleUiTests
                 var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
                 var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
                 var licenseToken = shell == "fish" ? "-l license" : shell == "bash" ? "--license" : "license:license command";
+                // #1570: the schema-driven generators emit one canonical description per flag
+                // across every branch — the pre-refactor per-branch wording ("snippets" /
+                // "contexts" / "excerpts") collapses to a single "payloads" tooltip.
+                // #1570 後はスキーマ駆動なので、ブランチごとに違う旧文言ではなく統一の "payloads" 表記。
                 var maxLineWidthToken = shell == "fish"
                     ? "Clamp long single-line payloads (0 disables clamping)"
                     : shell == "bash"
                         ? "--max-line-width"
-                        : "--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number";
+                        : "--max-line-width[Clamp long single-line payloads (0 disables clamping)]:number";
                 Assert.Contains(exactSubstringToken, output);
                 Assert.Contains(exactNameToken, output);
                 Assert.Contains(groupByNameToken, output);
@@ -231,8 +235,6 @@ public class ConsoleUiTests
                 Assert.Contains(maxLineWidthToken, output);
                 Assert.Contains("cshtml", output);
                 Assert.Contains("razor", output);
-                if (shell == "zsh")
-                    Assert.Contains("--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number", output);
                 if (shell is "bash" or "zsh")
                 {
                     // Should contain dynamically generated languages, including newly added ones
@@ -269,14 +271,25 @@ public class ConsoleUiTests
     [Fact]
     public void PrintCompletions_FishIncludesFindOptions()
     {
+        // #1570: fish completion is now emitted from `CliFlagSchema`. The hand-written
+        // `__fish_seen_subcommand_from <list>` strings change to the canonical
+        // command-ordering used by `CliFlagSchema.AllCommands`, and descriptions use the
+        // schema's single source of truth (e.g. `--exact` → "Backward-compatible exact
+        // shorthand"). These assertions intentionally check the schema-ordered groupings
+        // (`--query` and `--before`/`--after` predicates) and key flag invariants while
+        // accepting the unified wording.
+        // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
+        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
         var output = ConsoleUi.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
+        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
-        Assert.Contains("__fish_seen_subcommand_from search find", output);
+        // `--exact` schema membership: search + find + the name-resolution commands.
+        // 旧手書きが `search find` だけだった所を、スキーマ準拠の正規列で確認する。
+        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact ", output);
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
-        Assert.Contains("-l exact -d 'Exact match'", output);
+        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand'", output);
         Assert.Contains("__fish_seen_subcommand_from hotspots", output);
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }

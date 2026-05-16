@@ -679,198 +679,221 @@ public static class ConsoleUi
             .Distinct()
             .OrderBy(l => l));
 
+    // Commands that get their own per-command completion branch (bash/zsh). Order matters: the
+    // `else` generic branch is the catch-all, and `search` must remain the last `elif` so the
+    // tests `PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch` can isolate it.
+    // bash / zsh の専用ブランチを持つコマンド。順序は意図的で、`search` が最終 elif、`else` が
+    // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
+    private static readonly string[] EnumeratedCompletionCommands =
+    [
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "search",
+    ];
+
+    // Generic-branch representative set: union of completion flags from these commands populates
+    // the bash/zsh `else` branch. Excludes find/excerpt/etc. which have their own branches, and
+    // intentionally omits commands whose flags would surface in their own branches.
+    // generic ブランチを構成する代表コマンド集合。専用ブランチを持つコマンドは除外。
+    private static readonly string[] GenericBranchRepresentativeCommands =
+    [
+        "definition", "callers", "callees", "symbols", "files", "map", "impact", "deps", "unused",
+    ];
+
     private static string GetBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
-        return $@"_cdidx() {{
-    local cur prev commands
-    local cmd
-    cur=""${{COMP_WORDS[COMP_CWORD]}}""
-    prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
-    cmd=""${{COMP_WORDS[1]}}""
-    commands=""{cmds}""
-
-    if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=($(compgen -W ""$commands --help --version --license"" -- ""$cur""))
-        return
-    fi
-
-    case ""$prev"" in
-        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
-        --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
-        --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *)
-            if [ ""$cmd"" = ""find"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --max-line-width --exact --count --query --help --"" -- ""$cur""))
-            elif [ ""$cmd"" = ""excerpt"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --before --after --max-line-width --focus-line --focus-column --focus-length --start --end --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""references"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --max-line-width --exact --exact-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""inspect"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --body --max-line-width --exact --exact-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""hotspots"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""status"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --check --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""db"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --integrity-check --help"" -- ""$cur""))
-            elif [ ""$cmd"" = ""search"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --top --lang --path --exclude-path --exclude-tests --count --fts --snippet-lines --max-line-width --since --no-dedup --exact --exact-substring --help"" -- ""$cur""))
-            else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --since --depth --reverse --exact --exact-name --help"" -- ""$cur""))
-            fi
-            ;;
-    esac
-}}
-complete -F _cdidx cdidx";
+        var sb = new StringBuilder();
+        sb.Append("_cdidx() {\n");
+        sb.Append("    local cur prev commands\n");
+        sb.Append("    local cmd\n");
+        sb.Append("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+        sb.Append("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n");
+        sb.Append("    cmd=\"${COMP_WORDS[1]}\"\n");
+        sb.Append($"    commands=\"{cmds}\"\n");
+        sb.Append("\n");
+        sb.Append("    if [ $COMP_CWORD -eq 1 ]; then\n");
+        sb.Append("        COMPREPLY=($(compgen -W \"$commands --help --version --license\" -- \"$cur\"))\n");
+        sb.Append("        return\n");
+        sb.Append("    fi\n");
+        sb.Append("\n");
+        sb.Append("    case \"$prev\" in\n");
+        sb.Append("        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
+        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
+        sb.Append("        *)\n");
+        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        {
+            var command = EnumeratedCompletionCommands[i];
+            var keyword = i == 0 ? "if" : "elif";
+            sb.Append($"            {keyword} [ \"$cmd\" = \"{command}\" ]; then\n");
+            sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList(command)}\" -- \"$cur\"))\n");
+        }
+        sb.Append("            else\n");
+        sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashGenericFlagList()}\" -- \"$cur\"))\n");
+        sb.Append("            fi\n");
+        sb.Append("            ;;\n");
+        sb.Append("    esac\n");
+        sb.Append("}\n");
+        sb.Append("complete -F _cdidx cdidx");
+        return sb.ToString();
     }
+
+    private static string BuildBashFlagList(string command)
+    {
+        // Per-command branch: schema flags + universal --help. `find` additionally surfaces
+        // `--` as the end-of-options marker so users can pass literal queries starting with `-`.
+        // schema のフラグに `--help` を加え、`find` のみ `--` end-of-options マーカーも露出させる。
+        var tokens = new List<string>();
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            tokens.Add(flag.Name);
+        tokens.Add("--help");
+        if (command == "find")
+            tokens.Add("--");
+        return string.Join(" ", tokens);
+    }
+
+    private static string BuildBashGenericFlagList()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var tokens = new List<string>();
+        foreach (var command in GenericBranchRepresentativeCommands)
+        {
+            foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                // Skip flags that are scoped to the enumerated per-command branches; the generic
+                // branch is the catch-all for "everything else".
+                if (IsEnumeratedBranchScopedFlag(flag.Name))
+                    continue;
+                if (seen.Add(flag.Name))
+                    tokens.Add(flag.Name);
+            }
+        }
+        tokens.Add("--help");
+        return string.Join(" ", tokens);
+    }
+
+    private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
+        flagName is "--max-line-width" or "--snippet-lines" or "--fts" or "--no-dedup"
+            or "--prefix" or "--exact-substring" or "--integrity-check" or "--check"
+            or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
+            or "--before" or "--after" or "--group-by-name";
 
     private static string GetZshCompletions()
     {
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
-        return $@"#compdef cdidx
-_cdidx() {{
-    local -a commands
-    commands=(
-        {cmds}
-    )
+        var langs = GetCompletionLangs();
+        var sb = new StringBuilder();
+        sb.Append("#compdef cdidx\n");
+        sb.Append("_cdidx() {\n");
+        sb.Append("    local -a commands\n");
+        sb.Append("    commands=(\n");
+        sb.Append($"        {cmds}\n");
+        sb.Append("    )\n");
+        sb.Append("\n");
+        sb.Append("    _arguments -C \\\n");
+        sb.Append("        '1:command:->cmds' \\\n");
+        sb.Append("        '*::arg:->args'\n");
+        sb.Append("\n");
+        sb.Append("    case $state in\n");
+        sb.Append("        cmds) _describe 'command' commands ;;\n");
+        sb.Append("        args)\n");
+        sb.Append("            local subcmd\n");
+        sb.Append("            subcmd=$words[2]\n");
+        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        {
+            var command = EnumeratedCompletionCommands[i];
+            var keyword = i == 0 ? "if" : "elif";
+            sb.Append($"            {keyword} [[ $subcmd == {command} ]]; then\n");
+            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs));
+        }
+        sb.Append("            else\n");
+        AppendZshArguments(sb, BuildZshGenericArgs(langs));
+        sb.Append("            fi\n");
+        sb.Append("            ;;\n");
+        sb.Append("    esac\n");
+        sb.Append("}\n");
+        sb.Append("_cdidx");
+        return sb.ToString();
+    }
 
-    _arguments -C \
-        '1:command:->cmds' \
-        '*::arg:->args'
+    private static List<string> BuildZshArgsForCommand(string command, string langs)
+    {
+        var args = new List<string>();
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            args.Add(FormatZshArgument(flag, langs));
+        // Append a trailing positional placeholder so zsh suggests path/query completion after
+        // the flags — but only for commands that actually accept a positional argument. `status`,
+        // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
+        // matches the original hand-written script's behavior.
+        // 末尾 positional は path / query を受け付けるコマンドにのみ付ける。
+        var positional = command switch
+        {
+            "excerpt" => "'*:path'",
+            "find" or "search" or "references" or "inspect" => "'*:query'",
+            _ => null,
+        };
+        if (positional is not null)
+            args.Add(positional);
+        return args;
+    }
 
-    case $state in
-        cmds) _describe 'command' commands ;;
-        args)
-            local subcmd
-            subcmd=$words[2]
-            if [[ $subcmd == find ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--no-json[Disable JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--top[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                      '--path[Path filter]:glob' \
-                      '--exclude-path[Exclude path]:glob' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--before[Context lines before]:number' \
-                    '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number' \
-                    '--exact[Exact match]' \
-                    '--count[Count only]' \
-                    '--query[Literal query]' \
-                    '*:query'
-            elif [[ $subcmd == excerpt ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--start[Start line]:number' \
-                    '--end[End line]:number' \
-                    '--before[Context lines before]:number' \
-                    '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line excerpts]:number' \
-                    '--focus-line[excerpt: focused line number]:number' \
-                    '--focus-column[excerpt: focused column]:number' \
-                    '--focus-length[excerpt: focused span width]:number' \
-                    '*:path'
-            elif [[ $subcmd == references ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            elif [[ $subcmd == inspect ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--body[Include body]' \
-                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            elif [[ $subcmd == hotspots ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--group-by-name[Hotspots: collapse same-name rows across files]' \
-                    '*:query'
-            elif [[ $subcmd == status ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--check[Verify index matches current workspace]'
-            elif [[ $subcmd == db ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--integrity-check[Run PRAGMA integrity_check on the database]'
-            elif [[ $subcmd == search ]]; then
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--top[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--count[Count only]' \
-                    '--fts[Raw FTS5 syntax]' \
-                    '--snippet-lines[Snippet length]:number' \
-                    '--max-line-width[Clamp long single-line snippets]:number' \
-                    '--since[Filter by modified-since timestamp]:datetime' \
-                    '--no-dedup[Show duplicate chunks]' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-substring[Search-only exact substring match]' \
-                    '*:query'
-            else
-                _arguments \
-                    '--db[Database path]:file:_files' \
-                    '--json[JSON output]' \
-                    '--limit[Max results]:number' \
-                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                    '--path[Path filter]:pattern' \
-                    '--exclude-path[Exclude path]:pattern' \
-                    '--exclude-tests[Exclude tests]' \
-                    '--body[Include body]' \
-                    '--count[Count only]' \
-                    '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-name[Exact symbol-name equality]' \
-                    '*:query'
-            fi
-            ;;
-    esac
-}}
-_cdidx";
+    private static List<string> BuildZshGenericArgs(string langs)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var args = new List<string>();
+        foreach (var command in GenericBranchRepresentativeCommands)
+        {
+            foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                if (IsEnumeratedBranchScopedFlag(flag.Name))
+                    continue;
+                if (seen.Add(flag.Name))
+                    args.Add(FormatZshArgument(flag, langs));
+            }
+        }
+        args.Add("'*:query'");
+        return args;
+    }
+
+    private static string FormatZshArgument(CliFlag flag, string langs)
+    {
+        var desc = flag.Description.Replace("'", "''");
+        if (!flag.IsValueBearing)
+            return $"'{flag.Name}[{desc}]'";
+
+        var valueSpec = flag.ValuePlaceholder switch
+        {
+            "<path>" => "file:_files",
+            "<glob>" => "pattern",
+            "<n>" => "number",
+            "<line>" => "number",
+            "<id>" => "id",
+            "<datetime>" => "datetime",
+            "<lang>" => $"language:({langs})",
+            "<kind>" => "kind:(function class struct interface enum property event delegate namespace import)",
+            "<query>" => "query",
+            "<name>" => "name",
+            "<host:port>" => "address",
+            "<stdio|http>" => "transport:(stdio http)",
+            _ => "value",
+        };
+        return $"'{flag.Name}[{desc}]:{valueSpec}'";
+    }
+
+    private static void AppendZshArguments(StringBuilder sb, IReadOnlyList<string> args)
+    {
+        sb.Append("                _arguments");
+        for (var i = 0; i < args.Count; i++)
+        {
+            sb.Append(" \\\n                    ");
+            sb.Append(args[i]);
+        }
+        sb.Append('\n');
     }
 
     private static string GetFishCompletions()
     {
+        var langs = GetCompletionLangs();
         var lines = new List<string>
         {
             "# cdidx fish completions",
@@ -881,35 +904,37 @@ _cdidx";
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
 
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from status' -l check -d 'Verify index matches current workspace'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l db -r -d 'Database path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l json -d 'JSON output'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from db' -l integrity-check -d 'Run PRAGMA integrity_check on the database'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l limit -r -d 'Max results'");
-        lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l lang -r -a '{GetCompletionLangs()}' -d 'Filter by language'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l count -d 'Count only'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l start -r -d 'Start line'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l end -r -d 'End line'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from hotspots' -l group-by-name -d 'Collapse same-name rows across files'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
-        lines.Add("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
+        // Emit one `complete` line per schema flag, joining the applicable command list into the
+        // fish `__fish_seen_subcommand_from` predicate. Hotspots' `--group-by-name` description is
+        // shortened to match the legacy "Collapse same-name rows across files" tooltip that the
+        // existing test pins (the schema description is fuller and still appears in zsh).
+        // schema 1 行 = fish の 1 行 (`complete -c cdidx -n '__fish_seen_subcommand_from <cmds>' -l <name> ...`)
+        // という対応で生成する。`--group-by-name` のみ既存テストが期待する短い tooltip を維持。
+        foreach (var flag in CliFlagSchema.All)
+        {
+            var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
+            var name = flag.Name.TrimStart('-');
+            // Token order is `-l name (-r)? (-a 'values')? -d 'description'` — matches the
+            // pre-refactor hand-written script so the ConsoleUiTests fish-extractor regex
+            // (`'  -l <flag>`) keeps working for value-bearing flags too.
+            // トークン順は旧スクリプトと同じ `-l name (-r)? (-a) -d` を維持する。
+            // ConsoleUiTests の fish 抽出正規表現が -l の直前に値マーカーを期待していないため。
+            var requiresArg = flag.IsValueBearing ? " -r" : "";
+            var description = name switch
+            {
+                "group-by-name" => "Collapse same-name rows across files",
+                _ => flag.Description,
+            };
+            var argSpec = flag.ValuePlaceholder switch
+            {
+                "<lang>" => $" -a '{langs}'",
+                "<kind>" => " -a 'function class struct interface enum property event delegate namespace import'",
+                "<stdio|http>" => " -a 'stdio http'",
+                _ => "",
+            };
+            description = description.Replace("'", "\\'");
+            lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {commands}' -l {name}{requiresArg}{argSpec} -d '{description}'");
+        }
         return string.Join(Environment.NewLine, lines);
     }
 
