@@ -24,7 +24,13 @@ internal sealed class HttpMcpTransport : IMcpTransport
 {
     private readonly HttpListener _listener;
     private readonly string _endpoint;
-    private readonly string? _bearerToken;
+    // The configured bearer token's SHA-256 digest, precomputed once at construction so the
+    // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
+    // per-request work proportional only to the attacker-supplied input length, eliminating the
+    // configured-token length side channel that a per-request hash would still leak.
+    // 設定トークンの SHA-256 をコンストラクタで一度だけ計算し、リクエスト毎の auth では
+    // 攻撃者入力のみハッシュ計算する。これにより設定トークン長による timing 漏洩を排除する。
+    private readonly byte[]? _bearerTokenHash;
     private HttpListenerContext? _pendingContext;
     private bool _disposed;
 
@@ -42,7 +48,9 @@ internal sealed class HttpMcpTransport : IMcpTransport
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
-        _bearerToken = string.IsNullOrEmpty(bearerToken) ? null : bearerToken;
+        _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
+            ? null
+            : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
         _endpoint = $"http://{host}:{boundPort}/";
     }
 
@@ -50,7 +58,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
     public string Endpoint => _endpoint;
 
-    internal bool RequiresBearerToken => _bearerToken is not null;
+    internal bool RequiresBearerToken => _bearerTokenHash is not null;
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -240,7 +248,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
     private async Task<bool> TryAuthorizeAsync(HttpListenerContext context)
     {
-        if (_bearerToken is null)
+        if (_bearerTokenHash is null)
             return true;
 
         // RFC 6750 §2.1: the auth-scheme token is case-insensitive — clients sending
@@ -252,7 +260,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
             && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var provided = header.Substring("Bearer ".Length).Trim();
-            if (ConstantTimeEquals(provided, _bearerToken))
+            if (HashEqualsConfiguredToken(provided))
                 return true;
         }
 
@@ -283,23 +291,21 @@ internal sealed class HttpMcpTransport : IMcpTransport
         }
     }
 
-    private static bool ConstantTimeEquals(string a, string b)
+    private bool HashEqualsConfiguredToken(string provided)
     {
-        // Compare SHA-256 hashes of both tokens via CryptographicOperations.FixedTimeEquals so
-        // the comparison length is independent of the configured secret. A naive
-        // length-then-bytes compare leaks the configured token length through timing even when
-        // the byte-loop itself is constant time; hashing to a fixed 32-byte digest first
-        // eliminates that side channel. The hashes are unsalted on purpose — the goal here is
-        // constant-time equality of two same-length arrays, not password storage.
-        // 設定トークンの長さが timing で漏れないよう、両入力を SHA-256 ハッシュへ畳んで
-        // CryptographicOperations.FixedTimeEquals で比較する。素朴な length-then-bytes は
-        // バイト比較ループが定数時間でも長さが漏れる。salt を付けないのはあくまで「同じ長さの
-        // 配列の定数時間比較」が目的で、パスワード保存ではないため。
-        Span<byte> aHash = stackalloc byte[32];
-        Span<byte> bHash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(a), aHash);
-        SHA256.HashData(Encoding.UTF8.GetBytes(b), bHash);
-        return CryptographicOperations.FixedTimeEquals(aHash, bHash);
+        // Hash only the attacker-supplied input and compare to the pre-computed configured-token
+        // digest via FixedTimeEquals. Hashing the configured token on every request would still
+        // leak its length through SHA-256's per-block work; pre-computing in the constructor and
+        // hashing only the request side eliminates that channel. The digest is unsalted on
+        // purpose — the goal is constant-time equality of two same-length 32-byte buffers, not
+        // password storage.
+        // 攻撃者入力のみハッシュ計算し、コンストラクタで事前計算した設定トークン digest と
+        // FixedTimeEquals で比較する。リクエスト毎に設定トークンをハッシュすると SHA-256 の
+        // ブロック処理量で設定トークン長が漏れるため、設定側を事前計算しておく。
+        // salt 無しは「同じ長さの 32 byte 配列の定数時間比較」が目的だから。
+        Span<byte> providedHash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(provided), providedHash);
+        return CryptographicOperations.FixedTimeEquals(providedHash, _bearerTokenHash);
     }
 
     public ValueTask DisposeAsync()
