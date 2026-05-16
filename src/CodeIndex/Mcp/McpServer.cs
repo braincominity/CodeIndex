@@ -776,12 +776,24 @@ public partial class McpServer : IDisposable
         foreach (var supported in SupportedProtocolVersions)
             supportedArray.Add(JsonValue.Create(supported));
 
-        var data = new JsonObject
+        // Keep the #1554 version-negotiation fields, then layer the #1581 canonical envelope
+        // on top via BuildData so this path also carries `category` / `suggestion` /
+        // `retry_safe` like every other JSON-RPC error.
+        // #1554 のバージョン交渉用フィールドを保ちつつ、#1581 の canonical envelope を
+        // BuildData で重ねて、他の JSON-RPC エラーと同様に category / suggestion / retry_safe
+        // を含めるようにする。
+        var extra = new JsonObject
         {
             ["supportedVersions"] = supportedArray
         };
         if (requestedVersion != null)
-            data["requestedVersion"] = requestedVersion;
+            extra["requestedVersion"] = requestedVersion;
+
+        var data = McpErrorEnvelope.BuildData(
+            McpErrorEnvelope.CategoryInvalidArgument,
+            "Reissue `initialize` with one of `data.supportedVersions` in `params.protocolVersion`, or omit the field to fall back to the server's newest supported version.",
+            retrySafe: false,
+            extra);
 
         var error = new JsonObject
         {

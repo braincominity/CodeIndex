@@ -1258,7 +1258,7 @@ cdidx-specific categories.
 | --- | --- | --- | --- |
 | `-32000` | `rate_limited` | `true` | Token-bucket throttle denied the call (#1560). Legacy fields `error_category`, `tool`, `caller`, `retry_after_ms` are kept alongside the canonical envelope for backward compatibility. |
 | `-32001` | `permission_denied` | `false` | Token auth failure (`TokenMcpAuthenticator`, #1559). The wire stays generic; stderr carries the detailed reason. |
-| `-32010` | `index_missing` | `false` | DB path does not exist or could not be opened for the requested tool call. |
+| `-32010` | `index_missing` | `true` | DB path does not exist or could not be opened for the requested tool call. The same request becomes safe to retry once the operator runs `cdidx index <projectPath>`. |
 | `-32011` | `index_stale` | `true` | SQLite reported `no such table` / `no such column`; the DB was written by an older cdidx and needs `cdidx index <projectPath> --rebuild`. |
 | `-32012` | `index_corrupted` | `false` | SQLite reported `database disk image is malformed` / `file is not a database` / `file is encrypted`. The DB cannot be read; the operator must delete it and reindex. |
 | `-32015` | `request_cancelled` | `true` | The MCP request was cancelled (client disconnect, shutdown). Reissue if the work is still needed. |
@@ -1268,9 +1268,13 @@ The following categories ride the standard JSON-RPC codes:
 | Standard code | Category | `retry_safe` | Trigger |
 | --- | --- | --- | --- |
 | `-32700` | `parse_error` | `false` | Frame was not valid JSON. |
-| `-32600` | `invalid_request` / `message_too_large` | `false` | Frame parsed but is not a JSON object, missing fields, or above the per-frame byte cap. |
-| `-32601` | `method_not_found` / `tool_unknown` / `tool_disabled` | `false` | Unknown JSON-RPC method, unknown MCP tool name, or known tool disabled by `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` (#1561). The `-32601` wire code is preserved for `tool_disabled` so the pre-#1581 client contract still holds; only the envelope is additive. |
-| `-32602` | `missing_parameter` / `invalid_argument` | `false` | Required parameter missing or argument shape rejected (also covers the protocol-version handshake mismatch from #1554). |
+| `-32700` | `message_too_large` | `false` | Frame is above the per-frame byte cap and is rejected before parsing. The frame reader uses the parse-error code because the frame is unreadable in the same sense as malformed JSON. |
+| `-32600` | `invalid_request` | `false` | Frame parsed but is not a JSON object, is missing required JSON-RPC fields, or carries an invalid `id`. |
+| `-32601` | `method_not_found` | `false` | Unknown JSON-RPC method (not one of `initialize` / `tools/list` / `tools/call` / `ping` / supported `notifications/*`). |
+| `-32601` | `tool_disabled` | `false` | Known MCP tool is disabled by `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` (#1561). The `-32601` wire code is preserved so the pre-#1581 client contract still holds; only the envelope is additive. `data.tool` carries the disabled tool name. |
+| `-32602` | `tool_unknown` | `false` | `tools/call` received an MCP tool name the server does not implement (typo or version mismatch). `data.tool` carries the unknown name. |
+| `-32602` | `missing_parameter` | `false` | `tools/call` request omitted the required `params.name` string. |
+| `-32602` | `invalid_argument` | `false` | Argument shape rejected by the tool (also covers the protocol-version handshake mismatch from #1554, which exposes `data.requestedVersion` / `data.supportedVersions`). |
 | `-32603` | `internal_error` | `false` | Unhandled exception path (fallback bucket). The wire message stays generic per #1530 sanitization; stderr carries the exception type. |
 
 The classifier `McpErrorEnvelope.ClassifyException(ex)` maps unhandled
@@ -2358,7 +2362,7 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 | --- | --- | --- | --- |
 | `-32000` | `rate_limited` | `true` | トークンバケットによるスロットルで拒否（#1560）。後方互換のため legacy フィールド `error_category` / `tool` / `caller` / `retry_after_ms` も canonical envelope と並べて維持する。 |
 | `-32001` | `permission_denied` | `false` | トークン認証失敗（`TokenMcpAuthenticator`、#1559）。ワイヤは汎用のまま、stderr に詳細を書く。 |
-| `-32010` | `index_missing` | `false` | DB パスが無いか、対象ツール呼び出しのためにオープンできなかった。 |
+| `-32010` | `index_missing` | `true` | DB パスが無いか、対象ツール呼び出しのためにオープンできなかった。オペレータが `cdidx index <projectPath>` を実行した後は同じリクエストを安全に再送できる。 |
 | `-32011` | `index_stale` | `true` | SQLite が `no such table` / `no such column` を返した。古い cdidx で書かれた DB に新しい binary を当てた状態で、`cdidx index <projectPath> --rebuild` が必要。 |
 | `-32012` | `index_corrupted` | `false` | SQLite が `database disk image is malformed` / `file is not a database` / `file is encrypted` を返した。読めないので運用側で削除して再構築。 |
 | `-32015` | `request_cancelled` | `true` | MCP リクエストがキャンセルされた（クライアント切断、シャットダウン等）。必要なら再送でよい。 |
@@ -2368,9 +2372,13 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 | 標準コード | カテゴリ | `retry_safe` | 発火条件 |
 | --- | --- | --- | --- |
 | `-32700` | `parse_error` | `false` | フレームが JSON として解析できなかった。 |
-| `-32600` | `invalid_request` / `message_too_large` | `false` | パースはできたが JSON オブジェクトでない、必須フィールド欠落、またはフレーム単位のバイト上限を超過。 |
-| `-32601` | `method_not_found` / `tool_unknown` / `tool_disabled` | `false` | 未知 JSON-RPC メソッド、未知 MCP ツール名、または `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY`（#1561）で無効化された既知ツール。`tool_disabled` のワイヤコードは #1581 以前のクライアント契約を保つため `-32601` のまま維持し、envelope のみを additive に追加する。 |
-| `-32602` | `missing_parameter` / `invalid_argument` | `false` | 必須パラメータ欠落、または引数 shape が拒否（#1554 のプロトコルバージョン交渉ミスマッチも含む）。 |
+| `-32700` | `message_too_large` | `false` | フレームがパース前にバイト上限を超えて拒否された。フレームリーダーは「読めない」という意味で parse-error と同じコードを使う。 |
+| `-32600` | `invalid_request` | `false` | パースはできたが JSON オブジェクトでない、JSON-RPC 必須フィールド欠落、または不正な `id` を含む。 |
+| `-32601` | `method_not_found` | `false` | 未知 JSON-RPC メソッド（`initialize` / `tools/list` / `tools/call` / `ping` / サポート対象 `notifications/*` 以外）。 |
+| `-32601` | `tool_disabled` | `false` | `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY`（#1561）で無効化された既知ツール。ワイヤコードは #1581 以前のクライアント契約を保つため `-32601` のまま維持し、envelope のみ additive に追加する。`data.tool` に無効化されたツール名を含める。 |
+| `-32602` | `tool_unknown` | `false` | `tools/call` がサーバー未実装の MCP ツール名を指定した（typo またはバージョン不整合）。`data.tool` に未知の名前を含める。 |
+| `-32602` | `missing_parameter` | `false` | `tools/call` リクエストに必須 `params.name` 文字列が無い。 |
+| `-32602` | `invalid_argument` | `false` | ツールが引数 shape を拒否した（#1554 のプロトコルバージョン交渉ミスマッチもここで、`data.requestedVersion` / `data.supportedVersions` を併載）。 |
 | `-32603` | `internal_error` | `false` | 未処理例外の fallback バケット。ワイヤメッセージは #1530 の sanitization に従い汎用のまま、stderr に例外型を出す。 |
 
 分類器 `McpErrorEnvelope.ClassifyException(ex)` は未処理例外を例外型と一部の `SqliteException.Message` サブストリングから `index_stale` / `index_corrupted` / `request_cancelled` / `internal_error` にマッピングする — 生メッセージはワイヤに乗らない（#1530）。`ProcessFrame` の JSON-RPC catch-all と `tools/call` の catch-all が同じ分類器を使うため、ツール呼び出し途中で `SqliteException` が起きても `error.data` でも `result.structuredContent` でも同じ `index_stale` envelope が surface する。

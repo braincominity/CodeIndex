@@ -188,6 +188,15 @@ public class McpServerTests : IDisposable
             .Select(n => n!.GetValue<string>())
             .ToArray();
         Assert.Equal(McpServer.SupportedProtocolVersions, supported);
+
+        // #1581: the version-negotiation error path must also carry the canonical envelope
+        // (`category` / `suggestion` / `retry_safe`) on top of the #1554 version fields so
+        // clients can branch on category instead of parsing the message string.
+        // #1581: バージョン交渉エラーも canonical envelope を必ず併載し、クライアントは
+        // category で分岐できる。
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(data["suggestion"]!.GetValue<string>()));
+        Assert.False(data["retry_safe"]!.GetValue<bool>());
     }
 
     [Fact]
