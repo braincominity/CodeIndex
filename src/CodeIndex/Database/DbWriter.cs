@@ -522,7 +522,7 @@ public class DbWriter
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO symbols (
-                    file_id, kind, name, line, start_line, end_line,
+                    file_id, kind, name, line, start_line, start_column, end_line,
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
@@ -530,7 +530,7 @@ public class DbWriter
                     name_folded
                 )
                 VALUES (
-                    @fid, @kind, @name, @line, @startLine, @endLine,
+                    @fid, @kind, @name, @line, @startLine, @startColumn, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
                     @containerKind, @containerName, @containerQualifiedName, @familyKey,
                     @visibility, @returnType,
@@ -542,6 +542,7 @@ public class DbWriter
             var pName = cmd.Parameters.Add("@name", SqliteType.Text);
             var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
             var pStartLine = cmd.Parameters.Add("@startLine", SqliteType.Integer);
+            var pStartColumn = cmd.Parameters.Add("@startColumn", SqliteType.Integer);
             var pEndLine = cmd.Parameters.Add("@endLine", SqliteType.Integer);
             var pBodyStartLine = cmd.Parameters.Add("@bodyStartLine", SqliteType.Integer);
             var pBodyEndLine = cmd.Parameters.Add("@bodyEndLine", SqliteType.Integer);
@@ -566,6 +567,7 @@ public class DbWriter
                 pName.Value = symbol.Name;
                 pLine.Value = symbol.Line;
                 pStartLine.Value = startLine;
+                pStartColumn.Value = (object?)symbol.StartColumn ?? DBNull.Value;
                 pEndLine.Value = endLine;
                 pBodyStartLine.Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
                 pBodyEndLine.Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
