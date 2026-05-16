@@ -1042,6 +1042,10 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 | **Linux** | Usually pre-installed. If not: `sudo apt install sqlite3` |
 | **Windows** | `winget install SQLite.SQLite` or `scoop install sqlite` |
 
+## Output formats
+
+Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
+
 ## AI Integration
 
 cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local index.
@@ -2478,6 +2482,10 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 | **macOS** | プリインストール済み |
 | **Linux** | 通常プリインストール済み。未導入時: `sudo apt install sqlite3` |
 | **Windows** | `winget install SQLite.SQLite` または `scoop install sqlite` |
+
+## 出力形式
+
+人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
 
 ## AIとの連携
 

@@ -140,6 +140,7 @@ public static class QueryCommandRunner
         "-V",
         "--group-by-name",
         "--with-paths",
+        "--bytes",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -980,7 +981,10 @@ public static class QueryCommandRunner
             else
             {
                 foreach (var r in results)
-                    Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {r.Path}");
+                {
+                    var size = options.RawBytes ? $"{r.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(r.Size);
+                    Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {size,12}  {r.Path}");
+                }
                 Console.Error.WriteLine($"({results.Count} files)");
             }
             return CommandExitCodes.Success;
@@ -1414,7 +1418,11 @@ public static class QueryCommandRunner
                 WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
-                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item => $"{item.Path}  [{item.Lines} lines, {item.Size} bytes]"));
+                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
+                {
+                    var size = options.RawBytes ? $"{item.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(item.Size);
+                    return $"{item.Path}  [{item.Lines} lines, {size}]";
+                }));
                 WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                 WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
                 WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}]"));
@@ -2898,6 +2906,7 @@ public static class QueryCommandRunner
         bool checkWorkspace = false;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
+        bool rawBytes = false;
         string? statusExplainField = null;
         var extraNames = new List<string>();
 
@@ -3098,6 +3107,9 @@ public static class QueryCommandRunner
                     break;
                 case "--with-paths":
                     withPaths = true;
+                    break;
+                case "--bytes":
+                    rawBytes = true;
                     break;
                 case "--check":
                     if (allowStatusCheck)
@@ -3318,6 +3330,7 @@ public static class QueryCommandRunner
             CheckWorkspace = checkWorkspace,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
+            RawBytes = rawBytes,
             StatusExplainField = statusExplainField,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -5034,6 +5047,7 @@ public sealed class QueryCommandOptions
     public bool CheckWorkspace { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
+    public bool RawBytes { get; init; }
     public string? StatusExplainField { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
