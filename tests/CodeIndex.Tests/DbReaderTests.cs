@@ -3399,7 +3399,7 @@ public class DbReaderTests : IDisposable
             },
         ]);
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -3427,7 +3427,7 @@ public class DbReaderTests : IDisposable
             Run();
             """);
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -3670,7 +3670,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("instantiate", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
         Assert.False(truncated);
         Assert.Null(truncatedReason);
         var impactCaller = Assert.Single(impact);
@@ -3725,8 +3725,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
         Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
 
-        var (bareImpact, bareTruncated, bareTruncatedReason) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
-        var (qualifiedImpact, qualifiedTruncated, qualifiedTruncatedReason) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (bareImpact, bareTruncated, bareTruncatedReason, _, _) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated, qualifiedTruncatedReason, _, _) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
         Assert.False(bareTruncated);
         Assert.False(qualifiedTruncated);
         Assert.Null(bareTruncatedReason);
@@ -9474,7 +9474,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "Changed", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_subscribe_"]);
 
         Assert.False(truncated);
@@ -9520,7 +9520,7 @@ public class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -9551,11 +9551,11 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (depth1, truncated1, truncatedReason1) = _reader.GetTransitiveCallers(
+        var (depth1, truncated1, truncatedReason1, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth2, truncated2, truncatedReason2) = _reader.GetTransitiveCallers(
+        var (depth2, truncated2, truncatedReason2, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth3, truncated3, truncatedReason3) = _reader.GetTransitiveCallers(
+        var (depth3, truncated3, truncatedReason3, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 3, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
 
         Assert.False(truncated1);
@@ -9584,6 +9584,54 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CycleReportsTerminationReasonAndMembers()
+    {
+        // Issue #1883: a caller cycle must be explicit in the impact metadata so consumers
+        // can distinguish a natural end from a traversal stopped by the visited guard.
+        // #1883: caller cycle は impact metadata に明示し、自然終了と visited guard による停止を区別する。
+        InsertIndexedFile("src/impact_cycle.cs", "csharp",
+            """
+            public static class ImpactCycle
+            {
+                public static void A() { B(); }
+                public static void B() { C(); }
+                public static void C() { A(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("C", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_cycle"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.True(analysis.CycleDetected);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(new[] { "A", "B", "C" }, cycle.Members);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_MaxDepthReportsTerminationReason()
+    {
+        InsertIndexedFile("src/impact_depth_reason.cs", "csharp",
+            """
+            public static class ImpactDepthReason
+            {
+                public static void Leaf() { }
+                public static void Mid() { Leaf(); }
+                public static void Top() { Mid(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_reason"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.MaxDepthReached, analysis.TerminationReason);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_WithPathsDefaultIsOff()
     {
         // Default (no opt-in) keeps the legacy contract: Paths is null and PathsTruncated is false.
@@ -9597,7 +9645,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (results, _, _) = _reader.GetTransitiveCallers(
+        var (results, _, _, _, _) = _reader.GetTransitiveCallers(
             "Leaf", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_paths_off"]);
 
         var caller = Assert.Single(results);
@@ -9627,7 +9675,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (resultsDefault, _, _) = _reader.GetTransitiveCallers(
+        var (resultsDefault, _, _, _, _) = _reader.GetTransitiveCallers(
             "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"]);
 
         var defaultByName = resultsDefault
@@ -9639,7 +9687,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, defaultByName["A"].Depth);
         Assert.Null(defaultByName["A"].Paths);
 
-        var (resultsWithPaths, _, _) = _reader.GetTransitiveCallers(
+        var (resultsWithPaths, _, _, _, _) = _reader.GetTransitiveCallers(
             "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"],
             withPaths: true);
 
@@ -9680,7 +9728,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (results, _, _) = _reader.GetTransitiveCallers(
+        var (results, _, _, _, _) = _reader.GetTransitiveCallers(
             "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
             withPaths: true, maxPathsPerResult: 2);
 
@@ -9692,7 +9740,7 @@ public class DbReaderTests : IDisposable
         // Exact-fit: cap equals the natural number of paths. Truncated must stay false because
         // no unexplored parent was skipped — the DFS just drained naturally as it hit the cap.
         // ちょうど cap と等しい経路数の場合、未探索 parent はないので truncated は false のまま。
-        var (exactResults, _, _) = _reader.GetTransitiveCallers(
+        var (exactResults, _, _, _, _) = _reader.GetTransitiveCallers(
             "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
             withPaths: true, maxPathsPerResult: 3);
         var exactTop = exactResults.Single(r => r.CallerName == "Top");
@@ -9742,7 +9790,7 @@ public class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
 
         Assert.True(truncated);
         Assert.Equal(ImpactTruncatedReasons.UserLimit, truncatedReason);

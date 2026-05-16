@@ -271,6 +271,16 @@ public class ImpactAnalysisResult
     public List<FileDependencyResult> FileImpacts { get; set; } = [];
     public bool Truncated { get; set; }
     /// <summary>
+    /// Explains why the impact traversal stopped. Known values are defined in
+    /// <see cref="ImpactTerminationReasons"/>. Issue #1883.
+    /// </summary>
+    [JsonPropertyName("termination_reason")]
+    public string TerminationReason { get; set; } = ImpactTerminationReasons.Completed;
+    [JsonPropertyName("cycle_detected")]
+    public bool CycleDetected { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ImpactCycleResult>? Cycles { get; set; }
+    /// <summary>
     /// Distinguishes between truncation kinds when <see cref="Truncated"/> is true so callers
     /// can decide whether to retry with a higher <c>--limit</c> or treat the input graph as
     /// pathological. Known values:
@@ -304,6 +314,21 @@ public static class ImpactTruncatedReasons
 
     /// <summary>Internal safety cap fired on a pathological graph.</summary>
     public const string SafetyCap = "safety_cap";
+}
+
+public static class ImpactTerminationReasons
+{
+    public const string Completed = "completed";
+    public const string MaxDepthReached = "max_depth_reached";
+    public const string CycleDetected = "cycle_detected";
+    public const string RowLimitTruncated = "row_limit_truncated";
+    public const string SafetyCap = "safety_cap";
+    public const string Cancelled = "cancelled";
+}
+
+public class ImpactCycleResult
+{
+    public List<string> Members { get; set; } = [];
 }
 
 public class StatusResult
