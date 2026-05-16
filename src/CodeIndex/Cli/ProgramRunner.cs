@@ -9,10 +9,26 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
-    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null)
+    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null, string? configStartDirectory = null)
     {
         appVersion ??= ConsoleUi.LoadVersion();
+
+        // Load project-local `.cdidxrc.json` before anything else reads env vars so log
+        // location, debug mode, and MCP gates honor the file (#1571). Hard-fail on
+        // validation errors so silent typos cannot quietly change behavior.
+        // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
+        // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
+        var configResult = CdidxConfigFile.LoadAndApply(configStartDirectory ?? Environment.CurrentDirectory);
+        if (configResult.Failed)
+        {
+            Console.Error.WriteLine(configResult.Error);
+            Console.Error.WriteLine($"Hint: fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
+            return CommandExitCodes.UsageError;
+        }
+
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
+        if (configResult.Loaded)
+            GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
         jsonOptions ??= CreateDefaultJsonOptions();
 
         if (!TryConsumeColorFlag(ref args, out var colorError))
@@ -144,6 +160,7 @@ internal static class ProgramRunner
                 exitCode = commandName switch
                 {
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
@@ -605,18 +622,12 @@ internal static class ProgramRunner
         try
         {
             using var cts = new CancellationTokenSource();
-            ConsoleCancelEventHandler? cancelHandler = (_, e) =>
-            {
-                if (cts.IsCancellationRequested)
-                    return;
-                // Treat Ctrl+C as a graceful shutdown signal: cancel the listener so the loop
-                // exits and the HTTP socket is released for the next invocation.
-                // Ctrl+C は graceful shutdown として扱い、listener を解除して socket を解放する。
-                e.Cancel = true;
-                cts.Cancel();
-            };
-            Console.CancelKeyPress += cancelHandler;
-            try
+            // Treat SIGINT (Ctrl+C) AND SIGTERM as graceful shutdown signals so orchestrators
+            // (systemd, launchd, supervisord) can drain the listener and release the HTTP socket
+            // instead of force-killing the process (#1573).
+            // SIGINT (Ctrl+C) と SIGTERM を graceful shutdown として扱い、systemd / launchd /
+            // supervisord が socket を解放して再起動できるようにする（#1573）。
+            using (McpServer.RegisterShutdownHandlers(cts))
             {
                 if (resolved.IsLoopback && bearerToken is null)
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
@@ -624,10 +635,6 @@ internal static class ProgramRunner
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
 
                 server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
-            }
-            finally
-            {
-                Console.CancelKeyPress -= cancelHandler;
             }
         }
         finally

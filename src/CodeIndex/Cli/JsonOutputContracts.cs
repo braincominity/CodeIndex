@@ -75,6 +75,17 @@ internal sealed class IndexDryRunJsonResult
     public List<CliJsonMessage>? Errors { get; init; }
 }
 
+internal sealed class IndexWatchEventJsonResult
+{
+    public string Status { get; init; } = string.Empty;
+    public string? ProjectRoot { get; init; }
+    public string? Db { get; init; }
+    public int? DebounceMs { get; init; }
+    public int? BatchSize { get; init; }
+    public long? ElapsedMs { get; init; }
+    public string? Reason { get; init; }
+}
+
 internal sealed class IndexUpdateSummaryJsonResult
 {
     public long FilesTotal { get; init; }
@@ -121,6 +132,10 @@ internal sealed class IndexUpdateJsonResult
     public string? DegradedReason { get; init; }
     public string? RecommendedAction { get; init; }
     public string? AlternativeAction { get; init; }
+    public bool CwdDriftDetected { get; init; }
+    public string? CwdAtStart { get; init; }
+    public string? CwdAtFinalize { get; init; }
+    public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public long ElapsedMs { get; init; }
@@ -150,6 +165,10 @@ internal sealed class IndexFullScanJsonResult
     public string? PriorIndexedHeadCommit { get; init; }
     public string? CurrentHeadCommit { get; init; }
     public string? HeadChangeNotice { get; init; }
+    public bool CwdDriftDetected { get; init; }
+    public string? CwdAtStart { get; init; }
+    public string? CwdAtFinalize { get; init; }
+    public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public long ElapsedMs { get; init; }
@@ -213,6 +232,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
+[JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(HookCommandJsonResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(List<CalleeResult>))]

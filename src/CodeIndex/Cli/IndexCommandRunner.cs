@@ -31,6 +31,11 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        // Snapshot cwd alongside the already-absolutized options so the finalize step can
+        // detect mid-run drift (embedded host, signal handler, future plugin) and warn the
+        // operator. Failure to read cwd (e.g. it was deleted out from under us) is best-effort
+        // -- we just skip the drift warning rather than block the run. Issue #1577.
+        var initialCwd = TryCaptureCurrentDirectory();
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
@@ -51,6 +56,29 @@ public static class IndexCommandRunner
                 Console.Error.WriteLine("Hint: check the project path and rerun `cdidx index <projectPath>` with an existing directory.");
             }
             return CommandExitCodes.NotFound;
+        }
+
+        if (options.Watch)
+        {
+            // --watch is the only mode that holds the process open after the initial scan, so
+            // combining it with --commits, --files, or --dry-run produces ambiguous semantics:
+            // those flags describe a one-shot snapshot. Reject the combination up front with
+            // an actionable hint instead of silently picking one behavior.
+            // --watch のみが初回スキャン後も常駐するため、ワンショット用の --commits / --files /
+            // --dry-run と併用すると挙動が曖昧になる。ヒント付きで早期に拒否する。
+            if (options.Commits.Count > 0 || options.UpdateFiles.Count > 0 || options.DryRun)
+            {
+                const string watchConflictSynopsis =
+                    "`cdidx index <projectPath> --watch [--debounce <ms>]` "
+                    + "(omit --commits / --files / --dry-run; the initial scan plus continuous watch handles incremental refresh)";
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "--watch cannot be combined with --commits, --files, or --dry-run (watch already drives continuous incremental updates)",
+                    CommandExitCodes.UsageError,
+                    "Use " + watchConflictSynopsis + ".",
+                    CommandErrorCodes.UsageError);
+            }
         }
 
         if (options.Rebuild && isUpdateMode)
@@ -90,7 +118,7 @@ public static class IndexCommandRunner
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             ConsoleUi.PrintBanner();
             Console.WriteLine();
@@ -199,7 +227,7 @@ public static class IndexCommandRunner
                     {
                         var displayPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(options.ProjectPath, f));
                         errorList.Add(new CliJsonMessage(displayPath, message));
-                        if (!options.Json)
+                        if (!options.Json && !options.Quiet)
                             ConsoleUi.PrintWarning($"{displayPath}: {message}");
                     }
                     continue;
@@ -264,6 +292,7 @@ public static class IndexCommandRunner
             ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
         }
 
+        int initialExitCode;
         using (indexLock)
         {
             using var db = new DbContext(dbPath);
@@ -329,10 +358,20 @@ public static class IndexCommandRunner
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
-        return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit);
+        initialExitCode = isUpdateMode
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
         }
+
+        if (!options.Watch || initialExitCode != CommandExitCodes.Success)
+            return initialExitCode;
+
+        // Release the index lock before entering the watch loop so concurrent
+        // `cdidx index` invocations between batches can still acquire it. Each
+        // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
+        // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
+        // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
+        return IndexWatchRunner.Run(options, jsonOptions, Path.GetFullPath(options.ProjectPath), Path.GetFullPath(dbPath));
     }
 
     private static string DescribeLockHolder(IndexLockInfo? holder)
@@ -449,6 +488,45 @@ public static class IndexCommandRunner
     }
 
 
+    // Index-mode flag names recognized by `ParseArgs`. Kept in sync with the switch above
+    // so `Warning: unknown option ...` can suggest the closest accepted flag (#1582). Easter-egg
+    // and random-spinner flags are excluded since they are intentionally undiscoverable.
+    // `ParseArgs` の switch と同期した index 系の受理フラグ一覧。`unknown option` 警告で
+    // 最も近い受理フラグを did-you-mean 提案するのに用いる (#1582)。
+    // easter egg や random-spinner は意図的に未公開なので除外する。
+    private static readonly string[] AcceptedIndexFlags =
+    [
+        "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
+        "--watch", "--debounce", "--commits", "--files", "--help",
+    ];
+
+    private static readonly string[] AcceptedBackfillFoldFlags =
+    [
+        "--db", "--json", "--help",
+    ];
+
+    private static void WriteUnknownIndexOptionSuggestion(string token)
+    {
+        var name = TrimInlineValue(token);
+        var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedIndexFlags);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+    }
+
+    private static void WriteUnknownBackfillFoldOptionSuggestion(string token)
+    {
+        var name = TrimInlineValue(token);
+        var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedBackfillFoldFlags);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+    }
+
+    private static string TrimInlineValue(string token)
+    {
+        var eq = token.IndexOf('=');
+        return eq < 0 ? token : token[..eq];
+    }
+
     public static IndexCommandOptions ParseArgs(string[] args)
     {
         string? projectPath = null;
@@ -456,8 +534,12 @@ public static class IndexCommandRunner
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
+        bool quiet = false;
         bool dryRun = false;
         bool force = false;
+        bool watch = false;
+        int? watchDebounceMs = null;
+        var durationFormat = DurationOutputFormat.Auto;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -480,11 +562,35 @@ public static class IndexCommandRunner
                 case "--json":
                     json = true;
                     break;
+                case "--quiet":
+                    quiet = true;
+                    break;
                 case "--dry-run":
                     dryRun = true;
                     break;
                 case "--force":
                     force = true;
+                    break;
+                case "--watch":
+                    watch = true;
+                    break;
+                case "--debounce" when i + 1 < args.Length:
+                    if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
+                    {
+                        watchDebounceMs = parsedDebounce;
+                        i++;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"Warning: invalid --debounce value '{args[i + 1]}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{args[i + 1]}'（無視。ミリ秒の0以上の整数を指定）");
+                        i++;
+                    }
+                    break;
+                case "--duration-format" when i + 1 < args.Length:
+                    durationFormat = ParseDurationFormat(args[++i], durationFormat);
+                    break;
+                case var option when option.StartsWith("--duration-format=", StringComparison.Ordinal):
+                    durationFormat = ParseDurationFormat(option["--duration-format=".Length..], durationFormat);
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -509,7 +615,10 @@ public static class IndexCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith('-'))
+                    {
                         Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                        WriteUnknownIndexOptionSuggestion(args[i]);
+                    }
                     else
                         projectPath = args[i];
                     break;
@@ -531,17 +640,97 @@ public static class IndexCommandRunner
 
         return new IndexCommandOptions
         {
-            ProjectPath = projectPath,
-            DbPath = dbPath,
+            // Absolutize critical paths at the option-parsing boundary so a cwd shift after
+            // this point (embedded host, signal handler, future plugin) cannot silently break
+            // relative-path math in FileIndexer / GitHelper / DbPathResolver. Issue #1577.
+            // オプション解析の境界で絶対化し、以降の cwd 変化で相対パス計算が崩れないようにする。
+            ProjectPath = AbsolutizePathOption(projectPath),
+            DbPath = AbsolutizeDbPathOption(dbPath),
             Rebuild = rebuild,
             Verbose = verbose,
             Json = json,
+            Quiet = quiet,
             Commits = commits,
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
+            Watch = watch,
+            WatchDebounceMs = watchDebounceMs,
+            DurationFormat = durationFormat,
         };
+    }
+
+    private static DurationOutputFormat ParseDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "auto" => DurationOutputFormat.Auto,
+            "seconds" => DurationOutputFormat.Seconds,
+            "hms" => DurationOutputFormat.Hms,
+            _ => WarnInvalidDurationFormat(value, fallback),
+        };
+    }
+
+    private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        Console.Error.WriteLine($"Warning: invalid --duration-format value '{value}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{value}'（無視。auto, seconds, hms のいずれかを指定）");
+        return fallback;
+    }
+
+    private static string? AbsolutizePathOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+        try
+        {
+            return Path.GetFullPath(value);
+        }
+        catch
+        {
+            return value;
+        }
+    }
+
+    private static string? AbsolutizeDbPathOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+        if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return value;
+        return AbsolutizePathOption(value);
+    }
+
+    internal static string? TryCaptureCurrentDirectory()
+    {
+        try
+        {
+            return Environment.CurrentDirectory;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Build a warning message when the process cwd at the final write step differs from
+    /// the cwd captured at the option-parsing boundary. Returns null when the two cwds
+    /// are equal or either snapshot is missing. Issue #1577.
+    /// </summary>
+    internal static string? BuildCwdDriftNotice(string? initialCwd, string? currentCwd)
+    {
+        if (string.IsNullOrEmpty(initialCwd) || string.IsNullOrEmpty(currentCwd))
+            return null;
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(initialCwd, currentCwd, comparison))
+            return null;
+        return $"Process working directory changed during index (was {initialCwd}, now {currentCwd}). "
+            + "Index/query paths were absolutized at the option-parsing boundary so this run "
+            + "is unaffected, but later code paths that depend on Environment.CurrentDirectory "
+            + "may misbehave. Restore the original working directory or re-resolve relative paths.";
     }
 
     private static BackfillFoldCommandOptions ParseBackfillFoldArgs(string[] args)
@@ -563,7 +752,10 @@ public static class IndexCommandRunner
                     return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
                 default:
                     if (args[i].StartsWith('-'))
+                    {
                         Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                        WriteUnknownBackfillFoldOptionSuggestion(args[i]);
+                    }
                     else
                         return new BackfillFoldCommandOptions
                         {
@@ -602,7 +794,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
-        string? currentHeadCommit)
+        string? currentHeadCommit,
+        string? initialCwd)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -641,7 +834,7 @@ public static class IndexCommandRunner
             {
                 ConsoleUi.StopSpinner(spinnerCts);
             }
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
                 Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
@@ -657,7 +850,7 @@ public static class IndexCommandRunner
 
         if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths))
         {
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 Console.WriteLine("  Detected ignore-file changes; falling back to a full scan to keep the index aligned.");
                 Console.WriteLine();
@@ -682,13 +875,14 @@ public static class IndexCommandRunner
                 currentHotspotFamilyMarkerFingerprints,
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
-                currentHeadCommit);
+                currentHeadCommit,
+                initialCwd);
         }
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         CancellationTokenSource? updateCts = null;
-          var interactiveUpdateSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
+          var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
@@ -813,7 +1007,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
@@ -830,7 +1024,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath}");
@@ -840,7 +1034,7 @@ public static class IndexCommandRunner
                     else
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
@@ -857,7 +1051,7 @@ public static class IndexCommandRunner
                     if (!pathFilter.ShouldDeleteExisting)
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -869,7 +1063,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -886,7 +1080,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -931,7 +1125,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
@@ -948,7 +1142,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
@@ -970,7 +1164,7 @@ public static class IndexCommandRunner
 
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
-                if (warning != null && !options.Json)
+                if (warning != null && !options.Json && !options.Quiet)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
@@ -986,7 +1180,7 @@ public static class IndexCommandRunner
                 if (existingId != null)
                 {
                     skipped++;
-                    if (options.Verbose && !options.Json)
+                    if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
                         Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
@@ -1013,7 +1207,7 @@ public static class IndexCommandRunner
 
                 updated++;
                 ftsMutated = true;
-                if (options.Verbose && !options.Json)
+                if (options.Verbose && !options.Json && !options.Quiet)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
@@ -1029,10 +1223,7 @@ public static class IndexCommandRunner
                 if (!options.Json)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
-                    if (options.Verbose)
-                        Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}\n{ex.StackTrace}");
-                    else
-                        Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}");
+                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex));
                     ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
@@ -1040,7 +1231,7 @@ public static class IndexCommandRunner
 
         PauseUpdateSpinnerForConsoleWrite();
 
-        if (purgedRefs > 0 && !options.Json)
+        if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         if (ftsMutated)
@@ -1148,6 +1339,18 @@ public static class IndexCommandRunner
         if (errors == 0)
             StampIndexedHeadMetadata(writer, projectRoot);
         stopwatch.Stop();
+        // Detect cwd drift between option-parsing and finalize. Paths used in this run are
+        // already absolute, but a drifted cwd is a strong signal that an embedded host or
+        // signal handler mutated process state -- surface it so the operator can correct
+        // their hosting code. Issue #1577.
+        var finalCwd = TryCaptureCurrentDirectory();
+        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
+        var cwdDriftDetected = cwdDriftNotice != null;
+        if (cwdDriftDetected)
+        {
+            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
+            warnings++;
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -1203,6 +1406,10 @@ public static class IndexCommandRunner
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
                 RecommendedAction = foldOnlyRemediation?.RecommendedAction,
                 AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                CwdDriftDetected = cwdDriftDetected,
+                CwdAtStart = initialCwd,
+                CwdAtFinalize = finalCwd,
+                CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -1230,12 +1437,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
+            if (cwdDriftDetected)
+                ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
 
         return CommandExitCodes.Success;
@@ -1512,6 +1721,33 @@ public static class IndexCommandRunner
         }
     }
 
+    // Public stderr stays a single user-facing line; stack frames leak internal type names,
+    // source paths, and line numbers to any stderr consumer (notably MCP clients that
+    // capture child-process stderr for diagnostics), so we never append `ex.StackTrace`
+    // here even under `--verbose`. CR/LF in `path` or `ex.Message` are collapsed to a
+    // space so a multiline exception message cannot inject stack-like lines into the
+    // captured stderr stream. Deeper diagnostics live in opt-in channels like
+    // `cdidx report` or `CDIDX_DEBUG` (#1578).
+    // 公開 stderr は 1 行のユーザー向けメッセージのみとし、`ex.StackTrace` は載せない。
+    // 内部型名・ソースパス・行番号が stderr 取り込み側 (MCP クライアントなど) に漏れるため、
+    // `--verbose` でも付加しない。`path` や `ex.Message` に含まれる CR/LF は空白へ畳み込み、
+    // 複数行メッセージが疑似スタック行を注入できないようにする。詳細診断は
+    // `cdidx report` / `CDIDX_DEBUG` で取得する (#1578)。
+    internal static string FormatPerFileErrorLine(string label, string path, Exception ex) =>
+        $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(ex.Message)}";
+
+    private static string CollapseLineBreaks(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+        if (value.IndexOfAny(['\r', '\n']) < 0)
+            return value;
+        var buffer = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value)
+            buffer.Append(ch == '\r' || ch == '\n' ? ' ' : ch);
+        return buffer.ToString();
+    }
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
@@ -1547,7 +1783,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
-        string? currentHeadCommit)
+        string? currentHeadCommit,
+        string? initialCwd)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -1582,7 +1819,7 @@ public static class IndexCommandRunner
                 $"Indexed HEAD changed since the last full scan (was {priorIndexedHeadCommit}, now {currentHeadCommit}). " +
                 $"Incremental indexing only refreshes files it can scan in the current worktree, so rows for files that exist only on the previously indexed branch may remain. " +
                 $"Run `cdidx index {QuoteCommandArgument(projectRoot)} --rebuild` to fully refresh the index.";
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
                 ConsoleUi.PrintWarning(headChangeNotice);
         }
 
@@ -1596,7 +1833,7 @@ public static class IndexCommandRunner
         }
 
         CancellationTokenSource? spinnerCts = null;
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
@@ -1613,7 +1850,7 @@ public static class IndexCommandRunner
         var warningList = warningScanErrors
             .Select(error => new CliJsonMessage(error.Path, error.Message))
             .ToList();
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             Console.WriteLine($"  Found {files.Count:N0} files");
             foreach (var error in scanResult.Errors)
@@ -1632,7 +1869,7 @@ public static class IndexCommandRunner
         writer.ClearMetadataTargetReady();
 
         CancellationTokenSource? purgeCts = null;
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = files
@@ -1653,9 +1890,9 @@ public static class IndexCommandRunner
 
             var authoritativeDirectories = scanResult.ListedDirectories
                 .ToHashSet(StringComparer.Ordinal);
-            var symlinkPrunedDirectories = scanResult.SymlinkPrunedDirectories
+            var attributePrunedDirectories = scanResult.AttributePrunedDirectories
                 .ToHashSet(StringComparer.Ordinal);
-            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, symlinkPrunedDirectories);
+            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
         }
         else
         {
@@ -1664,7 +1901,7 @@ public static class IndexCommandRunner
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             if (purged > 0)
             {
@@ -1679,13 +1916,13 @@ public static class IndexCommandRunner
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
-        if (purgedRefs > 0 && !options.Json)
+        if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
 
-          var interactiveIndexSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
+          var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
@@ -1717,7 +1954,7 @@ public static class IndexCommandRunner
 
         void EnsureIndexingActivityVisible()
         {
-            if (options.Json)
+            if (options.Json || options.Quiet)
                 return;
 
             if (indexProgressVisible)
@@ -1738,7 +1975,7 @@ public static class IndexCommandRunner
 
         EnsureIndexingActivityVisible();
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             PauseIndexSpinnerForConsoleWrite();
             indexProgressVisible = true;
@@ -1752,7 +1989,7 @@ public static class IndexCommandRunner
             {
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-                if (warning != null && !options.Json)
+                if (warning != null && !options.Json && !options.Quiet)
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
@@ -1776,14 +2013,14 @@ public static class IndexCommandRunner
                     processed++;
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
                         reusedHotspotFamilyLanguages.Add(record.Lang);
-                    if (options.Verbose && !options.Json)
+                    if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
                         Console.WriteLine($"  [SKIP] {record.Path}");
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
-                    if (!options.Json)
+                    if (!options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.PrintProgress(processed, files.Count);
@@ -1807,7 +2044,7 @@ public static class IndexCommandRunner
                 WriteProjectRootOnce();
                 txn.Commit();
 
-                if (options.Verbose && !options.Json)
+                if (options.Verbose && !options.Json && !options.Quiet)
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
@@ -1823,16 +2060,13 @@ public static class IndexCommandRunner
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
-                    if (options.Verbose)
-                        Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
-                    else
-                        Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}");
+                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", filePath, ex));
                     ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }
 
             processed++;
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 PauseIndexSpinnerForConsoleWrite();
                 ConsoleUi.PrintProgress(processed, files.Count);
@@ -1940,6 +2174,9 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            writer.SetMeta(
+                DbContext.UnknownExtensionFileCountMetaKey,
+                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // We deliberately only stamp on full scans (rebuild or default incremental). Update
             // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
@@ -1959,6 +2196,17 @@ public static class IndexCommandRunner
             StampIndexedHeadMetadata(writer, projectRoot);
         }
         stopwatch.Stop();
+        // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
+        // rationale; the warning is informational because we already absolutized paths.
+        // Issue #1577.
+        var finalCwd = TryCaptureCurrentDirectory();
+        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
+        var cwdDriftDetected = cwdDriftNotice != null;
+        if (cwdDriftDetected)
+        {
+            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
+            warnings++;
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -2018,12 +2266,16 @@ public static class IndexCommandRunner
                 PriorIndexedHeadCommit = priorIndexedHeadCommit,
                 CurrentHeadCommit = currentHeadCommit,
                 HeadChangeNotice = headChangeNotice,
+                CwdDriftDetected = cwdDriftDetected,
+                CwdAtStart = initialCwd,
+                CwdAtFinalize = finalCwd,
+                CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
             }, jsonContext.IndexFullScanJsonResult));
         }
-        else
+        else if (!options.Quiet)
         {
             Console.WriteLine();
             Console.WriteLine();
@@ -2034,6 +2286,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Symbols  : {totalSymbols:N0}");
             Console.WriteLine($"  Refs     : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped  : {skipped:N0} (unchanged)");
+            if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
+            {
+                Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
+                foreach (var relPath in scanResult.UnknownExtensionFiles.Take(5))
+                    Console.WriteLine($"    {relPath}");
+                if (scanResult.UnknownExtensionFiles.Count > 5)
+                    Console.WriteLine($"    ... {scanResult.UnknownExtensionFiles.Count - 5:N0} more");
+            }
             if (warnings > 0) Console.WriteLine($"  Warnings : {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors   : {errors:N0}");
             Console.WriteLine($"  Graph    : {(graphTableAvailableAfter ? "ready" : "degraded")}");
@@ -2043,12 +2303,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
+            if (cwdDriftDetected)
+                ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
 
         return CommandExitCodes.Success;
@@ -2251,11 +2513,15 @@ public sealed class IndexCommandOptions
     public bool Rebuild { get; init; }
     public bool Verbose { get; init; }
     public bool Json { get; init; }
+    public bool Quiet { get; init; }
     public List<string> Commits { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }
+    public bool Watch { get; init; }
+    public int? WatchDebounceMs { get; init; }
+    public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
 }
 
 public sealed class BackfillFoldCommandOptions

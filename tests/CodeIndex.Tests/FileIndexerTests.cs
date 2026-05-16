@@ -292,6 +292,46 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("elf", new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F', 0x02, 0x01, 0x01, 0x00 })]
+    [InlineData("macho", new byte[] { 0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01 })]
+    [InlineData("pe", new byte[] { (byte)'M', (byte)'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00 })]
+    [InlineData("data", new byte[] { (byte)'#', (byte)'!', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'s', (byte)'h', 0x00 })]
+    public void DetectLanguage_ExtensionlessBinaryLikeFiles_ReturnsNull(string fileName, byte[] bytes)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, fileName);
+            File.WriteAllBytes(path, bytes);
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessOverCapShebangLine_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "tool");
+            File.WriteAllText(path, "#!/usr/bin/env " + new string('x', 256));
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
     [Fact]
     public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
     {
@@ -884,6 +924,67 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData(FileAttributes.ReparsePoint, false, true)]
+    [InlineData(FileAttributes.ReparsePoint, true, true)]
+    [InlineData(FileAttributes.Hidden, false, false)]
+    [InlineData(FileAttributes.Hidden, true, true)]
+    [InlineData(FileAttributes.System, false, false)]
+    [InlineData(FileAttributes.System, true, true)]
+    [InlineData(FileAttributes.Hidden | FileAttributes.System, true, true)]
+    [InlineData(FileAttributes.Archive, true, false)]
+    public void HasSkippedAttributes_RejectsWindowsHiddenAndSystemOnly(
+        FileAttributes attributes,
+        bool isWindows,
+        bool expected)
+    {
+        Assert.Equal(expected, FileIndexer.HasSkippedAttributes(attributes, isWindows));
+    }
+
+    [Fact]
+    public void ScanFiles_OnWindowsSkipsHiddenAndSystemEntries()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "visible.py"), "print('visible')\n");
+
+            var hiddenFile = Path.Combine(tempDir, "hidden.py");
+            File.WriteAllText(hiddenFile, "print('hidden')\n");
+            File.SetAttributes(hiddenFile, File.GetAttributes(hiddenFile) | FileAttributes.Hidden);
+
+            var systemFile = Path.Combine(tempDir, "system.py");
+            File.WriteAllText(systemFile, "print('system')\n");
+            File.SetAttributes(systemFile, File.GetAttributes(systemFile) | FileAttributes.System);
+
+            var hiddenDir = Path.Combine(tempDir, "hidden_dir");
+            Directory.CreateDirectory(hiddenDir);
+            File.WriteAllText(Path.Combine(hiddenDir, "nested.py"), "print('hidden nested')\n");
+            File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
+
+            var systemDir = Path.Combine(tempDir, "system_dir");
+            Directory.CreateDirectory(systemDir);
+            File.WriteAllText(Path.Combine(systemDir, "nested.py"), "print('system nested')\n");
+            File.SetAttributes(systemDir, File.GetAttributes(systemDir) | FileAttributes.System);
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["visible.py"], files);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsDanglingSymlinksWithoutAbortingScan()
     {
@@ -1042,6 +1143,48 @@ public class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DoesNotMarkParentsFullyScannedWhenNestedDirectoryFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var srcDir = Path.Combine(tempDir, "src");
+        var blockedDir = Path.Combine(srcDir, "blocked");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(blockedDir);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(srcDir, "service.py"), "print('service')");
+            File.WriteAllText(Path.Combine(blockedDir, "secret.py"), "print('secret')");
+            originalMode = File.GetUnixFileMode(blockedDir);
+            SetUnixPermissions(blockedDir, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py", "src/service.py"], files);
+            Assert.Contains(result.Errors, error => error.Path == "src/blocked" && error.Message == "Could not scan directory due to permissions.");
+            Assert.Contains("", result.ListedDirectories);
+            Assert.DoesNotContain("", result.FullyScannedDirectories);
+            Assert.DoesNotContain("src", result.FullyScannedDirectories);
+            Assert.DoesNotContain("src/blocked", result.FullyScannedDirectories);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(blockedDir))
+                SetUnixPermissions(blockedDir, originalMode.Value);
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, true);
         }
@@ -1597,6 +1740,35 @@ public class FileIndexerTests
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SeparatesUnknownExtensionsFromOtherNonIndexableFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
+            File.WriteAllText(Path.Combine(tempDir, "app.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
+            File.WriteAllText(Path.Combine(tempDir, "tool"), "plain text without a shebang\n");
+            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.mystery"), "ignored unknown extension\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var scanResult = indexer.ScanFilesDetailed();
+
+            Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+            Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
+            Assert.Contains("tool", scanResult.NonIndexablePaths);
+            Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
+            Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
         }
         finally
         {

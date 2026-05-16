@@ -27,9 +27,10 @@ public class ConsoleUiTests
 
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
-        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
@@ -48,6 +49,7 @@ public class ConsoleUiTests
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
+        Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
@@ -114,6 +116,30 @@ public class ConsoleUiTests
         var frames = ConsoleUi.GetSpinnerFrames(null);
 
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+    }
+
+    [Theory]
+    [InlineData(0, "0ms")]
+    [InlineData(999, "999ms")]
+    [InlineData(1_000, "1.0s")]
+    [InlineData(59_900, "59.9s")]
+    [InlineData(60_000, "1m 0s")]
+    [InlineData(3_599_000, "59m 59s")]
+    [InlineData(3_600_000, "1h 0m 0s")]
+    [InlineData(86_400_000, "24h 0m 0s")]
+    [InlineData(360_061_000, "100h 1m 1s")]
+    public void FormatDuration_Auto_UsesUnitLabels(int milliseconds, string expected)
+    {
+        Assert.Equal(expected, ConsoleUi.FormatDuration(TimeSpan.FromMilliseconds(milliseconds)));
+    }
+
+    [Fact]
+    public void FormatDuration_ExplicitFormats_RespectUserPreference()
+    {
+        var duration = TimeSpan.FromMilliseconds(65_432);
+
+        Assert.Equal("65.4s", ConsoleUi.FormatDuration(duration, DurationOutputFormat.Seconds));
+        Assert.Equal("00:01:05", ConsoleUi.FormatDuration(duration, DurationOutputFormat.Hms));
     }
 
     [Fact]
@@ -219,11 +245,15 @@ public class ConsoleUiTests
                 var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
                 var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
                 var licenseToken = shell == "fish" ? "-l license" : shell == "bash" ? "--license" : "license:license command";
+                // #1570: the schema-driven generators emit one canonical description per flag
+                // across every branch — the pre-refactor per-branch wording ("snippets" /
+                // "contexts" / "excerpts") collapses to a single "payloads" tooltip.
+                // #1570 後はスキーマ駆動なので、ブランチごとに違う旧文言ではなく統一の "payloads" 表記。
                 var maxLineWidthToken = shell == "fish"
                     ? "Clamp long single-line payloads (0 disables clamping)"
                     : shell == "bash"
                         ? "--max-line-width"
-                        : "--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number";
+                        : "--max-line-width[Clamp long single-line payloads (0 disables clamping)]:number";
                 Assert.Contains(exactSubstringToken, output);
                 Assert.Contains(exactNameToken, output);
                 Assert.Contains(groupByNameToken, output);
@@ -231,8 +261,6 @@ public class ConsoleUiTests
                 Assert.Contains(maxLineWidthToken, output);
                 Assert.Contains("cshtml", output);
                 Assert.Contains("razor", output);
-                if (shell == "zsh")
-                    Assert.Contains("--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number", output);
                 if (shell is "bash" or "zsh")
                 {
                     // Should contain dynamically generated languages, including newly added ones
@@ -269,14 +297,25 @@ public class ConsoleUiTests
     [Fact]
     public void PrintCompletions_FishIncludesFindOptions()
     {
+        // #1570: fish completion is now emitted from `CliFlagSchema`. The hand-written
+        // `__fish_seen_subcommand_from <list>` strings change to the canonical
+        // command-ordering used by `CliFlagSchema.AllCommands`, and descriptions use the
+        // schema's single source of truth (e.g. `--exact` → "Backward-compatible exact
+        // shorthand"). These assertions intentionally check the schema-ordered groupings
+        // (`--query` and `--before`/`--after` predicates) and key flag invariants while
+        // accepting the unified wording.
+        // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
+        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
         var output = ConsoleUi.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
+        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
-        Assert.Contains("__fish_seen_subcommand_from search find", output);
+        // `--exact` schema membership: search + find + the name-resolution commands.
+        // 旧手書きが `search find` だけだった所を、スキーマ準拠の正規列で確認する。
+        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact ", output);
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
-        Assert.Contains("-l exact -d 'Exact match'", output);
+        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand'", output);
         Assert.Contains("__fish_seen_subcommand_from hotspots", output);
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }
@@ -606,6 +645,68 @@ public class ConsoleUiTests
     public void FindClosestCommand_GarbageInput_ReturnsNull(string input)
     {
         Assert.Null(ConsoleUi.FindClosestCommand(input));
+    }
+
+    [Theory]
+    [InlineData("--paht", "--path")]
+    [InlineData("--exclud-path", "--exclude-path")]
+    [InlineData("--limti", "--limit")]
+    [InlineData("--lnag", "--lang")]
+    public void FindClosestMatch_FlagTypo_SuggestsClosestFlag(string input, string expected)
+    {
+        var flags = new[] { "--path", "--exclude-path", "--limit", "--lang", "--kind", "--json", "--query" };
+
+        Assert.Equal(expected, ConsoleUi.FindClosestMatch(input, flags));
+    }
+
+    [Theory]
+    [InlineData("pythno", "python")]
+    [InlineData("csarp", "csharp")]
+    [InlineData("typescritp", "typescript")]
+    public void FindClosestMatch_LanguageTypo_SuggestsClosestLanguage(string input, string expected)
+    {
+        var languages = new[] { "python", "csharp", "typescript", "javascript", "go", "rust" };
+
+        Assert.Equal(expected, ConsoleUi.FindClosestMatch(input, languages));
+    }
+
+    [Fact]
+    public void FindClosestMatch_BlankInput_ReturnsNull()
+    {
+        Assert.Null(ConsoleUi.FindClosestMatch(null, new[] { "csharp" }));
+        Assert.Null(ConsoleUi.FindClosestMatch("", new[] { "csharp" }));
+        Assert.Null(ConsoleUi.FindClosestMatch("  ", new[] { "csharp" }));
+    }
+
+    [Fact]
+    public void FindClosestMatches_ReturnsRankedSuggestions()
+    {
+        var candidates = new[] { "added", "changed", "fixed", "removed", "security", "docs" };
+
+        var matches = ConsoleUi.FindClosestMatches("addd", candidates, maxResults: 2);
+
+        Assert.Contains("added", matches);
+        Assert.True(matches.Count <= 2);
+    }
+
+    [Fact]
+    public void FindClosestMatches_NoMatchesWithinThreshold_ReturnsEmpty()
+    {
+        var candidates = new[] { "added", "changed" };
+
+        var matches = ConsoleUi.FindClosestMatches("absolutelynotrelated", candidates);
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void FindClosestMatches_ZeroMaxResults_ReturnsEmpty()
+    {
+        var candidates = new[] { "added", "changed" };
+
+        var matches = ConsoleUi.FindClosestMatches("addd", candidates, maxResults: 0);
+
+        Assert.Empty(matches);
     }
 
     [Theory]
