@@ -173,6 +173,65 @@ public class SuggestionStore
     }
 
     /// <summary>
+    /// Load suggestions matching the GitHub submission status without materializing
+    /// the whole store before filtering.
+    /// GitHub 送信状態に一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByStatus(bool submittedToGitHub)
+    {
+        return ReadFilteredUnlocked(s => s.SubmittedToGitHub == submittedToGitHub);
+    }
+
+    /// <summary>
+    /// Load suggestions created at or after the given timestamp without materializing
+    /// the whole store before filtering.
+    /// 指定時刻以降に作成された提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadSince(DateTimeOffset since)
+    {
+        var threshold = since.ToUniversalTime();
+        return ReadFilteredUnlocked(s => ToUtcOffset(s.CreatedAt) >= threshold);
+    }
+
+    /// <summary>
+    /// Load suggestions for a category without materializing the whole store before filtering.
+    /// カテゴリに一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByCategory(string category)
+    {
+        ArgumentNullException.ThrowIfNull(category);
+        var normalized = category.Trim();
+        return ReadFilteredUnlocked(s => string.Equals(s.Category, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Load suggestions for a language without materializing the whole store before filtering.
+    /// 言語に一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByLanguage(string language)
+    {
+        ArgumentNullException.ThrowIfNull(language);
+        var normalized = language.Trim();
+        return ReadFilteredUnlocked(s => string.Equals(s.Language, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Load a page of suggestions in stored order without materializing entries outside the page.
+    /// 保存順の提案ページを、ページ外のエントリを実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> Load(int skip, int take)
+    {
+        if (skip < 0)
+            throw new ArgumentOutOfRangeException(nameof(skip), "skip must be non-negative.");
+        if (take < 0)
+            throw new ArgumentOutOfRangeException(nameof(take), "take must be non-negative.");
+        if (take == 0)
+            return new List<SuggestionRecord>();
+
+        return ReadFilteredUnlocked(_ => true, skip, take);
+    }
+
+    /// <summary>
     /// Mark a suggestion as submitted to GitHub by updating its URL and flag.
     /// The entire read-modify-write is protected by a file lock.
     /// NOTE: Prefer TryAddAndSubmit for new submissions — this method exists
@@ -225,6 +284,81 @@ public class SuggestionStore
         }
         // IOException is NOT caught here — it propagates to the caller (fail-closed).
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
+    }
+
+    /// <summary>
+    /// Stream suggestions without acquiring the lock (caller must hold it for write-side read-modify-write).
+    /// Query readers call this directly because they do not mutate the store.
+    /// ロックを取得せずに提案をストリーミング読み込みする（書き込み側の read-modify-write では呼び出し元がロックを保持すること）。
+    /// クエリ読み取りはストアを変更しないため直接呼び出す。
+    /// </summary>
+    private List<SuggestionRecord> ReadFilteredUnlocked(
+        Func<SuggestionRecord, bool> predicate,
+        int skip = 0,
+        int? take = null)
+    {
+        if (!File.Exists(_filePath))
+            return new List<SuggestionRecord>();
+
+        if (new FileInfo(_filePath).Length == 0)
+            return new List<SuggestionRecord>();
+
+        try
+        {
+            return ReadFilteredUnlockedAsync(predicate, skip, take).GetAwaiter().GetResult();
+        }
+        catch (JsonException)
+        {
+            PreserveCorruptFile();
+            return new List<SuggestionRecord>();
+        }
+        // IOException is NOT caught here — it propagates to the caller (fail-closed).
+        // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
+    }
+
+    private async Task<List<SuggestionRecord>> ReadFilteredUnlockedAsync(
+        Func<SuggestionRecord, bool> predicate,
+        int skip,
+        int? take)
+    {
+        var results = new List<SuggestionRecord>();
+        var skipped = 0;
+
+        await using var stream = new FileStream(
+            _filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 16 * 1024,
+            useAsync: true);
+
+        await foreach (var record in JsonSerializer.DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions))
+        {
+            if (record == null || !predicate(record))
+                continue;
+
+            if (skipped < skip)
+            {
+                skipped++;
+                continue;
+            }
+
+            results.Add(record);
+            if (take.HasValue && results.Count >= take.Value)
+                break;
+        }
+
+        return results;
+    }
+
+    private static DateTimeOffset ToUtcOffset(DateTime value)
+    {
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => new DateTimeOffset(value),
+            DateTimeKind.Local => new DateTimeOffset(value.ToUniversalTime()),
+            _ => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)),
+        };
     }
 
     /// <summary>

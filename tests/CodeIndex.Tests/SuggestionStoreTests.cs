@@ -168,6 +168,104 @@ public class SuggestionStoreTests : IDisposable
         Assert.Null(r.GitHubIssueUrl);
     }
 
+    [Fact]
+    public void LoadByStatus_ReturnsOnlyMatchingSubmissionState()
+    {
+        var submitted = MakeRecord("other", null, "Submitted suggestion");
+        submitted.SubmittedToGitHub = true;
+        submitted.GitHubIssueUrl = "https://github.com/widthdom/CodeIndex/issues/1";
+        var unsubmitted = MakeRecord("other", null, "Unsubmitted suggestion");
+
+        _store.TryAdd(submitted);
+        _store.TryAdd(unsubmitted);
+
+        var loaded = _store.LoadByStatus(submittedToGitHub: false);
+
+        Assert.Single(loaded);
+        Assert.Equal(unsubmitted.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void LoadSince_ReturnsSuggestionsAtOrAfterThreshold()
+    {
+        var older = MakeRecord("other", null, "Older suggestion");
+        older.CreatedAt = new DateTime(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
+        var boundary = MakeRecord("other", null, "Boundary suggestion");
+        boundary.CreatedAt = new DateTime(2026, 5, 2, 9, 0, 0, DateTimeKind.Utc);
+        var newer = MakeRecord("other", null, "Newer suggestion");
+        newer.CreatedAt = new DateTime(2026, 5, 3, 9, 0, 0, DateTimeKind.Utc);
+
+        _store.TryAdd(older);
+        _store.TryAdd(boundary);
+        _store.TryAdd(newer);
+
+        var loaded = _store.LoadSince(new DateTimeOffset(2026, 5, 2, 9, 0, 0, TimeSpan.Zero));
+
+        Assert.Equal(new[] { boundary.Hash, newer.Hash }, loaded.Select(s => s.Hash));
+    }
+
+    [Fact]
+    public void LoadByCategory_IsCaseInsensitive()
+    {
+        var crash = MakeRecord("crash_report", "csharp", "Crash suggestion");
+        var other = MakeRecord("other", "csharp", "Other suggestion");
+
+        _store.TryAdd(crash);
+        _store.TryAdd(other);
+
+        var loaded = _store.LoadByCategory("CRASH_REPORT");
+
+        Assert.Single(loaded);
+        Assert.Equal(crash.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void LoadByLanguage_IsCaseInsensitive()
+    {
+        var csharp = MakeRecord("other", "csharp", "CSharp suggestion");
+        var python = MakeRecord("other", "python", "Python suggestion");
+
+        _store.TryAdd(csharp);
+        _store.TryAdd(python);
+
+        var loaded = _store.LoadByLanguage("CSHARP");
+
+        Assert.Single(loaded);
+        Assert.Equal(csharp.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void Load_ReturnsRequestedPageInStoredOrder()
+    {
+        var first = MakeRecord("other", null, "First suggestion");
+        var second = MakeRecord("other", null, "Second suggestion");
+        var third = MakeRecord("other", null, "Third suggestion");
+        var fourth = MakeRecord("other", null, "Fourth suggestion");
+
+        _store.TryAdd(first);
+        _store.TryAdd(second);
+        _store.TryAdd(third);
+        _store.TryAdd(fourth);
+
+        var loaded = _store.Load(skip: 1, take: 2);
+
+        Assert.Equal(new[] { second.Hash, third.Hash }, loaded.Select(s => s.Hash));
+    }
+
+    [Fact]
+    public void Load_FilteredCorruptJson_ReturnsEmptyListAndPreservesBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{not valid json[[[");
+
+        var loaded = _store.LoadByCategory("other");
+
+        Assert.Empty(loaded);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        Assert.False(File.Exists(filePath), "Original corrupt file should be removed");
+    }
+
     // --- MarkSubmitted tests / MarkSubmitted テスト ---
 
     [Fact]
