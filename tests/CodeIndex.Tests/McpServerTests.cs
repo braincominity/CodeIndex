@@ -6587,6 +6587,163 @@ public class McpServerTests : IDisposable
         writer.MarkIssuesReady();
     }
 
+    // --- Rate limiter (issue #1560) / レート制限器（#1560） ---
+
+    private sealed class FixedClock
+    {
+        public DateTimeOffset Now { get; set; } = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset Read() => Now;
+    }
+
+    private static FixedClock InstallRateLimiter(McpServer server, RateLimiterOptions options)
+    {
+        var clock = new FixedClock();
+        server.OverrideRateLimiterForTests(new RateLimiter(options, clock.Read));
+        return clock;
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimitDisabled_NoThrottle()
+    {
+        // Default (no env vars) must behave like the pre-#1560 server so existing stdio
+        // single-user sessions are unaffected. The limiter still records nothing on every
+        // call regardless of how many succeed.
+        // 既定（環境変数なし）では #1560 以前と同じ挙動で、stdio 単一ユーザーは影響を受けない。
+        for (var i = 0; i < 5; i++)
+        {
+            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"status\"}}}}")!;
+            var response = _server.HandleMessage(request)!;
+            Assert.Null(response["error"]);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimited_ReturnsStructuredNegative32000()
+    {
+        // Bucket of capacity 1, refilling at 1/sec. First call succeeds, second is denied
+        // with -32000 carrying tool / caller / retry_after_ms (#1560 contract).
+        // 容量 1・補充 1/sec のバケット。1 回目は成功、2 回目は -32000 で tool/caller/retry_after_ms
+        // を含む構造化レスポンスになる（#1560 の契約）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        var initialize = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.2.3"}}}""")!;
+        _server.HandleMessage(initialize);
+
+        var first = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(first["error"]);
+        Assert.False(first["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var second = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        Assert.Null(second["result"]);
+        var error = second["error"]!;
+        Assert.Equal(-32000, error["code"]!.GetValue<int>());
+        Assert.Contains("Rate limit exceeded", error["message"]!.GetValue<string>());
+        var data = error["data"]!;
+        Assert.Equal("rate_limited", data["error_category"]!.GetValue<string>());
+        Assert.Equal("status", data["tool"]!.GetValue<string>());
+        Assert.Equal("client-a/1.2.3", data["caller"]!.GetValue<string>());
+        Assert.True(data["retry_after_ms"]!.GetValue<long>() >= 1);
+        Assert.Equal(2, second["id"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimit_KeysByTool()
+    {
+        // Different tools have independent buckets, so once `status` is throttled the
+        // sibling tool `languages` still goes through (#1560).
+        // 別ツールは独立バケットを持つため、`status` がスロットルされても `languages` は通る（#1560）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        Assert.Null(_server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
+        Assert.NotNull(_server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
+
+        var languages = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+        Assert.Null(languages["error"]);
+    }
+
+    [Fact]
+    public void Initialize_CapturesClientInfoAsCallerIdentity()
+    {
+        // The caller identity is read from `clientInfo.name` on `initialize` so the
+        // limiter can attribute / throttle per client. Missing `clientInfo` falls back to
+        // `"unknown"` so anonymous clients still get a coherent bucket (#1560).
+        // `clientInfo.name` を取り込むことで、クライアント単位の計量・スロットルが効く。
+        // `clientInfo` が無い場合は `"unknown"` に fallback する（#1560）。
+        Assert.Equal("unknown", _server.CurrentCaller);
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"my-client"}}}""")!);
+        Assert.Equal("my-client", _server.CurrentCaller);
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"my-client","version":"2.0"}}}""")!);
+        Assert.Equal("my-client/2.0", _server.CurrentCaller);
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}""")!);
+        Assert.Equal("unknown", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void BatchQuery_PerSlotRateLimited_MarksOnlyOverQuotaSlots()
+    {
+        // batch_query mitigation: each inner slot also consumes a token from the
+        // (inner-tool, caller) bucket, so a misbehaving client cannot bypass the limiter
+        // by stuffing 10 inner `search` calls into a single allowed batch (#1560 evidence).
+        // Outer `batch_query` and inner `status` have independent buckets keyed by tool;
+        // burst=2 lets the outer call through and the first two inner `status` slots, while
+        // the third inner slot is throttled and surfaces error_category=rate_limited +
+        // retry_after_ms in the per-slot result.
+        // batch_query の対策: 内側スロットも (inner-tool, caller) からトークンを消費するため、
+        // 内側 search を 10 個詰めて制限を迂回できない。バケットはツール毎に独立しており、
+        // burst=2 なら外側 batch_query と 1〜2 個目の内側 status が通り、3 個目はスロット単位で
+        // error_category=rate_limited と retry_after_ms を返す。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 0.1, BurstCapacity = 2.0 });
+
+        var request = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[
+            {"tool":"status"},
+            {"tool":"status"},
+            {"tool":"status"}
+        ]}}}
+        """)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(3, results.Count);
+
+        Assert.Null(results[0]!["error"]);
+        Assert.Null(results[1]!["error"]);
+
+        var throttled = results[2]!;
+        Assert.NotNull(throttled["error"]);
+        Assert.Equal("rate_limited", throttled["error_category"]!.GetValue<string>());
+        Assert.True(throttled["retry_after_ms"]!.GetValue<long>() >= 1);
+
+        var metadata = structured["metadata"]!;
+        Assert.Equal(2, metadata["success_count"]!.GetValue<int>());
+        Assert.Equal(1, metadata["failure_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void BuildRateLimitedLog_IsActionable()
+    {
+        var log = McpServer.BuildRateLimitedLog("search", "client-a", 250);
+        Assert.Contains("Rate limit exceeded", log);
+        Assert.Contains("search", log);
+        Assert.Contains("client-a", log);
+        Assert.Contains("250", log);
+        Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", log);
+    }
+
     private static void WriteOversizedAsciiFile(string path)
     {
         const int targetBytes = 10 * 1024 * 1024 + 1;
