@@ -674,6 +674,8 @@ public class OutlineSymbol
 {
     public string Kind { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
     public int Line { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
