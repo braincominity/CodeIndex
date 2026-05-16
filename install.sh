@@ -98,6 +98,10 @@ warn()  { printf '\033[1;33mWARN:\033[0m %s\n' "$1" >&2; }
 error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 report_error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 
+published_release_rids() {
+    printf '%s' "linux-x64, linux-arm64, osx-arm64, win-x64"
+}
+
 cleanup() {
     if [ -n "$TMPDIR_CLEANUP" ]; then
         rm -rf "$TMPDIR_CLEANUP"
@@ -616,14 +620,14 @@ detect_platform() {
     case "$arch" in
         x86_64|amd64)   ARCH_NAME="x64"   ;;
         aarch64|arm64)  ARCH_NAME="arm64"  ;;
-        *)              error "Unsupported architecture: $arch (supported: x86_64, arm64)" ;;
+        *)              error "Unsupported architecture: $arch. Official release assets are published for $(published_release_rids). Other RIDs such as linux-x86, osx-x64, and win-x86 are not currently shipped. Install via 'dotnet tool install -g cdidx' with the .NET SDK, or build from source with 'dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r <rid> --self-contained true'. See docs/platform-support.md." ;;
     esac
 
     RID="${OS_NAME}-${ARCH_NAME}"
 
     # osx-x64 is not published / osx-x64 はリリースしていない
     if [ "$RID" = "osx-x64" ]; then
-        error "macOS x86_64 (Intel) binaries are not published. Use Rosetta 2 with osx-arm64 or install via 'dotnet tool install -g cdidx'."
+        error "macOS x86_64 (Intel) binaries are not published as CodeIndex-osx-x64.tar.gz. Install via 'dotnet tool install -g cdidx' with the .NET SDK, or build from source with 'dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r osx-x64 --self-contained true'. See docs/platform-support.md."
     fi
 
     # Reject musl-based Linux (e.g. Alpine) — published binaries require glibc
