@@ -50,6 +50,58 @@
     <Content Include="..\..\version.json" CopyToOutputDirectory="PreserveNewest" Link="version.json" />
   </ItemGroup>
 
+  <!--
+    Stamp commit SHA / build date / dirty flag into the assembly so the
+    `cdidx version` flag can distinguish dev builds from tagged releases
+    (#1550). XML comments may not contain a double-dash, so we avoid the
+    literal flag spelling here.
+    バグ報告で dev ビルドとリリースタグを区別できるよう、commit SHA / build
+    date / dirty フラグをアセンブリに刻む (#1550)。XML コメント内には連続した
+    ダッシュを書けないため、フラグ名そのものを記述しない。
+  -->
+  <Target Name="StampCdidxBuildMetadata" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git rev-parse --short=7 HEAD"
+          ConsoleToMSBuild="true"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          EchoOff="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="CdidxGitShaRaw" />
+      <Output TaskParameter="ExitCode" PropertyName="CdidxGitShaExitCode" />
+    </Exec>
+    <Exec Command="git diff-index --quiet HEAD --"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          EchoOff="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="CdidxGitDirtyExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <CdidxBuildDate>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</CdidxBuildDate>
+      <CdidxBuildCommit Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitShaRaw)' != ''">$(CdidxGitShaRaw)</CdidxBuildCommit>
+      <CdidxBuildCommit Condition="'$(CdidxBuildCommit)' == ''">unknown</CdidxBuildCommit>
+      <CdidxBuildDirty Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '0'">clean</CdidxBuildDirty>
+      <CdidxBuildDirty Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '1'">dirty</CdidxBuildDirty>
+      <CdidxBuildDirty Condition="'$(CdidxBuildDirty)' == ''">unknown</CdidxBuildDirty>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>CdidxCommit</_Parameter1>
+        <_Parameter2>$(CdidxBuildCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>CdidxBuildDate</_Parameter1>
+        <_Parameter2>$(CdidxBuildDate)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>CdidxBuildDirty</_Parameter1>
+        <_Parameter2>$(CdidxBuildDirty)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -165,6 +165,13 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     int DefinitionSites,
     List<string> Paths);
 
+internal sealed record VersionInfoJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("commit")] string Commit,
+    [property: JsonPropertyName("build_date")] string BuildDate,
+    [property: JsonPropertyName("dirty")] string Dirty);
+
 [JsonSourceGenerationOptions(
     WriteIndented = false,
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
@@ -233,6 +240,7 @@ internal sealed record GroupedSymbolHotspotJsonResult(
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
+[JsonSerializable(typeof(VersionInfoJsonResult))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 
 internal static class CliJsonSerializerContextFactory

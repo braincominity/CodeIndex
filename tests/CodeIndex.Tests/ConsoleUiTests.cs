@@ -181,6 +181,25 @@ public class ConsoleUiTests
         Assert.Contains('.', version);
     }
 
+    [Fact]
+    public void LoadBuildMetadata_PopulatesAllFields()
+    {
+        // #1550: build metadata (commit SHA, build date, dirty flag) is stamped
+        // into the assembly so `cdidx --version` can distinguish dev builds
+        // from tagged releases. All four fields must be non-empty — when the
+        // MSBuild target cannot resolve a value it falls back to "unknown".
+        // #1550 で導入したアセンブリメタデータ。MSBuild ターゲットが値を解決
+        // できない場合は "unknown" フォールバックが入るため、いずれのフィールド
+        // も空にはならない。
+        var metadata = ConsoleUi.LoadBuildMetadata();
+        Assert.False(string.IsNullOrWhiteSpace(metadata.Version));
+        Assert.False(string.IsNullOrWhiteSpace(metadata.Commit));
+        Assert.False(string.IsNullOrWhiteSpace(metadata.BuildDate));
+        Assert.False(string.IsNullOrWhiteSpace(metadata.Dirty));
+        Assert.Equal(ConsoleUi.LoadVersion(), metadata.Version);
+        Assert.Contains(metadata.Dirty, new[] { "clean", "dirty", "unknown" });
+    }
+
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]

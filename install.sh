@@ -1139,24 +1139,28 @@ run_reinstall_real() {
     # whose single extracted token happens to equal the requested tag but
     # does not represent the binary's own reported version, e.g.
     # "warning: expected package v1.2.3" or "see /releases/v1.2.3/notes".
-    # Real `cdidx --version` output is literally `cdidx v<ver>` on exactly
-    # one non-empty line — no prefix, no trailing diagnostic text, and no
-    # additional diagnostic lines after it (verified against the current
-    # build). Require two invariants:
+    # Real `cdidx --version` output is exactly one non-empty line that
+    # starts with `cdidx v<ver>` and, since #1550, optionally ends with a
+    # parenthesized build-metadata block `(commit <sha>, built <date>,
+    # <clean|dirty>)`. No bare trailing text is permitted. Require two
+    # invariants:
     #   (a) EXACTLY one non-empty line in the output, rejecting multi-line
     #       shapes such as `cdidx v1.2.3\nwarning: expected package v1.2.3
     #       missing` where the first line is exact but a trailing diagnostic
     #       line slips through the token enumeration with the same single
     #       distinct version token.
-    #   (b) That single non-empty line EXACTLY equals `${BINARY_NAME}
-    #       v<requested>`, rejecting trailing-diagnostic shapes such as
-    #       `cdidx v1.2.3 warning: expected package missing`.
+    #   (b) That single non-empty line EITHER EXACTLY equals `${BINARY_NAME}
+    #       v<requested>` OR equals `${BINARY_NAME} v<requested> (<build
+    #       metadata>)`. Trailing-diagnostic shapes such as
+    #       `cdidx v1.2.3 warning: expected package missing` (no parens
+    #       around the trailing text) are rejected.
     # single-token の診断文だけで silent pass しないよう、`cdidx --version` の
-    # 出力全体が `${BINARY_NAME} v<要求版>` という 1 行の非空行だけで構成され、
-    # かつその 1 行が完全一致することを要求する（実バイナリの `--version` 出力は
-    # `cdidx v<ver>` の 1 行だけで、末尾に追加トークンも追加行も無い）。
-    # 末尾に診断文が続く `cdidx v1.2.3 warning: ...` や、先頭行の後に
-    # 診断行が続く `cdidx v1.2.3\nwarning: ...` のような shape もこれで弾く。
+    # 出力全体が 1 行の非空行で、その行が `${BINARY_NAME} v<要求版>` か
+    # `${BINARY_NAME} v<要求版> (<build metadata>)` のいずれかと完全一致する
+    # ことを要求する（#1550 以降、末尾に括弧で囲ったメタデータが付くケースを
+    # 許容する）。末尾に括弧無しの診断文が続く `cdidx v1.2.3 warning: ...` や、
+    # 先頭行の後に診断行が続く `cdidx v1.2.3\nwarning: ...` のような shape は
+    # これで弾く。
     local reinstall_nonempty_line_count
     reinstall_nonempty_line_count="$(printf '%s\n' "$reinstall_version_output" | awk 'NF { count++ } END { print count + 0 }')"
     if [ "$reinstall_nonempty_line_count" != "1" ]; then
@@ -1164,8 +1168,19 @@ run_reinstall_real() {
     fi
     local reinstall_first_version_line
     reinstall_first_version_line="$(printf '%s\n' "$reinstall_version_output" | awk 'NF { print; exit }')"
-    if [ "$reinstall_first_version_line" != "${BINARY_NAME} v${reinstall_expected_version}" ]; then
-        error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must be exactly '${BINARY_NAME} v${reinstall_expected_version}' but got: ${reinstall_first_version_line:-<empty>}."
+    local reinstall_version_head="${BINARY_NAME} v${reinstall_expected_version}"
+    local reinstall_version_line_ok=0
+    if [ "$reinstall_first_version_line" = "$reinstall_version_head" ]; then
+        reinstall_version_line_ok=1
+    else
+        case "$reinstall_first_version_line" in
+            "${reinstall_version_head} ("*")")
+                reinstall_version_line_ok=1
+                ;;
+        esac
+    fi
+    if [ "$reinstall_version_line_ok" != "1" ]; then
+        error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must be exactly '${reinstall_version_head}' or '${reinstall_version_head} (<build metadata>)' but got: ${reinstall_first_version_line:-<empty>}."
     fi
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that

@@ -298,6 +298,73 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_Version_HumanOutput_IncludesBuildMetadata()
+    {
+        // Issue #1550: `cdidx --version` should distinguish dev builds from
+        // tagged releases by appending a parenthesised `(commit <sha>, built
+        // <date>, <clean|dirty>)` suffix. The exact values come from MSBuild
+        // stamping so we assert on the structural shape only.
+        // #1550: --version 出力で開発ビルドとリリースを区別できるよう、コミット SHA /
+        // ビルド日 / clean|dirty 情報を末尾に付与する。値は MSBuild が刻印するため
+        // ここでは構造のみを検証する。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--version"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        var line = stdout.Trim();
+        Assert.StartsWith("cdidx v", line);
+        // Either bare `cdidx v<ver>` (no metadata stamped) or with full suffix.
+        // メタ刻印が無いビルドでは `cdidx v<ver>` のみ、ある場合は括弧付き末尾。
+        if (line.Contains('('))
+        {
+            Assert.Contains("commit ", line);
+            Assert.Contains(", built ", line);
+            Assert.EndsWith(")", line);
+        }
+    }
+
+    [Fact]
+    public void Run_Version_JsonOutput_HasExpectedShape()
+    {
+        // Issue #1550: `cdidx --version --json` is the machine-readable form
+        // used by support tooling. All five keys must be present.
+        // #1550: ツール連携用の --version --json 出力。5 キーが揃うことを検証。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--version", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.Equal("cdidx", root.GetProperty("name").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("version").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("commit").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("build_date").GetString()));
+        var dirty = root.GetProperty("dirty").GetString();
+        Assert.Contains(dirty, new[] { "clean", "dirty", "unknown" });
+    }
+
+    [Fact]
+    public void Run_Version_UnknownFlag_ReturnsUsageError()
+    {
+        // Stray tokens after --version are a typo (`--Json`, `-v`) rather than
+        // a valid mode and should fail loudly with a hint, not be silently
+        // ignored.
+        // --version の後ろの未知フラグは打ち間違いとみなしてヒント付きで失敗させる。
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--version", "--bogus"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--version does not accept '--bogus'", stderr);
+        Assert.Contains("Hint:", stderr);
+    }
+
+    [Fact]
     public void IsTrimmedJsonUnavailable_RecognizesReflectionDisabledMessage()
     {
         var ex = new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
