@@ -1281,6 +1281,22 @@ bootstrap prompt, the smoke tests, and this section exist so that any
 regression in the user-facing install flow is caught by the next person
 who opens a cloud session, not by a real user after release.
 
+## MCP audit log emission
+
+`AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) is the opt-in per-MCP-server JSONL audit (#1562). It is owned by `ProgramRunner.RunMcp` and threaded into `McpServer` through an internal constructor overload; no other dispatch site participates. Each `tools/call` produces exactly one record — including malformed requests (`tool="(missing)"`) and unknown tools (`error_code=-32602`) — so a misbehaving client cannot hide its activity by varying the request shape.
+
+Contract guarantees that downstream consumers can rely on:
+
+- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `arg_values`, `result_count`, `error` are emitted only when non-null; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
+- **Error code semantics.** `0` = success, `1` = MCP tool error (`isError: true`), negative = the verbatim JSON-RPC error code (e.g. `-32602` for invalid params, `-32603` for internal error). The companion `error` string is one of `jsonrpc_error`, `tool_error`, `missing_tool_name`, or the sanitized exception type name (`McpServer.BuildSanitizedToolErrorMessage` keeps `ex.Message` out of the wire and out of the audit, #1530).
+- **Result count.** `ExtractResultCount` prefers `structuredContent.count` over `structuredContent.results.length`; tool errors and JSON-RPC errors omit the field. Tools that return no count-shaped payload (e.g. `ping`) leave `result_count` absent rather than emitting `0`.
+- **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a `DeepClone` so later mutation of the request payload cannot retroactively change the audit trail.
+- **Caller identity.** `_clientName` / `_clientVersion` are captured from every `initialize.clientInfo` and overwrite on reconnection within the same session, so a long-running MCP loop with multiple `initialize` handshakes attributes records to the *currently connected* client rather than the first one.
+- **Rotation.** Writes go through an open-append-close cycle so external `tail -F` consumers follow rotations and so the file is closed during the rename. When `_bytesWritten >= MaxBytes`, `RotateLocked` drops `<path>.(RotationKeep-1)` (currently `<path>.2`), cascades surviving slots up by one, and moves `<path>` to `<path>.1`. `RotationKeep = 3`, so `<path>.3` is never created — exercised by `AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow`.
+- **Best effort.** Serialization failures, IO failures, and rotation failures are swallowed (the audit must not crash the underlying tool call). The constructor still fails fast on impossible paths so the operator sees the misconfiguration before any tool dispatch happens.
+
+The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCommandRunner.ParseArgs` and consumes only the audit-specific tokens — `--db` and anything after `--` is left intact so existing escape semantics survive. `--audit-log-include-values` requires `--audit-log <path>` because echoing values into a destination nobody configured would be a silent footgun.
+
 ## Coding conventions
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
@@ -2284,6 +2300,22 @@ flowchart TD
 ### なぜこれが重要か
 
 Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
+
+## MCP 監査ログの出力
+
+`AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) は MCP サーバーごとのオプトイン JSONL 監査ログ (#1562)。所有者は `ProgramRunner.RunMcp` で、`McpServer` の internal コンストラクタオーバーロード経由で渡される。ほかの呼び出しサイトは関与しない。`tools/call` ごとに必ず 1 レコード生成し、引数欠落（`tool="(missing)"`) や未知ツール (`error_code=-32602`) も含む — リクエスト形状を変えることで監査から消えるのを防ぐためである。
+
+下流コンシューマが依存できる契約:
+
+- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`arg_values`、`result_count`、`error` は値が non-null のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
+- **エラーコード意味論。** `0`=成功、`1`=MCP ツールエラー (`isError: true`)、負値=JSON-RPC エラーコードそのまま（例: invalid params なら `-32602`、internal error なら `-32603`）。同伴する `error` 文字列は `jsonrpc_error` / `tool_error` / `missing_tool_name` / サニタイズ済み例外型名のいずれか。`McpServer.BuildSanitizedToolErrorMessage` が `ex.Message` をワイヤーと audit から除外している（#1530）。
+- **result count。** `ExtractResultCount` は `structuredContent.count` を優先し、無ければ `structuredContent.results.length`、いずれも無ければ省略する。ツールエラー / JSON-RPC エラー時も省略する（`0` ではなく欠落）。
+- **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できる。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は `DeepClone` で取るので、後段のリクエスト改変が監査記録を遡及的に書き換えることはない。
+- **呼び出し元の特定。** `_clientName` / `_clientVersion` は `initialize.clientInfo` から毎回キャプチャし、同一セッション内で再 `initialize` があれば上書きされる。複数 handshake が走る長寿命 MCP ループでも、*現在接続中の*クライアントに対して記録が紐付く。
+- **ローテーション。** 1 レコードごとに open-append-close する。外部 `tail -F` の追従と rename 時の close-state 維持のため。`_bytesWritten >= MaxBytes` を超えた時点で `RotateLocked` が `<path>.(RotationKeep-1)`（現在は `<path>.2`）を破棄し、生存スロットを 1 つ古い側へ寄せ、`<path>` を `<path>.1` へ移す。`RotationKeep = 3` なので `<path>.3` は決して生成されない（`AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow` で常時検証）。
+- **ベストエフォート。** シリアライズ失敗・IO 失敗・rotation 失敗はすべて握り潰す（監査の失敗で本体ツール呼び出しを壊さない）。一方、構築時の不正パスはコンストラクタが早期失敗させ、ディスパッチ前にオペレーターに気付かせる。
+
+フラグパーサ (`ProgramRunner.TryConsumeAuditLogFlags`) は `QueryCommandRunner.ParseArgs` より前に走り、audit 関連トークンのみを消費する。`--db` と `--` 以降はそのまま残し、既存のエスケープ意味論を保つ。`--audit-log-include-values` は `--audit-log <path>` を必須とする（出力先が設定されていない状況で値を echo する設定をサイレントに許すと、後で「値が記録されているはず」と誤解される footgun になる）。
 
 ## コーディング規約
 
