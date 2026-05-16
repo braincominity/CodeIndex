@@ -113,11 +113,14 @@ If you need deterministic, scriptable retrieval outside an IDE (or across multip
 
 For implementation details (schema, indexing pipeline, MCP behavior), see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
-## 30-Second Quick Start
+## First Query Quick Start
 
 ```bash
-# One-liner install (no .NET required)
+# One-liner install (no .NET required; usually seconds)
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+
+# First index: ~30-60s on small repos; minutes or longer on 100k-file trees.
+# Add --verbose to see each file status while it runs.
 cdidx .
 cdidx search "handleRequest"
 ```
@@ -127,6 +130,12 @@ That is the whole loop:
 1. `cdidx .` builds or refreshes `.cdidx/codeindex.db`
 2. `cdidx search ...` returns results from the local index
 3. after edits, refresh with `cdidx . --files path/to/file.cs` or `cdidx . --commits HEAD`
+
+During indexing, interactive terminals show `Scanning...`, `Indexing...`, and
+a `67.0% [28/42]`-style progress line. If a large first index looks slow, rerun
+with `cdidx . --verbose` to see `[OK  ]`, `[SKIP]`, `[DEL ]`, and `[ERR ]`
+file statuses. Use incremental refreshes after the first run; see
+[Options](#options) for `--files` and `--commits`.
 
 ## Installation
 
@@ -260,6 +269,11 @@ cdidx ./myproject
 cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
 ```
+
+The first index does the expensive work once. Expect roughly 30-60 seconds on
+small repositories, and minutes or longer on very large monorepos with around
+100k files. Interactive terminals keep a live spinner and progress bar; use
+`--verbose` when you want per-file status while waiting.
 
 By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
 Indexing keeps the built-in skip lists (`node_modules`, `bin`, `obj`, lockfiles, etc.) and also honors user `.gitignore` plus optional `.cdidxignore` rules across full scans, `--files`, and `--commits` updates. On Windows, paths marked with the Hidden or System attribute are skipped before language detection so broad scans do not enter OS-owned caches such as `System Volume Information` or `$Recycle.Bin`; clear those attributes before indexing project-owned source files because ignore rules only exclude additional paths. When the project is inside Git, ignore matching follows the repository's `core.ignorecase` setting, even when the indexed project path is a subdirectory inside that repo; repo-root and other ancestor `.gitignore` files above that subdirectory still apply, and `--commits` resolves changed paths from the repository root before narrowing them back to the indexed project root. `**` only gets Git-style special handling in the documented path forms rather than as an unrestricted cross-directory wildcard. If an update refresh includes ignore-file changes, cdidx automatically falls back to a full scan so newly ignored files are purged safely. Invalid ignore lines are skipped with a warning instead of aborting the whole run, while unreadable ignore files fail closed for that directory scope so cdidx does not index with incomplete rules.
@@ -1427,11 +1441,14 @@ CodeIndex は source-available / Fair Source-style software であり、OSI-appr
 
 実装の詳細（スキーマ、索引パイプライン、MCP挙動）は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) を参照してください。
 
-## 30秒で試す
+## 最初の検索を試す
 
 ```bash
-# .NET 不要のワンライナーインストール
+# .NET 不要のワンライナーインストール（通常は数秒）
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+
+# 初回 index は小規模 repo で約30-60秒、100kファイル級では数分以上かかることがあります。
+# 実行中のファイル別ステータスを見たい場合は --verbose を付けてください。
 cdidx .
 cdidx search "handleRequest"
 ```
@@ -1441,6 +1458,12 @@ cdidx search "handleRequest"
 1. `cdidx .` で `.cdidx/codeindex.db` を作成または更新
 2. `cdidx search ...` でローカルインデックスを検索
 3. 編集後は `cdidx . --files path/to/file.cs` や `cdidx . --commits HEAD` で差分更新
+
+インデックス中、interactive terminal では `Scanning...`、`Indexing...`、
+`67.0% [28/42]` のような進捗行が表示されます。大きな初回 index が遅く見える
+場合は `cdidx . --verbose` で再実行すると、`[OK  ]`、`[SKIP]`、`[DEL ]`、`[ERR ]`
+のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
+`--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
 
 ## インストール
 
@@ -1565,6 +1588,11 @@ cdidx ./myproject
 cdidx ./myproject --rebuild     # 完全再構築
 cdidx ./myproject --verbose     # ファイルごとの詳細表示
 ```
+
+初回 index は重い処理を一度だけ実行します。小規模リポジトリでは約30-60秒、
+100kファイル級の大規模 monorepo では数分以上かかることがあります。
+interactive terminal では spinner と progress bar が動き続けます。待っている間に
+ファイル別ステータスを確認したい場合は `--verbose` を使ってください。
 
 `cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
 
