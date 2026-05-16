@@ -1852,7 +1852,7 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, CountOccurrences(stdout, "Updating 1 file(s)..."));
+            Assert.Equal(1, CountOccurrences(stdout, "Updating 1 file..."));
         }
         finally
         {

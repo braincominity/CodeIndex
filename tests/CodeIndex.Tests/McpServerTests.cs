@@ -2050,7 +2050,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("Found 1 references.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 reference.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
@@ -2164,7 +2164,7 @@ public class McpServerTests : IDisposable
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Found 1 callers.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 caller.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -5858,7 +5858,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
-        Assert.Contains("returned bucket(s)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]

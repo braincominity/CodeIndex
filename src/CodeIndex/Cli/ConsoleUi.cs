@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 
@@ -87,6 +88,22 @@ public static class ConsoleUi
         "⠋", "⠙", "⠹", "⠸", "⠼",
         "⠴", "⠦", "⠧", "⠇", "⠏",
     ];
+
+    internal static string Counted(int count, string singular, string? plural = null, string? format = null)
+    {
+        var formatted = format == null
+            ? count.ToString(CultureInfo.InvariantCulture)
+            : count.ToString(format, CultureInfo.InvariantCulture);
+        return $"{formatted} {(count == 1 ? singular : plural ?? singular + "s")}";
+    }
+
+    internal static string FoundSummary(int count, string singular, string? plural = null)
+    {
+        plural ??= singular + "s";
+        return count == 0
+            ? $"No {plural} found."
+            : $"Found {Counted(count, singular, plural)}.";
+    }
 
     // --- Spinner / スピナー ---
 

@@ -920,7 +920,7 @@ internal static class ProgramRunner
 
         if (cmdArgs.Length > 1)
         {
-            Console.Error.WriteLine($"Error: --completions accepts exactly one shell value, got extra argument(s): {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.");
+            Console.Error.WriteLine($"Error: --completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.");
             Console.Error.WriteLine("Hint: rerun with exactly one shell name: `bash`, `zsh`, or `fish`.");
             Console.Error.WriteLine("Usage: cdidx --completions <shell>");
             return CommandExitCodes.UsageError;
