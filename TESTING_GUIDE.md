@@ -21,8 +21,9 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Framework: xUnit
 - Target framework: `net8.0`
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`, `FsCheck.Xunit`
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
+- `FsCheck.Xunit` is reserved for property-based tests that assert universal invariants (never-throws contracts, idempotence, "output is parseable by downstream consumer") across randomly generated inputs. Use it to complement, not replace, the example-based `[Fact]` / `[Theory]` tests — pick FsCheck when the property is a universally quantified claim, and an example test when a specific concrete case is the contract.
 - Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
 
 ## Test Layout
@@ -59,6 +60,8 @@ The test project mirrors the production areas closely.
   Database corruption recovery and graceful degradation behavior.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
   Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
+- `PropertyBasedParserTests.cs`
+  FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestConsoleLock.cs`
   Shared test helpers.
 
@@ -191,8 +194,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - フレームワーク: xUnit
 - 対象フレームワーク: `net8.0`
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`、`FsCheck.Xunit`
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
+- `FsCheck.Xunit` はランダム生成入力に対する普遍的不変条件（never-throws、idempotence、"出力が downstream consumer で parse 可能" 等）を表明する property-based テスト専用です。例ベースの `[Fact]` / `[Theory]` を置き換えるのではなく補完するもので、普遍量化された主張なら FsCheck、特定の具体ケースが契約なら例ベースという形で使い分けてください。
 - テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
 
 ## テスト構成
@@ -229,6 +233,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   DB破損からの復旧とグレースフル劣化のテスト。
 - `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
   CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
+- `PropertyBasedParserTests.cs`
+  issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestConsoleLock.cs`
   共有テストヘルパー。
 
