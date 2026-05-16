@@ -2677,7 +2677,7 @@ public static class QueryCommandRunner
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("languages", cmdArgs, ["--json"]))
+        if (TryWriteUnsupportedOptionError("languages", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("languages")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "languages"))
             return CommandExitCodes.UsageError;
