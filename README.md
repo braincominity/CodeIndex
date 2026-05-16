@@ -55,7 +55,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
-- Incremental refreshes with `--files` and `--commits`.
+- Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
 - Exact DB/worktree freshness checks with `status --check`.
 - `status --json` reports the last full-scan unknown-extension count so
   extension-table gaps are visible.
@@ -165,7 +165,7 @@ cdidx mcp
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
-- `--files` と `--commits` による差分更新。
+- `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `status --check` による DB と作業ツリーの完全一致確認。
 - `status --json` で直近 full scan の未知拡張子数を返し、拡張子テーブルの
   抜けを確認可能。
