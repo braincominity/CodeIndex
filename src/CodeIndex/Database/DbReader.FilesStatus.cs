@@ -421,6 +421,7 @@ public partial class DbReader
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
+        var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
         // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
         // consistency with the other freshness signals; missing on legacy DBs.
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
@@ -432,6 +433,7 @@ public partial class DbReader
             Chunks = chunks,
             Symbols = symbols,
             References = references,
+            UnknownExtensionFileCount = unknownExtensionFileCount,
             IndexedAt = freshness.IndexedAt,
             LatestModified = freshness.LatestModified,
             IndexedHeadSha = indexedHeadSha,
@@ -565,6 +567,16 @@ public partial class DbReader
     // "true"/"false" meta 文字列を nullable bool に。欠落・不明値は null フォールバック。
     private static bool? ParseMetaBool(string? raw)
         => string.IsNullOrWhiteSpace(raw) || !bool.TryParse(raw, out var value)
+            ? null
+            : value;
+
+    private static long? ParseMetaLong(string? raw)
+        => string.IsNullOrWhiteSpace(raw)
+            || !long.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value)
             ? null
             : value;
 }

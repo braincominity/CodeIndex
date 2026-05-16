@@ -132,6 +132,10 @@ internal sealed class IndexUpdateJsonResult
     public string? DegradedReason { get; init; }
     public string? RecommendedAction { get; init; }
     public string? AlternativeAction { get; init; }
+    public bool CwdDriftDetected { get; init; }
+    public string? CwdAtStart { get; init; }
+    public string? CwdAtFinalize { get; init; }
+    public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public long ElapsedMs { get; init; }
@@ -161,6 +165,10 @@ internal sealed class IndexFullScanJsonResult
     public string? PriorIndexedHeadCommit { get; init; }
     public string? CurrentHeadCommit { get; init; }
     public string? HeadChangeNotice { get; init; }
+    public bool CwdDriftDetected { get; init; }
+    public string? CwdAtStart { get; init; }
+    public string? CwdAtFinalize { get; init; }
+    public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public long ElapsedMs { get; init; }

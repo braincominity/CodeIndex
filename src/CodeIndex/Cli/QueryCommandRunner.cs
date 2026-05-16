@@ -3241,7 +3241,7 @@ public static class QueryCommandRunner
         {
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
-            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var reader = new DbReader(db);
             return action(reader);
         }
         catch (FtsQuerySyntaxException ex)
