@@ -179,6 +179,7 @@ internal static class CliFlagSchema
             new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", Commands = Set("search") },
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
+            new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },
