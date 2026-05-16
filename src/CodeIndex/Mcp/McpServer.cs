@@ -578,7 +578,10 @@ public partial class McpServer : IDisposable
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        // Reuse the connection-scoped schema cache so each MCP tool call no longer
+        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565).
+        // MCP ツール呼び出しごとの schema 再走査を排除する (issue #1565)。
+        var reader = new DbReader(db);
         return action(reader);
     }
 

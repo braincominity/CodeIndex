@@ -37,6 +37,7 @@ public partial class DbReader
     private static readonly IReadOnlyDictionary<string, string> QueryLanguageAliases = BuildQueryLanguageAliases();
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
+    private readonly DbSchemaCache? _schemaCache;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _referenceColumns;
@@ -254,6 +255,24 @@ public partial class DbReader
     }
 
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
+        : this(connection, isReadOnly, schemaCache: null)
+    {
+    }
+
+    /// <summary>
+    /// Reuse a connection-scoped <see cref="DbSchemaCache"/> so callers that
+    /// share a single `DbContext` across multiple reader constructions pay
+    /// `PRAGMA table_info` / `PRAGMA index_list` exactly once per session
+    /// instead of once per reader (issue #1565).
+    /// </summary>
+    public DbReader(DbContext context)
+        : this(context?.Connection ?? throw new ArgumentNullException(nameof(context)),
+               context.IsReadOnly,
+               context.SchemaCache)
+    {
+    }
+
+    public DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache)
     {
         _conn = connection;
         // SQL user functions are registered once per connection by `DbContext` when the
@@ -262,6 +281,7 @@ public partial class DbReader
         // SQL ユーザー関数は接続オープン時に `DbContext` が一度だけ登録するため、
         // ここでの再登録は不要 (#1564)。
         _isReadOnly = isReadOnly;
+        _schemaCache = schemaCache;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
@@ -398,19 +418,9 @@ public partial class DbReader
 
     private HashSet<string> LoadIndexes(string tableName)
     {
-        var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!HasTable(tableName))
-            return indexes;
-
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA index_list('{tableName.Replace("'", "''")}')";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            if (!reader.IsDBNull(1))
-                indexes.Add(reader.GetString(1));
-        }
-        return indexes;
+        if (_schemaCache != null)
+            return _schemaCache.GetIndexes(tableName);
+        return DbSchemaCache.LoadIndexes(_conn, tableName, DbSchemaCache.QueryHasTable(_conn, tableName));
     }
 
     private static int ParseFoldVersion(SqliteConnection conn)
@@ -533,10 +543,9 @@ public partial class DbReader
 
     private bool HasTable(string tableName)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
-        cmd.Parameters.AddWithValue("@name", tableName);
-        return cmd.ExecuteScalar() != null;
+        if (_schemaCache != null)
+            return _schemaCache.HasTable(tableName);
+        return DbSchemaCache.QueryHasTable(_conn, tableName);
     }
 
     private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
@@ -1774,15 +1783,9 @@ public partial class DbReader
 
     private HashSet<string> LoadColumns(string tableName)
     {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
-
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            columns.Add(reader.GetString(1));
-
-        return columns;
+        if (_schemaCache != null)
+            return _schemaCache.GetColumns(tableName);
+        return DbSchemaCache.LoadColumns(_conn, tableName);
     }
 
     internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
