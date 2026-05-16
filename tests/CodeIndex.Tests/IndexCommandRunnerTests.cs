@@ -76,6 +76,23 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatPerFileErrorLine_CollapsesNewlinesInPathAndMessage_PreventingInjection()
+    {
+        // Issue #1578 follow-up: even without ex.StackTrace, a multiline exception
+        // message (or a CR/LF-bearing path) could still inject pseudo-stack lines
+        // into stderr that MCP clients then misinterpret. The formatter must keep
+        // the output on a single line.
+        // Issue #1578 派生: ex.StackTrace を外しても、`ex.Message` や `path` に CR/LF が
+        // 含まれると疑似スタック行が stderr に注入されうる。フォーマッタは 1 行に保つこと。
+        var ex = new InvalidOperationException("first line\nat Internal.Type.Method() in /home/secret.cs:42");
+        var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "weird\r\npath.cs", ex);
+
+        Assert.DoesNotContain("\n", line);
+        Assert.DoesNotContain("\r", line);
+        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
+    }
+
+    [Fact]
     public void Run_HelpFlagReturnsSuccess()
     {
         int exitCode;
