@@ -118,7 +118,7 @@ public static class IndexCommandRunner
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             ConsoleUi.PrintBanner();
             Console.WriteLine();
@@ -227,7 +227,7 @@ public static class IndexCommandRunner
                     {
                         var displayPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(options.ProjectPath, f));
                         errorList.Add(new CliJsonMessage(displayPath, message));
-                        if (!options.Json)
+                        if (!options.Json && !options.Quiet)
                             ConsoleUi.PrintWarning($"{displayPath}: {message}");
                     }
                     continue;
@@ -534,6 +534,7 @@ public static class IndexCommandRunner
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
+        bool quiet = false;
         bool dryRun = false;
         bool force = false;
         bool watch = false;
@@ -560,6 +561,9 @@ public static class IndexCommandRunner
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--quiet":
+                    quiet = true;
                     break;
                 case "--dry-run":
                     dryRun = true;
@@ -645,6 +649,7 @@ public static class IndexCommandRunner
             Rebuild = rebuild,
             Verbose = verbose,
             Json = json,
+            Quiet = quiet,
             Commits = commits,
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
@@ -829,7 +834,7 @@ public static class IndexCommandRunner
             {
                 ConsoleUi.StopSpinner(spinnerCts);
             }
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 Console.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
                 Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
@@ -845,7 +850,7 @@ public static class IndexCommandRunner
 
         if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths))
         {
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 Console.WriteLine("  Detected ignore-file changes; falling back to a full scan to keep the index aligned.");
                 Console.WriteLine();
@@ -874,10 +879,10 @@ public static class IndexCommandRunner
                 initialCwd);
         }
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             Console.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         CancellationTokenSource? updateCts = null;
-          var interactiveUpdateSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
+          var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
@@ -1002,7 +1007,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
@@ -1019,7 +1024,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath}");
@@ -1029,7 +1034,7 @@ public static class IndexCommandRunner
                     else
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
@@ -1046,7 +1051,7 @@ public static class IndexCommandRunner
                     if (!pathFilter.ShouldDeleteExisting)
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -1058,7 +1063,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -1075,7 +1080,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -1120,7 +1125,7 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
@@ -1137,7 +1142,7 @@ public static class IndexCommandRunner
                         deleteTxn.Commit();
                         removed++;
                         ftsMutated = true;
-                        if (options.Verbose && !options.Json)
+                        if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
@@ -1159,7 +1164,7 @@ public static class IndexCommandRunner
 
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
-                if (warning != null && !options.Json)
+                if (warning != null && !options.Json && !options.Quiet)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
@@ -1175,7 +1180,7 @@ public static class IndexCommandRunner
                 if (existingId != null)
                 {
                     skipped++;
-                    if (options.Verbose && !options.Json)
+                    if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
                         Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
@@ -1202,7 +1207,7 @@ public static class IndexCommandRunner
 
                 updated++;
                 ftsMutated = true;
-                if (options.Verbose && !options.Json)
+                if (options.Verbose && !options.Json && !options.Quiet)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
@@ -1226,7 +1231,7 @@ public static class IndexCommandRunner
 
         PauseUpdateSpinnerForConsoleWrite();
 
-        if (purgedRefs > 0 && !options.Json)
+        if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         if (ftsMutated)
@@ -1814,7 +1819,7 @@ public static class IndexCommandRunner
                 $"Indexed HEAD changed since the last full scan (was {priorIndexedHeadCommit}, now {currentHeadCommit}). " +
                 $"Incremental indexing only refreshes files it can scan in the current worktree, so rows for files that exist only on the previously indexed branch may remain. " +
                 $"Run `cdidx index {QuoteCommandArgument(projectRoot)} --rebuild` to fully refresh the index.";
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
                 ConsoleUi.PrintWarning(headChangeNotice);
         }
 
@@ -1828,7 +1833,7 @@ public static class IndexCommandRunner
         }
 
         CancellationTokenSource? spinnerCts = null;
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
@@ -1845,7 +1850,7 @@ public static class IndexCommandRunner
         var warningList = warningScanErrors
             .Select(error => new CliJsonMessage(error.Path, error.Message))
             .ToList();
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
             foreach (var error in scanResult.Errors)
@@ -1864,7 +1869,7 @@ public static class IndexCommandRunner
         writer.ClearMetadataTargetReady();
 
         CancellationTokenSource? purgeCts = null;
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = files
@@ -1896,7 +1901,7 @@ public static class IndexCommandRunner
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             if (purged > 0)
             {
@@ -1911,13 +1916,13 @@ public static class IndexCommandRunner
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
-        if (purgedRefs > 0 && !options.Json)
+        if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
 
-          var interactiveIndexSpinner = !options.Json && ConsoleUi.ShouldUseInteractiveConsole();
+          var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
@@ -1949,7 +1954,7 @@ public static class IndexCommandRunner
 
         void EnsureIndexingActivityVisible()
         {
-            if (options.Json)
+            if (options.Json || options.Quiet)
                 return;
 
             if (indexProgressVisible)
@@ -1970,7 +1975,7 @@ public static class IndexCommandRunner
 
         EnsureIndexingActivityVisible();
 
-        if (!options.Json)
+        if (!options.Json && !options.Quiet)
         {
             PauseIndexSpinnerForConsoleWrite();
             indexProgressVisible = true;
@@ -1984,7 +1989,7 @@ public static class IndexCommandRunner
             {
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-                if (warning != null && !options.Json)
+                if (warning != null && !options.Json && !options.Quiet)
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
@@ -2008,14 +2013,14 @@ public static class IndexCommandRunner
                     processed++;
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
                         reusedHotspotFamilyLanguages.Add(record.Lang);
-                    if (options.Verbose && !options.Json)
+                    if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
                         Console.WriteLine($"  [SKIP] {record.Path}");
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
-                    if (!options.Json)
+                    if (!options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.PrintProgress(processed, files.Count);
@@ -2039,7 +2044,7 @@ public static class IndexCommandRunner
                 WriteProjectRootOnce();
                 txn.Commit();
 
-                if (options.Verbose && !options.Json)
+                if (options.Verbose && !options.Json && !options.Quiet)
                 {
                     PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
@@ -2061,7 +2066,7 @@ public static class IndexCommandRunner
             }
 
             processed++;
-            if (!options.Json)
+            if (!options.Json && !options.Quiet)
             {
                 PauseIndexSpinnerForConsoleWrite();
                 ConsoleUi.PrintProgress(processed, files.Count);
@@ -2270,7 +2275,7 @@ public static class IndexCommandRunner
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
             }, jsonContext.IndexFullScanJsonResult));
         }
-        else
+        else if (!options.Quiet)
         {
             Console.WriteLine();
             Console.WriteLine();
@@ -2508,6 +2513,7 @@ public sealed class IndexCommandOptions
     public bool Rebuild { get; init; }
     public bool Verbose { get; init; }
     public bool Json { get; init; }
+    public bool Quiet { get; init; }
     public List<string> Commits { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
