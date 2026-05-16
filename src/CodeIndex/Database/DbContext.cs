@@ -139,7 +139,7 @@ public class DbContext : IDisposable
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
                 Execute("PRAGMA busy_timeout=5000");
-                RegisterConnectionFunctions(_connection);
+                RegisterConnectionFunctionsWithRetry(_connection);
                 _isReadOnly = true;
                 return;
             }
@@ -164,7 +164,7 @@ public class DbContext : IDisposable
                 static milliseconds => System.Threading.Thread.Sleep(milliseconds),
                 dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
-            RegisterConnectionFunctions(_connection);
+            RegisterConnectionFunctionsWithRetry(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -184,7 +184,7 @@ public class DbContext : IDisposable
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
             Execute("PRAGMA busy_timeout=5000");
-            RegisterConnectionFunctions(_connection);
+            RegisterConnectionFunctionsWithRetry(_connection);
             _isReadOnly = true;
         }
 
@@ -451,6 +451,29 @@ public class DbContext : IDisposable
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
+    private static void RegisterConnectionFunctionsWithRetry(
+        SqliteConnection connection,
+        Action<int>? sleep = null,
+        int maxAttempts = 5)
+    {
+        if (maxAttempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxAttempts), maxAttempts, "Must be at least 1.");
+
+        sleep ??= static milliseconds => System.Threading.Thread.Sleep(milliseconds);
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                RegisterConnectionFunctions(connection);
+                return;
+            }
+            catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxAttempts)
+            {
+                sleep(50 * attempt);
+            }
+        }
     }
 
     /// <summary>
