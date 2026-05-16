@@ -140,7 +140,7 @@ public static class IndexCommandRunner
                 {
                     dryCandidates = updatePaths
                         .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                        .Where(File.Exists)
+                        .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
                         .ToList();
                 }
             }
@@ -173,7 +173,7 @@ public static class IndexCommandRunner
                 {
                     dryCandidates = changedFiles
                         .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                        .Where(File.Exists)
+                        .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
                         .ToList();
                 }
             }
@@ -808,7 +808,7 @@ public static class IndexCommandRunner
             var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
             try
             {
-                if (!File.Exists(absPath))
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
                 {
                     if (!writer.HasFileAtPath(relPath))
                     {

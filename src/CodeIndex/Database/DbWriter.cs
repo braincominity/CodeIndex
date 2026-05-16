@@ -575,7 +575,11 @@ public class DbWriter
         foreach (var (id, relativePath) in dbPaths)
         {
             var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(absolutePath))
+            // Wrap with the Windows extended-length prefix before File.Exists so deep monorepo
+            // paths (>= 248 chars) are not silently classified as stale and DELETED from the DB.
+            // Without this wrap, the FileIndexer walker can index a long path successfully and
+            // the next index run will purge it. See LongPath.cs and #1547.
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
                 staleIds.Add(id);
         }
 
