@@ -66,13 +66,16 @@ public class PropertyBasedParserTests
     /// special characters (double quotes, asterisks, operator keywords, embedded
     /// control chars) the user typed. We verify by feeding the sanitized output into
     /// a real in-memory FTS5 table and asserting no syntax-error SqliteException
-    /// surfaces.
+    /// surfaces. We additionally require that the sanitizer did NOT collapse the
+    /// non-whitespace input to the empty-token fallback <c>"\"\""</c> — otherwise a
+    /// regression that aggressively stripped all input would pass vacuously.
     /// </summary>
     [Property(MaxTest = 200, EndSize = 64)]
     public Property SanitizeFtsQuery_EmitsParseableFts5(NonWhiteSpaceString query, bool prefix)
     {
         var sanitized = DbReader.SanitizeFtsQuery(query.Item, prefix);
-        return TryRunFts5Match(sanitized).ToProperty();
+        var nonTrivial = sanitized.Length > 2 && sanitized != "\"\"";
+        return (nonTrivial && TryRunFts5Match(sanitized)).ToProperty();
     }
 
     private static bool TryRunFts5Match(string match)
