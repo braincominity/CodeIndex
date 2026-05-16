@@ -1121,6 +1121,23 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   MCP spec bumps visible as actionable handshake failures instead of
   silently desynced wire formats. Bump the array deliberately and keep
   `ProtocolVersion` aligned with its first entry.
+- **Authentication middleware** (#1559). `McpServer` runs every parsed
+  JSON-RPC request through an `IMcpAuthenticator` *after* the method is
+  extracted but *before* dispatch. The default `LocalStdioAuthenticator`
+  is permissive (matches the historical stdio behaviour and tags every
+  caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
+  `TokenMcpAuthenticator`, which requires every responded request to
+  carry a matching `params.auth.token` and compares it in constant time
+  via `CryptographicOperations.FixedTimeEquals`. Failures uniformly
+  return JSON-RPC `-32001 "Unauthorized"` (per #1530 sanitization — the
+  wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
+  emits the detailed reason to stderr. Notifications
+  (`notifications/initialized`, `notifications/cancelled`) short-circuit
+  *before* the gate because they produce no response and cannot signal
+  an error code. The middleware is the seam for future transports — a
+  networked listener supplies a different `IMcpAuthenticator` while the
+  `McpCallerIdentity` shape (`Source` + `Subject`) stays stable for the
+  audit log (#1562).
 
 Because MCP uses a distinct serialization strategy, it is the most
 robust smoke test for "is the binary runnable at all?" — it stresses
@@ -2168,6 +2185,7 @@ sequenceDiagram
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
