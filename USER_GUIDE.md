@@ -1123,6 +1123,27 @@ Graph-oriented MCP tools such as `references`, `callers`, and `callees` also ret
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
+#### Optional HTTP transport
+
+By default `cdidx mcp` speaks JSON-RPC over stdin/stdout, which is what every config example above uses. AI clients that prefer to keep one warm server running across many requests — instead of paying subprocess-spawn cost per call — can switch the transport to HTTP:
+
+```bash
+cdidx mcp --transport http                              # binds to 127.0.0.1:38080 by default
+cdidx mcp --transport http --http-listen 127.0.0.1:9000 # custom loopback port
+CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
+  --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
+```
+
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. Non-POST verbs return `405 Method Not Allowed` with `Allow: POST`. The server is single-session — one in-flight request at a time — so the request/response ordering invariant the stdio loop relies on still holds end-to-end.
+
+Security defaults:
+
+- The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
+- Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` to a shared secret; when set, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`.
+- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing.
+
+The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
+
 #### Restricting which MCP tools a deployment exposes
 
 For read-only deployments or sessions that only need a narrow tool surface, two environment variables control which tools `cdidx mcp` advertises and dispatches (#1561):
@@ -2257,6 +2278,27 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+#### オプションの HTTP トランスポート
+
+既定では `cdidx mcp` は stdin/stdout 上で JSON-RPC を扱います（上の設定例はすべて stdio 前提）。AI クライアント側で「1 本のサーバーを温めたまま複数リクエストを捌きたい」「呼び出しごとにサブプロセスを起動したくない」というユースケースでは、トランスポートを HTTP に切り替えられます:
+
+```bash
+cdidx mcp --transport http                              # 既定で 127.0.0.1:38080 にバインド
+cdidx mcp --transport http --http-listen 127.0.0.1:9000 # ポートだけ変更
+CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
+  --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
+```
+
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content`、POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。サーバーはシングルセッション（同時に処理するリクエストは 1 件）なので、stdio ループが依存する「リクエスト 1 件 → レスポンス 1 件」の順序不変条件は HTTP でも保たれます。
+
+セキュリティ既定:
+
+- listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
+- 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` で共有秘密を指定する必要があります。指定時はすべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。
+- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。
+
+stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 
 #### デプロイ単位で公開する MCP ツールを制限する
 
