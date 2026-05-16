@@ -151,10 +151,17 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
+            // Stderr keeps the full message for local diagnostics, but the
+            // wire response only carries the exception type so SQLite-style
+            // "near 'foo': syntax error" detail or other content-bearing
+            // strings cannot leak to the JSON-RPC client (#1530).
+            // stderr には診断用に詳細を残すが、ネットワークに出るレスポンスには
+            // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
+            // 内容漏れを防ぐ（#1530）。
             Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
             if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
             {
-                var errorResponse = CreateErrorResponse(true, requestId, -32603, ex.Message);
+                var errorResponse = CreateErrorResponse(true, requestId, -32603, BuildSanitizedLoopErrorMessage(ex));
                 await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
             }
         }
@@ -276,9 +283,19 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
+            // Stderr captures the full ex.Message for local debugging, but the
+            // JSON-RPC tool result is sanitized down to the tool name +
+            // exception type. ex.Message can otherwise echo bound parameter
+            // values (e.g. SQLite errors quote the offending literal) or path
+            // / content fragments, which would leak to the client through the
+            // MCP transcript (#1530).
+            // stderr には ex.Message をそのまま残してローカルデバッグを支えるが、
+            // JSON-RPC のツール結果は tool 名 + 例外型のみに絞る。SQLite 例外などは
+            // バインド値や該当リテラルを含むため、生のメッセージをクライアントに渡すと
+            // パスや索引内容が漏れる（#1530）。
             Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
-            return CreateToolErrorResponse(true, id, $"Error executing {toolName}: {ex.Message}");
+            return CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex));
         }
         finally
         {
@@ -300,6 +317,20 @@ public partial class McpServer : IDisposable
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
+
+    // Wire-safe error body for the tool catch-all. Mentions the tool and the
+    // exception type so the client can branch (retry vs. surface to user)
+    // while keeping bound values or matched content out of the response (#1530).
+    // ツール catch-all のワイヤー向け本文。クライアントが分岐できるよう tool 名と
+    // 例外型は残し、バインド値や一致内容は含めない（#1530）。
+    internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex) =>
+        $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
+
+    // Wire-safe error body for the JSON-RPC loop catch-all. Same rationale as
+    // the tool catch-all (#1530).
+    // JSON-RPC ループ catch-all のワイヤー向け本文。理由はツール catch-all と同じ（#1530）。
+    internal static string BuildSanitizedLoopErrorMessage(Exception ex) =>
+        $"Internal error ({ex.GetType().Name}). See cdidx server stderr for details.";
 
     // Tool implementations are in McpToolHandlers.cs / ツール実装は McpToolHandlers.cs に分離
 

@@ -1391,6 +1391,8 @@ public partial class McpServer
                 ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
+            if (analysis.TruncatedReason != null)
+                payload["truncated_reason"] = analysis.TruncatedReason;
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             string? maxDepthClampWarning = null;
             if (maxDepthRequested != maxDepth)
@@ -1403,12 +1405,23 @@ public partial class McpServer
             if (analysis.Suggestion != null)
                 payload["suggestion"] = analysis.Suggestion;
 
+            // Summary tail differs by truncated_reason so retry advice is actionable: user_limit
+            // is solvable by raising --limit, safety_cap is not. Issue #1533.
+            // 切り捨て理由ごとに retry 助言を分岐 (user_limit は --limit 緩和で解消、safety_cap は不可) (#1533)。
+            string truncatedTail;
+            if (!analysis.Truncated)
+                truncatedTail = "";
+            else if (analysis.TruncatedReason == ImpactTruncatedReasons.SafetyCap)
+                truncatedTail = " Results truncated by internal safety cap (graph likely pathological); raising limit will not help.";
+            else
+                truncatedTail = " Results truncated — increase limit for more.";
+
             var summary = analysis.ImpactMode switch
             {
                 "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only."
-                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                    + truncatedTail,
                 _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
-                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                    + truncatedTail,
                 _ => "No impact found.",
             };
             if (maxDepthClampWarning != null)
@@ -1822,8 +1835,15 @@ public partial class McpServer
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
             if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
-                writer.MarkFoldReady();
-                foldReadyAfter = true;
+                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
+                // insert during this restamp window leaves foldReadyAfter=false and degrades
+                // to the legacy "missing_fold_backfill" reason instead of silent misadvertise.
+                // Issue #1535.
+                // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
+                // 場合は missing_fold_backfill に降格する。Issue #1535。
+                foldReadyAfter = writer.MarkFoldReady();
+                if (!foldReadyAfter)
+                    foldReadyReason = "missing_fold_backfill";
             }
             else if (!backfillReady)
             {
@@ -1943,11 +1963,14 @@ public partial class McpServer
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            var verified = writer.AllFoldedColumnsBackfilled();
+            // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
+            // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
+            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
+            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
+            var verified = writer.MarkFoldReady();
             if (!verified)
-                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values.");
+                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
 
-            writer.MarkFoldReady();
             var userVersionAfter = db.GetUserVersion();
 
             var payload = new JsonObject

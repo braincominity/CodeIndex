@@ -35,6 +35,10 @@ public static partial class SymbolExtractor
         @"^\s*(?:[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*::)?[A-Za-z_]\w*\s+as\s+(?:(?:public|protected|private)\s+)?(?<name>(?!public\b|protected\b|private\b)[A-Za-z_]\w*)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    private static readonly Regex PhpUseGroupItemAliasRegex = new(
+        @"^(?<name>[\w\\]+)\s+as\s+(?<alias>\w+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex PhpDocblockTypeAliasRegex = new(
         @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?type\s+(?<name>[A-Za-z_]\w*)\s+(?<returnType>\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -61,11 +65,11 @@ public static partial class SymbolExtractor
 
                 var importedName = item;
                 var alias = string.Empty;
-                var aliasIndex = item.IndexOf(" as ", StringComparison.OrdinalIgnoreCase);
-                if (aliasIndex >= 0)
+                var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
+                if (aliasMatch.Success)
                 {
-                    importedName = item[..aliasIndex].Trim();
-                    alias = item[(aliasIndex + 4)..].Trim();
+                    importedName = aliasMatch.Groups["name"].Value;
+                    alias = aliasMatch.Groups["alias"].Value;
                 }
 
                 var symbolName = alias.Length > 0 ? alias : prefix + importedName;
@@ -218,32 +222,42 @@ public static partial class SymbolExtractor
 
     private static void ExtractPhpDocblockPropertySymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        HashSet<string>? seenDocblockPropertyNames = null;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
-            var match = PhpDocblockPropertyRegex.Match(line);
-            if (!match.Success)
-                continue;
+            if (line.IndexOf("/**", StringComparison.Ordinal) >= 0)
+                seenDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
 
-            var lineNumber = lineIndex + 1;
-            var nameGroup = match.Groups["name"];
-            AddSymbolRecord(
-                symbols,
-                cssSeenSymbols: null,
-                lineNumber,
-                new SymbolRecord
+            var match = PhpDocblockPropertyRegex.Match(line);
+            if (match.Success)
+            {
+                var lineNumber = lineIndex + 1;
+                var nameGroup = match.Groups["name"];
+                if (seenDocblockPropertyNames == null || seenDocblockPropertyNames.Add(nameGroup.Value))
                 {
-                    FileId = fileId,
-                    Kind = "property",
-                    Name = nameGroup.Value,
-                    Line = lineNumber,
-                    StartLine = lineNumber,
-                    StartColumn = nameGroup.Index,
-                    EndLine = lineNumber,
-                    Signature = line.Trim(),
-                    ReturnType = match.Groups["returnType"].Value,
-                },
-                line);
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = nameGroup.Value,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            StartColumn = nameGroup.Index,
+                            EndLine = lineNumber,
+                            Signature = line.Trim(),
+                            ReturnType = match.Groups["returnType"].Value,
+                        },
+                        line);
+                }
+            }
+
+            if (seenDocblockPropertyNames != null && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+                seenDocblockPropertyNames = null;
         }
     }
 

@@ -73,7 +73,7 @@ public class IndexCommandRunnerTests
         var (exitCode, _, stderr) = RunAndCaptureStreams([missingProject]);
 
         Assert.Equal(CommandExitCodes.NotFound, exitCode);
-        Assert.Contains("Error: directory not found", stderr);
+        Assert.Contains("Error [E011_DIRECTORY_NOT_FOUND]: directory not found", stderr);
         Assert.Contains("rerun `cdidx index <projectPath>` with an existing directory", stderr);
     }
 

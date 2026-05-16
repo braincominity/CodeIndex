@@ -24,7 +24,8 @@ public static class DbCommandRunner
                 jsonOptions,
                 options.ParseError,
                 CommandExitCodes.UsageError,
-                "Run `cdidx db --integrity-check --help` to see the supported command shape.");
+                "Run `cdidx db --integrity-check --help` to see the supported command shape.",
+                CommandErrorCodes.UsageError);
 
         if (!options.IntegrityCheck)
             return WriteCommandError(
@@ -32,7 +33,8 @@ public static class DbCommandRunner
                 jsonOptions,
                 "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Pass `--integrity-check` to run `PRAGMA integrity_check` on the database.");
+                "Pass `--integrity-check` to run `PRAGMA integrity_check` on the database.",
+                CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
@@ -42,7 +44,8 @@ public static class DbCommandRunner
                 jsonOptions,
                 $"database not found: {dbPath}",
                 CommandExitCodes.NotFound,
-                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
+                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
+                CommandErrorCodes.DbNotFound);
 
         try
         {
@@ -70,7 +73,7 @@ public static class DbCommandRunner
                     foreach (var line in issues)
                         Console.WriteLine($"    - {line}");
                     Console.WriteLine();
-                    Console.Error.WriteLine("Error: SQLite reported integrity_check failures.");
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbIntegrityFailed}]: SQLite reported integrity_check failures.");
                     Console.Error.WriteLine("Hint: rebuild with `cdidx index <projectPath> --rebuild` to discard the corrupted DB and start fresh.");
                 }
             }
@@ -87,7 +90,8 @@ public static class DbCommandRunner
                 jsonOptions,
                 $"failed to run integrity check: {ex.Message}",
                 CommandExitCodes.DatabaseError,
-                "Retry `cdidx db --integrity-check`. If this persists, the DB may be unreadable; rebuild with `cdidx index <projectPath> --rebuild`.");
+                "Retry `cdidx db --integrity-check`. If this persists, the DB may be unreadable; rebuild with `cdidx index <projectPath> --rebuild`.",
+                CommandErrorCodes.DbError);
         }
     }
 
@@ -167,15 +171,16 @@ public static class DbCommandRunner
         };
     }
 
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
             Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint),
+                new CommandErrorJsonResult("error", message, hint, errorCode),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
         else
         {
-            Console.Error.WriteLine($"Error: {message}");
+            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
+            Console.Error.WriteLine($"{prefix}: {message}");
             if (hint != null)
                 Console.Error.WriteLine($"Hint: {hint}");
         }

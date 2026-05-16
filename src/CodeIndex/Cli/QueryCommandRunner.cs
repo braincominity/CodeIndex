@@ -1203,21 +1203,21 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
                 if ((arg == "--limit" || arg == "--top")
-                    && int.TryParse(value, out var limitCeil)
+                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitCeil)
                     && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
                     && limitCeil > limitMax)
                     return $"Error: --limit must be less than or equal to {limitMax}, got '{value}'.";
-                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                if (arg == "--max-line-width" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthValue) || widthValue < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
-                if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
+                if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
-                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
+                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if ((arg == "--before" || arg == "--after")
-                    && int.TryParse(value, out var contextCeil)
+                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
                     return $"Error: {arg} must be less than or equal to {contextMax}, got '{value}'.";
@@ -1891,6 +1891,8 @@ public static class QueryCommandRunner
                                 zeroPayload["max_depth"] = maxDepth;
                                 zeroPayload["actual_depth"] = 0;
                                 zeroPayload["truncated"] = analysis.Truncated;
+                                if (analysis.TruncatedReason != null)
+                                    zeroPayload["truncated_reason"] = analysis.TruncatedReason;
                                 zeroPayload["impact_mode"] = analysis.ImpactMode;
                                 zeroPayload["heuristic"] = analysis.Heuristic;
                                 zeroPayload["file_impacts"] = new JsonArray();
@@ -1978,6 +1980,8 @@ public static class QueryCommandRunner
                             zeroPayload["max_depth"] = maxDepth;
                             zeroPayload["actual_depth"] = 0;
                             zeroPayload["truncated"] = analysis.Truncated;
+                            if (analysis.TruncatedReason != null)
+                                zeroPayload["truncated_reason"] = analysis.TruncatedReason;
                             zeroPayload["impact_mode"] = analysis.ImpactMode;
                             zeroPayload["heuristic"] = analysis.Heuristic;
                             zeroPayload["file_impacts"] = new JsonArray();
@@ -2025,6 +2029,8 @@ public static class QueryCommandRunner
                         ["hint_file_count"] = hintFileCount,
                         ["truncated"] = analysis.Truncated,
                     };
+                    if (analysis.TruncatedReason != null)
+                        payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -2061,6 +2067,8 @@ public static class QueryCommandRunner
                     ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
                     ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult),
                 };
+                if (analysis.TruncatedReason != null)
+                    payload["truncated_reason"] = analysis.TruncatedReason;
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2092,7 +2100,11 @@ public static class QueryCommandRunner
                     }
                 }
 
-                var truncNote = analysis.Truncated ? " [TRUNCATED]" : "";
+                var truncNote = analysis.Truncated
+                    ? analysis.TruncatedReason != null
+                        ? $" [TRUNCATED: {analysis.TruncatedReason}]"
+                        : " [TRUNCATED]"
+                    : "";
                 if (hasHeuristicHints)
                     Console.Error.WriteLine($"\n({hintCount} heuristic dependency hints across {hintFileCount} files{truncNote})");
                 else
@@ -3208,7 +3220,7 @@ public static class QueryCommandRunner
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
@@ -3223,7 +3235,7 @@ public static class QueryCommandRunner
         }
         catch (FtsQuerySyntaxException ex)
         {
-            Console.Error.WriteLine($"Error: FTS5 query syntax: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
             if (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
@@ -3239,15 +3251,31 @@ public static class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
+            if (ex is SqliteException sqliteEx)
             {
-                Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
-                Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
-                Database.DbDebug.DumpToStderr(ex);
-                return CommandExitCodes.DatabaseError;
+                if (sqliteEx.SqliteErrorCode == 13)
+                {
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.TempStoreExhausted}]: SQLite temp-store exhausted while evaluating this query.");
+                    Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
+                    Database.DbDebug.DumpToStderr(ex);
+                    return CommandExitCodes.DatabaseError;
+                }
+
+                // SQLITE_BUSY (5) and SQLITE_LOCKED (6) both mean a concurrent writer is
+                // holding the database; surface E002_DB_LOCKED so scripts can implement
+                // retry-with-backoff without substring-matching the prose message.
+                // SQLITE_BUSY/LOCKED は別 writer によるロック競合なので、リトライ判断用に
+                // E002_DB_LOCKED で機械可読に区別する。
+                if (sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6)
+                {
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
+                    Console.Error.WriteLine("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
+                    Database.DbDebug.DumpToStderr(ex);
+                    return CommandExitCodes.DatabaseError;
+                }
             }
 
-            Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
             Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;
@@ -4265,7 +4293,7 @@ public static class QueryCommandRunner
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
             return TryParseNonNegativeInt(rawValue, optionName, out value, out error);
 
-        if (!int.TryParse(rawValue, out value) || value <= 0)
+        if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
             error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
@@ -4285,7 +4313,7 @@ public static class QueryCommandRunner
 
     private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out value) || value < 0)
+        if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;
             error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
