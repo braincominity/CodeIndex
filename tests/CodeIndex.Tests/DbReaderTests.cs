@@ -233,6 +233,76 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_RanksRealCallsAboveManyLowerWeightSubscribeEdges()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/hotspot_weights.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RealCallTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "SubscribeOnlyTarget",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 7,
+            },
+        ]);
+
+        var references = new List<ReferenceRecord>();
+        for (var i = 0; i < 2; i++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "RealCallTarget",
+                ReferenceKind = "call",
+                Line = 10 + i,
+                Column = 9,
+                Context = "RealCallTarget();",
+            });
+        }
+        for (var i = 0; i < 5; i++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "SubscribeOnlyTarget",
+                ReferenceKind = "subscribe",
+                Line = 14 + i,
+                Column = 9,
+                Context = "SubscribeOnlyTarget += Handler;",
+            });
+        }
+        _writer.InsertReferences(references);
+
+        var hotspots = _reader.GetSymbolHotspots(limit: 2, kind: "function", lang: "csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("RealCallTarget", hotspots[0].Symbol.Name);
+        Assert.Equal(2, hotspots[0].ReferenceCount);
+        Assert.Equal(2.0, hotspots[0].ReferenceScore);
+        Assert.Equal("SubscribeOnlyTarget", hotspots[1].Symbol.Name);
+        Assert.Equal(5, hotspots[1].ReferenceCount);
+        Assert.Equal(1.5, hotspots[1].ReferenceScore, precision: 6);
+    }
+
+    [Fact]
     public void SearchSymbols_RustMacroQueriesIgnoreTrailingBang()
     {
         InsertIndexedFile(

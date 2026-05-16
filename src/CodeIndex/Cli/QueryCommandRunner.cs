@@ -2420,6 +2420,7 @@ public static class QueryCommandRunner
                             g.Symbol.Path,
                             g.Symbol.Line,
                             g.ReferenceCount,
+                            g.ReferenceScore,
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
@@ -2442,7 +2443,7 @@ public static class QueryCommandRunner
                         var s = g.Symbol;
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
-                        Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
+                        Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
                     Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
@@ -2546,6 +2547,7 @@ public static class QueryCommandRunner
                         r.Symbol.Path,
                         r.Symbol.Line,
                         r.ReferenceCount,
+                        r.ReferenceScore,
                         r.Symbol.Visibility,
                         r.Symbol.ContainerName))
                     .ToList();
@@ -2560,10 +2562,11 @@ public static class QueryCommandRunner
             }
             else
             {
-                foreach (var (s, refCount) in results)
+                foreach (var r in results)
                 {
+                    var s = r.Symbol;
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                    Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 Console.Error.WriteLine($"({results.Count} symbol hotspots)");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
@@ -4322,6 +4325,8 @@ public static class QueryCommandRunner
             return seconds > 0 ? $"{(int)duration.TotalMinutes}m{seconds}s" : $"{(int)duration.TotalMinutes}m";
         return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
+
+    private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
