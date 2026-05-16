@@ -500,6 +500,7 @@ public static class ConsoleUi
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
         Console.WriteLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
+        Console.WriteLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
         Console.WriteLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
         Console.WriteLine();
         Console.WriteLine("Examples:");
