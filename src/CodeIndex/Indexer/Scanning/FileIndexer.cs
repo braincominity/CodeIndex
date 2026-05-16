@@ -2122,30 +2122,70 @@ public class FileIndexer
             });
         }
 
-        // Mixed line endings — check raw bytes before LF normalization
-        // 混在改行コード — LF正規化前のrawBytesで確認
+        // Line-ending classification — check raw bytes before LF normalization so
+        // bare CR (legacy Mac) and three-way mixes are not silently flattened by
+        // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
+        // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
+        // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
+        // と 3 種混在を見分ける。
         var hasCrlf = false;
         var hasLfOnly = false;
+        var hasCrOnly = false;
         for (int i = 0; i < rawBytes.Length; i++)
         {
-            if (rawBytes[i] == 0x0D && i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
+            if (rawBytes[i] == 0x0D)
             {
-                hasCrlf = true;
-                i++; // skip the LF after CR
+                if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
+                {
+                    hasCrlf = true;
+                    i++; // skip the LF after CR
+                }
+                else
+                {
+                    hasCrOnly = true;
+                }
             }
             else if (rawBytes[i] == 0x0A)
             {
                 hasLfOnly = true;
             }
         }
-        if (hasCrlf && hasLfOnly)
+        var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
+        if (distinctEndingTypes >= 3)
         {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings_three_way",
+                Line = 0,
+                Message = "Mixed line endings (CRLF, LF, and CR)",
+            });
+        }
+        else if (distinctEndingTypes == 2)
+        {
+            string description;
+            if (hasCrlf && hasLfOnly)
+                description = "CRLF and LF";
+            else if (hasCrlf && hasCrOnly)
+                description = "CRLF and CR";
+            else
+                description = "LF and CR";
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "mixed_line_endings",
                 Line = 0,
-                Message = "Mixed line endings (CRLF and LF)",
+                Message = $"Mixed line endings ({description})",
+            });
+        }
+        else if (hasCrOnly)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "cr_only_line_endings",
+                Line = 0,
+                Message = "CR-only line endings (legacy Mac)",
             });
         }
 
