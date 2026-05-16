@@ -32,9 +32,9 @@ internal static class ProgramRunner
 
         if (args[0] is "--version" or "-V")
         {
-            Console.WriteLine($"cdidx v{appVersion}");
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} version_only=true");
-            return CommandExitCodes.Success;
+            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion);
+            GlobalToolLog.Info($"command_complete exit_code={versionExitCode} version_only=true");
+            return versionExitCode;
         }
 
         if (args[0] is "--license" or "license")
@@ -284,6 +284,74 @@ internal static class ProgramRunner
         using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
         server.RunAsync().GetAwaiter().GetResult();
         return CommandExitCodes.Success;
+    }
+
+    // `--version` is now build-aware so dev builds from main are not
+    // indistinguishable from tagged releases in bug reports (#1550). Human
+    // output stays on a single line — `cdidx v<ver>` optionally followed by
+    // ` (commit <sha>, built <date>, <clean|dirty>)` — so the install.sh
+    // reinstall validator can stay anchored against trailing diagnostic spam.
+    // バグ報告で dev ビルドとリリースタグを区別できるよう `--version` を
+    // ビルド情報付きにする (#1550)。人間出力は 1 行に保ち、install.sh の
+    // reinstall validator が末尾診断文を誤って許容しないよう、括弧で囲った
+    // メタデータ以外を許さない形に揃える。
+    internal static int RunVersion(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
+    {
+        var wantsJson = false;
+        foreach (var arg in cmdArgs)
+        {
+            if (arg is "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            Console.Error.WriteLine($"Error: --version does not accept '{arg}'.");
+            Console.Error.WriteLine("Hint: use `cdidx --version` or `cdidx --version --json`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var baseMetadata = ConsoleUi.LoadBuildMetadata();
+        // Honour the caller-provided appVersion (overrides version.json so
+        // tests and embedded hosts can pin a specific semver) while keeping
+        // the assembly-stamped commit/build-date/dirty fields.
+        // 呼び出し元が appVersion を渡した場合はそれを優先する（テストや
+        // 組み込みホストが semver を固定できるよう）一方、commit / build
+        // date / dirty は刻印された値をそのまま使う。
+        var metadata = string.IsNullOrWhiteSpace(appVersion)
+            ? baseMetadata
+            : baseMetadata with { Version = appVersion! };
+        if (wantsJson)
+        {
+            var payload = new VersionInfoJsonResult(
+                Name: "cdidx",
+                Version: metadata.Version,
+                Commit: metadata.Commit,
+                BuildDate: metadata.BuildDate,
+                Dirty: metadata.Dirty);
+            var json = JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).VersionInfoJsonResult);
+            Console.WriteLine(json);
+            return CommandExitCodes.Success;
+        }
+
+        Console.WriteLine(FormatVersionLine(metadata));
+        return CommandExitCodes.Success;
+    }
+
+    internal static string FormatVersionLine(ConsoleUi.BuildMetadata metadata)
+    {
+        var commit = string.IsNullOrWhiteSpace(metadata.Commit) ? "unknown" : metadata.Commit;
+        var buildDate = string.IsNullOrWhiteSpace(metadata.BuildDate) ? "unknown" : metadata.BuildDate;
+        var dirty = string.IsNullOrWhiteSpace(metadata.Dirty) ? "unknown" : metadata.Dirty;
+
+        // Suppress the metadata suffix only when every component is "unknown",
+        // so legacy callers that depend on the exact `cdidx v<ver>` shape keep
+        // working when no build stamp is present (e.g. mocked binaries).
+        // 全項目が unknown のときだけ末尾メタデータを省略し、ビルド刻印が
+        // 無い旧バイナリ／モックでも `cdidx v<ver>` 形式を保つ。
+        if (commit == "unknown" && buildDate == "unknown" && dirty == "unknown")
+            return $"cdidx v{metadata.Version}";
+
+        return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty})";
     }
 
     private static int RunCompletions(string[] cmdArgs)

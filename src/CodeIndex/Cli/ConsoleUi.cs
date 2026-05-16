@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Reflection;
 using System.Text;
 
 namespace CodeIndex.Cli;
@@ -334,6 +335,43 @@ public static class ConsoleUi
                 return ver.GetString() ?? "0.0.0";
         }
         return "0.0.0";
+    }
+
+    /// <summary>
+    /// Build metadata stamped into the assembly at compile time, used by
+    /// `--version` so dev builds and tagged releases are distinguishable in
+    /// bug reports (#1550). Any field can be "unknown" when the build host
+    /// lacks git (e.g. a tarball-only checkout).
+    /// `--version` がバグ報告で dev ビルドとタグ済みリリースを区別できる
+    /// よう、ビルド時にアセンブリへ刻んだメタデータ (#1550)。git の無い
+    /// ビルドホストでは各フィールドが "unknown" になりうる。
+    /// </summary>
+    public sealed record BuildMetadata(string Version, string Commit, string BuildDate, string Dirty);
+
+    /// <summary>
+    /// Load the full build metadata: semver from version.json plus commit/build
+    /// date/dirty flag stamped into the assembly via <c>AssemblyMetadataAttribute</c>.
+    /// version.json の semver と、AssemblyMetadataAttribute で刻まれた
+    /// commit / build date / dirty フラグを合わせて読み込む。
+    /// </summary>
+    public static BuildMetadata LoadBuildMetadata()
+    {
+        var assembly = typeof(ConsoleUi).Assembly;
+        return new BuildMetadata(
+            Version: LoadVersion(),
+            Commit: ReadAssemblyMetadata(assembly, "CdidxCommit"),
+            BuildDate: ReadAssemblyMetadata(assembly, "CdidxBuildDate"),
+            Dirty: ReadAssemblyMetadata(assembly, "CdidxBuildDirty"));
+    }
+
+    private static string ReadAssemblyMetadata(Assembly assembly, string key)
+    {
+        foreach (var attr in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+        {
+            if (string.Equals(attr.Key, key, StringComparison.Ordinal))
+                return string.IsNullOrWhiteSpace(attr.Value) ? "unknown" : attr.Value!;
+        }
+        return "unknown";
     }
 
     // --- Usage / 使い方 ---
