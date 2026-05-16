@@ -137,6 +137,29 @@ with `cdidx . --verbose` to see `[OK  ]`, `[SKIP]`, `[DEL ]`, and `[ERR ]`
 file statuses. Use incremental refreshes after the first run; see
 [Options](#options) for `--files` and `--commits`.
 
+## CI integration
+
+Use `cdidx status --check` when a script needs one command that verifies both
+workspace freshness and readiness of query subsystems. On success, non-JSON
+`--check` exits 0 and writes no stdout. On failure, it writes one diagnostic line
+per failed check to stderr, such as `[stale] workspace_check ...` or
+`[degraded] fold_ready=false ...`.
+
+Exit codes for `status --check` are command-specific:
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | stale workspace/index |
+| 2 | degraded readiness |
+| 3 | both stale and degraded |
+
+For structured automation, use `cdidx status --check --json`. The JSON payload
+includes the full status object plus `failed_checks`, an array of the checks that
+made the command fail. To check only selected readiness areas, pass
+`--check=fold,graph,hotspot,csharp`; `workspace`, `issues`, `sql`, and `newer`
+are also accepted scopes.
+
 ## Installation
 
 ### Option A: One-liner install (no .NET required)
@@ -268,6 +291,7 @@ cdidx --version
 cdidx ./myproject
 cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
+cdidx ./myproject --duration-format seconds  # show elapsed time as seconds
 cdidx ./myproject --watch       # stay running and reindex on file changes
 cdidx ./myproject --watch --debounce 200   # coalesce bursts within a 200 ms window
 ```
@@ -307,10 +331,12 @@ Done.
   Hotspots : ready
   C# names : ready
   Fold     : ready
-  Elapsed  : 00:00:02
+  Elapsed  : 2.4s
 ```
 
 During long-running indexing on an interactive terminal, `Indexing...` stays live as a spinner instead of dropping to a fixed line until the next 50-file progress update. Warnings still print immediately, but the spinner resumes right after each warning so the run does not look frozen. When stdout is redirected (for example `cdidx . > out.txt`), cdidx prints a single `Indexing...` line to stdout, keeps warnings on stderr, and emits only line-based progress updates to stdout.
+
+Human output formats elapsed index time with unit labels by default: milliseconds under 1 second, seconds under 1 minute, minutes/seconds under 1 hour, and hours/minutes/seconds after that. Use `--duration-format seconds` for decimal seconds or `--duration-format hms` for the legacy `HH:MM:SS` display. JSON output continues to expose raw `elapsed_ms` for machine consumers.
 
 Machine-readable output also reports the post-run readiness bits directly:
 
@@ -628,6 +654,7 @@ cdidx report --output report.tgz --json
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
 | `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
+| `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
@@ -1555,6 +1582,27 @@ cdidx search "handleRequest"
 のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
 `--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
 
+## CI 連携
+
+スクリプトから workspace の鮮度と query subsystem の readiness を一度に確認したい場合は
+`cdidx status --check` を使います。成功時、非 JSON の `--check` は exit 0 で stdout に
+何も出力しません。失敗時は `[stale] workspace_check ...` や
+`[degraded] fold_ready=false ...` のように、失敗した check ごとに stderr へ 1 行出力します。
+
+`status --check` の exit code はこのコマンド専用です:
+
+| Exit | 意味 |
+|---|---|
+| 0 | ok |
+| 1 | workspace / index が stale |
+| 2 | readiness が degraded |
+| 3 | stale と degraded の両方 |
+
+構造化された自動化では `cdidx status --check --json` を使ってください。JSON には
+完全な status object に加えて、失敗原因の配列 `failed_checks` が含まれます。
+特定の readiness だけを確認する場合は `--check=fold,graph,hotspot,csharp` を指定できます。
+`workspace`、`issues`、`sql`、`newer` も scope として受け付けます。
+
 ## インストール
 
 ### 方法A: ワンライナーインストール（.NET 不要）
@@ -1677,6 +1725,7 @@ cdidx --version
 cdidx ./myproject
 cdidx ./myproject --rebuild     # 完全再構築
 cdidx ./myproject --verbose     # ファイルごとの詳細表示
+cdidx ./myproject --duration-format seconds  # 経過時間を秒で表示
 cdidx ./myproject --watch       # 初回スキャン後も常駐して変更を反映
 cdidx ./myproject --watch --debounce 200   # 200 ms のデバウンス窓でまとめて反映
 ```
@@ -1714,10 +1763,12 @@ Done.
   Hotspots: ready
   C# names: ready
   Fold    : ready
-  Elapsed : 00:00:02
+  Elapsed : 2.4s
 ```
 
 対話ターミナルで長時間インデックスするときも、`Indexing...` は次の 50 ファイル更新まで固定文字列に落ちず、スピナーとして動き続けます。警告はその場で表示されますが、各警告の直後にスピナーが再開するため、処理が止まったようには見えません。stdout をリダイレクトしている場合（例: `cdidx . > out.txt`）は、stdout には `Indexing...` を 1 回だけ出し、警告は stderr に分離したまま、stdout には行単位の進捗だけを出します。
+
+human 出力の index 経過時間は既定で単位付きになります。1 秒未満はミリ秒、1 分未満は秒、1 時間未満は分/秒、それ以上は時/分/秒です。`--duration-format seconds` で小数秒、`--duration-format hms` で従来の `HH:MM:SS` 表示にできます。JSON 出力は機械向けに raw の `elapsed_ms` を維持します。
 
 機械向けの `--json` 出力でも、実行後の readiness bit がそのまま返ります:
 
@@ -2039,6 +2090,7 @@ cdidx report --output report.tgz --json
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新。通常のコミット後はこちらを推奨。rename/delete の旧パスも git 履歴から拾える。 |
 | `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
+| `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |

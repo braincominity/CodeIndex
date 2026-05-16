@@ -1517,24 +1517,37 @@ public partial class McpServer : IDisposable
 
     /// <summary>
     /// Create a tool error response (MCP format with isError flag).
-    /// ツールエラーレスポンスを作成（isErrorフラグ付きMCP形式）。
+    /// Optional <paramref name="similarValues"/> attach a structured
+    /// <c>data.similar_values</c> array to the result so MCP clients can offer
+    /// recovery alternatives without parsing the human-readable message (#1582).
+    /// ツールエラーレスポンスを作成（isError フラグ付き MCP 形式）。
+    /// <paramref name="similarValues"/> を渡すと結果に構造化された
+    /// <c>data.similar_values</c> 配列を添えるので、MCP クライアントは
+    /// 人間向けメッセージを解析せずに代替候補を提示できる (#1582)。
     /// </summary>
     private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
-        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
-        => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData);
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
+        IReadOnlyList<string>? similarValues = null)
+        => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData, similarValues);
 
     // Backward-compatible overload for tool handlers that return argument-validation
     // failures (#1581). These were all "missing parameter / invalid argument" call sites
     // before the envelope was introduced, so the default classification is `invalid_argument`
-    // / retry_safe=false. Sites that have richer context should call the explicit overload.
+    // / retry_safe=false. The optional `similarValues` carries the structured did-you-mean
+    // candidates for unknown enum values (#1582). Sites that have richer context should
+    // call the explicit overload.
     // 引数バリデーション失敗を返す既存ツールハンドラ向けの互換オーバーロード（#1581）。
     // envelope 導入前の呼び出しは全て「引数不正」系だったため既定カテゴリを `invalid_argument`
-    // / retry_safe=false とする。より具体的なカテゴリを持てる呼び出し元は明示オーバーロードを使う。
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message)
+    // / retry_safe=false とする。任意の `similarValues` は未知 enum 値に対する構造化された
+    // did-you-mean 候補 (#1582)。より具体的なカテゴリを持てる呼び出し元は明示オーバーロード
+    // を使う。
+    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+        IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id, message,
             category: McpErrorEnvelope.CategoryInvalidArgument,
             suggestion: "Tool argument validation failed. Inspect the tool's `inputSchema` via tools/list and adjust the call.",
-            retrySafe: false);
+            retrySafe: false,
+            similarValues: similarValues);
 
     // Issue #1581: tool-result errors mirror the JSON-RPC error envelope by including
     // the same `category` / `suggestion` / `retry_safe` triple under `result.structuredContent`.
@@ -1544,7 +1557,8 @@ public partial class McpServer : IDisposable
     // を `result.structuredContent` に載せる。既存の `content[0].text` + `isError` だけを読む
     // クライアントは互換のまま、新規クライアントは `structuredContent` でカテゴリ分岐できる。
     private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
-        string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
+        string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
+        IReadOnlyList<string>? similarValues = null)
     {
         var result = new JsonObject
         {
@@ -1559,6 +1573,16 @@ public partial class McpServer : IDisposable
             ["isError"] = true,
             ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
         };
+        if (similarValues != null && similarValues.Count > 0)
+        {
+            var similarArray = new JsonArray();
+            foreach (var value in similarValues)
+                similarArray.Add(JsonValue.Create(value));
+            result["data"] = new JsonObject
+            {
+                ["similar_values"] = similarArray,
+            };
+        }
         return CreateSuccessResponse(hasId, id, result);
     }
 

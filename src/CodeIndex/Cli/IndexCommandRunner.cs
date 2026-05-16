@@ -488,6 +488,45 @@ public static class IndexCommandRunner
     }
 
 
+    // Index-mode flag names recognized by `ParseArgs`. Kept in sync with the switch above
+    // so `Warning: unknown option ...` can suggest the closest accepted flag (#1582). Easter-egg
+    // and random-spinner flags are excluded since they are intentionally undiscoverable.
+    // `ParseArgs` の switch と同期した index 系の受理フラグ一覧。`unknown option` 警告で
+    // 最も近い受理フラグを did-you-mean 提案するのに用いる (#1582)。
+    // easter egg や random-spinner は意図的に未公開なので除外する。
+    private static readonly string[] AcceptedIndexFlags =
+    [
+        "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
+        "--watch", "--debounce", "--commits", "--files", "--help",
+    ];
+
+    private static readonly string[] AcceptedBackfillFoldFlags =
+    [
+        "--db", "--json", "--help",
+    ];
+
+    private static void WriteUnknownIndexOptionSuggestion(string token)
+    {
+        var name = TrimInlineValue(token);
+        var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedIndexFlags);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+    }
+
+    private static void WriteUnknownBackfillFoldOptionSuggestion(string token)
+    {
+        var name = TrimInlineValue(token);
+        var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedBackfillFoldFlags);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+    }
+
+    private static string TrimInlineValue(string token)
+    {
+        var eq = token.IndexOf('=');
+        return eq < 0 ? token : token[..eq];
+    }
+
     public static IndexCommandOptions ParseArgs(string[] args)
     {
         string? projectPath = null;
@@ -499,6 +538,7 @@ public static class IndexCommandRunner
         bool force = false;
         bool watch = false;
         int? watchDebounceMs = null;
+        var durationFormat = DurationOutputFormat.Auto;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -542,6 +582,12 @@ public static class IndexCommandRunner
                         i++;
                     }
                     break;
+                case "--duration-format" when i + 1 < args.Length:
+                    durationFormat = ParseDurationFormat(args[++i], durationFormat);
+                    break;
+                case var option when option.StartsWith("--duration-format=", StringComparison.Ordinal):
+                    durationFormat = ParseDurationFormat(option["--duration-format=".Length..], durationFormat);
+                    break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                         commits.Add(args[++i]);
@@ -565,7 +611,10 @@ public static class IndexCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith('-'))
+                    {
                         Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                        WriteUnknownIndexOptionSuggestion(args[i]);
+                    }
                     else
                         projectPath = args[i];
                     break;
@@ -603,7 +652,25 @@ public static class IndexCommandRunner
             Force = force,
             Watch = watch,
             WatchDebounceMs = watchDebounceMs,
+            DurationFormat = durationFormat,
         };
+    }
+
+    private static DurationOutputFormat ParseDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "auto" => DurationOutputFormat.Auto,
+            "seconds" => DurationOutputFormat.Seconds,
+            "hms" => DurationOutputFormat.Hms,
+            _ => WarnInvalidDurationFormat(value, fallback),
+        };
+    }
+
+    private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        Console.Error.WriteLine($"Warning: invalid --duration-format value '{value}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{value}'（無視。auto, seconds, hms のいずれかを指定）");
+        return fallback;
     }
 
     private static string? AbsolutizePathOption(string? value)
@@ -680,7 +747,10 @@ public static class IndexCommandRunner
                     return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
                 default:
                     if (args[i].StartsWith('-'))
+                    {
                         Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                        WriteUnknownBackfillFoldOptionSuggestion(args[i]);
+                    }
                     else
                         return new BackfillFoldCommandOptions
                         {
@@ -1362,7 +1432,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
@@ -2228,7 +2298,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
@@ -2445,6 +2515,7 @@ public sealed class IndexCommandOptions
     public bool Force { get; init; }
     public bool Watch { get; init; }
     public int? WatchDebounceMs { get; init; }
+    public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
 }
 
 public sealed class BackfillFoldCommandOptions
