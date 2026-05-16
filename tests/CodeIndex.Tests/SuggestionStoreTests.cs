@@ -230,6 +230,26 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal("Post-corruption suggestion", all[0].Description);
     }
 
+    [Fact]
+    public void TryAdd_MoveFailure_DoesNotLeaveOrphanTmpFile()
+    {
+        // Force File.Move to fail by pre-creating the destination as a directory.
+        // The write-to-temp succeeds, but the rename onto a directory throws and
+        // the temp file must be cleaned up so `.cdidx/` does not accumulate orphans (#1574).
+        // File.Move を失敗させるため、宛先パスをディレクトリとして事前作成する。
+        // 一時ファイルへの書き込みは成功するが、ディレクトリに対する rename は失敗するため、
+        // `.cdidx/` に孤児が蓄積しないよう一時ファイルがクリーンアップされる必要がある (#1574)。
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var tmpPath = filePath + ".tmp";
+        Directory.CreateDirectory(filePath);
+
+        var record = MakeRecord("other", null, "Move failure cleanup");
+        var ex = Record.Exception(() => _store.TryAdd(record));
+
+        Assert.NotNull(ex);
+        Assert.False(File.Exists(tmpPath), $"Orphan .tmp file should be cleaned up after Move failure: {tmpPath}");
+    }
+
     // --- Helpers / ヘルパー ---
 
     private static SuggestionRecord MakeRecord(string category, string? language, string description)
