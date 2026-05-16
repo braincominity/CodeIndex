@@ -487,8 +487,8 @@ public static class IndexCommandRunner
             else
             {
                 Console.WriteLine("Backfilling folded-name columns ...");
-                Console.WriteLine($"  symbols:            {symbols:N0} row(s) rewritten");
-                Console.WriteLine($"  symbol_references:  {symbolReferences:N0} row(s) rewritten");
+                Console.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} rewritten");
+                Console.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} rewritten");
                 if (rewriteAll)
                     Console.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
                 Console.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
@@ -872,7 +872,7 @@ public static class IndexCommandRunner
             }
             if (!options.Json && !options.Quiet)
             {
-                Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
+                Console.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
                 Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
             }
         }
@@ -949,7 +949,7 @@ public static class IndexCommandRunner
         }
 
         if (!options.Json && !options.Quiet)
-            Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
+            Console.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         CancellationTokenSource? updateCts = null;
           var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
@@ -1921,7 +1921,7 @@ public static class IndexCommandRunner
             .ToList();
         if (!options.Json && !options.Quiet)
         {
-            Console.WriteLine($"  Found {files.Count:N0} files");
+            Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
             foreach (var error in scanResult.Errors)
                 ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
             Console.WriteLine();
