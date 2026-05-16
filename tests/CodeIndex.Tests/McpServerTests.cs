@@ -708,6 +708,67 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        // Issue #1580: CodeIndexException carries author-controlled Code / Category /
+        // Path / Hint values, so the MCP catch-all must surface them so clients can
+        // branch on Code without parsing free-form messages. The free-form `Message`
+        // text built by CodeIndexException itself (which already includes the path
+        // suffix) still must not be echoed verbatim, to keep #1530 closed for the
+        // database message body.
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+        Assert.Contains("Error executing search", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedLoopErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+
+        Assert.Contains("Internal error", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_NoPathNoHint_OmitsFragments()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbError,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Generic failure.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+
+        Assert.Contains("[E008_DB_ERROR/database]", message);
+        Assert.DoesNotContain("path=", message);
+        Assert.DoesNotContain("hint=", message);
+    }
+
+    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
@@ -2051,7 +2112,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("Found 1 references.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 reference.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
@@ -2165,7 +2226,7 @@ public class McpServerTests : IDisposable
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Found 1 callers.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 caller.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -5600,6 +5661,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByFileReportsGroupingMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_group_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp",
+                """
+                public class One
+                {
+                    private void A() { A(); A(); }
+                    private void B() { B(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Two.cs", "csharp",
+                """
+                public class Two
+                {
+                    private void C() { C(); }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
+            }
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function","groupBy":"file","limit":1}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            var hotspot = structured["hotspots"]!.AsArray().Single()!;
+            Assert.Equal("file", structured["grouped_by"]!.GetValue<string>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Equal("src/One.cs", hotspot["path"]!.GetValue<string>());
+            Assert.Equal(3, hotspot["reference_count"]!.GetValue<int>());
+            Assert.Equal(2, hotspot["symbol_count"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())
@@ -5863,7 +5972,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
-        Assert.Contains("returned bucket(s)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]

@@ -19,6 +19,10 @@ jobs:
     if: github.repository == 'Widthdom/CodeIndex'
     strategy:
       matrix:
+        # Keep this matrix in sync with docs/platform-support.md and install.sh
+        # unsupported-RID guidance.
+        # この matrix は docs/platform-support.md と install.sh の未対応 RID
+        # ガイダンスと同期する。
         include:
           - os: ubuntu-latest
             rid: linux-x64

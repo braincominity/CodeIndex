@@ -448,7 +448,7 @@ src/Auth/TokenService.cs:42-58
 (2 results)
 ```
 
-Human-readable search output is centered around the first matching line when possible, instead of always showing the start of the chunk.
+Human-readable search output is centered around the first matching line when possible, instead of always showing the start of the chunk. When a matching line is too long, the clamped snippet keeps the strongest match visible by default: a full-query match wins over individual tokens, and a tight cluster of multiple query tokens wins over a weaker incidental token farther left. Use `--snippet-focus=leftmost` for the legacy earliest-match behavior or `--snippet-focus=proximity` to favor dense multi-token clusters.
 
 Use `--json` for machine-readable output (AI agents):
 
@@ -492,7 +492,7 @@ With `--json`, symbol results also include definition ranges, optional body rang
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
-`search --json` and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, and `truncated_line_count`. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the first match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
+`search --json` and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, and `truncated_line_count`. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
 
 ### Resolve a definition
 
@@ -597,7 +597,7 @@ Languages:
 - reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, `scan_errors`, and `head_changed` (with `indexed_head_commit` / `workspace_head_commit` when the worktree HEAD has moved since the last full scan). Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
 - exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
 
-`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning recommending `cdidx index <projectPath> --rebuild` (and exposes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). `--commits` / `--files` partial updates deliberately preserve the captured HEAD so the staleness signal survives until a real full scan reindexes the worktree.
+`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning (also exposed as `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). When a branch-switch workflow knows the previous and current refs, refresh with `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` instead of rebuilding the whole project; it updates only files changed between the refs and includes rename/delete old paths for purging. Use a full `cdidx index <projectPath> --rebuild` or `cdidx <projectPath> --json` refresh when the refs are unavailable, after history-moving operations, or when you need a whole-checkout stale-path purge.
 
 Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
 
@@ -671,6 +671,7 @@ cdidx report --output report.tgz --json
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
+| `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
 | `--fts` | `search` | Use raw FTS5 query syntax; malformed input is reported as a usage error with a hint |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. Pass at most one of `--exact`, `--exact-substring`, `--exact-name`; combining two or more is rejected with `Error: pass only one of --exact, --exact-substring, --exact-name.`. CLI JSON and MCP `structuredContent` expose `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
@@ -680,6 +681,7 @@ cdidx report --output report.tgz --json
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `hotspots`, `unused`, `validate` | Filter by kind (case-insensitive; `--kind FUNCTION` is treated as `--kind function`). `definition` / `symbols` / `hotspots` / `unused` use symbol kinds (`function`, `class`, `struct`, `interface`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`); `references` accepts all indexed reference kinds (`call`, `instantiate`, `subscribe`, `attribute`, `annotation`, `type_reference`); `callers` / `callees` accept only the call-graph kinds (`call`, `instantiate`, `subscribe`) and reject non-call-graph kinds (`--kind attribute` / `--kind annotation` / `--kind type_reference`) with a usage error — metadata rows are attributed to the enclosing body-range symbol rather than the annotated target, and `type_reference` rows are compile-time type-position edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) rather than runtime calls, so `callers` / `callees` cannot answer either correctly; use `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` instead. `references` defaults to every indexed reference kind so metadata usages remain visible, while `callers` / `callees` / `hotspots` / `impact` default to the call-graph kinds only (`call`, `instantiate`, `subscribe`) and exclude metadata edges (`attribute`, `annotation`, `type_reference`). Identical constructor `call` + `instantiate` rows at one physical site still collapse; `validate` uses issue kinds such as `bom` |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | Return only counts. `search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` ignore `--limit` and return authoritative totals; `impact` and `hotspots` still report the visible page count and may truncate with `--limit` (with `--json`: a single count object; commands that expose file counts add `files`) |
+| `--group-by <symbol\|file\|statement>` | `hotspots` | Choose the hotspot grouping unit. The default is `symbol` for non-SQL scopes and `statement` for `--lang sql`, preserving SQL's statement-oriented grouping; JSON includes `grouped_by` so mixed-language callers can verify the active unit. `file` rolls symbol hotspot volume up to target files. |
 | `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving `definition_sites` / `paths` metadata in JSON |
 | `--with-paths` | `impact` | Emit a `paths` array on each caller listing the shortest call chains `[resolvedRoot, intermediate..., callerName]`. Same-depth diamond convergence (e.g. `A → B → foo` and `A → C → foo`) surfaces both routes that the default dedup collapses. Per-row cap (10) keeps JSON payloads bounded; `paths_truncated` signals overflow. Off by default; default behavior is unchanged. |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction (max: 10000000) |
@@ -1333,7 +1335,7 @@ Once configured, the AI can directly call these tools:
 | `deps` | File-level dependency edges from the reference graph |
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxDepth`: `maxDepth: N` returns callers at depth 1..N — a chain A→B→C→D queried against D with `maxDepth: 2` yields C at depth 1 and B at depth 2); use `maxDepth: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
-| `symbol_hotspots` | Find high-impact symbols; unique names use codebase-wide counts, duplicate-name families fall back conservatively |
+| `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response now includes a top-level `metadata` object with `total_elapsed_ms`, `success_count`, and `failure_count`, and every entry in `results` carries `elapsed_ms` plus a compact `args_summary` so callers can spot partial failures and slow inner queries without re-issuing them. |
 | `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
@@ -1908,7 +1910,7 @@ src/Auth/TokenService.cs:42-58
 (2 results)
 ```
 
-人間向けの検索出力は、可能な限り最初の一致行を中心にスニペットを表示し、常にチャンク先頭だけを出すことはありません。
+人間向けの検索出力は、可能な限り最初の一致行を中心にスニペットを表示し、常にチャンク先頭だけを出すことはありません。一致行が長すぎて切り詰められる場合、デフォルトではスニペットは最も強い一致を残します。全文クエリ一致は個別トークンより優先され、複数のクエリトークンが近接している箇所は左側にある弱い偶発トークンより優先されます。従来の最左一致に戻すには `--snippet-focus=leftmost`、近接した複数トークンをさらに優先するには `--snippet-focus=proximity` を使います。
 
 `--json` でAI/機械向け出力:
 
@@ -1950,7 +1952,7 @@ function   CreateUser                               src/Services/UserService.cs:
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
 
-`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count` が含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最初の一致トークン周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
+`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count` が含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
 
 ### 定義を引く
 
@@ -2056,7 +2058,7 @@ Languages:
 
 `status --check` は既定で 24 時間の index-age しきい値を使って stale-index hint を説明します。呼び出しごとに `--stale-after <duration>`（`30m` / `2h` / `7d`）、プロセスや CI 単位で `CDIDX_STALE_AFTER`、リポジトリ単位で `.cdidxrc.json` の `"stale_after": "2h"` により上書きできます。有効なしきい値は human 出力に表示され、JSON では `stale_after_seconds` として返ります。
 
-`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `cdidx index <projectPath> --rebuild` を推奨する `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。`--commits` / `--files` の部分更新は記録 HEAD を意図的に維持するため、次の full scan が worktree を再インデックスするまで stale 通知が継続します。
+`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。ブランチ切り替え workflow が切り替え前後の ref を持っているなら、プロジェクト全体を再構築せず `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` で更新してください。2つの ref 間で変更されたファイルだけを更新し、rename/delete の旧 path も purge 対象に含めます。ref が分からない場合、履歴を動かす操作の後、または checkout 全体の stale path purge が必要な場合は、`cdidx index <projectPath> --rebuild` または `cdidx <projectPath> --json` の full refresh を使います。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
 
@@ -2131,6 +2133,7 @@ cdidx report --output report.tgz --json
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
+| `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
 | `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
 | `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
@@ -2143,6 +2146,7 @@ cdidx report --output report.tgz --json
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `hotspots`, `unused`, `validate` | 種別でフィルタ（大文字小文字を区別しない。`--kind FUNCTION` は `--kind function` と同じ扱い）。`definition` / `symbols` / `hotspots` / `unused` は symbol kind（`function`、`class`、`struct`、`interface`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`）、`references` は全ての reference kind（`call`、`instantiate`、`subscribe`、`attribute`、`annotation`、`type_reference`）を受け付ける。`callers` / `callees` は call-graph 種別のみ（`call`、`instantiate`、`subscribe`）を受け付け、非 call-graph 種別（`--kind attribute` / `--kind annotation` / `--kind type_reference`）は usage error で拒否する — metadata 行は注釈対象そのものではなく body-range 上の外側シンボルに帰属し、`type_reference` は宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な型位置エッジであり実行時呼び出しではないため、`callers` / `callees` はいずれの kind にも正しく答えられない。metadata / 型位置参照の列挙は `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` を使う。`references` の既定は全 reference kind を表示して metadata 参照も見えるままにするが、`callers` / `callees` / `hotspots` / `impact` の既定は call-graph kind（`call`、`instantiate`、`subscribe`）のみで、`attribute` / `annotation` / `type_reference` のような metadata edge は除外する。同じ物理位置にある constructor の `call` + `instantiate` 重複行は引き続き集約する。`validate` は `bom` などの issue kind を使う |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | 件数だけを返す。`search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` は `--limit` を無視した総件数を返し、`impact` と `hotspots` は visible page count のままで `--limit` によって切り詰められることがある（`--json` 併用時は単一の count オブジェクト。files 件数を出すコマンドは `files` も返す） |
+| `--group-by <symbol\|file\|statement>` | `hotspots` | hotspot の集計単位を選ぶ。既定は非 SQL scope では `symbol`、`--lang sql` では既存の statement-oriented grouping を保つため `statement`。JSON には `grouped_by` が入り、mixed-language 呼び出しでも現在の単位を確認できる。`file` は symbol hotspot の参照量を対象ファイル単位にまとめる。 |
 | `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では `definition_sites` / `paths` metadata を保持したまま返す |
 | `--with-paths` | `impact` | 各 caller に `paths` 配列を付け、`[resolvedRoot, 中間..., callerName]` の順で最短呼び出し経路を列挙する。同 depth で複数経路が収束するダイヤモンド（例: `A → B → foo` と `A → C → foo`）でも、既定 dedup で潰れる経路をすべて表示する。1 行あたりの保持上限は 10 経路で、超過時は `paths_truncated` を `true` にする。既定では出力しないため、フラグ未指定時の挙動は変更しない。 |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行（最大: 10000000） |
@@ -2799,7 +2803,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxDepth` は inclusive で、`maxDepth: N` 指定時は depth 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxDepth: 2` 検索すると C(depth=1) と B(depth=2) が返る）。`maxDepth: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
-| `symbol_hotspots` | 影響の大きいシンボルを検索。一意名は codebase 全体件数、同名ファミリーは保守的に縮退 |
+| `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `elapsed_ms` / `args_summary` が含まれ、部分失敗や遅い内部クエリを再実行せず把握できます。 |
 | `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |

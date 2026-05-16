@@ -83,6 +83,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 |---|---|
 | [User Guide](USER_GUIDE.md) | Detailed installation, command examples, options, supported languages, MCP setup, and troubleshooting. |
 | [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) | Install guidance for restricted cloud agent sessions. |
+| [Platform Support](docs/platform-support.md) | Official release asset RIDs, unsupported platforms, and source-build alternatives. |
 | [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, implementation notes, and release workflow. |
 | [Testing Guide](TESTING_GUIDE.md) | Test conventions and validation commands. |
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
@@ -209,6 +210,7 @@ cdidx mcp
 |---|---|
 | [ユーザーガイド](USER_GUIDE.md#cdidx日本語) | 詳細なインストール、コマンド例、オプション、対応言語、MCP 設定、トラブルシュート。 |
 | [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md#日本語) | 制限されたクラウドエージェント環境でのインストール手順。 |
+| [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート) | 公式リリースアセットの RID、未対応 platform、source build の代替手段。 |
 | [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド) | アーキテクチャ、実装メモ、リリース手順。 |
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |

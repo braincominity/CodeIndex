@@ -63,7 +63,7 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
@@ -82,7 +82,7 @@ public static class ConsoleUi
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--depth <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
-        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by-name]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
         ("languages", "cdidx languages [--json]"),
         ("mcp", "cdidx mcp [--db <path>]"),
@@ -99,6 +99,22 @@ public static class ConsoleUi
         "⠋", "⠙", "⠹", "⠸", "⠼",
         "⠴", "⠦", "⠧", "⠇", "⠏",
     ];
+
+    internal static string Counted(int count, string singular, string? plural = null, string? format = null)
+    {
+        var formatted = format == null
+            ? count.ToString(CultureInfo.InvariantCulture)
+            : count.ToString(format, CultureInfo.InvariantCulture);
+        return $"{formatted} {(count == 1 ? singular : plural ?? singular + "s")}";
+    }
+
+    internal static string FoundSummary(int count, string singular, string? plural = null)
+    {
+        plural ??= singular + "s";
+        return count == 0
+            ? $"No {plural} found."
+            : $"Found {Counted(count, singular, plural)}.";
+    }
 
     // --- Spinner / スピナー ---
 
@@ -573,6 +589,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
+        Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
         Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
@@ -627,6 +644,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
         Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback");
+        Console.WriteLine("  cdidx hotspots --group-by=file --json           Compare hotspot volume by target file");
         Console.WriteLine("  cdidx hotspots --group-by-name --exclude-tests  Collapse same-name hotspots across files");
         Console.WriteLine("  cdidx impact Run --depth 0 --exclude-tests      Resolve a symbol without traversing callers");
         Console.WriteLine("  cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints");
@@ -917,7 +935,7 @@ public static class ConsoleUi
     }
 
     private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
-        flagName is "--max-line-width" or "--snippet-lines" or "--fts" or "--no-dedup"
+        flagName is "--max-line-width" or "--snippet-lines" or "--snippet-focus" or "--fts" or "--no-dedup"
             or "--prefix" or "--exact-substring" or "--integrity-check" or "--check" or "--stale-after"
             or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
             or "--before" or "--after" or "--group-by-name";

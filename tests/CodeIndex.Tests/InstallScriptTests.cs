@@ -1793,6 +1793,63 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DetectPlatform_MacosX64_PrintsActionableUnsupportedRidGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            uname() {
+                case "$1" in
+                    -s) printf '%s\n' "Darwin" ;;
+                    -m) printf '%s\n' "x86_64" ;;
+                    *)  printf '%s\n' "unknown" ;;
+                esac
+            }
+
+            detect_platform
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("macOS x86_64 (Intel) binaries are not published as CodeIndex-osx-x64.tar.gz", stderr);
+        Assert.Contains("dotnet tool install -g cdidx", stderr);
+        Assert.Contains("dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r osx-x64 --self-contained true", stderr);
+        Assert.Contains("docs/platform-support.md", stderr);
+        Assert.DoesNotContain("Rosetta 2 with osx-arm64", stderr);
+    }
+
+    [Fact]
+    public void DetectPlatform_UnsupportedArchitecture_PrintsPublishedRidPolicyAndSourceBuildGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            uname() {
+                case "$1" in
+                    -s) printf '%s\n' "Linux" ;;
+                    -m) printf '%s\n' "i686" ;;
+                    *)  printf '%s\n' "unknown" ;;
+                esac
+            }
+
+            detect_platform
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unsupported architecture: i686", stderr);
+        Assert.Contains("linux-x64, linux-arm64, osx-arm64, win-x64", stderr);
+        Assert.Contains("linux-x86, osx-x64, and win-x86 are not currently shipped", stderr);
+        Assert.Contains("dotnet tool install -g cdidx", stderr);
+        Assert.Contains("dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r <rid> --self-contained true", stderr);
+        Assert.Contains("docs/platform-support.md", stderr);
+    }
+
+    [Fact]
     public void ResolveVersion_UsesJqWhenAvailable()
     {
         if (OperatingSystem.IsWindows())
