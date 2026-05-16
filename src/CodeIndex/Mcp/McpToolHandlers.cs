@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
@@ -1145,21 +1146,39 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {maxBatchSize})");
 
         var resultsArray = new JsonArray();
+        var totalStopwatch = Stopwatch.StartNew();
+        int successCount = 0;
+        int failureCount = 0;
+
+        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage)
+        {
+            slotStopwatch.Stop();
+            failureCount++;
+            resultsArray.Add(new JsonObject
+            {
+                ["tool"] = toolName,
+                ["args_summary"] = BuildArgsSummary(toolArgs),
+                ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
+                ["error"] = errorMessage,
+            });
+        }
+
         foreach (var q in queries)
         {
             var toolName = q?["tool"]?.GetValue<string>();
             var toolArgs = q?["arguments"];
+            var slotStopwatch = Stopwatch.StartNew();
 
             if (string.IsNullOrEmpty(toolName))
             {
-                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = "Missing tool name" });
+                AppendSlotError(toolName, toolArgs, slotStopwatch, "Missing tool name");
                 continue;
             }
 
             // Block write operations in batch / バッチ内では書き込み操作をブロック
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
-                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = $"{toolName} is not allowed in batch_query (write operation)" });
+                AppendSlotError(toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)");
                 continue;
             }
 
@@ -1193,7 +1212,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = $"Unknown tool: {toolName}" });
+                    AppendSlotError(toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}");
                     continue;
                 }
 
@@ -1203,29 +1222,79 @@ public partial class McpServer
                 if (isError)
                 {
                     var errorText = response["result"]?["content"]?[0]?["text"]?.GetValue<string>() ?? "Unknown error";
-                    resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = errorText });
+                    AppendSlotError(toolName, toolArgs, slotStopwatch, errorText);
                     continue;
                 }
 
+                slotStopwatch.Stop();
                 var structured = response["result"]?["structuredContent"];
+                successCount++;
                 resultsArray.Add(new JsonObject
                 {
                     ["tool"] = toolName,
-                    ["result"] = structured?.DeepClone()
+                    ["args_summary"] = BuildArgsSummary(toolArgs),
+                    ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
+                    ["result"] = structured?.DeepClone(),
                 });
             }
             catch (Exception ex)
             {
-                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = ex.Message });
+                AppendSlotError(toolName, toolArgs, slotStopwatch, ex.Message);
             }
         }
 
+        totalStopwatch.Stop();
+        var totalElapsedMs = totalStopwatch.ElapsedMilliseconds;
         var payload = new JsonObject
         {
             ["count"] = resultsArray.Count,
+            ["metadata"] = new JsonObject
+            {
+                ["total_elapsed_ms"] = totalElapsedMs,
+                ["success_count"] = successCount,
+                ["failure_count"] = failureCount,
+            },
             ["results"] = resultsArray,
         };
-        return CreateToolResult(id, $"Executed {resultsArray.Count} queries.", payload);
+        var summary = failureCount == 0
+            ? $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms (all succeeded)."
+            : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
+        return CreateToolResult(id, summary, payload);
+    }
+
+    /// <summary>
+    /// Build a compact, single-line summary string of a batch slot's arguments
+    /// so callers can correlate per-slot timings with what was requested
+    /// without re-parsing the original payload.
+    /// バッチスロットの arguments を1行で要約し、呼び出し側がペイロードを
+    /// 再解析せずスロット別時間と対応付けられるようにする。
+    /// </summary>
+    private const int BatchArgsSummaryMaxLength = 200;
+    private static string BuildArgsSummary(JsonNode? toolArgs)
+    {
+        if (toolArgs is not JsonObject obj)
+            return string.Empty;
+        if (obj.Count == 0)
+            return string.Empty;
+        var parts = new List<string>(obj.Count);
+        foreach (var kv in obj)
+        {
+            var key = kv.Key;
+            var value = kv.Value;
+            string rendered = value switch
+            {
+                null => "null",
+                JsonValue v => v.ToJsonString(),
+                JsonArray arr => $"[{arr.Count}]",
+                JsonObject inner => $"{{{inner.Count}}}",
+                _ => value.ToJsonString(),
+            };
+            parts.Add($"{key}={rendered}");
+        }
+        var joined = string.Join(", ", parts);
+        if (joined.Length > BatchArgsSummaryMaxLength)
+            joined = joined.Substring(0, BatchArgsSummaryMaxLength - 1) + "…";
+        return joined;
     }
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
@@ -1278,10 +1347,11 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)

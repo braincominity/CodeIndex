@@ -9584,6 +9584,124 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_WithPathsDefaultIsOff()
+    {
+        // Default (no opt-in) keeps the legacy contract: Paths is null and PathsTruncated is false.
+        // 既定では Paths は null、PathsTruncated は false で旧来の契約を維持する。
+        InsertIndexedFile("src/impact_paths_off.cs", "csharp",
+            """
+            public static class ImpactPathsOff
+            {
+                public static void Leaf() { }
+                public static void Caller() { Leaf(); }
+            }
+            """);
+
+        var (results, _, _) = _reader.GetTransitiveCallers(
+            "Leaf", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_paths_off"]);
+
+        var caller = Assert.Single(results);
+        Assert.Equal("Caller", caller.CallerName);
+        Assert.Null(caller.Paths);
+        Assert.False(caller.PathsTruncated);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_WithPathsSurfacesDiamondConvergence()
+    {
+        // Issue #1536: when BFS converges on the same caller via distinct intermediates at the
+        // same depth (A → B → Foo and A → C → Foo), `--with-paths` must surface both routes so
+        // that callers can tell "via what" the dependency flows. The non-opt-in result keeps the
+        // historical dedup (single A row at depth 2).
+        // issue #1536: 同 depth で同名 caller に複数経路が収束する (A → B → Foo と A → C → Foo)
+        // 場合、--with-paths で双方の経路を返すこと。opt-in しない既存出力は depth 2 の A 1 行に
+        // 集約される従来動作を維持する。
+        InsertIndexedFile("src/impact_paths_diamond.cs", "csharp",
+            """
+            public static class ImpactPathsDiamond
+            {
+                public static void Foo() { }
+                public static void B() { Foo(); }
+                public static void C() { Foo(); }
+                public static void A() { B(); C(); }
+            }
+            """);
+
+        var (resultsDefault, _, _) = _reader.GetTransitiveCallers(
+            "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"]);
+
+        var defaultByName = resultsDefault
+            .GroupBy(r => r.CallerName)
+            .ToDictionary(g => g.Key!, g => g.OrderBy(r => r.Depth).First());
+        // Diamond dedup collapses A to a single row at depth 2 — the legacy behavior the issue
+        // calls out as lossy (no "via what" hint without --with-paths).
+        Assert.True(defaultByName.ContainsKey("A"));
+        Assert.Equal(2, defaultByName["A"].Depth);
+        Assert.Null(defaultByName["A"].Paths);
+
+        var (resultsWithPaths, _, _) = _reader.GetTransitiveCallers(
+            "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"],
+            withPaths: true);
+
+        var aResult = resultsWithPaths.Single(r => r.CallerName == "A");
+        Assert.NotNull(aResult.Paths);
+        Assert.False(aResult.PathsTruncated);
+
+        var pathSet = aResult.Paths!
+            .Select(p => string.Join("->", p))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(new[] { "Foo->B->A", "Foo->C->A" }, pathSet);
+
+        // Direct callers (B, C) keep a single trivial path that ends at themselves.
+        var bResult = resultsWithPaths.Single(r => r.CallerName == "B");
+        Assert.NotNull(bResult.Paths);
+        Assert.Equal(new[] { "Foo->B" }, bResult.Paths!.Select(p => string.Join("->", p)).ToArray());
+        var cResult = resultsWithPaths.Single(r => r.CallerName == "C");
+        Assert.NotNull(cResult.Paths);
+        Assert.Equal(new[] { "Foo->C" }, cResult.Paths!.Select(p => string.Join("->", p)).ToArray());
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_WithPathsRespectsPerRowCap()
+    {
+        // When more shortest paths converge on a single caller than the per-row cap allows,
+        // PathsTruncated must be set so consumers know there are more routes than emitted.
+        // 同一 caller に保持上限を超える経路がある場合は PathsTruncated を立てて知らせること。
+        InsertIndexedFile("src/impact_paths_cap.cs", "csharp",
+            """
+            public static class ImpactPathsCap
+            {
+                public static void Sink() { }
+                public static void M1() { Sink(); }
+                public static void M2() { Sink(); }
+                public static void M3() { Sink(); }
+                public static void Top() { M1(); M2(); M3(); }
+            }
+            """);
+
+        var (results, _, _) = _reader.GetTransitiveCallers(
+            "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
+            withPaths: true, maxPathsPerResult: 2);
+
+        var top = results.Single(r => r.CallerName == "Top");
+        Assert.NotNull(top.Paths);
+        Assert.Equal(2, top.Paths!.Count);
+        Assert.True(top.PathsTruncated);
+
+        // Exact-fit: cap equals the natural number of paths. Truncated must stay false because
+        // no unexplored parent was skipped — the DFS just drained naturally as it hit the cap.
+        // ちょうど cap と等しい経路数の場合、未探索 parent はないので truncated は false のまま。
+        var (exactResults, _, _) = _reader.GetTransitiveCallers(
+            "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
+            withPaths: true, maxPathsPerResult: 3);
+        var exactTop = exactResults.Single(r => r.CallerName == "Top");
+        Assert.NotNull(exactTop.Paths);
+        Assert.Equal(3, exactTop.Paths!.Count);
+        Assert.False(exactTop.PathsTruncated);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_LimitSmallerThanCallerCount_ReportsUserLimitReason()
     {
         // #1533: when truncation is caused by --limit, the reason must be "user_limit"

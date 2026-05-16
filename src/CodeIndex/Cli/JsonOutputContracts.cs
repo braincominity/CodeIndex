@@ -212,6 +212,7 @@ internal sealed record GroupedSymbolHotspotJsonResult(
 [JsonSerializable(typeof(QueryFindCountJsonResult))]
 [JsonSerializable(typeof(QueryPathErrorJsonResult))]
 [JsonSerializable(typeof(List<ReferenceResult>))]
+[JsonSerializable(typeof(List<List<string>>))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(List<SymbolHotspotJsonResult>))]
 [JsonSerializable(typeof(List<SymbolResult>))]

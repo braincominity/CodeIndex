@@ -219,6 +219,20 @@ public class ImpactResult
     public int Depth { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
+    // Optional list of distinct shortest call paths from the resolved root symbol
+    // through any intermediates to this caller. Each inner list is ordered
+    // [resolvedRoot, intermediate..., thisCallerName]. Populated only when the
+    // caller explicitly opts in (impact --with-paths) so default JSON stays compact;
+    // null when the caller did not request paths. See issue #1536.
+    // ルートシンボルから本 caller までの推移呼び出し経路（同 BFS 深さで収束する
+    // 複数経路を保持）。各経路は [resolvedRoot, intermediate..., thisCallerName]
+    // の順で並ぶ。impact --with-paths のときのみ populate される。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<List<string>>? Paths { get; set; }
+    // True when the caller has more distinct shortest paths than the per-row cap kept here.
+    // 同一 caller に対して保持上限を超える別経路が存在する場合に true。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool PathsTruncated { get; set; }
 }
 
 public class ImpactAnalysisResult
