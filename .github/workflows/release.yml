@@ -167,6 +167,38 @@ jobs:
         if: ${{ !matrix.cross_compile }}
         run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo
 
+      # Generate a CycloneDX SBOM once per release on the linux-x64 lane.
+      # SBOM content is RID-independent (it lists NuGet package dependencies
+      # including the bundled SQLitePCLRaw native asset), so producing it on
+      # every matrix entry would just upload identical bytes four times.
+      # Pinned to a known-stable major to avoid silent CLI surface drift from
+      # an upstream major release breaking the release workflow.
+      # SBOM はリリースごとに 1 回だけ生成すれば十分 (CycloneDX 出力は NuGet
+      # 依存ツリーと SQLitePCLRaw のネイティブアセットを列挙するので RID 間で
+      # 内容は同一)。upstream の major 変更で release workflow が黙って壊れない
+      # よう、安定メジャーをピン留めする。
+      - name: Install CycloneDX SBOM tool (linux-x64 only)
+        if: matrix.rid == 'linux-x64'
+        run: dotnet tool install --global CycloneDX --version 6.2.0
+
+      - name: Generate CycloneDX SBOM (linux-x64 only)
+        if: matrix.rid == 'linux-x64'
+        run: |
+          mkdir -p sbom
+          dotnet-CycloneDX src/CodeIndex/CodeIndex.csproj \
+            --output sbom \
+            --output-format Json \
+            --exclude-test-projects \
+            --filename cdidx.sbom.cdx.json
+          test -s sbom/cdidx.sbom.cdx.json
+
+      - name: Upload SBOM artifact (linux-x64 only)
+        if: matrix.rid == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeIndex-sbom
+          path: sbom/cdidx.sbom.cdx.json
+
       - name: Publish (self-contained)
         run: >
           dotnet publish src/CodeIndex/CodeIndex.csproj
@@ -236,7 +268,16 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release-files
-          find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release-files/ \;
+          # Tarballs/zips are per-RID artifacts; the SBOM is a single
+          # RID-independent JSON file. Both go in release-files so
+          # sha256sums.txt covers the SBOM as well, letting supply-chain
+          # consumers verify the SBOM bytes the same way they verify the
+          # binaries.
+          # tarball/zip は RID 別の成果物、SBOM は RID 非依存の単一 JSON。
+          # どちらも release-files に集約することで sha256sums.txt が SBOM の
+          # ハッシュもカバーし、SBOM 利用側はバイナリと同じ手順で SBOM の
+          # 完全性を検証できる。
+          find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -exec cp {} release-files/ \;
           cd release-files
           sha256sum * > sha256sums.txt
 

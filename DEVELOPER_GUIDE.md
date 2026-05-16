@@ -754,14 +754,17 @@ during testing or packaging.
 
 ### The moving parts
 
-Four artifacts have to end up in three correct places for `cdidx` to work:
+Four artifacts have to end up in three correct places for `cdidx` to work,
+plus one supply-chain attestation that is published next to the binaries but
+not installed:
 
 | Artifact | Origin | Final location | Required by |
 | --- | --- | --- | --- |
 | `cdidx` (trimmed self-contained single-file binary) | `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` in `release.yml` | `$HOME/.local/bin/cdidx` | User's `PATH` |
 | `libe_sqlite3.so` (Linux) / `libe_sqlite3.dylib` (macOS) | Native asset from the `Microsoft.Data.Sqlite` (SQLitePCLRaw) NuGet, copied into the publish output | `$HOME/.local/bin/` (next to the binary) | `SqliteConnection` static ctor → P/Invoke |
 | `version.json` | Repo root; `CodeIndex.csproj` copies it to the publish output as a `Content` item | `$HOME/.local/bin/` (next to the binary) | `ConsoleUi.LoadVersion()` via `AppContext.BaseDirectory` |
-| `sha256sums.txt` | `release.yml` computes it after packaging | Downloaded to a temp dir during install, not kept | `install.sh` integrity check |
+| `sha256sums.txt` | `release.yml` computes it after packaging (covers tarballs/zips and the SBOM) | Downloaded to a temp dir during install, not kept | `install.sh` integrity check; SBOM consumers |
+| `cdidx.sbom.cdx.json` | `release.yml` runs `dotnet CycloneDX` once on the `linux-x64` lane (content is RID-independent) and uploads it as a `CodeIndex-sbom` artifact; `create-release` copies it into `release-files/` so `sha256sums.txt` covers it | Published as a GitHub release asset; not installed on user machines | Compliance reviews (SOC2, FedRAMP-style); supply-chain scanners (Snyk, Trivy, Grype) |
 
 The first three are packaged into `CodeIndex-<rid>.tar.gz` by
 `release.yml`. A clean install has to reproduce that layout on the user's
@@ -1852,14 +1855,17 @@ Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は
 
 ### 構成要素
 
-`cdidx` が動作するためには、4つのアーティファクトが3つの正しい場所に収まる必要がある:
+`cdidx` が動作するためには、4つのアーティファクトが3つの正しい場所に収まる必要があり、
+さらにユーザー環境にはインストールされないがリリースには同梱されるサプライチェーン用の
+追加アセットが1つある:
 
 | アーティファクト | 由来 | 最終配置先 | 必要とする処理 |
 | --- | --- | --- | --- |
 | `cdidx`（trim 済み自己完結型シングルファイルバイナリ） | `release.yml` 内の `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` | `$HOME/.local/bin/cdidx` | ユーザーの `PATH` |
 | `libe_sqlite3.so`（Linux）/ `libe_sqlite3.dylib`（macOS） | `Microsoft.Data.Sqlite`（SQLitePCLRaw）NuGet のネイティブ資産。publish 出力に同梱される | `$HOME/.local/bin/`（バイナリの隣） | `SqliteConnection` 静的コンストラクタ → P/Invoke |
 | `version.json` | リポジトリルート。`CodeIndex.csproj` が `Content` として publish 出力にコピー | `$HOME/.local/bin/`（バイナリの隣） | `AppContext.BaseDirectory` 経由の `ConsoleUi.LoadVersion()` |
-| `sha256sums.txt` | `release.yml` がパッケージング後に計算 | インストール中は一時ディレクトリに保持のみ | `install.sh` の整合性チェック |
+| `sha256sums.txt` | `release.yml` がパッケージング後に計算（tarball/zip と SBOM 双方をカバー） | インストール中は一時ディレクトリに保持のみ | `install.sh` の整合性チェック / SBOM 利用側 |
+| `cdidx.sbom.cdx.json` | `release.yml` が `linux-x64` lane で 1 度だけ `dotnet CycloneDX` を実行（内容は RID 非依存）し、`CodeIndex-sbom` アーティファクトとして upload。`create-release` が `release-files/` にコピーして `sha256sums.txt` の対象に含める | GitHub release のアセットとして公開、ユーザー環境にはインストールしない | コンプライアンスレビュー（SOC2 / FedRAMP 系）/ サプライチェーンスキャナー（Snyk / Trivy / Grype） |
 
 最初の3つは `release.yml` により `CodeIndex-<rid>.tar.gz` にパッケージされる。クリーンインストールは同じレイアウトをユーザーの環境で再現する必要がある。ランタイムファイルが欠けると、後述の診断表にある症状のいずれかが発生する。
 
