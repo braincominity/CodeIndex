@@ -267,6 +267,20 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_FilteredWhitespaceOnlyFile_ReturnsEmptyListWithoutBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, " \r\n\t ");
+
+        var loaded = _store.LoadByLanguage("csharp");
+
+        Assert.Empty(loaded);
+        Assert.True(File.Exists(filePath), "Whitespace-only file should remain the live store.");
+        Assert.False(File.Exists(backupPath), "Whitespace-only file should not be treated as corrupt.");
+    }
+
+    [Fact]
     public void StreamingReadShare_AllowsConcurrentReplacementWrite()
     {
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");

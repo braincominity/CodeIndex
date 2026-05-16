@@ -304,6 +304,9 @@ public class SuggestionStore
         if (new FileInfo(_filePath).Length == 0)
             return new List<SuggestionRecord>();
 
+        if (IsEmptyOrWhitespaceStoreFile())
+            return new List<SuggestionRecord>();
+
         try
         {
             return ReadFilteredUnlockedAsync(predicate, skip, take).GetAwaiter().GetResult();
@@ -315,6 +318,28 @@ public class SuggestionStore
         }
         // IOException is NOT caught here — it propagates to the caller (fail-closed).
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
+    }
+
+    private bool IsEmptyOrWhitespaceStoreFile()
+    {
+        using var stream = new FileStream(
+            _filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            StreamingReadFileShare);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buffer = new char[4096];
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            for (var i = 0; i < read; i++)
+            {
+                if (!char.IsWhiteSpace(buffer[i]))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private async Task<List<SuggestionRecord>> ReadFilteredUnlockedAsync(
