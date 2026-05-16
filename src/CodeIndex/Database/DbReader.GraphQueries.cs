@@ -676,14 +676,12 @@ public partial class DbReader
 
     private static IReadOnlyDictionary<string, int> BuildReferenceKindCounts(int callCount, int instantiateCount, int subscribeCount)
     {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (callCount > 0)
-            counts["call"] = callCount;
-        if (instantiateCount > 0)
-            counts["instantiate"] = instantiateCount;
-        if (subscribeCount > 0)
-            counts["subscribe"] = subscribeCount;
-        return counts;
+        return new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["call"] = callCount,
+            ["instantiate"] = instantiateCount,
+            ["subscribe"] = subscribeCount,
+        };
     }
 
     /// <summary>
