@@ -6,11 +6,11 @@ using CodeIndex.Models;
 namespace CodeIndex.Cli;
 
 /// <summary>
-/// Reads and writes improvement suggestions to .cdidx/suggestions.json.
+/// Reads and writes improvement suggestions to .cdidx/suggestions-*.json.
 /// Provides deduplication via SHA256 hash of (category + language + normalized description).
 /// All read-modify-write operations are serialized with a file lock to prevent
 /// concurrent writers from silently overwriting each other's changes.
-/// 改善提案を .cdidx/suggestions.json に読み書きする。
+/// 改善提案を .cdidx/suggestions-*.json に読み書きする。
 /// (category + language + 正規化済み description) のSHA256ハッシュで重複排除する。
 /// 全ての read-modify-write 操作はファイルロックでシリアライズされ、
 /// 並行書き込み者が互いの変更をサイレントに上書きすることを防ぐ。
