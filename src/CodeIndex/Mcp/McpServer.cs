@@ -250,6 +250,9 @@ public partial class McpServer : IDisposable
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
 
         Database.DbDebug.ResetContext();
+        var metricsStartedAt = DateTimeOffset.UtcNow;
+        var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        string? metricsError = null;
         try
         {
             return toolName switch
@@ -295,12 +298,46 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
+            metricsError = ex.GetType().Name;
             return CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex));
         }
         finally
         {
             Database.DbDebug.ResetContext();
+            if (MetricsSink.IsActive)
+            {
+                metricsStopwatch.Stop();
+                MetricsSink.Record(new MetricsEvent(
+                    Timestamp: metricsStartedAt,
+                    Tool: toolName,
+                    Source: "mcp",
+                    ElapsedMs: metricsStopwatch.Elapsed.TotalMilliseconds,
+                    ExitCode: metricsError == null ? 0 : 1,
+                    Language: TryReadStringArg(args, "language") ?? TryReadStringArg(args, "lang"),
+                    Error: metricsError));
+            }
         }
+    }
+
+    private static string? TryReadStringArg(JsonNode? args, string key)
+    {
+        if (args is null)
+            return null;
+
+        try
+        {
+            var node = args[key];
+            if (node is null)
+                return null;
+            if (node is JsonValue value && value.TryGetValue<string>(out var stringValue))
+                return string.IsNullOrWhiteSpace(stringValue) ? null : stringValue;
+        }
+        catch
+        {
+            // Best-effort: any oddity in argument shape just suppresses the language hint.
+            // ベストエフォート: 引数形状が不正でも language ヒントを抑止するだけ。
+        }
+        return null;
     }
 
     internal static string BuildOversizedMessageLog(int lineLength) =>

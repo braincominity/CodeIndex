@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
@@ -21,19 +22,35 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
+        {
+            Console.Error.WriteLine(metricsError);
+            Console.Error.WriteLine("Hint: pass `--metrics <path>` (e.g. `--metrics out.jsonl`).");
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} metrics_flag_invalid=true");
+            return CommandExitCodes.UsageError;
+        }
+
+        using var metricsSession = MetricsSink.TryStart(metricsPath);
+
         TryConsumeDebugUnsafeFlag(ref args);
+
+        var commandStopwatch = Stopwatch.StartNew();
+        var commandStartTimestamp = DateTimeOffset.UtcNow;
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
             ConsoleUi.PrintUsage(showBanner: args.Length > 0);
-            GlobalToolLog.Info($"command_complete exit_code={(args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success)} help_or_usage=true");
-            return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
+            var helpExit = args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={helpExit} help_or_usage=true");
+            EmitCommandMetric("help", args, commandStartTimestamp, commandStopwatch, helpExit);
+            return helpExit;
         }
 
         if (args[0] is "--version" or "-V")
         {
             Console.WriteLine($"cdidx v{appVersion}");
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} version_only=true");
+            EmitCommandMetric("version", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
@@ -41,6 +58,7 @@ internal static class ProgramRunner
         {
             ConsoleUi.PrintLicenseSummary();
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
+            EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
@@ -48,6 +66,7 @@ internal static class ProgramRunner
         {
             var exitCode = RunCompletions(args[1..]);
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
+            EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, exitCode);
             return exitCode;
         }
 
@@ -55,6 +74,7 @@ internal static class ProgramRunner
         {
             ConsoleUi.PrintUsage(showBanner: true);
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
@@ -63,6 +83,7 @@ internal static class ProgramRunner
         {
             ConsoleUi.PrintEasterEggMessage(easterEgg);
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} easter_egg={easterEgg}");
+            EmitCommandMetric("easter_egg", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
@@ -72,6 +93,7 @@ internal static class ProgramRunner
             {
                 var mcpExitCode = RunMcp(args[1..], appVersion);
                 GlobalToolLog.Info($"command_complete exit_code={mcpExitCode} command=mcp");
+                EmitCommandMetric("mcp", args, commandStartTimestamp, commandStopwatch, mcpExitCode);
                 return mcpExitCode;
             }
 
@@ -121,6 +143,7 @@ internal static class ProgramRunner
                 };
             }
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command={commandName}");
+            EmitCommandMetric(commandName, args, commandStartTimestamp, commandStopwatch, exitCode);
             return exitCode;
         }
         catch (Exception ex)
@@ -128,10 +151,12 @@ internal static class ProgramRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
             {
                 GlobalToolLog.Error($"command_complete exit_code={exitCode} handled_exception={ex.GetType().Name}: {ex.Message}");
+                EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.GetType().Name);
                 return exitCode;
             }
 
             GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
             throw;
         }
     }
@@ -244,6 +269,103 @@ internal static class ProgramRunner
             args = kept.ToArray();
         }
         return seen;
+    }
+
+    // Strip `--metrics <path>` / `--metrics=<path>` from the global args before subcommand
+    // parsing so any command (CLI or MCP) inherits the same JSONL metrics sink without
+    // each subcommand re-declaring the flag. Falls back to the CDIDX_METRICS env var when
+    // the explicit flag is absent. Anything after `--` is left untouched to preserve
+    // subcommand query-escape semantics (#1549).
+    // サブコマンド解析前に `--metrics <path>` / `--metrics=<path>` を取り除き、CLI/MCPいずれの
+    // コマンドでも同じJSONLシンクを継承させる。明示フラグが無い場合は CDIDX_METRICS 環境変数に
+    // フォールバック。`--` 以降はサブコマンドのクエリエスケープ意味論を保つため触らない (#1549)。
+    internal static bool TryConsumeMetricsFlag(ref string[] args, out string? path, out string error)
+    {
+        path = null;
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        string? requested = null;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? rawValue = null;
+            if (arg == "--metrics")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --metrics requires a path value (use `--metrics <path>` or `--metrics=<path>`).";
+                    return false;
+                }
+                rawValue = args[++i];
+            }
+            else if (arg.StartsWith("--metrics=", StringComparison.Ordinal))
+            {
+                rawValue = arg.Substring("--metrics=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                error = "Error: --metrics requires a non-empty path value.";
+                return false;
+            }
+            requested = rawValue;
+        }
+
+        path = requested;
+        args = kept.ToArray();
+        return true;
+    }
+
+    internal static void EmitCommandMetric(string tool, string[] args, DateTimeOffset startTimestamp, Stopwatch stopwatch, int exitCode, string? error = null)
+    {
+        if (!MetricsSink.IsActive)
+            return;
+
+        stopwatch.Stop();
+        MetricsSink.Record(new MetricsEvent(
+            Timestamp: startTimestamp,
+            Tool: tool,
+            Source: "cli",
+            ElapsedMs: stopwatch.Elapsed.TotalMilliseconds,
+            ExitCode: exitCode,
+            Language: TryParseLanguageFromArgs(args),
+            Error: error));
+    }
+
+    internal static string? TryParseLanguageFromArgs(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                return null;
+            if (arg == "--lang" && i + 1 < args.Length)
+                return args[i + 1];
+            if (arg.StartsWith("--lang=", StringComparison.Ordinal))
+                return arg.Substring("--lang=".Length);
+        }
+        return null;
     }
 
     internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()
