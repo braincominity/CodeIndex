@@ -1773,7 +1773,7 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
-            var rebuildWriter = new DbWriter(db.Connection);
+            var rebuildWriter = new DbWriter(db);
             rebuildWriter.ClearHotspotFamilyReady();
             rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
@@ -1782,7 +1782,7 @@ public partial class McpServer
         db.InitializeSchema();
         MarkSharedDbMigrated();
 
-        var writer = new DbWriter(db.Connection);
+        var writer = new DbWriter(db);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath));
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -2050,7 +2050,7 @@ public partial class McpServer
             var db = GetOrOpenSharedDb();
             db.InitializeSchema();
             MarkSharedDbMigrated();
-            var writer = new DbWriter(db.Connection);
+            var writer = new DbWriter(db);
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
