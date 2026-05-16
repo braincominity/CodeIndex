@@ -720,6 +720,7 @@ public class DbContext : IDisposable
                 name            TEXT,
                 line            INTEGER,
                 start_line      INTEGER,
+                start_column    INTEGER,
                 end_line        INTEGER,
                 body_start_line INTEGER,
                 body_end_line   INTEGER,
@@ -773,6 +774,7 @@ public class DbContext : IDisposable
         EnsureColumn("files", "modified", "DATETIME");
         EnsureColumn("files", "indexed_at", "DATETIME");
         EnsureColumn("symbols", "start_line", "INTEGER");
+        EnsureColumn("symbols", "start_column", "INTEGER");
         EnsureColumn("symbols", "end_line", "INTEGER");
         EnsureColumn("symbols", "body_start_line", "INTEGER");
         EnsureColumn("symbols", "body_end_line", "INTEGER");
