@@ -173,6 +173,18 @@ internal static class ProgramRunner
             EmitCommandMetric(commandName, args, commandStartTimestamp, commandStopwatch, exitCode);
             return exitCode;
         }
+        catch (CodeIndexException ex)
+        {
+            // Issue #1580: surface Code, Path, Category, and Hint uniformly so
+            // users can tell which file failed and automation has a stable
+            // signal to branch on instead of parsing free-form messages.
+            // #1580: 失敗ファイル / 構造化フィールドを CLI で一律に表示する。
+            var exitCode = MapCodeIndexExceptionExitCode(ex.Code);
+            CodeIndexExceptionFormatter.Write(ex, args, jsonOptions);
+            GlobalToolLog.Error($"command_complete exit_code={exitCode} code_index_exception code={ex.Code} category={ex.Category} path={ex.Path}");
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.Code);
+            return exitCode;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
@@ -190,6 +202,21 @@ internal static class ProgramRunner
 
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+
+    internal static int MapCodeIndexExceptionExitCode(string code) => code switch
+    {
+        CommandErrorCodes.DbNotFound => CommandExitCodes.NotFound,
+        CommandErrorCodes.DbLocked => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DbNotWritable => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DbIntegrityFailed => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.SchemaTooNew => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.TempStoreExhausted => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DbError => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DirectoryNotFound => CommandExitCodes.NotFound,
+        CommandErrorCodes.FeatureUnavailable => CommandExitCodes.FeatureUnavailable,
+        CommandErrorCodes.UsageError => CommandExitCodes.UsageError,
+        _ => CommandExitCodes.DatabaseError,
+    };
 
     internal static bool TryConsumeColorFlag(ref string[] args, out string error)
     {
