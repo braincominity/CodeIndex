@@ -113,6 +113,23 @@ public class ConsoleUiTests
         Assert.Contains("cdidx license", output);
     }
 
+    [Theory]
+    [InlineData(0, "0 results", "No results found.")]
+    [InlineData(1, "1 result", "Found 1 result.")]
+    [InlineData(5, "5 results", "Found 5 results.")]
+    public void CountedAndFoundSummary_UseNaturalPluralization(int count, string counted, string summary)
+    {
+        Assert.Equal(counted, ConsoleUi.Counted(count, "result"));
+        Assert.Equal(summary, ConsoleUi.FoundSummary(count, "result"));
+    }
+
+    [Fact]
+    public void Counted_AllowsIrregularPluralAndNumberFormat()
+    {
+        Assert.Equal("2 in-file matches", ConsoleUi.Counted(2, "in-file match", "in-file matches"));
+        Assert.Equal("1,234 files", ConsoleUi.Counted(1234, "file", format: "N0"));
+    }
+
     [Fact]
     public void GetSpinnerFrames_Default_UsesRotatingBrailleSequence()
     {
