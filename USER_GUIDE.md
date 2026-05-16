@@ -1054,7 +1054,7 @@ Once configured, the AI can directly call these tools:
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact symbols; unique names use codebase-wide counts, duplicate-name families fall back conservatively |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response now includes a top-level `metadata` object with `total_elapsed_ms`, `success_count`, and `failure_count`, and every entry in `results` carries `elapsed_ms` plus a compact `args_summary` so callers can spot partial failures and slow inner queries without re-issuing them. |
-| `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings) |
+| `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2132,7 +2132,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きいシンボルを検索。一意名は codebase 全体件数、同名ファミリーは保守的に縮退 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `elapsed_ms` / `args_summary` が含まれ、部分失敗や遅い内部クエリを再実行せず把握できます。 |
-| `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末）を報告 |
+| `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
