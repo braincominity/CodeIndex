@@ -12,6 +12,25 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+### NuGet lock files
+
+`Directory.Build.props` sets `RestorePackagesWithLockFile=true`, so every project under this solution writes a `packages.lock.json` next to its `.csproj`. The lock file pins exact resolved versions and `contentHash` for every direct **and transitive** package, including the native-bearing `SQLitePCLRaw.bundle_e_sqlite3` that ships under `Microsoft.Data.Sqlite`. This keeps builds reproducible across machines, CI lanes, and release artifacts, and turns a silent transitive bump (or downgrade attack) into a loud, build-breaking diff.
+
+CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
+
+The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
+
+When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
+
+```bash
+dotnet restore CodeIndex.sln --force-evaluate
+git status --short -- '**/packages.lock.json'
+```
+
+If CI fails with `NU1004 The packages lock file is inconsistent with the project dependencies`, that is exactly this signal: rerun `dotnet restore --force-evaluate` locally, review the lock-file diff, and commit it. Do **not** delete the lock files to "make CI pass" — that re-opens the supply-chain hole this contract closes.
+
+The lock files for projects with zero direct `PackageReference` entries (e.g. `tools/CodeIndex.Changelog/`) intentionally contain an empty `net8.0: {}` dependency map. That is normal and proves the project is participating in the locked-mode contract.
+
 ## Architecture
 
 | Area | Key files | Responsibility |
@@ -1204,6 +1223,25 @@ dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
+
+### NuGet lock ファイル
+
+`Directory.Build.props` が `RestorePackagesWithLockFile=true` を設定しているため、本ソリューション配下の各プロジェクトは `.csproj` と並んで `packages.lock.json` を出力します。lock ファイルは直接依存と**推移依存**の双方について解決済みバージョンと `contentHash` を固定し、`Microsoft.Data.Sqlite` 配下にネイティブを含めて出荷する `SQLitePCLRaw.bundle_e_sqlite3` まで対象に含めます。これによりマシン・CI lane・release アーティファクトの再現性が保たれ、推移依存の暗黙バンプ（あるいは downgrade attack）が build を壊す差分として顕在化します。
+
+CI（`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`）はソリューションの restore を `--locked-mode` 付きで実行し、commit 済み lock ファイルと解決結果に差分があるとアーティファクトに混入する前にビルドが失敗します。ローカル開発の通常 restore は従来どおりで、`--locked-mode` は CI でのみ強制されます。
+
+release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet パッケージング）には意図的に `RestoreLockedMode=true` を設定していません。これらは runtime-specific な restore を走らせ、ソリューション restore 時には存在しなかった lock エントリ（`net8.0/<rid>` 等の runtime section や trimming 用の `Microsoft.NET.ILLink.Tasks`）を正当に追加します。それでも `Directory.Build.props` の `RestorePackagesWithLockFile=true` により、その実行マシン上の全 restore は lock ファイル経由で解決されるため版は固定されたままです。`Microsoft.Data.Sqlite` および `SQLitePCLRaw.*` グラフに対する supply-chain 保証は、先行する solution-level の locked restore で担保されます。
+
+依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
+
+```bash
+dotnet restore CodeIndex.sln --force-evaluate
+git status --short -- '**/packages.lock.json'
+```
+
+CI で `NU1004 The packages lock file is inconsistent with the project dependencies` が出る場合は、まさに本契約が発するシグナルです。ローカルで `dotnet restore --force-evaluate` をやり直し、lock ファイルの差分を確認した上で commit してください。CI を通すために lock ファイルを削除してはいけません。それは本契約が塞いだ supply-chain の穴を再び開けます。
+
+直接 `PackageReference` を持たないプロジェクト（例: `tools/CodeIndex.Changelog/`）の lock ファイルは意図的に空の `net8.0: {}` 依存マップを含みます。これは正常な状態で、当該プロジェクトも locked-mode 契約に参加している証拠です。
 
 ## アーキテクチャ
 
