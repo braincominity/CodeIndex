@@ -7513,4 +7513,155 @@ public class McpServerTests : IDisposable
             written += toWrite;
         }
     }
+
+    // Issue #1573: the MCP loop used to block on stdin until EOF with no signal-driven exit
+    // path, so SIGINT/SIGTERM left the process hung. The fix wires CancellationToken through to
+    // the transport's ReadFrameAsync; this test pins that contract by tripping the token while
+    // ReadFrameAsync is blocked and asserting the loop drains cleanly and disposes the transport.
+    // #1573: 旧実装は stdin EOF まで固まり、SIGINT/SIGTERM で吊り下がっていた。修正で
+    // CancellationToken が ReadFrameAsync まで届くようになったため、ブロック中にトークンを
+    // トリップしたときループが正常終了し transport が dispose されることを固定するテスト。
+    [Fact]
+    public async Task RunAsync_CancellationDrainsLoopAndDisposesTransport()
+    {
+        var transport = new CancellableFakeTransport();
+        using var cts = new CancellationTokenSource();
+
+        var runTask = _server.RunAsync(transport, cts.Token);
+
+        await transport.WaitForReadAsync(TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+
+        // The loop must observe cancellation and return on its own — without the fix this awaits
+        // forever because ReadLineAsync ignored the (then-non-existent) token.
+        // 修正前は ReadLineAsync が token を見ていないため永遠にブロックした。完了することを確認。
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(runTask.IsCompletedSuccessfully, "RunAsync should exit cleanly when its CancellationToken is cancelled.");
+        Assert.True(transport.ReadCalls >= 1);
+    }
+
+    // Cancellation must also unblock readers that were already pending before the signal arrived
+    // and stop the loop without producing a spurious WriteFrameAsync call (which would otherwise
+    // be observable as a half-completed request on the wire).
+    // 信号到着前から待機中の reader も解除し、ループが余分な WriteFrameAsync を出さずに終了することを確認。
+    [Fact]
+    public async Task RunAsync_CancelledBeforeAnyResponseDoesNotWriteFrame()
+    {
+        var transport = new CancellableFakeTransport();
+        using var cts = new CancellationTokenSource();
+
+        var runTask = _server.RunAsync(transport, cts.Token);
+        await transport.WaitForReadAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, transport.WriteCalls);
+    }
+
+    /// <summary>
+    /// In-memory IMcpTransport whose ReadFrameAsync blocks until the supplied CancellationToken
+    /// trips. Records read/write counts so tests can assert the loop actually entered the read
+    /// before cancellation arrived (and never wrote a response after).
+    /// CancellationToken がトリップするまで ReadFrameAsync をブロックするインメモリ実装。
+    /// ループが read に入ってからキャンセルが来たことと、その後 write が発生していないことを検証する。
+    /// </summary>
+    private sealed class CancellableFakeTransport : IMcpTransport
+    {
+        private readonly TaskCompletionSource _readEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Name => "fake";
+        public string Endpoint => "memory://test";
+        public int ReadCalls { get; private set; }
+        public int WriteCalls { get; private set; }
+        public bool Disposed { get; private set; }
+
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            ReadCalls++;
+            _readEntered.TrySetResult();
+            // Honour the token: a never-completing Task<string?> + token-driven cancellation
+            // mirrors how stdio's ReadLineAsync(CancellationToken) behaves on SIGINT/SIGTERM.
+            // token に従って待機。stdio の ReadLineAsync(CancellationToken) と同じ動作を再現する。
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken)))
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task WaitForReadAsync(TimeSpan timeout) => _readEntered.Task.WaitAsync(timeout);
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress
+    // (and PosixSignal.SIGTERM on Unix) must trip the loop. This test exercises the cross-platform
+    // Ctrl+C path by raising the .NET CancelKeyPress event directly via reflection — the test cannot
+    // send real signals to the test process without crashing the xUnit runner.
+    // #1573 の中核。Console.CancelKeyPress 経由 (Unix では PosixSignal.SIGTERM 経由) でループを
+    // 止められることが要件。実信号は xUnit runner ごと落とすため、リフレクションで CancelKeyPress
+    // を直接発火させてクロスプラットフォーム経路を検証する。
+    [Fact]
+    public void RegisterShutdownHandlers_ConsoleCancelKeyPress_CancelsToken()
+    {
+        using var cts = new CancellationTokenSource();
+        using var registration = McpServer.RegisterShutdownHandlers(cts);
+
+        Assert.False(cts.IsCancellationRequested);
+        RaiseConsoleCancelKeyPress();
+        Assert.True(cts.IsCancellationRequested);
+    }
+
+    // After the registration is disposed, a subsequent Ctrl+C must not touch a stale CTS — the
+    // typical RunMcpHttp shape disposes the CTS right after the registration, so a late signal
+    // would otherwise hit ObjectDisposedException and crash the host.
+    // registration を dispose した後の Ctrl+C は使用済み CTS に触れてはならない。RunMcpHttp は
+    // registration の直後に CTS を dispose するため、late signal で ObjectDisposedException で
+    // host が落ちないことを担保する。
+    [Fact]
+    public void RegisterShutdownHandlers_AfterDispose_DoesNotInvokeHandler()
+    {
+        using var cts = new CancellationTokenSource();
+        var registration = McpServer.RegisterShutdownHandlers(cts);
+        registration.Dispose();
+
+        RaiseConsoleCancelKeyPress();
+
+        Assert.False(cts.IsCancellationRequested);
+    }
+
+    private static void RaiseConsoleCancelKeyPress()
+    {
+        // Console.CancelKeyPress is exposed as a public event but its backing delegate field is
+        // private. Reflection is the only test-time path; .NET intentionally does not let user
+        // code synthesise ConsoleCancelEventArgs (its constructor is internal). We construct the
+        // args via the same internal ctor the runtime uses for real Ctrl+C events. The backing
+        // field is null when no handlers are attached — that itself proves the handler was
+        // removed, so callers must not assume a non-null delegate after dispose.
+        // Console.CancelKeyPress は public event だが backing field は private で、
+        // ConsoleCancelEventArgs の ctor も internal。reflection が唯一のテスト経路。
+        // ハンドラ未登録の状態ではフィールドは null になり、それ自体が解除済みの証拠なので、
+        // 呼び出し側は dispose 後に non-null を仮定してはならない。
+        var field = typeof(Console).GetField("s_cancelCallbacks", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var del = (ConsoleCancelEventHandler?)field!.GetValue(null);
+        if (del == null)
+            return;
+        var argsType = typeof(ConsoleCancelEventArgs);
+        var argsCtor = argsType.GetConstructor(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, binder: null, types: new[] { typeof(ConsoleSpecialKey) }, modifiers: null);
+        Assert.NotNull(argsCtor);
+        var args = (ConsoleCancelEventArgs)argsCtor!.Invoke(new object[] { ConsoleSpecialKey.ControlC });
+        del!.Invoke(null!, args);
+    }
 }

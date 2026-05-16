@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -259,15 +260,94 @@ public partial class McpServer : IDisposable
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
     /// <see cref="RunAsync(IMcpTransport, CancellationToken)"/> so existing callers stay
-    /// source-compatible after the #1558 transport refactor.
+    /// source-compatible after the #1558 transport refactor. SIGINT (Ctrl+C) and SIGTERM are
+    /// translated into loop cancellation so orchestrators (systemd, launchd, supervisord) can
+    /// achieve a clean shutdown instead of hanging until stdin closes (#1573).
     /// 既定の stdio トランスポートで MCP ループを動かす。#1558 のトランスポート抽象化後も
     /// 既存呼び出しがソース互換となるよう <see cref="RunAsync(IMcpTransport, CancellationToken)"/>
-    /// のラッパとして残す。
+    /// のラッパとして残す。SIGINT (Ctrl+C) と SIGTERM をループキャンセルに変換し、stdin が閉じる
+    /// まで固まる旧挙動を解消する（systemd / launchd / supervisord から graceful shutdown 可能に, #1573）。
     /// </summary>
     public async Task RunAsync()
     {
         await using var transport = new StdioMcpTransport(StdioBufferSize);
-        await RunAsync(transport, CancellationToken.None).ConfigureAwait(false);
+        using var cts = new CancellationTokenSource();
+        using (RegisterShutdownHandlers(cts))
+        {
+            await RunAsync(transport, cts.Token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Register cross-platform SIGINT (Ctrl+C) and SIGTERM handlers that cancel <paramref name="cts"/>
+    /// so orchestrator-driven shutdowns drain the loop cleanly instead of leaving the MCP process
+    /// hung on stdin or force-killed mid-iteration (#1573). The returned IDisposable removes the
+    /// handlers; dispose it before disposing the CTS to avoid races between a late signal and CTS
+    /// teardown.
+    /// SIGINT (Ctrl+C) と SIGTERM を `cts` のキャンセルに変換するクロスプラットフォームハンドラを登録する
+    /// （#1573）。返り値の IDisposable でハンドラを解除する。late signal と CTS 破棄の競合を避けるため、
+    /// CTS の Dispose より先にこれを Dispose する。
+    /// </summary>
+    internal static IDisposable RegisterShutdownHandlers(CancellationTokenSource cts)
+    {
+        ArgumentNullException.ThrowIfNull(cts);
+
+        ConsoleCancelEventHandler cancelHandler = (_, e) =>
+        {
+            if (cts.IsCancellationRequested)
+                return;
+            // Honour the signal without letting the .NET runtime terminate the process before
+            // the loop has a chance to drain and dispose the shared DbContext.
+            // .NET runtime の即時終了を抑え、ループが DbContext を片付ける猶予を確保する。
+            e.Cancel = true;
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { /* signal raced disposal — nothing to cancel. */ }
+        };
+        Console.CancelKeyPress += cancelHandler;
+
+        PosixSignalRegistration? sigtermRegistration = null;
+        try
+        {
+            sigtermRegistration = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+            {
+                if (cts.IsCancellationRequested)
+                    return;
+                ctx.Cancel = true;
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { /* see CancelKeyPress branch. */ }
+            });
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // PosixSignal.SIGTERM is supported on net8.0 across Windows/Linux/macOS, but a future
+            // niche runtime might not implement it. Console.CancelKeyPress still covers Ctrl+C
+            // everywhere, so degrade silently rather than refusing to start.
+            // .NET 8 では SIGTERM がクロスプラットフォーム対応だが、将来の特殊ランタイムで未対応の
+            // 可能性に備え、Console.CancelKeyPress による Ctrl+C カバレッジを残してサイレントに縮退する。
+        }
+
+        return new ShutdownHandlerRegistration(cancelHandler, sigtermRegistration);
+    }
+
+    private sealed class ShutdownHandlerRegistration : IDisposable
+    {
+        private ConsoleCancelEventHandler? _cancelHandler;
+        private PosixSignalRegistration? _sigterm;
+
+        public ShutdownHandlerRegistration(ConsoleCancelEventHandler cancelHandler, PosixSignalRegistration? sigterm)
+        {
+            _cancelHandler = cancelHandler;
+            _sigterm = sigterm;
+        }
+
+        public void Dispose()
+        {
+            var handler = Interlocked.Exchange(ref _cancelHandler, null);
+            if (handler != null)
+                Console.CancelKeyPress -= handler;
+            var sigterm = Interlocked.Exchange(ref _sigterm, null);
+            sigterm?.Dispose();
+        }
     }
 
     /// <summary>
