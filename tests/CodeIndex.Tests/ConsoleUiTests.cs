@@ -94,8 +94,10 @@ public class ConsoleUiTests
 
         Assert.Contains("Update workflows:", output);
         Assert.Contains("Use --commits with a project path after normal commits", output);
+        Assert.Contains("Use --changed-between <old-ref> <new-ref> after switching branches", output);
         Assert.Contains("Use --files only for known in-place edits or new files", output);
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
+        Assert.Contains("cdidx index ./myproject --changed-between main feature", output);
     }
 
     [Fact]
@@ -109,6 +111,23 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx license", output);
+    }
+
+    [Theory]
+    [InlineData(0, "0 results", "No results found.")]
+    [InlineData(1, "1 result", "Found 1 result.")]
+    [InlineData(5, "5 results", "Found 5 results.")]
+    public void CountedAndFoundSummary_UseNaturalPluralization(int count, string counted, string summary)
+    {
+        Assert.Equal(counted, ConsoleUi.Counted(count, "result"));
+        Assert.Equal(summary, ConsoleUi.FoundSummary(count, "result"));
+    }
+
+    [Fact]
+    public void Counted_AllowsIrregularPluralAndNumberFormat()
+    {
+        Assert.Equal("2 in-file matches", ConsoleUi.Counted(2, "in-file match", "in-file matches"));
+        Assert.Equal("1,234 files", ConsoleUi.Counted(1234, "file", format: "N0"));
     }
 
     [Fact]

@@ -1299,6 +1299,7 @@ public partial class DbReader
                    {GetSymbolColumnSql("signature")} AS signature,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type
             FROM symbols s
@@ -1315,10 +1316,13 @@ public partial class DbReader
         {
             while (reader.TrackedRead())
             {
+                var name = reader.GetString(1);
+                var containerName = GetNullableString(reader, 9);
+                var containerQualifiedName = GetNullableString(reader, 10);
                 symbols.Add(new OutlineSymbol
                 {
                     Kind = reader.GetString(0),
-                    Name = reader.GetString(1),
+                    Name = name,
                     Line = reader.GetInt32(2),
                     StartLine = GetInt32OrFallback(reader, 3, 2),
                     EndLine = GetInt32OrFallback(reader, 4, 2),
@@ -1326,14 +1330,16 @@ public partial class DbReader
                     BodyEndLine = GetNullableInt32(reader, 6),
                     Signature = GetNullableString(reader, 7),
                     ContainerKind = GetNullableString(reader, 8),
-                    ContainerName = GetNullableString(reader, 9),
-                    Visibility = GetNullableString(reader, 10),
-                    ReturnType = GetNullableString(reader, 11),
+                    ContainerName = containerName,
+                    Path = BuildOutlineSymbolPath(containerQualifiedName ?? containerName, name),
+                    Visibility = GetNullableString(reader, 11),
+                    ReturnType = GetNullableString(reader, 12),
                 });
             }
         }
 
         PopulateOutlineDepths(symbols);
+        PopulateOutlineDisplayNames(symbols, lang);
 
         return new OutlineResult
         {
@@ -1343,6 +1349,182 @@ public partial class DbReader
             SymbolCount = symbols.Count,
             Symbols = symbols,
         };
+    }
+
+    private static void PopulateOutlineDisplayNames(List<OutlineSymbol> symbols, string? lang)
+    {
+        foreach (var symbol in symbols)
+        {
+            symbol.DisplayName = BuildOutlineDisplayName(symbol, lang);
+        }
+    }
+
+    private static string BuildOutlineDisplayName(OutlineSymbol symbol, string? lang)
+    {
+        if (IsCallableOutlineSymbol(symbol.Kind))
+        {
+            var compactSignature = TryBuildCompactCallableSignature(symbol.Name, symbol.Signature, lang);
+            if (!string.IsNullOrWhiteSpace(compactSignature))
+                return compactSignature!;
+
+            return $"{symbol.Name}@{symbol.Line}";
+        }
+
+        return !string.IsNullOrWhiteSpace(symbol.Path)
+            ? symbol.Path
+            : symbol.Name;
+    }
+
+    private static string BuildOutlineSymbolPath(string? containerQualifiedName, string name)
+    {
+        return string.IsNullOrWhiteSpace(containerQualifiedName)
+            ? name
+            : $"{containerQualifiedName}.{name}";
+    }
+
+    private static bool IsCallableOutlineSymbol(string kind)
+    {
+        return kind is "function" or "method" or "constructor";
+    }
+
+    private static string? TryBuildCompactCallableSignature(string name, string? signature, string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        var openParen = FindCallableParameterOpenParen(signature, name);
+        if (openParen < 0)
+            return null;
+
+        var closeParen = FindMatchingParen(signature, openParen);
+        if (closeParen < 0)
+            return null;
+
+        var parameters = signature.Substring(openParen + 1, closeParen - openParen - 1);
+        var parameterLabels = SplitTopLevelParameters(parameters)
+            .Select(parameter => SimplifyParameterForOutline(parameter, lang))
+            .Where(parameter => !string.IsNullOrWhiteSpace(parameter))
+            .ToList();
+
+        return $"{name}({string.Join(", ", parameterLabels)})";
+    }
+
+    private static int FindCallableParameterOpenParen(string signature, string name)
+    {
+        var searchStart = 0;
+        while (searchStart < signature.Length)
+        {
+            var nameIndex = signature.IndexOf(name, searchStart, StringComparison.Ordinal);
+            if (nameIndex < 0)
+                return -1;
+
+            var afterName = nameIndex + name.Length;
+            var cursor = afterName;
+            while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
+                cursor++;
+
+            if (cursor < signature.Length && signature[cursor] == '(')
+                return cursor;
+
+            searchStart = afterName;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingParen(string value, int openParen)
+    {
+        var depth = 0;
+        for (var i = openParen; i < value.Length; i++)
+        {
+            if (value[i] == '(')
+            {
+                depth++;
+            }
+            else if (value[i] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static IEnumerable<string> SplitTopLevelParameters(string parameters)
+    {
+        var start = 0;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var ch = parameters[i];
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0) bracketDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && bracketDepth == 0:
+                    yield return parameters[start..i].Trim();
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        var last = parameters[start..].Trim();
+        if (last.Length > 0)
+            yield return last;
+    }
+
+    private static string SimplifyParameterForOutline(string parameter, string? lang)
+    {
+        var cleaned = Regex.Replace(parameter, @"\s*=\s*.*$", "").Trim();
+        cleaned = Regex.Replace(cleaned, @"^\[[^\]]+\]\s*", "").Trim();
+        if (cleaned.Length == 0)
+            return string.Empty;
+
+        if (lang is "python")
+        {
+            if (cleaned is "self" or "cls" or "*" or "/")
+                return string.Empty;
+
+            var colonIndex = cleaned.IndexOf(':');
+            if (colonIndex >= 0 && colonIndex + 1 < cleaned.Length)
+                return cleaned[(colonIndex + 1)..].Trim();
+
+            return cleaned.TrimStart('*');
+        }
+
+        var colon = cleaned.LastIndexOf(':');
+        if (colon >= 0 && colon + 1 < cleaned.Length)
+            return cleaned[(colon + 1)..].Trim();
+
+        cleaned = Regex.Replace(cleaned, @"^(params|ref|out|in|this|readonly)\s+", "", RegexOptions.IgnoreCase).Trim();
+        var parts = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= 1)
+            return cleaned;
+
+        if (lang is "go")
+            return parts[^1];
+
+        return string.Join(" ", parts.Take(parts.Length - 1));
     }
 
     private static void PopulateOutlineDepths(List<OutlineSymbol> symbols)

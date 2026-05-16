@@ -74,6 +74,7 @@ public class McpServerTests : IDisposable
             Signature = "public void Run() { }",
             ContainerKind = "class",
             ContainerName = "App",
+            ContainerQualifiedName = "App",
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
@@ -704,6 +705,67 @@ public class McpServerTests : IDisposable
         Assert.Contains("server stderr", message);
         Assert.DoesNotContain("leaky_table", message);
         Assert.DoesNotContain("PRAGMA failed", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        // Issue #1580: CodeIndexException carries author-controlled Code / Category /
+        // Path / Hint values, so the MCP catch-all must surface them so clients can
+        // branch on Code without parsing free-form messages. The free-form `Message`
+        // text built by CodeIndexException itself (which already includes the path
+        // suffix) still must not be echoed verbatim, to keep #1530 closed for the
+        // database message body.
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+        Assert.Contains("Error executing search", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedLoopErrorMessage_CodeIndexException_EchoesStructuredFields()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbLocked,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed to open SQLite connection.",
+            path: "/var/cdidx/state.db",
+            hint: "Close other cdidx invocations.");
+
+        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+
+        Assert.Contains("Internal error", message);
+        Assert.Contains(nameof(CodeIndexException), message);
+        Assert.Contains("[E002_DB_LOCKED/database]", message);
+        Assert.Contains("path='/var/cdidx/state.db'", message);
+        Assert.Contains("hint='Close other cdidx invocations.'", message);
+        Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_CodeIndexException_NoPathNoHint_OmitsFragments()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbError,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Generic failure.");
+
+        var message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+
+        Assert.Contains("[E008_DB_ERROR/database]", message);
+        Assert.DoesNotContain("path=", message);
+        Assert.DoesNotContain("hint=", message);
     }
 
     [Fact]
@@ -2050,7 +2112,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("Found 1 references.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 reference.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
@@ -2164,7 +2226,7 @@ public class McpServerTests : IDisposable
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Found 1 callers.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Found 1 caller.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4769,6 +4831,10 @@ public class McpServerTests : IDisposable
         Assert.NotNull(result["structuredContent"]);
         var structured = result["structuredContent"]!;
         Assert.Equal("src/app.cs", structured["path"]!.GetValue<string>());
+        var symbols = structured["symbols"]!.AsArray();
+        var run = symbols.Single(symbol => symbol!["name"]!.GetValue<string>() == "Run")!;
+        Assert.Equal("Run()", run["displayName"]!.GetValue<string>());
+        Assert.Equal("App.Run", run["path"]!.GetValue<string>());
     }
 
     [Fact]
@@ -5858,7 +5924,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
-        Assert.Contains("returned bucket(s)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]

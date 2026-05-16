@@ -229,9 +229,13 @@ public class SuggestionStore
 
     /// <summary>
     /// Write suggestions atomically without acquiring the lock (caller must hold it).
-    /// Uses write-to-temp-and-rename to prevent partial writes.
+    /// Uses write-to-temp-and-rename to prevent partial writes. If either the write
+    /// or the rename throws, the temp file is best-effort deleted so that repeated
+    /// failures do not accumulate orphaned <c>.tmp</c> files in <c>.cdidx/</c>.
     /// ロックを取得せずにアトミックに提案を書き込む（呼び出し元がロックを保持していること）。
     /// 部分書き込みを防ぐため一時ファイル→リネームを使用。
+    /// write または rename が失敗した場合、一時ファイルをベストエフォートで削除して
+    /// <c>.cdidx/</c> に孤児 <c>.tmp</c> が蓄積するのを防ぐ。
     /// </summary>
     private void SaveUnlocked(List<SuggestionRecord> records)
     {
@@ -241,8 +245,16 @@ public class SuggestionStore
 
         var tempPath = _filePath + ".tmp";
         var json = JsonSerializer.Serialize(records, s_jsonOptions);
-        File.WriteAllText(tempPath, json);
-        File.Move(tempPath, _filePath, overwrite: true);
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, _filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
+            throw;
+        }
     }
 
     /// <summary>

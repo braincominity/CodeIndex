@@ -2129,8 +2129,8 @@ jobs:
     }
 
     [Theory]
-    [InlineData("search-extra", "unexpected extra positional argument(s) for search")]
-    [InlineData("excerpt-extra", "unexpected extra positional argument(s) for excerpt")]
+    [InlineData("search-extra", "unexpected extra positional 1 argument for search")]
+    [InlineData("excerpt-extra", "unexpected extra positional 1 argument for excerpt")]
     [InlineData("map-extra", "map does not accept positional arguments")]
     [InlineData("outline-extra", "outline does not accept positional arguments")]
     [InlineData("status-extra", "status does not accept positional arguments")]
@@ -4095,6 +4095,42 @@ jobs:
             Assert.Equal(string.Empty, excerptStderr);
             Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
             Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_HumanDisplaysCompactOverloadSignatures()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_overload_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/worker.cs",
+                "csharp",
+                """
+                using System.Threading;
+
+                public class Worker
+                {
+                    public void Process(string input) { }
+                    public void Process(int count, CancellationToken cancellationToken = default) { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/worker.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Process(string)", stdout);
+            Assert.Contains("Process(int, CancellationToken)", stdout);
         }
         finally
         {
@@ -25337,7 +25373,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.DoesNotContain("file_dependency_hints", stdout);
-            Assert.Contains("2 definition(s) across 1 file(s)", stderr);
+            Assert.Contains("2 definitions across 1 file", stderr);
         }
         finally
         {

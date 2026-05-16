@@ -11132,6 +11132,177 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_AddsDisplayNamesForCSharpOverloads()
+    {
+        InsertIndexedFile(
+            "src/worker.cs",
+            "csharp",
+            """
+            using System.Threading;
+
+            public class Worker
+            {
+                public void Process(string input) { }
+                public void Process(int count, CancellationToken cancellationToken = default) { }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/worker.cs");
+
+        Assert.NotNull(outline);
+        var overloads = outline!.Symbols
+            .Where(symbol => symbol.Name == "Process")
+            .OrderBy(symbol => symbol.Line)
+            .ToList();
+        Assert.Equal(2, overloads.Count);
+        Assert.Equal("Process(string)", overloads[0].DisplayName);
+        Assert.Equal("Worker.Process", overloads[0].Path);
+        Assert.Equal("Process(int, CancellationToken)", overloads[1].DisplayName);
+        Assert.Equal("Worker.Process", overloads[1].Path);
+    }
+
+    [Fact]
+    public void GetOutline_PathFallsBackToContainerNameWhenQualifiedContainerIsUnavailable()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy-container.cs",
+            Lang = "csharp",
+            Size = 64,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 3,
+            Content = "class Worker { void Process(int count) { } }",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Worker",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "class Worker",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Process",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "void Process(int count)",
+                ContainerKind = "class",
+                ContainerName = "Worker",
+            }
+        ]);
+
+        var outline = _reader.GetOutline("src/legacy-container.cs");
+
+        Assert.NotNull(outline);
+        var method = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "Process"));
+        Assert.Equal("Worker.Process", method.Path);
+        Assert.Equal("Process(int)", method.DisplayName);
+    }
+
+    [Fact]
+    public void GetOutline_AddsPathsForPythonShadowedMethods()
+    {
+        InsertIndexedFile(
+            "src/shadow.py",
+            "python",
+            """
+            class Alpha:
+                def run(self, value: int):
+                    return value
+
+            class Beta:
+                def run(self, value: str):
+                    return value
+            """);
+
+        var outline = _reader.GetOutline("src/shadow.py");
+
+        Assert.NotNull(outline);
+        var methods = outline!.Symbols
+            .Where(symbol => symbol.Name == "run")
+            .OrderBy(symbol => symbol.Line)
+            .ToList();
+        Assert.Equal(2, methods.Count);
+        Assert.Equal("run(int)", methods[0].DisplayName);
+        Assert.Equal("Alpha.run", methods[0].Path);
+        Assert.Equal("run(str)", methods[1].DisplayName);
+        Assert.Equal("Beta.run", methods[1].Path);
+    }
+
+    [Fact]
+    public void GetOutline_AddsDisplayNameForGoReceiverMethod()
+    {
+        InsertIndexedFile(
+            "cmd/app/main.go",
+            "go",
+            """
+            package main
+
+            import "context"
+
+            type Service struct{}
+
+            func (s *Service) Process(ctx context.Context, id int) error {
+                return nil
+            }
+            """);
+
+        var outline = _reader.GetOutline("cmd/app/main.go");
+
+        Assert.NotNull(outline);
+        var method = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "Process"));
+        Assert.Equal("Process(context.Context, int)", method.DisplayName);
+    }
+
+    [Fact]
+    public void GetOutline_AddsPathsForTypeScriptNamespaceShadowedFunctions()
+    {
+        InsertIndexedFile(
+            "src/shadow.ts",
+            "typescript",
+            """
+            namespace First {
+              export function make(value: string) {
+                return value;
+              }
+            }
+
+            namespace Second {
+              export function make(value: number) {
+                return value;
+              }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/shadow.ts");
+
+        Assert.NotNull(outline);
+        var functions = outline!.Symbols
+            .Where(symbol => symbol.Name == "make")
+            .OrderBy(symbol => symbol.Line)
+            .ToList();
+        Assert.Equal(2, functions.Count);
+        Assert.Equal("make(string)", functions[0].DisplayName);
+        Assert.Equal("First.make", functions[0].Path);
+        Assert.Equal("make(number)", functions[1].DisplayName);
+        Assert.Equal("Second.make", functions[1].Path);
+    }
+
+    [Fact]
     public void GetOutline_FileWithNoSymbols_ReturnsEmptyList()
     {
         var outline = _reader.GetOutline("docs/notes.md");
