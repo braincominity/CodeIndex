@@ -156,8 +156,10 @@ public partial class DbReader
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
     /// 可視性ランキング: public を最優先、次に protected、internal、private、不明は最後。
     /// </summary>
-    internal string VisibilityOrder => $@"
-        CASE lower({GetSymbolColumnSql("visibility")})
+    internal string VisibilityOrder => GetVisibilityRankSql(GetSymbolColumnSql("visibility"));
+
+    private static string GetVisibilityRankSql(string visibilitySql) => $@"
+        CASE lower({visibilitySql})
             WHEN 'public' THEN 0
             WHEN 'open' THEN 0
             WHEN 'pub' THEN 0
@@ -169,6 +171,15 @@ public partial class DbReader
             WHEN 'private' THEN 3
             WHEN 'fileprivate' THEN 3
             ELSE 4
+        END";
+
+    private static string GetVisibilityLabelSql(string visibilityRankSql) => $@"
+        CASE {visibilityRankSql}
+            WHEN 0 THEN 'public'
+            WHEN 1 THEN 'protected'
+            WHEN 2 THEN 'internal'
+            WHEN 3 THEN 'private'
+            ELSE NULL
         END";
     // Bucket ordering for files whose symbols exactly / prefix-match the ranking query.
     // Issue #1520: previously each bucket embedded a correlated `EXISTS (... lower(name) = lower(@q))`
@@ -184,20 +195,38 @@ public partial class DbReader
     internal const string PrefixSymbolMatchOrder =
         "CASE WHEN prefix_symbol_match.file_id IS NULL THEN 1 ELSE 0 END";
 
-    // Derived-table joins that supply the per-file boolean buckets referenced by the ranking
-    // ORDER BY constants above. SELECT DISTINCT keeps SQLite from flattening the subqueries
-    // back into the outer query, so each predicate runs once per query instead of once per row.
-    // 派生テーブルの SELECT DISTINCT により SQLite はサブクエリをフラット化せず、述語は 1 回だけ
-    // 評価される。
-    internal const string SearchSymbolMatchJoinsSql = @"
+    // Derived-table joins that supply the per-file match and visibility buckets referenced by
+    // search ranking. GROUP BY keeps the symbol predicates out of the outer per-hit scan while
+    // preserving the best visibility rank among matching symbols in each file.
+    // 検索順位で参照するファイル単位の一致・可視性 bucket を派生テーブルで供給する。GROUP BY により
+    // symbol 述語を外側の hit ごとの scan から切り離しつつ、ファイル内の一致シンボルの最良 visibility を保持する。
+    internal string SearchSymbolMatchJoinsSql
+    {
+        get
+        {
+            var exactVisibilityRankSql = GetVisibilityRankSql(GetSymbolColumnSql("visibility", symbolAlias: "s_exact"));
+            var prefixVisibilityRankSql = GetVisibilityRankSql(GetSymbolColumnSql("visibility", symbolAlias: "s_prefix"));
+            return $@"
         LEFT JOIN (
-            SELECT DISTINCT file_id FROM symbols
+            SELECT
+                file_id,
+                MIN({exactVisibilityRankSql}) AS visibility_order,
+                {GetVisibilityLabelSql($"MIN({exactVisibilityRankSql})")} AS visibility
+            FROM symbols s_exact
             WHERE name = @rankingQuery COLLATE NOCASE
+            GROUP BY file_id
         ) AS exact_symbol_match ON exact_symbol_match.file_id = f.id
         LEFT JOIN (
-            SELECT DISTINCT file_id FROM symbols
+            SELECT
+                file_id,
+                MIN({prefixVisibilityRankSql}) AS visibility_order,
+                {GetVisibilityLabelSql($"MIN({prefixVisibilityRankSql})")} AS visibility
+            FROM symbols s_prefix
             WHERE name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+            GROUP BY file_id
         ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id";
+        }
+    }
     private const string PathTextMatchOrder = @"
         CASE
             WHEN instr(lower(f.path), lower(@rankingQuery)) > 0 THEN 0
