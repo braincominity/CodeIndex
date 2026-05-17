@@ -1,4 +1,21 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Models;
+
+/// <summary>
+/// Lifecycle state for a locally recorded improvement suggestion.
+/// ローカルに記録された改善提案のライフサイクル状態。
+/// </summary>
+public enum SuggestionStatus
+{
+    Draft,
+    SubmittedPendingTriage,
+    OpenInUpstream,
+    ResolvedInUpstream,
+    WontFix,
+    Duplicate,
+    Superseded,
+}
 
 /// <summary>
 /// Represents a structured improvement suggestion from an AI agent.
@@ -45,6 +62,9 @@ public class SuggestionRecord
     /// <summary>UTC timestamp when the suggestion was recorded / 提案が記録されたUTCタイムスタンプ</summary>
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>Current lifecycle status / 現在のライフサイクル状態</summary>
+    public SuggestionStatus Status { get; set; } = SuggestionStatus.Draft;
+
     /// <summary>Agent or client identity that created the suggestion / 提案を作成したエージェントまたはクライアントID</summary>
     public string CreatedByAgent { get; set; } = "unknown";
 
@@ -63,10 +83,30 @@ public class SuggestionRecord
     /// <summary>Optional natural-language invocation context supplied by the caller / 呼び出し元が渡す任意の自然言語コンテキスト</summary>
     public string? ToolInvocationContext { get; set; }
 
-    /// <summary>Whether the suggestion has been submitted to GitHub / GitHubに送信済みか</summary>
-    public bool SubmittedToGitHub { get; set; }
+    /// <summary>Upstream GitHub Issue number when known / 判明している場合の upstream GitHub Issue 番号</summary>
+    public int? UpstreamIssueNumber { get; set; }
 
-    /// <summary>GitHub Issue URL if submitted / 送信済みの場合のGitHub Issue URL</summary>
+    /// <summary>Upstream GitHub Issue URL when known / 判明している場合の upstream GitHub Issue URL</summary>
+    public string? UpstreamUrl { get; set; }
+
+    /// <summary>UTC timestamp of the last upstream sync / 最後に upstream と同期したUTCタイムスタンプ</summary>
+    public DateTime? LastSyncedAt { get; set; }
+
+    /// <summary>UTC timestamp when the suggestion was resolved / 提案が解決されたUTCタイムスタンプ</summary>
+    public DateTime? ResolvedAt { get; set; }
+
+    /// <summary>Hash of an older suggestion superseded by this one / この提案が置き換える古い提案のハッシュ</summary>
+    public string? Supersedes { get; set; }
+
+    /// <summary>Hash of a newer suggestion that superseded this one / この提案を置き換えた新しい提案のハッシュ</summary>
+    public string? SupersededBy { get; set; }
+
+    /// <summary>Legacy submitted flag, read for migration only / 移行用に読み取る旧送信済みフラグ</summary>
+    [JsonPropertyName("submitted_to_github")]
+    public bool? SubmittedToGitHub { get; set; }
+
+    /// <summary>Legacy GitHub Issue URL, read for migration only / 移行用に読み取る旧GitHub Issue URL</summary>
+    [JsonPropertyName("github_issue_url")]
     public string? GitHubIssueUrl { get; set; }
 
     /// <summary>

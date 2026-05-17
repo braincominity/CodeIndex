@@ -70,7 +70,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -88,7 +88,8 @@ public partial class DbReader
             // instr() による完全部分一致検索 — 大文字小文字区別、FTS5トークナイズなし
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
-                       0.0 AS rank
+                       0.0 AS rank,
+                       {GetSearchVisibilitySql()} AS visibility
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
@@ -101,7 +102,8 @@ public partial class DbReader
             var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery, prefix);
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
-                       rank
+                       rank,
+                       {GetSearchVisibilitySql()} AS visibility
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
@@ -121,6 +123,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@exactQuery", query);
         cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
@@ -142,6 +145,7 @@ public partial class DbReader
                     EndLine = reader.GetInt32(3),
                     Content = reader.GetString(4),
                     Score = reader.GetDouble(5),
+                    Visibility = GetNullableString(reader, 6),
                 });
             }
         }
@@ -152,7 +156,7 @@ public partial class DbReader
         return deduplicate ? DeduplicateOverlappingResults(raw) : raw;
     }
 
-    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false)
+    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true)
     {
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
@@ -199,6 +203,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@exactQuery", query);
         cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
@@ -341,7 +346,19 @@ public partial class DbReader
 
     private static string GetSearchOrderSql()
     {
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.modified DESC, f.path";
+        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.modified DESC, f.path";
     }
+
+    private static string SearchVisibilityOrder => @"
+        CASE
+            WHEN @visibilityRank = 0 THEN 0
+            ELSE COALESCE(exact_symbol_match.visibility_order, prefix_symbol_match.visibility_order, 4)
+        END";
+
+    private static string GetSearchVisibilitySql() => @"
+        CASE
+            WHEN exact_symbol_match.visibility IS NOT NULL THEN exact_symbol_match.visibility
+            ELSE prefix_symbol_match.visibility
+        END";
 
 }

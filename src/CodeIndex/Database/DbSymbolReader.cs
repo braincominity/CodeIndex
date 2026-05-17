@@ -71,6 +71,15 @@ public partial class DbReader
     private const int UnusedPublicCandidateBudget = 2048;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
+    private static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
+        CASE {referenceKindSql}
+            WHEN 'call' THEN 1.0
+            WHEN 'instantiate' THEN 1.0
+            WHEN 'subscribe' THEN 0.3
+            WHEN 'type_reference' THEN 0.1
+            ELSE 0.0
+        END";
+
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
     /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
@@ -1604,9 +1613,9 @@ public partial class DbReader
     /// 複数の logical target が同名を共有する場合は bare-name 参照で真の対象を特定できないため
     /// 保守的な in-target file 件数へフォールバックし、1 つの logical target family に収まる行は集約する。
     /// </summary>
-    public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
-        if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
+        if (!_hasReferencesTable) return [];
         var containerNameSql = GetSymbolColumnSql("container_name");
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
         var familyKeySql = GetSymbolColumnSql("family_key");
@@ -1748,7 +1757,8 @@ public partial class DbReader
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
                        sr.line,
                        sr.column_number,
-                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
+                       " + GetHotspotReferenceWeightSql("sr.reference_kind") + @" AS reference_weight
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
@@ -1758,7 +1768,8 @@ public partial class DbReader
                 SELECT lang,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 GROUP BY lang, symbol_name, symbol_segment_count
             ),
@@ -1767,7 +1778,8 @@ public partial class DbReader
                        raw_symbol_name,
                        symbol_name AS resolved_symbol_name,
                        symbol_segment_count AS resolved_symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 WHERE allow_leaf_fallback = 1
                 GROUP BY lang, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
@@ -1794,7 +1806,8 @@ public partial class DbReader
                        file_id,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
@@ -1804,7 +1817,8 @@ public partial class DbReader
                        raw_symbol_name,
                        symbol_name AS resolved_symbol_name,
                        symbol_segment_count AS resolved_symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 WHERE allow_leaf_fallback = 1
                 GROUP BY lang, file_id, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
@@ -1813,7 +1827,8 @@ public partial class DbReader
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc_exact.ref_count, 0) + COALESCE(frc_leaf.ref_count, 0)) AS ref_count
+                       SUM(COALESCE(frc_exact.ref_count, 0) + COALESCE(frc_leaf.ref_count, 0)) AS ref_count,
+                       SUM(COALESCE(frc_exact.ref_score, 0.0) + COALESCE(frc_leaf.ref_score, 0.0)) AS ref_score
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -1859,7 +1874,13 @@ public partial class DbReader
                               OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                                 THEN COALESCE(gerc.ref_count, 0) + COALESCE(glrc.ref_count, 0)
                             ELSE COALESCE(crc.ref_count, 0)
-                        END AS ref_count
+                        END AS ref_count,
+                       CASE
+                            WHEN nc.defs = 1
+                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                                THEN COALESCE(gerc.ref_score, 0.0) + COALESCE(glrc.ref_score, 0.0)
+                            ELSE COALESCE(crc.ref_score, 0.0)
+                        END AS ref_score
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
@@ -1896,13 +1917,13 @@ public partial class DbReader
                  AND crc.name = gr.name
                  AND crc.kind = gr.kind
             )
-            SELECT gr.name, rc.ref_count,
+            SELECT gr.name, rc.ref_count, rc.ref_score,
                    gr.kind, gr.path, gr.lang, gr.line,
                    gr.visibility, gr.container_name
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
             WHERE rc.ref_count > 0
-            ORDER BY rc.ref_count DESC
+            ORDER BY rc.ref_score DESC, rc.ref_count DESC
             LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
@@ -1921,20 +1942,25 @@ public partial class DbReader
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
             cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
-        var results = new List<(SymbolResult, int)>();
+        var results = new List<SymbolHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add((new SymbolResult
+            results.Add(new SymbolHotspotResult
             {
-                Name = reader.GetString(0),
-                Kind = reader.GetString(2),
-                Path = reader.GetString(3),
-                Lang = GetNullableString(reader, 4),
-                Line = reader.GetInt32(5),
-                Visibility = GetNullableString(reader, 6),
-                ContainerName = GetNullableString(reader, 7),
-            }, reader.GetInt32(1)));
+                Symbol = new SymbolResult
+                {
+                    Name = reader.GetString(0),
+                    Kind = reader.GetString(3),
+                    Path = reader.GetString(4),
+                    Lang = GetNullableString(reader, 5),
+                    Line = reader.GetInt32(6),
+                    Visibility = GetNullableString(reader, 7),
+                    ContainerName = GetNullableString(reader, 8),
+                },
+                ReferenceCount = reader.GetInt32(1),
+                ReferenceScore = reader.GetDouble(2),
+            });
         }
         return results;
     }
@@ -2035,7 +2061,8 @@ public partial class DbReader
                        " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        sr.line,
                        sr.column_number,
-                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
+                       " + GetHotspotReferenceWeightSql("sr.reference_kind") + @" AS reference_weight
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
@@ -2045,7 +2072,8 @@ public partial class DbReader
                 SELECT lang,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 GROUP BY lang, symbol_name, symbol_segment_count
             ),
@@ -2071,7 +2099,8 @@ public partial class DbReader
                        file_id,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count
+                       COUNT(*) AS ref_count,
+                       SUM(reference_weight) AS ref_score
                 FROM logical_references
                 GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
@@ -2079,7 +2108,8 @@ public partial class DbReader
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count
+                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count,
+                       SUM(COALESCE(frc.ref_score, 0.0)) AS ref_score
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -2106,7 +2136,13 @@ public partial class DbReader
                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                                THEN COALESCE(grc.ref_count, 0)
                            ELSE COALESCE(crc.ref_count, 0)
-                       END AS ref_count
+                       END AS ref_count,
+                       CASE
+                           WHEN nc.defs = 1
+                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                               THEN COALESCE(grc.ref_score, 0.0)
+                           ELSE COALESCE(crc.ref_score, 0.0)
+                       END AS ref_score
                 FROM filtered_candidates fc
                 JOIN name_cardinality nc
                   ON nc.lang = fc.lang
@@ -2135,7 +2171,8 @@ public partial class DbReader
                        fc.visibility,
                        fc.container_name,
                        fc.logical_target_key,
-                       src.ref_count
+                       src.ref_count,
+                       src.ref_score
                 FROM filtered_candidates fc
                 JOIN site_reference_counts src ON src.symbol_id = fc.id
                 WHERE src.ref_count > 0
@@ -2151,12 +2188,14 @@ public partial class DbReader
             grouped_reference_counts AS (
                 SELECT hs.name,
                        hs.kind,
-                       SUM(hs.ref_count) AS ref_count
+                       SUM(hs.ref_count) AS ref_count,
+                       SUM(hs.ref_score) AS ref_score
                 FROM (
                     SELECT DISTINCT name,
                            kind,
                            logical_target_key,
-                           ref_count
+                           ref_count,
+                           ref_score
                     FROM hotspot_sites
                 ) hs
                 GROUP BY hs.name, hs.kind
@@ -2165,6 +2204,7 @@ public partial class DbReader
                 SELECT hs.name,
                        hs.kind,
                        MAX(grc.ref_count) AS ref_count,
+                       MAX(grc.ref_score) AS ref_score,
                        COUNT(*) AS definition_sites
                 FROM ranked_sites hs
                 JOIN grouped_reference_counts grc
@@ -2172,7 +2212,7 @@ public partial class DbReader
                  AND grc.kind = hs.kind
                 GROUP BY hs.name, hs.kind
             )
-            SELECT g.name, g.kind, g.ref_count, g.definition_sites,
+            SELECT g.name, g.kind, g.ref_count, g.ref_score, g.definition_sites,
                    rep.path, rep.lang, rep.line, rep.visibility, rep.container_name,
                    (
                        SELECT GROUP_CONCAT(path, char(10))
@@ -2189,7 +2229,7 @@ public partial class DbReader
               ON rep.name = g.name
              AND rep.kind = g.kind
              AND rep.rep_rank = 1
-            ORDER BY g.ref_count DESC, g.name, g.kind
+            ORDER BY g.ref_score DESC, g.ref_count DESC, g.name, g.kind
             LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
@@ -2212,7 +2252,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var paths = GetNullableString(reader, 9)?
+            var paths = GetNullableString(reader, 10)?
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList() ?? [];
             results.Add(new GroupedHotspotResult
@@ -2221,14 +2261,15 @@ public partial class DbReader
                 {
                     Name = reader.GetString(0),
                     Kind = reader.GetString(1),
-                    Path = reader.GetString(4),
-                    Lang = GetNullableString(reader, 5),
-                    Line = reader.GetInt32(6),
-                    Visibility = GetNullableString(reader, 7),
-                    ContainerName = GetNullableString(reader, 8),
+                    Path = reader.GetString(5),
+                    Lang = GetNullableString(reader, 6),
+                    Line = reader.GetInt32(7),
+                    Visibility = GetNullableString(reader, 8),
+                    ContainerName = GetNullableString(reader, 9),
                 },
                 ReferenceCount = reader.GetInt32(2),
-                DefinitionSites = reader.GetInt32(3),
+                ReferenceScore = reader.GetDouble(3),
+                DefinitionSites = reader.GetInt32(4),
                 Paths = paths,
             });
         }

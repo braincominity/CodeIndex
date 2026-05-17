@@ -573,6 +573,10 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
 
+### Local lifecycle fields
+
+Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+
 ### What is NOT included in the payload by design
 
 - File paths from the user's project
