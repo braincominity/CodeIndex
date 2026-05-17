@@ -424,7 +424,7 @@ public class DbReaderTests : IDisposable
         const string target = "TargetService";
         InsertManualReference(path, lang, containerKind: null, containerName: null, target, "call");
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
 
         var result = Assert.Single(results);
         Assert.Equal(path, result.Path);
@@ -448,7 +448,7 @@ public class DbReaderTests : IDisposable
             target: "TargetService",
             kind: "call");
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
 
         Assert.Empty(results);
         Assert.False(truncated);
