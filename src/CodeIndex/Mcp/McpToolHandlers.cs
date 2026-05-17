@@ -274,6 +274,19 @@ public partial class McpServer
         return string.IsNullOrWhiteSpace(value) ? null : new List<string> { value };
     }
 
+    private static List<string>? ReadScopedPathList(JsonNode? args)
+    {
+        var paths = ReadPathList(args, "path") ?? [];
+        var projects = ReadPathList(args, "project") ?? [];
+        if (projects.Count == 0)
+            return paths.Count == 0 ? null : paths;
+
+        var solution = args?["solution"]?.GetValue<string>();
+        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projects, solution))
+            paths.Add(glob);
+        return paths.Count == 0 ? null : paths;
+    }
+
     /// <summary>
     /// Serialize a path filter list back into a JSON echo value.
     /// Null/empty → JSON null; single element → string; multiple → array.
@@ -351,7 +364,7 @@ public partial class McpServer
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -438,7 +451,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -533,7 +546,7 @@ public partial class McpServer
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -592,7 +605,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
@@ -657,7 +670,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
@@ -724,7 +737,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
@@ -783,7 +796,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -831,7 +844,7 @@ public partial class McpServer
     {
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
@@ -869,7 +882,7 @@ public partial class McpServer
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
@@ -1187,7 +1200,7 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         if (pathPatterns == null || pathPatterns.Count == 0)
             return CreateToolErrorResponse(id, "Missing required parameter: path");
 
@@ -1542,7 +1555,7 @@ public partial class McpServer
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
@@ -1585,7 +1598,7 @@ public partial class McpServer
         var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
@@ -1694,7 +1707,7 @@ public partial class McpServer
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
 
         return WithDbReader(id, reader =>
         {
@@ -1948,6 +1961,8 @@ public partial class McpServer
         }
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
+        var projectFilters = ReadPathList(args, "project") ?? [];
+        var solutionPath = args?["solution"]?.GetValue<string>();
         var projectPath = Path.GetFullPath(path);
 
         // Prevent path traversal — only allow indexing within current working directory
@@ -2054,6 +2069,16 @@ public partial class McpServer
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
+        if (projectFilters.Count > 0)
+        {
+            var relativeProjectFiles = SolutionProjectResolver.ResolveProjectFiles(projectPath, projectFilters, solutionPath)
+                .ToHashSet(StringComparer.Ordinal);
+            files = files
+                .Where(file => relativeProjectFiles.Contains(Path.GetRelativePath(projectPath, file)
+                    .Replace(Path.DirectorySeparatorChar, '/')
+                    .Replace(Path.AltDirectorySeparatorChar, '/')))
+                .ToList();
+        }
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };

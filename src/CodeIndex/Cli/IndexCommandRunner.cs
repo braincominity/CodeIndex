@@ -41,6 +41,17 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (options.ProjectFilterError != null)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                options.ProjectFilterError,
+                CommandExitCodes.UsageError,
+                "Check --project / --solution and rerun the command.",
+                CommandErrorCodes.UsageError);
+        }
+
         // Snapshot cwd alongside the already-absolutized options so the finalize step can
         // detect mid-run drift (embedded host, signal handler, future plugin) and warn the
         // operator. Failure to read cwd (e.g. it was deleted out from under us) is best-effort
@@ -544,7 +555,7 @@ public static class IndexCommandRunner
     [
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--watch", "--debounce", "--duration-format", "--max-file-bytes",
-        "--commits", "--files", "--help",
+        "--commits", "--changed-between", "--files", "--solution", "--project", "--help",
     ];
 
     private static readonly string[] AcceptedBackfillFoldFlags =
@@ -595,6 +606,9 @@ public static class IndexCommandRunner
         var changedBetweenRefs = new List<string>();
         var changedBetweenSpecified = false;
         var updateFiles = new List<string>();
+        var projectFilters = new List<string>();
+        string? solutionPath = null;
+        string? projectFilterError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -661,6 +675,18 @@ public static class IndexCommandRunner
                     if (changedBetweenRefs.Count != 2)
                         Console.Error.WriteLine("Warning: --changed-between requires exactly two refs / --changed-between は2つのrefが必要です");
                     break;
+                case "--solution" when i + 1 < args.Length:
+                    solutionPath = args[++i];
+                    break;
+                case var option when option.StartsWith("--solution=", StringComparison.Ordinal):
+                    solutionPath = option["--solution=".Length..];
+                    break;
+                case "--project" when i + 1 < args.Length:
+                    projectFilters.Add(args[++i]);
+                    break;
+                case var option when option.StartsWith("--project=", StringComparison.Ordinal):
+                    projectFilters.Add(option["--project=".Length..]);
+                    break;
                 case "--files":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                         updateFiles.Add(args[++i]);
@@ -685,6 +711,18 @@ public static class IndexCommandRunner
                     else
                         projectPath = args[i];
                     break;
+            }
+        }
+
+        if (projectFilters.Count > 0 && projectPath != null)
+        {
+            try
+            {
+                updateFiles.AddRange(SolutionProjectResolver.ResolveProjectFiles(projectPath, projectFilters, solutionPath));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                projectFilterError = ex.Message;
             }
         }
 
@@ -717,6 +755,9 @@ public static class IndexCommandRunner
             ChangedBetweenSpecified = changedBetweenSpecified,
             ChangedBetweenRefs = changedBetweenRefs,
             UpdateFiles = updateFiles,
+            ProjectFilters = projectFilters,
+            SolutionPath = solutionPath,
+            ProjectFilterError = projectFilterError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
@@ -3036,6 +3077,9 @@ public sealed class IndexCommandOptions
     public bool ChangedBetweenSpecified { get; init; }
     public List<string> ChangedBetweenRefs { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
+    public List<string> ProjectFilters { get; init; } = [];
+    public string? SolutionPath { get; init; }
+    public string? ProjectFilterError { get; init; }
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }

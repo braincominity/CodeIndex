@@ -61,6 +61,8 @@ public static class QueryCommandRunner
         "--snippet-lines",
         "--snippet-focus",
         "--path",
+        "--project",
+        "--solution",
         "--exclude-path",
         "--depth",
         "--query",
@@ -3111,6 +3113,8 @@ public static class QueryCommandRunner
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
+        var projectFilters = new List<string>();
+        string? solutionFilter = null;
         var excludePaths = new List<string>();
         bool excludeTests = false;
         DateTime? since = null;
@@ -3438,6 +3442,21 @@ public static class QueryCommandRunner
                     else
                         AddParseError(pathError!);
                     break;
+                case "--project":
+                    if (TryReadStringOptionValue(args, ref i, "--project", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var projectName, out var projectError))
+                        projectFilters.Add(projectName!);
+                    else
+                        AddParseError(projectError!);
+                    break;
+                case "--solution":
+                    if (TryReadStringOptionValue(args, ref i, "--solution", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var solutionValue, out var solutionError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--solution", solutionValue!);
+                        solutionFilter = solutionValue;
+                    }
+                    else
+                        AddParseError(solutionError!);
+                    break;
                 case "--exclude-path":
                     if (TryReadStringOptionValue(args, ref i, "--exclude-path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var excludePath, out var excludePathError))
                         excludePaths.Add(excludePath!);
@@ -3598,6 +3617,19 @@ public static class QueryCommandRunner
             }
         }
 
+        if (parseErrors == null && projectFilters.Count > 0)
+        {
+            try
+            {
+                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projectFilters, solutionFilter))
+                    pathPatterns.Add(glob);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                AddParseError($"Error: {ex.Message}");
+            }
+        }
+
         return new QueryCommandOptions
         {
             DbPath = dbPath,
@@ -3621,6 +3653,8 @@ public static class QueryCommandRunner
             SnippetFocus = snippetFocus,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
+            ProjectFilters = projectFilters,
+            SolutionFilter = solutionFilter,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
             CountOnly = countOnly,
@@ -5617,6 +5651,8 @@ public sealed class QueryCommandOptions
     public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
+    public List<string> ProjectFilters { get; init; } = [];
+    public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
     public bool CountOnly { get; init; }
