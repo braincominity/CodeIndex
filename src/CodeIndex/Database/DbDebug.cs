@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -26,6 +27,7 @@ namespace CodeIndex.Database;
 public static class DbDebug
 {
     private const int MaxNumericChars = 64;
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
 
     [ThreadStatic]
     private static string? _lastSql;
@@ -35,6 +37,10 @@ public static class DbDebug
     private static List<(string Name, string Value)>? _lastRow;
     [ThreadStatic]
     private static bool _hasContext;
+    [ThreadStatic]
+    private static List<QueryProfileEntry>? _profileEntries;
+    [ThreadStatic]
+    private static long? _slowQueryThresholdMs;
 
     // Process-wide gate that must be flipped by an explicit CLI flag before
     // CDIDX_DEBUG=unsafe is honored. Defaults to false so an env var alone
@@ -64,6 +70,23 @@ public static class DbDebug
     {
         Interlocked.Exchange(ref _allowUnsafeProcess, 0);
         Interlocked.Exchange(ref _unsafeDowngradeWarned, 0);
+        EndProfile();
+    }
+
+    public static bool IsProfileEnabled => _profileEntries != null;
+
+    public static void BeginProfile(long? slowQueryThresholdMs = null)
+    {
+        _profileEntries = new List<QueryProfileEntry>();
+        _slowQueryThresholdMs = slowQueryThresholdMs;
+    }
+
+    public static List<QueryProfileEntry> EndProfile()
+    {
+        var entries = _profileEntries ?? new List<QueryProfileEntry>();
+        _profileEntries = null;
+        _slowQueryThresholdMs = null;
+        return entries;
     }
 
     private enum DebugMode { Off, Redacted, Unsafe }
@@ -121,6 +144,64 @@ public static class DbDebug
         _lastParams = ps;
         _lastRow = null;
         _hasContext = true;
+    }
+
+    internal static SqliteDataReader ExecuteReader(SqliteCommand cmd)
+    {
+        if (!IsProfileEnabled)
+            return cmd.ExecuteReader();
+
+        var entry = new QueryProfileEntry(cmd.CommandText, CaptureQueryPlan(cmd));
+        _profileEntries!.Add(entry);
+
+        var sw = Stopwatch.StartNew();
+        var reader = cmd.ExecuteReader();
+        sw.Stop();
+
+        entry.AddElapsed(sw.Elapsed);
+        entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
+        s_activeProfiles.Add(reader, new ActiveProfile(entry));
+        return reader;
+    }
+
+    internal static void TrackReadElapsed(SqliteDataReader reader, TimeSpan elapsed, bool rowRead)
+    {
+        if (!s_activeProfiles.TryGetValue(reader, out var active))
+            return;
+
+        active.Entry.AddElapsed(elapsed);
+        if (rowRead)
+            active.Entry.IncrementRows();
+        active.Entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
+    }
+
+    private static List<QueryPlanRow> CaptureQueryPlan(SqliteCommand source)
+    {
+        var rows = new List<QueryPlanRow>();
+        try
+        {
+            using var explain = source.Connection!.CreateCommand();
+            explain.Transaction = source.Transaction;
+            explain.CommandText = "EXPLAIN QUERY PLAN " + source.CommandText;
+            foreach (SqliteParameter parameter in source.Parameters)
+                explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value ?? DBNull.Value);
+
+            using var reader = explain.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add(new QueryPlanRow(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3)));
+            }
+        }
+        catch (Exception ex)
+        {
+            rows.Add(new QueryPlanRow(-1, -1, -1, "EXPLAIN QUERY PLAN failed: " + ex.Message));
+        }
+
+        return rows;
     }
 
     internal static void SnapshotRow(SqliteDataReader reader)
@@ -241,14 +322,63 @@ internal static class DbDebugExtensions
     public static SqliteDataReader ExecuteTrackedReader(this SqliteCommand cmd)
     {
         DbDebug.TrackCommand(cmd);
-        return cmd.ExecuteReader();
+        return DbDebug.ExecuteReader(cmd);
     }
 
     public static bool TrackedRead(this SqliteDataReader reader)
     {
+        var sw = Stopwatch.StartNew();
         var ok = reader.Read();
+        sw.Stop();
+        DbDebug.TrackReadElapsed(reader, sw.Elapsed, ok);
         if (ok)
             DbDebug.SnapshotRow(reader);
         return ok;
     }
 }
+
+public sealed class QueryProfileEntry
+{
+    private long _elapsedTicks;
+    private int _rowsRead;
+    private bool _slowLogged;
+
+    internal QueryProfileEntry(string sql, List<QueryPlanRow> queryPlan)
+    {
+        Sql = sql;
+        QueryPlan = queryPlan;
+    }
+
+    public string Sql { get; }
+    public List<QueryPlanRow> QueryPlan { get; }
+    public double ElapsedMs => TimeSpan.FromTicks(Interlocked.Read(ref _elapsedTicks)).TotalMilliseconds;
+    public int RowsScanned => Volatile.Read(ref _rowsRead);
+
+    internal void AddElapsed(TimeSpan elapsed) => Interlocked.Add(ref _elapsedTicks, elapsed.Ticks);
+
+    internal void IncrementRows() => Interlocked.Increment(ref _rowsRead);
+
+    internal void MarkCompletedIfSlow(long? slowQueryThresholdMs)
+    {
+        if (!slowQueryThresholdMs.HasValue || _slowLogged)
+            return;
+
+        var elapsedMs = ElapsedMs;
+        if (elapsedMs < slowQueryThresholdMs.Value)
+            return;
+
+        _slowLogged = true;
+        try
+        {
+            CodeIndex.Cli.GlobalToolLog.Info($"slow_query elapsed_ms={elapsedMs:0.###} rows_scanned={RowsScanned} sql={Sql.Replace("\n", " ", StringComparison.Ordinal)}");
+        }
+        catch
+        {
+            // Best-effort only / ベストエフォートのみ
+        }
+    }
+}
+
+public sealed record QueryPlanRow(int Id, int Parent, int NotUsed, string Detail);
+
+internal sealed record ActiveProfile(QueryProfileEntry Entry);

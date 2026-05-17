@@ -76,6 +76,9 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Human `status` output translates readiness flags and `status --explain <field>`
   describes one readiness field/remediation; `status --json` keeps raw fields for
   automation, including the last full-scan unknown-extension count.
+- Read commands accept `--profile` to append SQL timing, row-count, and
+  `EXPLAIN QUERY PLAN` JSON after the normal result; `--slow-query-ms <n>` logs
+  profiled SQL statements that meet the threshold.
 - The documented `status --json` trust contract covers `fold_ready`,
   `fold_ready_reason`, `graph_table_available`, `issues_table_available`,
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
@@ -217,6 +220,9 @@ cdidx mcp
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
   個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
   と直近 full scan の未知拡張子数を維持します。
+- read 系コマンドは `--profile` で通常結果の後に SQL の時間、行数、
+  `EXPLAIN QUERY PLAN` の JSON を追加できます。`--slow-query-ms <n>` は
+  閾値以上の profiled SQL をログに記録します。
 - 文書化された `status --json` trust contract は `fold_ready`、
   `fold_ready_reason`、`graph_table_available`、`issues_table_available`、
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
