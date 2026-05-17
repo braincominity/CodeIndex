@@ -367,6 +367,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
         var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
         var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
@@ -407,8 +408,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
             }
         }
         catch (IndexInterruptedException ex)
@@ -915,6 +916,7 @@ public static class IndexCommandRunner
         int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        bool priorSymbolExtractorVersionsMatchCurrent,
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
@@ -1030,6 +1032,7 @@ public static class IndexCommandRunner
                 jsonOptions,
                 priorFoldVersion,
                 priorFoldFingerprint,
+                priorSymbolExtractorVersionsMatchCurrent,
                 priorCSharpSymbolNameContractVersion,
                 priorMetadataTargetCsharp,
                 priorSqlGraphContractVersion,
@@ -1455,7 +1458,8 @@ public static class IndexCommandRunner
         var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
-            && priorFoldFingerprint == currentFoldFingerprint;
+            && priorFoldFingerprint == currentFoldFingerprint
+            && priorSymbolExtractorVersionsMatchCurrent;
         string? foldReadyReasonAfter = foldReadyAfter
             ? null
             : GetFoldReadyReason(
@@ -1527,7 +1531,8 @@ public static class IndexCommandRunner
             // fold_ready=false のまま残す。
             if ((priorReadiness & DbContext.FoldReadyFlag) != 0
                 && priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint)
+                && priorFoldFingerprint == currentFoldFingerprint
+                && priorSymbolExtractorVersionsMatchCurrent)
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
                 // insert during this restamp window leaves foldReadyAfter=false. Issue #1535.
@@ -2033,6 +2038,7 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        bool priorSymbolExtractorVersionsMatchCurrent,
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
@@ -2578,13 +2584,14 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled();
+            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
-                && foldFingerprintMatchesCurrent;
+                && foldFingerprintMatchesCurrent
+                && priorSymbolExtractorVersionsMatchCurrent;
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
@@ -2603,7 +2610,7 @@ public static class IndexCommandRunner
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
                 // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady();
+                foldReadyAfter = writer.MarkFoldReady(stampCurrentSymbolExtractorVersions: skipped == 0);
                 if (!foldReadyAfter)
                 {
                     backfillReady = false;
