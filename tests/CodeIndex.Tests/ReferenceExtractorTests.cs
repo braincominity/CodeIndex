@@ -12156,11 +12156,14 @@ public class ReferenceExtractorTests
     {
         const string content = """
             @inherits App.Pages.BasePage
+            @implements App.Pages.IUserActions
+            @attribute [Authorize]
             @inject Services.UserService UserService
 
             <UserCard User="CurrentUser" />
             <Shared.DetailPanel />
             <button @onclick="HandleClick">Save</button>
+            <button @onclick="InheritedClick">Inherited</button>
             <input @ref="inputRef" @key="person" @bind="Value" />
             @* <AdminPanel /> *@
             <!-- <AuditPanel /> -->
@@ -12191,10 +12194,23 @@ public class ReferenceExtractorTests
             .IndexOf("DetailPanel", StringComparison.Ordinal) + 1;
 
         Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IUserActions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Authorize" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
-        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "razor_event_binding");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "HandleClick"
+            && r.ReferenceKind == "implicit_implementation");
+        Assert.Contains(references, r =>
+            r.SymbolName == "InheritedClick"
+            && r.ReferenceKind == "razor_event_binding");
+        Assert.Contains(references, r =>
+            r.SymbolName == "InheritedClick"
+            && r.ReferenceKind == "implicit_implementation"
+            && r.ContainerKind == "interface"
+            && r.ContainerName == "IUserActions");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");

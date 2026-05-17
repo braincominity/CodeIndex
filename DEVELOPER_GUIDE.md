@@ -207,6 +207,7 @@ files 1──N symbol_references
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
+| `razor_event_binding` | raw label | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
