@@ -2121,9 +2121,11 @@ public class FileIndexerTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_long_path");
+        var tempRoot = TestProjectHelper.CreateTempProject("cdidx_long_path");
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
         try
         {
+            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(projectRoot));
             var leafPath = CreateWindowsLongPathFixture(projectRoot);
             Assert.True(leafPath.Length >= 260, $"Fixture path length was {leafPath.Length}, expected >= 260.");
 
@@ -2148,7 +2150,7 @@ public class FileIndexerTests
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+            DeleteLongPathDirectory(tempRoot);
         }
     }
 
@@ -3040,10 +3042,8 @@ public class FileIndexerTests
     {
         var current = Path.Combine(
             projectRoot,
-            "node_modules",
             ".pnpm",
             "fixture-pkg@1.0.0",
-            "node_modules",
             "fixture-pkg");
         var segment = 0;
 
@@ -3054,6 +3054,43 @@ public class FileIndexerTests
         var leafPath = Path.Combine(current, "long-file.js");
         File.WriteAllText(LongPath.EnsureWindowsPrefix(leafPath), "export function longPathFixture() { return 42; }\n");
         return leafPath;
+    }
+
+    private static void DeleteLongPathDirectory(string path)
+    {
+        var prefixedPath = LongPath.EnsureWindowsPrefix(path);
+        if (!Directory.Exists(prefixedPath))
+            return;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                ClearLongPathAttributes(path);
+                Directory.Delete(prefixedPath, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static void ClearLongPathAttributes(string path)
+    {
+        var prefixedPath = LongPath.EnsureWindowsPrefix(path);
+        foreach (var file in Directory.EnumerateFiles(prefixedPath, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+
+        foreach (var dir in Directory.EnumerateDirectories(prefixedPath, "*", SearchOption.AllDirectories))
+            File.SetAttributes(dir, FileAttributes.Normal);
+
+        File.SetAttributes(prefixedPath, FileAttributes.Normal);
     }
 
     private static void IndexScannedFiles(string projectRoot, DbWriter writer)
