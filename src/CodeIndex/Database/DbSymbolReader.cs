@@ -76,6 +76,7 @@ public partial class DbReader
             WHEN 'call' THEN 1.0
             WHEN 'instantiate' THEN 1.0
             WHEN 'subscribe' THEN 0.3
+            WHEN 'friend' THEN 0.3
             WHEN 'type_reference' THEN 0.1
             ELSE 0.0
         END";

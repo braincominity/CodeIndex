@@ -2618,6 +2618,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CppFriendReferenceParticipatesInGraphQueries()
+    {
+        InsertIndexedFile("src/widget.cpp", "cpp",
+            """
+            class Inspector {};
+
+            class Widget
+            {
+                friend class Inspector;
+            };
+            """);
+
+        var callers = _reader.GetCallers("Inspector", lang: "cpp", exact: true, pathPatterns: ["widget.cpp"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/widget.cpp", caller.Path);
+        Assert.Equal("class", caller.CallerKind);
+        Assert.Equal("Widget", caller.CallerName);
+        Assert.Equal("Inspector", caller.CalleeName);
+        Assert.Equal("friend", caller.ReferenceKind);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_CountsSameNameReferencesPerSymbolFile()
     {
         InsertIndexedFile("src/hotspots_alpha.py", "python",

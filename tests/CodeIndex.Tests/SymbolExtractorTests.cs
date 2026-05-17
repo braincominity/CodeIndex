@@ -1204,6 +1204,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cpp_DetectsFriendDeclarations()
+    {
+        var content = """
+            class Widget {
+              friend class Inspector;
+              friend struct ns::Peer;
+              friend void freeFn(Widget&);
+              friend bool operator==(const Widget&, const Widget&);
+              template <typename U> friend class Container;
+              // friend class CommentOnly;
+              const char* text = "friend class StringOnly;";
+            };
+
+            template <typename T>
+            class Box {
+              friend class BoxInspector;
+            };
+
+            class Outer {
+              class Inner {
+                friend class Outer::Probe;
+              };
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inspector" && s.Signature == "friend class Inspector;");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Peer" && s.Signature == "friend struct ns::Peer;");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "freeFn" && s.Signature == "friend void freeFn(Widget&);");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator==" && s.Signature == "friend bool operator==(const Widget&, const Widget&);");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Container" && s.Signature == "template <typename U> friend class Container;");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BoxInspector");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Probe" && s.Signature == "friend class Outer::Probe;");
+        Assert.DoesNotContain(symbols, s => s.Name == "CommentOnly");
+        Assert.DoesNotContain(symbols, s => s.Name == "StringOnly");
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsUnionDeclarations()
     {
         var content = """

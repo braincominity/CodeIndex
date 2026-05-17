@@ -167,6 +167,12 @@ public static partial class SymbolExtractor
     private const string CppTemplatePrefixPattern = @"(?:template\s*<[^>]*>\s*)*";
     private const string CppAttributePrefixPattern = @"(?:\[\[[^\r\n]*?\]\]\s*)*";
     private const string CppTypeAtomPattern = @"(?:decltype\s*\(\s*auto\s*\)|[\w:<>~]+)";
+    private static readonly Regex CppFriendTypeDeclarationRegex = new(
+        @"\bfriend\s+(?<kind>class|struct|union|enum(?:\s+class)?)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppFriendFunctionDeclarationRegex = new(
+        @"\bfriend\s+(?!(?:class|struct|union|typename|enum)\b)(?<returnType>[^;()]*?)\b(?<name>(?:[A-Za-z_]\w*::)*(?:[A-Za-z_]\w*|operator\s*(?:new\[\]|delete\[\]|new|delete|\[\]|[^\s(]+)))(?:\s*<[^>]+>)?\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportSpecRegex = new(
         @"^(?<name>(?:(?:[._]|[\p{L}_][\p{L}\p{Nd}_]*)\s+)?""(?:\\.|[^""\\])*"")(?:\s*;)?(?:\s*(?://.*|/\*.*\*/))?\s*$",
@@ -3751,6 +3757,8 @@ public static partial class SymbolExtractor
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
+        if (lang == "cpp")
+            ExtractCppFriendDeclarationSymbols(fileId, lines, symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         if (lang == "python")
@@ -3780,6 +3788,144 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var declared = new HashSet<string>(
+            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}"),
+            StringComparer.Ordinal);
+        var inBlockComment = false;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var matchLine = MaskCppFriendDeclarationLine(line, ref inBlockComment);
+            var lineNumber = i + 1;
+
+            foreach (Match match in CppFriendTypeDeclarationRegex.Matches(matchLine))
+            {
+                var kind = NormalizeCppFriendTypeKind(match.Groups["kind"].Value);
+                var group = match.Groups["name"];
+                var name = LastCppDeclarationSegment(group.Value);
+                AddCppFriendDeclarationSymbol(fileId, symbols, declared, kind, name, lineNumber, group.Index, line);
+            }
+
+            foreach (Match match in CppFriendFunctionDeclarationRegex.Matches(matchLine))
+            {
+                var group = match.Groups["name"];
+                var name = LastCppDeclarationSegment(group.Value);
+                AddCppFriendDeclarationSymbol(fileId, symbols, declared, "function", name, lineNumber, group.Index, line);
+            }
+        }
+    }
+
+    private static string MaskCppFriendDeclarationLine(string line, ref bool inBlockComment)
+    {
+        var chars = line.ToCharArray();
+        for (var cursor = 0; cursor < chars.Length; cursor++)
+        {
+            if (inBlockComment)
+            {
+                chars[cursor] = ' ';
+                if (cursor + 1 < line.Length && line[cursor] == '*' && line[cursor + 1] == '/')
+                {
+                    chars[++cursor] = ' ';
+                    inBlockComment = false;
+                }
+
+                continue;
+            }
+
+            if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '/')
+            {
+                while (cursor < chars.Length)
+                    chars[cursor++] = ' ';
+                break;
+            }
+
+            if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '*')
+            {
+                chars[cursor++] = ' ';
+                chars[cursor] = ' ';
+                inBlockComment = true;
+                continue;
+            }
+
+            if (line[cursor] is '"' or '\'')
+            {
+                var quote = line[cursor];
+                chars[cursor++] = ' ';
+                while (cursor < chars.Length)
+                {
+                    if (line[cursor] == '\\' && cursor + 1 < line.Length)
+                    {
+                        chars[cursor++] = ' ';
+                        chars[cursor] = ' ';
+                        cursor++;
+                        continue;
+                    }
+
+                    var closes = line[cursor] == quote;
+                    chars[cursor++] = ' ';
+                    if (closes)
+                        break;
+                }
+
+                cursor--;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static void AddCppFriendDeclarationSymbol(
+        long fileId,
+        List<SymbolRecord> symbols,
+        HashSet<string> declared,
+        string kind,
+        string name,
+        int lineNumber,
+        int startColumn,
+        string line)
+    {
+        if (name.Length == 0 || !declared.Add($"{kind}:{name}"))
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = kind,
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                StartColumn = startColumn,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+            },
+            line);
+    }
+
+    private static string NormalizeCppFriendTypeKind(string kind)
+        => kind.StartsWith("enum", StringComparison.Ordinal) ? "enum" : kind;
+
+    private static string LastCppDeclarationSegment(string value)
+    {
+        var text = value.Trim();
+        var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
+        var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
+        if (!leaf.StartsWith("operator", StringComparison.Ordinal))
+        {
+            var genericIndex = text.IndexOf('<');
+            if (genericIndex >= 0)
+                text = text[..genericIndex].TrimEnd();
+        }
+
+        return qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
     }
 
 

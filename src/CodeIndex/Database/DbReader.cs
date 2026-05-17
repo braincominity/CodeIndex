@@ -126,10 +126,12 @@ public partial class DbReader
     private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe')";
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
-    // with non-call edges (issue #293).
+    // with non-call edges (issue #293); C++ `friend` declarations are retained because they are
+    // access/coupling edges that users expect in dependency-oriented graph queries (issue #1943).
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
-    // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
-    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe')";
+    // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。C++ の
+    // `friend` 宣言は access/coupling edge として依存関係 graph query に含める (issue #1943)。
+    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'friend')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 

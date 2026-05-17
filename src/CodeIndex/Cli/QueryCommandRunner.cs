@@ -4865,22 +4865,27 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
+        ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct", "union"];
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
+    // C++ `friend` declarations are also accepted because they are extractor-owned dependency
+    // edges and participate in graph queries.
     // `references --kind` で有効な reference kind。ReferenceExtractor が C#/Java の継承リスト、
     // 宣言型、generic 制約、`throws`、`is`/`as`/`instanceof`、XML-doc `cref` 対象向けに出力する
-    // compile-time な `type_reference` エッジを含む。
+    // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
+    // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "import", "instantiate", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "call", "friend", "import", "instantiate", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
-    // not call-graph edges, so those queries are rejected at the CLI / MCP boundary.
+    // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
+    // is a graph-visible coupling edge.
     // `callers` / `callees` が正しく返せる reference kind。metadata 種別 (`attribute` / `annotation`)
     // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
+    // C++ の `friend` は graph に出す coupling edge。
     private static readonly string[] CallGraphOnlyReferenceKinds =
-        ["call", "instantiate", "subscribe", "unsubscribe"];
+        ["call", "friend", "instantiate", "subscribe", "unsubscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
