@@ -1117,7 +1117,22 @@ public static class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
-        var csharpWorkspaceSymbols = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, targetPaths);
+        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+        if (csharpWorkspace.HasStaticInterfaceContracts)
+        {
+            foreach (var filePath in indexer.ScanFilesDetailed().Files)
+            {
+                var detection = FileIndexer.TryDetectLanguage(filePath);
+                if (detection.Status == FileIndexer.FileProbeStatus.Supported
+                    && detection.Language == "csharp")
+                {
+                    targetPaths.Add(filePath);
+                }
+            }
+
+            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+        }
+
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
         {
             DemoteReadinessOnce();
@@ -1311,6 +1326,7 @@ public static class IndexCommandRunner
                     record.Modified,
                     record.Checksum,
                     allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
@@ -1339,7 +1355,7 @@ public static class IndexCommandRunner
                     content,
                     symbols,
                     record.Path,
-                    record.Lang == "csharp" ? csharpWorkspaceSymbols : null);
+                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2329,7 +2345,7 @@ public static class IndexCommandRunner
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
-        var csharpWorkspaceSymbols = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, files);
+        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, files);
 
         try
         {
@@ -2364,6 +2380,7 @@ public static class IndexCommandRunner
                             record.Modified,
                             record.Checksum,
                             allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                                && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                     }
@@ -2404,7 +2421,7 @@ public static class IndexCommandRunner
                         content,
                         symbols,
                         record.Path,
-                        record.Lang == "csharp" ? csharpWorkspaceSymbols : null);
+                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2887,16 +2904,20 @@ public static class IndexCommandRunner
         }
     }
 
-    private static List<SymbolRecord> BuildCSharpStaticInterfaceWorkspaceSymbols(
+    private static CSharpStaticInterfaceWorkspaceSymbols BuildCSharpStaticInterfaceWorkspaceSymbols(
         DbWriter writer,
         FileIndexer indexer,
+        string projectRoot,
         IEnumerable<string> filePaths)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
-            var detection = FileIndexer.TryDetectLanguage(filePath);
+            var absolutePath = Path.IsPathRooted(filePath)
+                ? filePath
+                : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
+            var detection = FileIndexer.TryDetectLanguage(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
             {
@@ -2905,7 +2926,7 @@ public static class IndexCommandRunner
 
             try
             {
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
                 if (record.Lang != "csharp")
                     continue;
 
@@ -2921,8 +2942,46 @@ public static class IndexCommandRunner
 
         var symbols = writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths);
         symbols.AddRange(pendingSymbols);
-        return symbols;
+        return new CSharpStaticInterfaceWorkspaceSymbols(
+            symbols,
+            symbols.Any(IsCSharpStaticInterfaceContractSymbol));
     }
+
+    private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
+        => symbol.Kind is "function" or "property"
+           && symbol.ContainerKind == "interface"
+           && !string.IsNullOrWhiteSpace(symbol.Signature)
+           && ContainsCSharpWord(symbol.Signature!, "static")
+           && (ContainsCSharpWord(symbol.Signature!, "abstract")
+               || ContainsCSharpWord(symbol.Signature!, "virtual"));
+
+    private static bool ContainsCSharpWord(string text, string word)
+    {
+        var index = 0;
+        while (index < text.Length)
+        {
+            index = text.IndexOf(word, index, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + word.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+                return true;
+
+            index += word.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpIdentifierPart(char ch)
+        => char.IsLetterOrDigit(ch) || ch == '_';
+
+    private sealed record CSharpStaticInterfaceWorkspaceSymbols(
+        IReadOnlyList<SymbolRecord> Symbols,
+        bool HasStaticInterfaceContracts);
 
     private sealed record FoldOnlyRemediation(
         string DegradedReason,
