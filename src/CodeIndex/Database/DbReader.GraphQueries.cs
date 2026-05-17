@@ -11,7 +11,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -24,11 +24,21 @@ public partial class DbReader
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var supportedLangPredicate = BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang");
 
+        var groupedReferenceKindSql = rawKinds
+            ? GetGroupedCallerReferenceKindSql("r.reference_kind")
+            : GetGroupedCallerLogicalReferenceKindSql("r.reference_kind");
+        var groupedReferenceKindGroupSql = rawKinds
+            ? GetRawReferenceKindSql("r.reference_kind")
+            : GetLogicalReferenceKindSql("r.reference_kind");
         var sql = referenceKind == null
             ? @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
+                       " + groupedReferenceKindSql + @" AS reference_kind,
+                       " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
+                       " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
+                       " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                       " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
@@ -89,16 +99,16 @@ public partial class DbReader
         if (referenceKind == null)
         {
             sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @"
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
+                   " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
                    MIN(line) AS first_line, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
-                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
+                   SUM(r.call_count) AS call_count,
+                   SUM(r.instantiate_count) AS instantiate_count,
+                   SUM(r.subscribe_count) AS subscribe_count,
+                   SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -162,7 +172,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -220,7 +230,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -250,7 +260,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -306,7 +316,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
@@ -338,7 +348,7 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
@@ -347,11 +357,21 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
+        var preferredCalleeKindSql = rawKinds
+            ? GetPreferredReferenceKindSql("r.reference_kind")
+            : GetPreferredLogicalReferenceKindSql("r.reference_kind");
+        var calleeGroupKindSql = rawKinds
+            ? GetRawReferenceKindSql("r.reference_kind")
+            : GetLogicalReferenceKindSql("r.reference_kind");
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       {preferredCalleeKindSql} AS reference_kind,
+                       {ReferenceKindCountSql("r.reference_kind", "call")} AS call_count,
+                       {ReferenceKindCountSql("r.reference_kind", "instantiate")} AS instantiate_count,
+                       {ReferenceKindCountSql("r.reference_kind", "subscribe")} AS subscribe_count,
+                       {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
@@ -413,10 +433,10 @@ public partial class DbReader
             SELECT path, lang, container_kind, container_name, symbol_name,
                    reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
-                   " + ReferenceKindCountSql("reference_kind", "call") + @" AS call_count,
-                   " + ReferenceKindCountSql("reference_kind", "instantiate") + @" AS instantiate_count,
-                   " + ReferenceKindCountSql("reference_kind", "subscribe") + @" AS subscribe_count,
-                   " + ReferenceWeightedScoreSql("reference_kind") + @" AS weighted_score
+                   SUM(r.call_count) AS call_count,
+                   SUM(r.instantiate_count) AS instantiate_count,
+                   SUM(r.subscribe_count) AS subscribe_count,
+                   SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         }
@@ -483,7 +503,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -497,7 +517,7 @@ public partial class DbReader
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
                        " + (referenceKind == null
-                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
                            : "r.reference_kind") + @" AS reference_kind
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
@@ -538,7 +558,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -571,7 +591,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable)
@@ -584,7 +604,7 @@ public partial class DbReader
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
                        " + (referenceKind == null
-                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
                            : "r.reference_kind") + @" AS reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
@@ -625,7 +645,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
@@ -670,7 +690,7 @@ public partial class DbReader
     private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
     {
         ReferenceRankMode.Count => "reference_count DESC",
-        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'subscribe' THEN 2 ELSE 3 END, reference_count DESC",
+        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'subscribe' THEN 2 WHEN 'event' THEN 2 ELSE 3 END, reference_count DESC",
         _ => "weighted_score DESC, reference_count DESC",
     };
 
@@ -857,7 +877,7 @@ public partial class DbReader
     /// <paramref name="withPaths"/> を true にすると、各 caller に対してルートからの推移経路
     /// （ダイヤモンド収束時は複数）を <paramref name="maxPathsPerResult"/> 件まで付与する（issue #1536）。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
+    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -874,6 +894,9 @@ public partial class DbReader
         queue.Enqueue((resolvedName, 0));
         visited.Add(resolvedName);
         var truncated = false;
+        var maxDepthReached = false;
+        var cycles = new List<ImpactCycleResult>();
+        var cycleKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // truncatedReason tracks the *strongest* signal observed: safety_cap wins over
         // user_limit because it tells callers that raising --limit alone will not help
         // (the input graph is likely pathological). See Issue #1533.
@@ -889,16 +912,15 @@ public partial class DbReader
         // ["foo", "B", "A"], not file-qualified entries.
         // path 追跡は opt-in 時のみ確保する。同名 caller が複数ファイルにあっても経路上は同名
         // ノードとして畳む（issue #1536 の例 ["foo", "B", "A"] と整合）。
-        Dictionary<string, HashSet<string>>? parentsByName = null;
-        Dictionary<string, int>? depthByName = null;
+        Dictionary<string, HashSet<string>> parentsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, HashSet<string>> cycleParentsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> depthByName = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [resolvedName] = 0,
+        };
         var resultIndicesByName = withPaths
             ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
             : null;
-        if (withPaths)
-        {
-            parentsByName = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            depthByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        }
 
         while (queue.Count > 0 && results.Count < limit)
         {
@@ -933,10 +955,18 @@ public partial class DbReader
                     }
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                    if (IsCycleEdge(callerName, currentSymbol, cycleParentsByName))
+                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, cycleParentsByName));
                     if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                         && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path)))
                         continue;
                     var key = $"{caller.Path}:{callerName}";
+                    if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                    {
+                        cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        cycleParentsByName[callerName] = cycleParentSet;
+                    }
+                    cycleParentSet.Add(currentSymbol);
 
                     if (!visited.Add(key))
                     {
@@ -946,10 +976,10 @@ public partial class DbReader
                         // 同 depth で再到達した場合のみ親辺を追加し、別 depth の到達は破棄。
                         // BFS により最短経路だけが残る。
                         if (withPaths
-                            && depthByName!.TryGetValue(callerName, out var existingDepth)
+                            && depthByName.TryGetValue(callerName, out var existingDepth)
                             && existingDepth == depth + 1)
                         {
-                            parentsByName![callerName].Add(currentSymbol);
+                            parentsByName[callerName].Add(currentSymbol);
                         }
                         continue;
                     }
@@ -968,14 +998,8 @@ public partial class DbReader
 
                     if (withPaths)
                     {
-                        if (!depthByName!.ContainsKey(callerName))
+                        if (!depthByName.ContainsKey(callerName))
                             depthByName[callerName] = depth + 1;
-                        if (!parentsByName!.TryGetValue(callerName, out var parentSet))
-                        {
-                            parentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            parentsByName[callerName] = parentSet;
-                        }
-                        parentSet.Add(currentSymbol);
                         if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
                         {
                             idxList = new List<int>();
@@ -983,6 +1007,16 @@ public partial class DbReader
                         }
                         idxList.Add(results.Count - 1);
                     }
+                    else if (!depthByName.ContainsKey(callerName))
+                    {
+                        depthByName[callerName] = depth + 1;
+                    }
+                    if (!parentsByName.TryGetValue(callerName, out var parentSet))
+                    {
+                        parentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        parentsByName[callerName] = parentSet;
+                    }
+                    parentSet.Add(currentSymbol);
 
                     // Only recurse if the just-added caller (at depth + 1) is strictly below
                     // maxDepth, so that the next BFS step can reach depth + 2 ≤ maxDepth.
@@ -993,7 +1027,26 @@ public partial class DbReader
                     if (caller.CallerName != null
                         && caller.CallerName != SyntheticTopLevelCallerName
                         && depth + 1 < maxDepth)
+                    {
                         queue.Enqueue((caller.CallerName, depth + 1));
+                    }
+                    else if (caller.CallerName != null
+                             && caller.CallerName != SyntheticTopLevelCallerName
+                             && depth + 1 == maxDepth)
+                    {
+                        maxDepthReached |= InspectBoundaryCallers(
+                            caller.CallerName,
+                            resolvedName,
+                            rootDefinitionPaths,
+                            visited,
+                            cycleParentsByName,
+                            cycles,
+                            cycleKeys,
+                            lang,
+                            pathPatterns,
+                            excludePathPatterns,
+                            excludeTests);
+                    }
                 }
 
                 offset += page.Count;
@@ -1023,7 +1076,7 @@ public partial class DbReader
             var effectiveCap = maxPathsPerResult > 0 ? maxPathsPerResult : DefaultImpactPathsPerResult;
             foreach (var (callerName, indices) in resultIndicesByName!)
             {
-                var (paths, more) = EnumerateImpactPaths(callerName, parentsByName!, resolvedName, effectiveCap);
+                var (paths, more) = EnumerateImpactPaths(callerName, parentsByName, resolvedName, effectiveCap);
                 foreach (var idx in indices)
                 {
                     results[idx].Paths = paths;
@@ -1032,7 +1085,162 @@ public partial class DbReader
             }
         }
 
-        return (results, truncated, truncatedReason);
+        var terminationReason = truncatedReason switch
+        {
+            ImpactTruncatedReasons.SafetyCap => ImpactTerminationReasons.SafetyCap,
+            ImpactTruncatedReasons.UserLimit => ImpactTerminationReasons.RowLimitTruncated,
+            _ when cycles.Count > 0 => ImpactTerminationReasons.CycleDetected,
+            _ when maxDepthReached => ImpactTerminationReasons.MaxDepthReached,
+            _ => ImpactTerminationReasons.Completed,
+        };
+
+        return (results, truncated, truncatedReason, terminationReason, cycles);
+    }
+
+    private bool InspectBoundaryCallers(
+        string symbolName,
+        string resolvedName,
+        HashSet<string> rootDefinitionPaths,
+        HashSet<string> visited,
+        Dictionary<string, HashSet<string>> cycleParentsByName,
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        const int pageSize = 200;
+        var offset = 0;
+        while (true)
+        {
+            var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+            if (page.Count == 0)
+                return false;
+
+            foreach (var caller in page)
+            {
+                var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                if (IsCycleEdge(callerName, symbolName, cycleParentsByName))
+                    AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, symbolName, cycleParentsByName));
+                var isRoot = string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
+                    && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path));
+                if (isRoot)
+                    continue;
+
+                if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                {
+                    cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    cycleParentsByName[callerName] = cycleParentSet;
+                }
+                cycleParentSet.Add(symbolName);
+
+                var key = $"{caller.Path}:{callerName}";
+                if (!visited.Contains(key))
+                    return true;
+            }
+
+            if (page.Count < pageSize)
+                return false;
+            offset += page.Count;
+        }
+    }
+
+    private static bool IsCycleEdge(
+        string callerName,
+        string currentSymbol,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        if (string.Equals(callerName, currentSymbol, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return HasAncestor(currentSymbol, callerName, parentsByName);
+    }
+
+    private static bool HasAncestor(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        var stack = new Stack<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        stack.Push(node);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!seen.Add(current))
+                continue;
+            if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!parentsByName.TryGetValue(current, out var parents))
+                continue;
+            foreach (var parent in parents)
+                stack.Push(parent);
+        }
+        return false;
+    }
+
+    private static List<string> BuildCycleMembers(
+        string callerName,
+        string currentSymbol,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!TryBuildAncestorPath(currentSymbol, callerName, parentsByName, members))
+        {
+            members.Add(callerName);
+            members.Add(currentSymbol);
+        }
+        var result = members.ToList();
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
+    }
+
+    private static bool TryBuildAncestorPath(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return TryBuildAncestorPathCore(node, target, parentsByName, members, seen);
+    }
+
+    private static bool TryBuildAncestorPathCore(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members,
+        HashSet<string> seen)
+    {
+        if (!seen.Add(node))
+            return false;
+        members.Add(node);
+        if (string.Equals(node, target, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (parentsByName.TryGetValue(node, out var parents))
+        {
+            foreach (var parent in parents)
+            {
+                if (TryBuildAncestorPathCore(parent, target, parentsByName, members, seen))
+                    return true;
+            }
+        }
+
+        members.Remove(node);
+        return false;
+    }
+
+    private static void AddImpactCycle(
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
+        List<string> members)
+    {
+        if (members.Count == 0)
+            return;
+        var key = string.Join("\u001F", members);
+        if (!cycleKeys.Add(key))
+            return;
+        cycles.Add(new ImpactCycleResult { Members = members });
     }
 
     private static (List<List<string>> Paths, bool Truncated) EnumerateImpactPaths(
@@ -1141,6 +1349,9 @@ public partial class DbReader
                 FileImpacts = [],
                 Truncated = false,
                 TruncatedReason = null,
+                TerminationReason = ImpactTerminationReasons.Completed,
+                CycleDetected = false,
+                Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,
                 ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
                 Suggestion = definitions.Count == 0
@@ -1149,7 +1360,7 @@ public partial class DbReader
             };
         }
 
-        var (callers, truncated, truncatedReason) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
+        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
@@ -1232,6 +1443,9 @@ public partial class DbReader
             FileImpacts = fileImpacts,
             Truncated = truncated,
             TruncatedReason = truncated ? truncatedReason : null,
+            TerminationReason = terminationReason,
+            CycleDetected = cycles.Count > 0,
+            Cycles = cycles.Count > 0 ? cycles : null,
             GraphTableAvailable = _hasReferencesTable,
             ZeroResultReason = zeroResultReason,
             Suggestion = suggestion,
