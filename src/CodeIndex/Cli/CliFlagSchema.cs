@@ -150,6 +150,13 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
     ];
 
+    private static readonly string[] ProfileCommands =
+    [
+        "search", "definition", "references", "callers", "callees", "symbols", "files",
+        "find", "excerpt", "map", "inspect", "outline", "status", "validate", "deps",
+        "impact", "unused", "hotspots",
+    ];
+
     public static IReadOnlyList<CliFlag> All { get; } = BuildAll();
 
     private static IReadOnlyList<CliFlag> BuildAll()
@@ -158,6 +165,8 @@ internal static class CliFlagSchema
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
             new() { Name = "--json", Description = "JSON output", Commands = Set(JsonCommands) },
+            new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
+            new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
             new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
