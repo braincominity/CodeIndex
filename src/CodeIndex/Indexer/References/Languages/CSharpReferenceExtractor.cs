@@ -5,6 +5,7 @@ using CSharpFunctionValueReceiverNameRecord = CodeIndex.Indexer.ReferenceExtract
 using CSharpMultiLineTypePatternState = CodeIndex.Indexer.ReferenceExtractor.CSharpMultiLineTypePatternState;
 using CSharpUsingAliasRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingAliasRecord;
 using CSharpUsingStaticRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingStaticRecord;
+using CSharpWhereConstraintState = CodeIndex.Indexer.ReferenceExtractor.CSharpWhereConstraintState;
 
 namespace CodeIndex.Indexer;
 
@@ -134,6 +135,7 @@ internal static class CSharpReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container,
+        CSharpWhereConstraintState pendingWhereConstraint,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
         => ReferenceExtractor.EmitCSharpTypePositionReferences(
             preparedLine,
@@ -150,6 +152,7 @@ internal static class CSharpReferenceExtractor
             lineNumber,
             resolveContainerForColumn,
             container,
+            pendingWhereConstraint,
             ref pendingCSharpMultiLineTypePattern);
 
     public static bool HasTrailingIsAsTypePatternIntro(string preparedLine, string originalLine)

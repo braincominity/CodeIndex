@@ -20423,6 +20423,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineWhereConstraints_CapturesConstraintTypeReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            interface IContract<T> {}
+            interface IAuditable {}
+            namespace Domain.Models { class Entity {} }
+
+            class Demo<TValue, TKey>
+                where TValue :
+                    global::Domain.Models.Entity,
+                    IContract<TKey>,
+                    IAuditable,
+                    new()
+                where TKey : notnull
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Entity" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IAuditable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "TValue" or "TKey" or "notnull" or "new") && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpGenericSignatures_DoNotEmitTypeParameterReferences()
     {
         const string content = """

@@ -21,6 +21,12 @@ public static partial class ReferenceExtractor
         int PendingTypeLineNumber,
         string? PendingContext,
         SymbolRecord? PendingContainer);
+    internal sealed class CSharpWhereConstraintState
+    {
+        public bool Active { get; set; }
+        public HashSet<string> HeaderGenericParameterNames { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> IgnoredSegments { get; } = new(StringComparer.Ordinal);
+    }
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
@@ -1096,6 +1102,7 @@ public static partial class ReferenceExtractor
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
+        var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
@@ -1784,6 +1791,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall,
                     container,
+                    pendingCSharpWhereConstraint!,
                     ref pendingCSharpMultiLineTypePattern);
 
                 if (CSharpReferenceExtractor.HasTrailingIsAsTypePatternIntro(preparedLine, originalLine))
@@ -3685,11 +3693,21 @@ public static partial class ReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container,
+        CSharpWhereConstraintState pendingWhereConstraint,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
         TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
-        EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCSharpWhereConstraintReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            csharpGenericParameterNames,
+            pendingWhereConstraint);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))

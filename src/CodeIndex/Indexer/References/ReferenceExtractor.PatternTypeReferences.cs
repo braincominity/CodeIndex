@@ -550,19 +550,78 @@ public static partial class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string> declarationGenericParameterNames,
+        CSharpWhereConstraintState pendingWhereConstraint)
     {
-        var genericParameterNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        if (declarationGenericParameterNames.Count > 0)
         {
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(declarationGenericParameterNames);
+        }
+
+        var searchStart = 0;
+        if (pendingWhereConstraint.Active)
+        {
+            var nextWhereMatch = CSharpWhereClauseRegex.Match(line);
+            var nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index : -1;
+            var pendingEnd = FindTypeListTerminator(line, allowArrow: true);
+            if (nextWhere >= 0 && (pendingEnd < 0 || nextWhere < pendingEnd))
+                pendingEnd = nextWhere;
+            if (pendingEnd < 0)
+                pendingEnd = line.Length;
+
+            EmitCSharpWhereConstraintSegments(
+                line,
+                0,
+                pendingEnd,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                pendingWhereConstraint.IgnoredSegments);
+
+            if (pendingEnd < line.Length && nextWhere >= 0 && nextWhere == pendingEnd)
+            {
+                searchStart = nextWhere;
+            }
+            else if (pendingEnd < line.Length)
+            {
+                pendingWhereConstraint.Active = false;
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+                pendingWhereConstraint.IgnoredSegments.Clear();
+                return;
+            }
+            else
+            {
+                return;
+            }
+
+            pendingWhereConstraint.Active = false;
+            pendingWhereConstraint.IgnoredSegments.Clear();
+        }
+
+        var lineWhereMatches = CSharpWhereClauseRegex.Matches(line);
+        var sawWhereMatch = false;
+        var lineWhereNames = new HashSet<string>(pendingWhereConstraint.HeaderGenericParameterNames, StringComparer.Ordinal);
+        lineWhereNames.UnionWith(declarationGenericParameterNames);
+        foreach (Match match in lineWhereMatches)
+        {
+            if (match.Index < searchStart)
+                continue;
+            sawWhereMatch = true;
             var nameGroup = match.Groups["name"];
             if (nameGroup.Success && nameGroup.Value.Length > 0)
-                genericParameterNames.Add(nameGroup.Value);
+                lineWhereNames.Add(nameGroup.Value);
         }
-        genericParameterNames.UnionWith(CSharpWhereConstraintIgnoredSegments);
+        lineWhereNames.UnionWith(CSharpWhereConstraintIgnoredSegments);
 
-        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        foreach (Match match in lineWhereMatches)
         {
+            if (match.Index < searchStart)
+                continue;
             int listStart = match.Index + match.Length;
             var remaining = line.Substring(listStart);
             var nextWhereMatch = CSharpWhereClauseRegex.Match(remaining);
@@ -572,25 +631,69 @@ public static partial class ReferenceExtractor
                 end = nextWhere;
             if (end < 0)
                 end = remaining.Length;
-            var constraintList = remaining.Substring(0, end);
-            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+            EmitCSharpWhereConstraintSegments(
+                line,
+                listStart,
+                end,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                lineWhereNames);
+
+            if (listStart + end >= line.Length && nextWhere < 0 && FindTypeListTerminator(remaining, allowArrow: true) < 0)
             {
-                var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0 || rawSegment.Contains('('))
-                    continue;
-                var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    rawSegment,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "csharp",
-                    genericParameterNames);
+                pendingWhereConstraint.Active = true;
+                pendingWhereConstraint.IgnoredSegments.Clear();
+                pendingWhereConstraint.IgnoredSegments.UnionWith(lineWhereNames);
             }
+            else
+            {
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            }
+        }
+
+        if (!sawWhereMatch && FindTypeListTerminator(line, allowArrow: true) >= 0)
+        {
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+        }
+    }
+
+    private static void EmitCSharpWhereConstraintSegments(
+        string line,
+        int listStart,
+        int listLength,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string> ignoredSegments)
+    {
+        if (listLength <= 0)
+            return;
+
+        var constraintList = line.Substring(listStart, listLength);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+        {
+            var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "csharp",
+                ignoredSegments);
         }
     }
 
