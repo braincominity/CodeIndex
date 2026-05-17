@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 
@@ -645,6 +646,62 @@ public class ConsoleUiTests
         {
             Assert.True(ConsoleUi.ShouldUseColor());
         });
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_Utf8WindowsTerminal_IsInteractive()
+    {
+        Assert.True(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true));
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_StringWriterUtf16Capture_IsNotInteractive()
+    {
+        Assert.False(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.Unicode,
+            hasTerminalEnvironmentHint: false,
+            isWindows: false));
+    }
+
+    [Fact]
+    public void ShouldUseAnsiOutput_WindowsRequiresVirtualTerminalOrTerminalHint()
+    {
+        Assert.True(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            hasTerminalEnvironmentHint: false,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: true));
+
+        Assert.True(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: false));
+
+        Assert.False(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            hasTerminalEnvironmentHint: false,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: false));
+    }
+
+    [Fact]
+    public void ShouldUseAnsiOutput_RedirectedOutput_DisablesAnsiEvenWithTerminalHint()
+    {
+        Assert.False(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: true,
+            outputEncoding: Encoding.UTF8,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: true));
     }
 
     private static void WithColorEnvironment(string? noColor, string? cliColor, string? cliColorForce, Action action)
