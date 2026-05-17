@@ -10,6 +10,9 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbContext : IDisposable
 {
+    public const int DefaultWalAutocheckpointPages = 1000;
+    public const string DefaultSynchronousMode = "NORMAL";
+
     private static readonly string[] RequiredCodeIndexTables =
     [
         "files",
@@ -188,6 +191,8 @@ public class DbContext : IDisposable
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
             if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+            Execute($"PRAGMA synchronous={DefaultSynchronousMode}");
+            Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
         }
         catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
         {
