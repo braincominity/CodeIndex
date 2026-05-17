@@ -951,7 +951,12 @@ public partial class DbReader
                              && caller.CallerName != SyntheticTopLevelCallerName
                              && depth + 1 == maxDepth)
                     {
-                        maxDepthReached = true;
+                        maxDepthReached |= HasCallersBeyondDepth(
+                            caller.CallerName,
+                            lang,
+                            pathPatterns,
+                            excludePathPatterns,
+                            excludeTests);
                     }
                 }
 
@@ -1002,6 +1007,21 @@ public partial class DbReader
 
         return (results, truncated, truncatedReason, terminationReason, cycles);
     }
+
+    private bool HasCallersBeyondDepth(
+        string symbolName,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests) =>
+        GetCallersExact(
+            symbolName,
+            limit: 1,
+            offset: 0,
+            lang: lang,
+            pathPatterns: pathPatterns,
+            excludePathPatterns: excludePathPatterns,
+            excludeTests: excludeTests).Count > 0;
 
     private static bool IsCycleEdge(
         string callerName,
