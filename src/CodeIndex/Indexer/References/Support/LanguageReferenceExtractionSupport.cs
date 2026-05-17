@@ -192,7 +192,7 @@ internal static class LanguageReferenceExtractionSupport
         @"->\s*(?<concept>(?:(?:[A-Za-z_]\w*)\s*::\s*)*[A-Za-z_]\w*)\s*<(?<args>[^;{}<>]+(?:<[^;{}<>]+>)?[^;{}<>]*)>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppFriendTypeRegex = new(
-        @"\bfriend\s+(?:class|struct|enum(?:\s+class)?)\s+(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*;",
+        @"\bfriend\s+(?:class|struct|union|typename|enum(?:\s+class)?)\s+(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppDynamicExceptionSpecRegex = new(
         @"\bthrow\s*\(\s*(?<type>(?:(?:[A-Za-z_]\w*\s*::\s*)*[A-Z_]\w*(?:\s*[*&])?(?:\s*,\s*)?)+)\s*\)",
