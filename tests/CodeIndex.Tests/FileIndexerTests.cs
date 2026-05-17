@@ -3058,16 +3058,14 @@ public class FileIndexerTests
 
     private static void DeleteLongPathDirectory(string path)
     {
-        var prefixedPath = LongPath.EnsureWindowsPrefix(path);
-        if (!Directory.Exists(prefixedPath))
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(path)))
             return;
 
         for (var attempt = 0; attempt < 5; attempt++)
         {
             try
             {
-                ClearLongPathAttributes(path);
-                Directory.Delete(prefixedPath, recursive: true);
+                DeleteLongPathDirectoryRecursive(path);
                 return;
             }
             catch (IOException) when (attempt < 4)
@@ -3081,16 +3079,23 @@ public class FileIndexerTests
         }
     }
 
-    private static void ClearLongPathAttributes(string path)
+    private static void DeleteLongPathDirectoryRecursive(string path)
     {
         var prefixedPath = LongPath.EnsureWindowsPrefix(path);
-        foreach (var file in Directory.EnumerateFiles(prefixedPath, "*", SearchOption.AllDirectories))
-            File.SetAttributes(file, FileAttributes.Normal);
-
-        foreach (var dir in Directory.EnumerateDirectories(prefixedPath, "*", SearchOption.AllDirectories))
-            File.SetAttributes(dir, FileAttributes.Normal);
-
         File.SetAttributes(prefixedPath, FileAttributes.Normal);
+
+        foreach (var file in Directory.EnumerateFiles(prefixedPath))
+        {
+            var filePath = LongPath.RemoveWindowsPrefix(file);
+            var prefixedFilePath = LongPath.EnsureWindowsPrefix(filePath);
+            File.SetAttributes(prefixedFilePath, FileAttributes.Normal);
+            File.Delete(prefixedFilePath);
+        }
+
+        foreach (var dir in Directory.EnumerateDirectories(prefixedPath))
+            DeleteLongPathDirectoryRecursive(LongPath.RemoveWindowsPrefix(dir));
+
+        Directory.Delete(prefixedPath);
     }
 
     private static void IndexScannedFiles(string projectRoot, DbWriter writer)
