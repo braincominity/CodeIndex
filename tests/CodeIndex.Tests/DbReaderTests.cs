@@ -9552,7 +9552,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "ImpactCycleA", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_call_cycle"]);
 
         Assert.False(truncated);
@@ -9614,7 +9614,7 @@ public class DbReaderTests : IDisposable
             },
         ]);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "ImpactMetadataTarget", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_metadata_cycle"]);
 
         Assert.False(truncated);

@@ -935,12 +935,12 @@ public partial class DbReader
                     }
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                    if (IsCycleEdge(callerName, currentSymbol, cycleParentsByName))
+                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, cycleParentsByName));
                     if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                         && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path)))
                         continue;
                     var key = $"{caller.Path}:{callerName}";
-                    if (IsCycleEdge(callerName, currentSymbol, cycleParentsByName))
-                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, cycleParentsByName));
                     if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
                     {
                         cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
