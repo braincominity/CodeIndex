@@ -1091,6 +1091,39 @@ public static partial class SymbolExtractor
             && pattern.BodyStyle == BodyStyle.None
             && pattern.ReturnTypeGroup != null;
 
+    private static string? NormalizeCSharpImplicitPartialMethodReturnType(
+        string? lang,
+        SymbolPattern pattern,
+        Match match,
+        string? returnType)
+    {
+        if (lang == "csharp"
+            && pattern.Kind == "function"
+            && pattern.ReturnTypeGroup != null
+            && returnType == "partial")
+        {
+            return "void";
+        }
+
+        return returnType;
+    }
+
+    private static void NormalizeCSharpImplicitPartialConstructorReturnTypes(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            var signature = symbol.Signature?.TrimStart();
+            if (symbol.Kind == "function"
+                && symbol.ReturnType == "void"
+                && string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal)
+                && signature != null
+                && CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature))
+            {
+                symbol.ReturnType = null;
+            }
+        }
+    }
+
     private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
     {
         if (string.IsNullOrWhiteSpace(returnType))
