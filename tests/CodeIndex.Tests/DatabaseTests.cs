@@ -118,8 +118,24 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
         }
     }
 
