@@ -51,6 +51,7 @@ public class ReferenceExtractorTests
                         <List<Item> items={items} />
                         <Provider<State, Action> value={ctx} />
                         <Foo<{ a: number }> {...rest} />
+                        <Mapper<(item: Item) => Result> />
                     </>
                 );
             }
@@ -72,6 +73,10 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "Screen");
         Assert.Contains(references, reference =>
+            reference.SymbolName == "Mapper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
             reference.SymbolName == "Item"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Screen");
@@ -84,9 +89,12 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Screen");
         Assert.Contains(references, reference =>
-            reference.SymbolName == "a"
+            reference.SymbolName == "Result"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Screen");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "a" or "item"
+            && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]

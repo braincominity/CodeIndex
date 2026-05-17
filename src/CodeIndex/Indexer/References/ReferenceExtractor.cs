@@ -1686,7 +1686,7 @@ public static partial class ReferenceExtractor
                         if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
                         {
                             var genericEnd = genericStart;
-                            if (TrySkipBalancedGenericArgs(preparedLine, ref genericEnd, out _)
+                            if (TrySkipTypeScriptJsxTypeArguments(preparedLine, ref genericEnd)
                                 && genericEnd > genericStart + 2)
                             {
                                 AddTypeExpressionSegments(
@@ -3310,6 +3310,56 @@ public static partial class ReferenceExtractor
         var extension = Path.GetExtension(path);
         return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TrySkipTypeScriptJsxTypeArguments(string preparedLine, ref int scan)
+    {
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var depth = 0;
+        while (scan < preparedLine.Length)
+        {
+            var ch = preparedLine[scan++];
+            if (ch == '\'' || ch == '"')
+            {
+                while (scan < preparedLine.Length)
+                {
+                    var quoted = preparedLine[scan++];
+                    if (quoted == '\\')
+                    {
+                        scan = Math.Min(scan + 1, preparedLine.Length);
+                        continue;
+                    }
+
+                    if (quoted == ch)
+                        break;
+                }
+
+                continue;
+            }
+
+            if (ch == '=' && scan < preparedLine.Length && preparedLine[scan] == '>')
+            {
+                scan++;
+                continue;
+            }
+
+            if (ch == '<')
+            {
+                depth++;
+            }
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return true;
+                if (depth < 0)
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsRazorFilePath(string? path)
