@@ -144,14 +144,14 @@ public static class IndexCommandRunner
         {
             ConsoleUi.PrintBanner();
             Console.WriteLine();
-            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
+            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
             Console.WriteLine($"  Output  : {resolvedDbPath}");
             Console.WriteLine($"  Mode    : {mode}");
             Console.WriteLine();
         }
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
-        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
 
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
@@ -200,7 +200,7 @@ public static class IndexCommandRunner
                 // Git更新モード: コミットまたはref間の変更ファイル。
                 var changedFiles = new HashSet<string>(StringComparer.Ordinal);
                 var relevantIgnoreFileChanged = false;
-                var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
                 foreach (var commit in options.Commits)
                 {
                     try
@@ -393,7 +393,7 @@ public static class IndexCommandRunner
         var writer = new DbWriter(db);
         var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
-        var projectRoot = Path.GetFullPath(options.ProjectPath);
+        var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
@@ -417,7 +417,7 @@ public static class IndexCommandRunner
         // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
         // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
         // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
-        return IndexWatchRunner.Run(options, jsonOptions, Path.GetFullPath(options.ProjectPath), Path.GetFullPath(dbPath));
+        return IndexWatchRunner.Run(options, jsonOptions, Path.GetFullPath(options.ProjectPath!), Path.GetFullPath(dbPath));
     }
 
     private static string DescribeLockHolder(IndexLockInfo? holder)
@@ -970,11 +970,15 @@ public static class IndexCommandRunner
                 targetPaths.Add(relPath);
         }
 
-        if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths))
+        var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
+        if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths) || typeScriptJavaScriptConfigChanged)
         {
             if (!options.Json && !options.Quiet)
             {
-                Console.WriteLine("  Detected ignore-file changes; falling back to a full scan to keep the index aligned.");
+                var reason = typeScriptJavaScriptConfigChanged
+                    ? "JavaScript/TypeScript config changes"
+                    : "ignore-file changes";
+                Console.WriteLine($"  Detected {reason}; falling back to a full scan to keep the index aligned.");
                 Console.WriteLine();
             }
 
@@ -1325,7 +1329,8 @@ public static class IndexCommandRunner
                     record.Path,
                     record.Modified,
                     record.Checksum,
-                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                    allowReuse: record.Lang is not ("javascript" or "typescript")
+                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
@@ -1346,7 +1351,7 @@ public static class IndexCommandRunner
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
@@ -1699,6 +1704,20 @@ public static class IndexCommandRunner
 
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
+
+    private static bool ContainsJavaScriptTypeScriptConfigPath(IEnumerable<string> paths)
+        => paths.Any(IsJavaScriptTypeScriptConfigPath);
+
+    private static bool IsJavaScriptTypeScriptConfigPath(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        return string.Equals(fileName, "jsconfig.json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "tsconfig.json", StringComparison.OrdinalIgnoreCase)
+            || (fileName.StartsWith("jsconfig.", StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            || (fileName.StartsWith("tsconfig.", StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool ContainsRelevantIgnoreFileUpdate(string projectRoot, IEnumerable<string> updateFiles)
     {
@@ -2379,7 +2398,8 @@ public static class IndexCommandRunner
                             record.Path,
                             record.Modified,
                             record.Checksum,
-                            allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                            allowReuse: record.Lang is not ("javascript" or "typescript")
+                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
@@ -2412,7 +2432,7 @@ public static class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     var chunks = ChunkSplitter.Split(fileId, content);
                     writer.InsertChunks(chunks);
-                    var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                    var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                     writer.InsertSymbols(symbols);
                     var references = ReferenceExtractor.Extract(

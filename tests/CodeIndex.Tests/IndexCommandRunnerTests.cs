@@ -2018,6 +2018,119 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_TypeScriptConfigChangeFallsBackToFullScanForAliasSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "components"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "app", "components"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "pages"));
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "components", "Button.tsx"), "export const Button = 1;\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app", "components", "Button.tsx"), "export const UpdatedButton = 1;\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "pages", "Page.tsx"), "import { Button } from \"@/components/Button\";\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("src/components/Button.tsx", ReadImportSymbolNames(dbPath));
+
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["app/*"]
+                    }
+                  }
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tsconfig.json", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            var imports = ReadImportSymbolNames(dbPath);
+            Assert.Contains("app/components/Button.tsx", imports);
+            Assert.DoesNotContain("src/components/Button.tsx", imports);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_JavaScriptExtendedConfigChangeFallsBackToFullScanForAliasSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "components"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "app", "components"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "pages"));
+            File.WriteAllText(Path.Combine(projectRoot, "jsconfig.json"), """
+                {
+                  "extends": "./jsconfig.base.json"
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "jsconfig.base.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "components", "Card.js"), "export const Card = 1;\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app", "components", "Card.js"), "export const UpdatedCard = 1;\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "pages", "Page.js"), "import { Card } from \"~/components/Card\";\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("src/components/Card.js", ReadImportSymbolNames(dbPath));
+
+            File.WriteAllText(Path.Combine(projectRoot, "jsconfig.base.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~/*": ["app/*"]
+                    }
+                  }
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "jsconfig.base.json", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            var imports = ReadImportSymbolNames(dbPath);
+            Assert.Contains("app/components/Card.js", imports);
+            Assert.DoesNotContain("src/components/Card.js", imports);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_SkipsPathsOutsideProjectRoot()
     {
         var projectRoot = CreateTempProject();
@@ -6319,6 +6432,19 @@ public class IndexCommandRunnerTests
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static HashSet<string> ReadImportSymbolNames(string dbPath)
+    {
+        using var connection = OpenNonPoolingConnection(dbPath);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM symbols WHERE kind = 'import'";
+        using var reader = command.ExecuteReader();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names;
     }
 
     private static string? ReadIndexedChecksum(string dbPath, string relativePath)
