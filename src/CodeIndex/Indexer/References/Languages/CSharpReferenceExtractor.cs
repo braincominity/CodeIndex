@@ -260,6 +260,8 @@ internal static class CSharpReferenceExtractor
                 continue;
             if (IsLikelyQualifiedTypeDeclaration(preparedLine, match.Index + match.Length))
                 continue;
+            if (qualifier.IndexOf('.') >= 0 && !IsFollowedByInvocation(preparedLine, match.Index + match.Length))
+                continue;
 
             var dotIndex = qualifier.LastIndexOf('.');
             var simpleNameStart = dotIndex >= 0
@@ -354,6 +356,15 @@ internal static class CSharpReferenceExtractor
         return sawWhitespace
             && index < preparedLine.Length
             && (char.IsLetter(preparedLine[index]) || preparedLine[index] == '_' || preparedLine[index] == '@');
+    }
+
+    private static bool IsFollowedByInvocation(string preparedLine, int afterMemberIndex)
+    {
+        var index = afterMemberIndex;
+        while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
+            index++;
+
+        return index < preparedLine.Length && preparedLine[index] == '(';
     }
 
     private static string NormalizeCSharpIdentifier(string identifier) =>

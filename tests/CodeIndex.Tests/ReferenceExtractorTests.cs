@@ -27363,6 +27363,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedTypeExpressions_DoNotCaptureNamespaceSegmentsAsCallReferences()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public object Convert(object value, List<System.Text.StringBuilder> builders)
+                {
+                    var builder = (System.Text.StringBuilder)value;
+                    return builders.Count > 0 ? builder : value;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Text"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
     {
         // Mid-file BOM right before a call site: the reference must still be captured
