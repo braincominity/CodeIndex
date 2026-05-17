@@ -93,6 +93,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
+- MCP `tools/list` descriptions include a `Language support:` clause sourced
+  from the same language registries as `cdidx languages`.
 
 ## Documentation
 
@@ -237,6 +239,8 @@ cdidx mcp
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
+- MCP の `tools/list` 説明には、`cdidx languages` と同じ言語レジストリから
+  生成した `Language support:` 句を含めます。
 
 ## ドキュメント
 
