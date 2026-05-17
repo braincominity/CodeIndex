@@ -61,6 +61,8 @@ public static class QueryCommandRunner
         "--snippet-lines",
         "--snippet-focus",
         "--path",
+        "--project",
+        "--solution",
         "--exclude-path",
         "--depth",
         "--query",
@@ -3111,6 +3113,8 @@ public static class QueryCommandRunner
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
+        var projectFilters = new List<string>();
+        string? solutionFilter = null;
         var excludePaths = new List<string>();
         bool excludeTests = false;
         DateTime? since = null;
@@ -3438,6 +3442,21 @@ public static class QueryCommandRunner
                     else
                         AddParseError(pathError!);
                     break;
+                case "--project":
+                    if (TryReadStringOptionValue(args, ref i, "--project", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var projectName, out var projectError))
+                        projectFilters.Add(projectName!);
+                    else
+                        AddParseError(projectError!);
+                    break;
+                case "--solution":
+                    if (TryReadStringOptionValue(args, ref i, "--solution", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var solutionValue, out var solutionError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--solution", solutionValue!);
+                        solutionFilter = solutionValue;
+                    }
+                    else
+                        AddParseError(solutionError!);
+                    break;
                 case "--exclude-path":
                     if (TryReadStringOptionValue(args, ref i, "--exclude-path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var excludePath, out var excludePathError))
                         excludePaths.Add(excludePath!);
@@ -3598,6 +3617,19 @@ public static class QueryCommandRunner
             }
         }
 
+        if (parseErrors == null && projectFilters.Count > 0)
+        {
+            try
+            {
+                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projectFilters, solutionFilter))
+                    pathPatterns.Add(glob);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                AddParseError($"Error: {ex.Message}");
+            }
+        }
+
         return new QueryCommandOptions
         {
             DbPath = dbPath,
@@ -3621,6 +3653,8 @@ public static class QueryCommandRunner
             SnippetFocus = snippetFocus,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
+            ProjectFilters = projectFilters,
+            SolutionFilter = solutionFilter,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
             CountOnly = countOnly,
@@ -4865,7 +4899,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct", "union"];
+        ["class", "delegate", "enum", "event", "function", "hook", "import", "interface", "namespace", "property", "struct", "union"];
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
@@ -4876,7 +4910,7 @@ public static class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -4885,7 +4919,7 @@ public static class QueryCommandRunner
     // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
     // C++ の `friend` は graph に出す coupling edge。
     private static readonly string[] CallGraphOnlyReferenceKinds =
-        ["call", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
+        ["call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
@@ -5617,6 +5651,8 @@ public sealed class QueryCommandOptions
     public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
+    public List<string> ProjectFilters { get; init; } = [];
+    public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
     public bool CountOnly { get; init; }

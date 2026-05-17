@@ -65,6 +65,12 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### C# / .NET integration
+
+`SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
+
+Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path.
+
 ### Extractor concurrency contract
 
 `SymbolExtractor` and `ReferenceExtractor` must be safe to call concurrently for different files or repeated calls on the same file content. Shared `Regex` instances and static lookup tables are initialized once by the CLR and treated as immutable after type initialization. Per-extraction state belongs in local variables, method parameters, caller-owned collections, or language-specific state objects created for that extraction call.
@@ -112,6 +118,7 @@ symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     kind            TEXT,                    -- "function", "class", "import", "namespace", ...
+    sub_kind        TEXT,                    -- language-specific subtype such as kotlin_value_class
     name            TEXT,
     line            INTEGER,                 -- 1-based anchor line
     start_line      INTEGER,                 -- definition start line
@@ -411,7 +418,7 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Swift still uses the regex path for `func`, `class`, `struct`, `protocol`, `enum`, `indirect enum`, stored properties (including `private(set)` / `fileprivate(set)` and backtick-escaped names), and enum cases, while a small dedicated trailing-lambda pass keeps idiomatic `name { ... }` call sites visible to the graph. Kotlin also stays on the regex path. Scala has a separate block-call pass for `name { ... }` / `name { x => ... }` forms so idiomatic calls such as `foreach {}`, `Try {}`, and `synchronized {}` stay visible too. Common Lisp and Racket use a lightweight S-expression scanner that masks strings, line comments, and `#| ... |#` block comments before extracting definitions and function ranges. HTML uses a dedicated character-level state machine instead of the regex pattern loop — it walks tag openers, quoted/unquoted attribute values (including multi-line values), and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. Named capture groups still extract identifiers for the regex-driven paths. Recent JS/TS additions also cover barrel re-export surfaces across commented, multiline, namespace, minified, TypeScript type-only-star, and `with {}` / `assert {}` import-attribute forms, while preserving the corresponding source-module `import` rows, alongside direct CommonJS named export assignments and their same-line / multiline parenthesized wrappers, multiline / constrained / async TypeScript generic-arrow RHS forms, prefix-safe function/class discrimination, and exported object-literal alias/shorthand properties.
 
-JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names.
+JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names. React hook detection is name-based: JavaScript/TypeScript function symbols whose names match `use[A-Z]...` are reclassified as `hook`, and JavaScript/TypeScript calls to `use[A-Z]...()` are emitted as `consumes_hook` references.
 
 Supported symbol kinds by language:
 
@@ -1524,6 +1531,12 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
+### C# / .NET integration
+
+`SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を読み、C# / F# / VB の project file を解決する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
+
+path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。
+
 ### 抽出器の並行実行契約
 
 `SymbolExtractor` と `ReferenceExtractor` は、異なるファイルへの並行呼び出しや、同じファイル内容に対する繰り返し呼び出しでも安全でなければならない。共有される `Regex` インスタンスや static な lookup table は CLR が一度だけ初期化し、型初期化後は immutable として扱う。抽出ごとの状態は、ローカル変数、メソッド引数、呼び出し元が所有するコレクション、またはその抽出呼び出し用に生成した言語固有の state object に持たせる。
@@ -1571,6 +1584,7 @@ symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     kind            TEXT,                    -- "function"、"class"、"import"、"namespace" など
+    sub_kind        TEXT,                    -- kotlin_value_class などの言語固有の細分類
     name            TEXT,
     line            INTEGER,                 -- 1始まりのアンカー行
     start_line      INTEGER,                 -- 定義開始行
@@ -1862,7 +1876,7 @@ LIMIT 20;
 
 大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。Swift は引き続き正規表現経路ですが、`func` / `class` / `struct` / `protocol` / `enum` / `indirect enum`、`private(set)` / `fileprivate(set)` 付きの stored property、バッククォートでエスケープされた名前、そして enum case を拾うようにしており、小さな trailing-lambda 専用パスで `name { ... }` 形の慣用的な呼び出しを graph から落とさないようにしています。Kotlin も正規表現経路のままです。Scala には `name { ... }` / `name { x => ... }` 形式を拾う専用の block-call パスがあり、`foreach {}` や `Try {}`、`synchronized {}` のような慣用的な呼び出しも graph から消えないようにしています。Common Lisp と Racket は、文字列、行コメント、`#| ... |#` ブロックコメントをマスクしてから定義と関数範囲を抽出する軽量な S 式スキャナーを使います。HTML は汎用の正規表現ループを使わず、専用の文字単位 state machine でタグ構造を走査し、引用符付き/なし属性値（複数行の引用符付き値を含む）と `<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体、`<!-- ... -->` コメントをマスクして、属性名に似た本体内文字列から phantom シンボルが漏れないようにしています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
 
-JS/TS の export surface 走査は、`export const { foo, renamed: localName } = source` のような destructured named export も、実際に出力される binding 名で索引します。
+JS/TS の export surface 走査は、`export const { foo, renamed: localName } = source` のような destructured named export も、実際に出力される binding 名で索引します。React hook 検出は名前ベースで、JavaScript/TypeScript の関数シンボル名が `use[A-Z]...` に一致する場合は `hook` として再分類し、JavaScript/TypeScript の `use[A-Z]...()` 呼び出しは `consumes_hook` 参照として出力します。
 
 言語別対応シンボル種別:
 

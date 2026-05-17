@@ -12,6 +12,34 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_ClassifiesReactCustomHookFunctions(string language)
+    {
+        var content = """
+            import { useEffect, useState } from "react";
+
+            const useLocalState = () => {
+              const [value, setValue] = useState(0);
+              useEffect(() => setValue(value + 1), [value]);
+              return value;
+            };
+
+            export const useComposedHook = () => {
+              return useLocalState();
+            };
+
+            const ordinaryFunction = () => useLocalState();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useLocalState");
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useComposedHook");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "ordinaryFunction");
+    }
+
     [Fact]
     public void Extract_AllPatternLanguages_IsDeterministicUnderParallelCalls()
     {
@@ -15002,6 +15030,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DistinguishesValueClassesAndInlineReifiedFunctions()
+    {
+        var content = """
+            @JvmInline
+            value class UserId(val id: Long)
+            inline class LegacyId(val value: String)
+            inline fun <reified T> parse(): T = TODO()
+            inline fun render(block: () -> Unit) = block()
+            inline suspend fun <reified T> load(): T = TODO()
+            fun value(inline: String): String = inline
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserId" && s.SubKind == "kotlin_value_class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyId" && s.SubKind == "kotlin_inline_class");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.SubKind == "kotlin_inline_reified_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render" && s.SubKind == "kotlin_inline_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.SubKind == "kotlin_inline_reified_function");
+        Assert.DoesNotContain(symbols, s => s.Name == "value" && s.SubKind != null);
+    }
+
+    [Fact]
     public void Extract_Kotlin_NormalizesBacktickedSymbolNames()
     {
         var content = """
@@ -22223,6 +22274,41 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(tsSymbols, s => s.Name == "FakeClassInTemplate");
         Assert.Contains(tsSymbols, s => s.Kind == "function" && s.Name == "realFunction");
         Assert.Contains(tsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_CrlfTemplateLiteralKeepsColumnsAligned(string language)
+    {
+        // Regression for issue #1465: CRLF input is normalized before JS/TS lexing, so a
+        // multi-line template literal must not shift columns for later real symbols.
+        // issue #1465 の回帰: JS/TS lexing 前に CRLF 入力を正規化するため、複数行
+        // template literal が後続の本物のシンボル列をずらしてはならない。
+        const string content = """
+            const src = `
+            class FakeClassInTemplate {}
+            function fakeFromTemplate() {}
+            `;
+
+            export function realFunction() {
+              return src;
+            }
+            """;
+        var lfContent = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var crlfContent = lfContent.Replace("\n", "\r\n", StringComparison.Ordinal);
+
+        var lfSymbols = SymbolExtractor.Extract(1, language, lfContent);
+        var crlfSymbols = SymbolExtractor.Extract(1, language, crlfContent);
+
+        var lfRealFunction = Assert.Single(lfSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        var crlfRealFunction = Assert.Single(crlfSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        Assert.Equal(lfRealFunction.Line, crlfRealFunction.Line);
+        Assert.Equal(lfRealFunction.StartColumn, crlfRealFunction.StartColumn);
+        Assert.Equal(lfRealFunction.Signature, crlfRealFunction.Signature);
+
+        Assert.DoesNotContain(crlfSymbols, s => s.Name == "fakeFromTemplate");
+        Assert.DoesNotContain(crlfSymbols, s => s.Name == "FakeClassInTemplate");
     }
 
     [Fact]

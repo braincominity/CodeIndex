@@ -19,9 +19,22 @@ internal static class KotlinReferenceExtractor
     private static readonly Regex BacktickConstructorCallRegex = new(
         @"(?<![\w$])(?<name>`[^`\r\n]+`)(?:\s*<[^()\r\n]+>)?\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex InfixFunctionDeclarationRegex = new(
+        @"(?<![\w$])infix\s+fun\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InfixFunctionNameRegex = new(
+        @"(?<![\w$])infix\s+fun\s+(?:<[^()\r\n]+>\s*)?(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)(?:\s*<[^>\r\n]+>)?\s*\.\s*)*(?<name>[_\p{L}][\w$]*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex IdentifierRegex = new(
+        @"(?<![\w$])(?<name>[_\p{L}][\w$]*)(?![\w$])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
+    private static readonly HashSet<string> BuiltInInfixFunctionNames = new(StringComparer.Ordinal)
+    {
+        "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
+    };
 
     public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
@@ -53,6 +66,42 @@ internal static class KotlinReferenceExtractor
 
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
+
+    public static HashSet<string> BuildInfixFunctionNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
+        if (language != "kotlin")
+            return names;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            if (InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
+            {
+                names.Add(symbol.Name);
+                var dotIndex = symbol.Name.LastIndexOf('.');
+                if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
+                    names.Add(symbol.Name[(dotIndex + 1)..]);
+            }
+        }
+
+        return names;
+    }
+
+    public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
+    {
+        if (language != "kotlin")
+            return;
+
+        foreach (var line in lines)
+        {
+            var match = InfixFunctionNameRegex.Match(line);
+            if (match.Success)
+                names.Add(match.Groups["name"].Value);
+        }
+    }
 
     private static bool IsConstructableClassSymbol(SymbolRecord symbol)
     {
@@ -104,6 +153,98 @@ internal static class KotlinReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
         => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference);
+
+    public static void EmitInfixCallReferences(
+        string preparedLine,
+        string originalLine,
+        IReadOnlySet<string> infixFunctionNames,
+        Action<string, int> addCallLikeReference)
+    {
+        foreach (Match match in IdentifierRegex.Matches(originalLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = nameGroup.Value;
+            if (!infixFunctionNames.Contains(name))
+                continue;
+            if (!IsUnmaskedSpan(preparedLine, nameGroup.Index, nameGroup.Length))
+                continue;
+            if (IsLikelyDeclarationOrImport(preparedLine, match.Index))
+                continue;
+            if (!HasLikelyInfixOperandBefore(originalLine, nameGroup.Index)
+                || !HasLikelyInfixOperandAfter(originalLine, nameGroup.Index + nameGroup.Length))
+            {
+                continue;
+            }
+
+            addCallLikeReference(name, nameGroup.Index);
+        }
+    }
+
+    public static bool IsInfixFunctionDeclarationSite(string preparedLine, int nameIndex)
+    {
+        var prefix = preparedLine[..Math.Max(0, nameIndex)];
+        return InfixFunctionDeclarationRegex.IsMatch(prefix);
+    }
+
+    private static bool IsUnmaskedSpan(string preparedLine, int start, int length)
+    {
+        if (start < 0 || length <= 0 || start + length > preparedLine.Length)
+            return false;
+
+        for (var i = 0; i < length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[start + i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsLikelyDeclarationOrImport(string preparedLine, int expressionIndex)
+    {
+        var prefix = preparedLine[..Math.Max(0, expressionIndex)].TrimStart();
+        if (InfixFunctionDeclarationRegex.IsMatch(prefix))
+            return true;
+
+        return prefix.StartsWith("import ", StringComparison.Ordinal)
+               || prefix.StartsWith("package ", StringComparison.Ordinal)
+               || prefix.StartsWith("class ", StringComparison.Ordinal)
+               || prefix.StartsWith("interface ", StringComparison.Ordinal)
+               || prefix.StartsWith("object ", StringComparison.Ordinal)
+               || prefix.StartsWith("fun ", StringComparison.Ordinal)
+               || prefix.StartsWith("infix fun ", StringComparison.Ordinal)
+               || (prefix.StartsWith("val ", StringComparison.Ordinal) && !prefix.Contains('='))
+               || (prefix.StartsWith("var ", StringComparison.Ordinal) && !prefix.Contains('='));
+    }
+
+    private static bool HasLikelyInfixOperandBefore(string preparedLine, int nameIndex)
+    {
+        var cursor = nameIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor--;
+        if (cursor < 0 || preparedLine[cursor] is '=' or ',' or '(' or '[' or '{' or ':' or ';')
+            return false;
+
+        if (ReferenceExtractor.IsJavaIdentifierPart(preparedLine[cursor]))
+        {
+            var end = cursor + 1;
+            while (cursor >= 0 && ReferenceExtractor.IsJavaIdentifierPart(preparedLine[cursor]))
+                cursor--;
+            var previousWord = preparedLine.Substring(cursor + 1, end - cursor - 1);
+            if (previousWord is "return" or "throw" or "if" or "while" or "when" or "for" or "val" or "var" or "fun" or "class")
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasLikelyInfixOperandAfter(string preparedLine, int afterNameIndex)
+    {
+        var cursor = afterNameIndex;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+        return cursor < preparedLine.Length && preparedLine[cursor] is not (',' or ')' or ']' or '}' or ':' or ';');
+    }
 
     public static void EmitMethodReferenceReferences(
         string preparedLine,

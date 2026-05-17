@@ -1149,7 +1149,7 @@ public static partial class ReferenceExtractor
             ignoredSegments: ignoredSegments);
     }
 
-    private static void AddTypeScriptTypeExpressionSegments(
+    internal static void AddTypeScriptTypeExpressionSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2072,6 +2072,9 @@ public static partial class ReferenceExtractor
                 i++;
 
             var segment = expression.Substring(segmentStart, i - segmentStart);
+            if (IsTypeScriptTypeLabelSegment(expression, i))
+                continue;
+
             AddTypeReferenceSegment(
                 references,
                 seen,
@@ -2084,6 +2087,17 @@ public static partial class ReferenceExtractor
                 "typescript",
                 ignoredSegments: ignoredSegments);
         }
+    }
+
+    private static bool IsTypeScriptTypeLabelSegment(string expression, int segmentEnd)
+    {
+        var next = segmentEnd;
+        while (next < expression.Length && char.IsWhiteSpace(expression[next]))
+            next++;
+
+        return next < expression.Length
+            && expression[next] == ':'
+            && (next + 1 >= expression.Length || expression[next + 1] != ':');
     }
 
     private static int ScanTypeScriptTemplateLiteralForTypeExpression(
