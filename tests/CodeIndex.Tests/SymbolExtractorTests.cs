@@ -12111,6 +12111,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MySqlDefinerCreatesDefinerSymbols()
+    {
+        const string content = """
+            CREATE DEFINER='admin'@'%' PROCEDURE schema.proc()
+            BEGIN
+              SELECT 1;
+            END;
+            CREATE DEFINER=`app_user`@`localhost` VIEW `schema`.`v_orders` AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "admin@%");
+        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "app_user@localhost");
+    }
+
+    [Fact]
     public void Extract_SQL_DetectsTSqlDdlKinds()
     {
         var content =

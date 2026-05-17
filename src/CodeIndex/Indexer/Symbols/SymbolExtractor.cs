@@ -317,6 +317,9 @@ public static partial class SymbolExtractor
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlDefinerRegex = new(
+        @"\bDEFINER\s*=\s*(?:'(?<user1>[^'\r\n]+)'|`(?<user2>[^`\r\n]+)`|(?<user3>[^\s@'`]+))\s*@\s*(?:'(?<host1>[^'\r\n]+)'|`(?<host2>[^`\r\n]+)`|(?<host3>[^\s'`]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -3802,6 +3805,8 @@ public static partial class SymbolExtractor
             ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
+        if (lang == "sql")
+            ExtractSqlDefinerSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
@@ -3824,6 +3829,52 @@ public static partial class SymbolExtractor
             if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
                 symbol.Kind = "hook";
         }
+    }
+
+    private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = SqlDefinerRegex.Match(lines[i]);
+            if (!match.Success)
+                continue;
+
+            var user = FirstSuccessfulGroupValue(match, "user1", "user2", "user3");
+            var host = FirstSuccessfulGroupValue(match, "host1", "host2", "host3");
+            if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(host))
+                continue;
+
+            var name = $"{user}@{host}";
+            var lineNumber = i + 1;
+            AddSymbolRecord(
+                symbols,
+                null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "definer",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = match.Index,
+                    EndLine = lineNumber,
+                    Signature = lines[i].Trim(),
+                },
+                lines[i]);
+        }
+    }
+
+    private static string? FirstSuccessfulGroupValue(Match match, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var group = match.Groups[name];
+            if (group.Success)
+                return group.Value;
+        }
+
+        return null;
     }
 
     internal static bool IsJavaScriptTypeScriptReactHookName(string name)
