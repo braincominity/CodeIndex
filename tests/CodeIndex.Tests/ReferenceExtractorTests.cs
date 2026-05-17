@@ -10817,6 +10817,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTemplateInstantiationSites_CaptureInstantiationReferences()
+    {
+        const string content = """
+            template class Box<int>;
+            extern template struct ns::Cache<Key>;
+
+            void Run() {
+              Box<User> box;
+              ns::Cache<Key> cache{};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var references = ReferenceExtractor.Extract(1, "cpp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CppTypedefAliases_CaptureTargetTypeReferences()
     {
         const string content = """

@@ -179,6 +179,9 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CppExplicitTemplateInstantiationRegex = new(
         @"\b(?:extern\s+)?template\s+(?:class|struct)\s+(?<type>[^;]+);",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CppTemplateIdDeclarationRegex = new(
+        @"(?<!template\s)(?<!class\s)(?<!struct\s)(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Z_]\w*)\s*<(?<args>[^;{}]+)>\s*(?:[*&]\s*)?[A-Za-z_]\w*\s*(?:[=;{,)]|\[[^\]]*\])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppTemplateParameterDefaultTypeRegex = new(
         @"\b(?:typename|class)\s+[A-Za-z_]\w*\s*=\s*(?<type>(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*(?:\s*<[^,>]+>)?(?:\s*[*&])?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1611,7 +1614,22 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
         {
             var group = match.Groups["type"];
+            var typeName = LastCppQualifiedSegment(group.Value);
+            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+        }
+
+        foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
+        {
+            if (IsCppTemplateDeclarationOrSpecializationLine(preparedLine, match.Index))
+                continue;
+
+            var group = match.Groups["type"];
+            var typeName = LastCppQualifiedSegment(group.Value);
+            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, match.Groups["args"].Value, match.Groups["args"].Index, context, lineNumber, resolveContainerForColumn(match.Groups["args"].Index), language);
         }
 
         foreach (Match match in CppTemplateParameterDefaultTypeRegex.Matches(preparedLine))
@@ -5023,6 +5041,13 @@ internal static class LanguageReferenceExtractionSupport
             text = text[..genericIndex].TrimEnd();
         var separator = text.LastIndexOf("::", StringComparison.Ordinal);
         return separator >= 0 ? text[(separator + 2)..].Trim() : text;
+    }
+
+    private static bool IsCppTemplateDeclarationOrSpecializationLine(string line, int matchIndex)
+    {
+        var prefix = line[..Math.Clamp(matchIndex, 0, line.Length)].TrimStart();
+        return prefix.StartsWith("template", StringComparison.Ordinal)
+            || prefix.StartsWith("export template", StringComparison.Ordinal);
     }
 
     private static string LastQualifiedSegment(string value)
