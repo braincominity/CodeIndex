@@ -30550,10 +30550,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptNamedReExportAliasQualifiedUsage_EmitsModuleReference()
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_StopsOutsideLocalScope()
     {
         const string content = """
-            export { InternalNamespace as PublicNamespace } from "./public-api";
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+
+            export function after(Lazy: any) {
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 7);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedImportAliasQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            import { InternalNamespace as PublicNamespace } from "./public-api";
 
             export function render() {
                 PublicNamespace.Widget.mount();
@@ -30568,6 +30596,26 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "reference"
             && r.Line == 4
             && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedReExportAliasQualifiedUsage_DoesNotCreateLocalModuleReference()
+    {
+        const string content = """
+            export { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4);
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>

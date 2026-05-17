@@ -5,7 +5,7 @@ namespace CodeIndex.Indexer;
 
 internal static class TypeScriptReferenceExtractor
 {
-    internal sealed record NamespaceAliasBinding(string Alias, string ModuleSpecifier, int BindingLine, int? ShadowLine);
+    internal sealed record NamespaceAliasBinding(string Alias, string ModuleSpecifier, int BindingLine, int? ShadowLine, int? EndLine);
 
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
@@ -15,8 +15,8 @@ internal static class TypeScriptReferenceExtractor
     private static readonly Regex DynamicImportNamespaceRegex = new(
         @"^\s*(?:const|let|var)\s+(?<alias>[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\s*\(\s*[""'](?<module>[^""']+)[""']\s*\)",
         RegexOptions.Compiled);
-    private static readonly Regex NamedImportExportRegex = new(
-        @"^\s*(?:import|export)\s+(?:type\s+)?\{(?<body>[^}]*)\}\s+from\s*[""'](?<module>[^""']+)[""']",
+    private static readonly Regex NamedImportRegex = new(
+        @"^\s*import\s+(?:type\s+)?\{(?<body>[^}]*)\}\s+from\s*[""'](?<module>[^""']+)[""']",
         RegexOptions.Compiled);
     private static readonly Regex LocalDeclarationRegex = new(
         @"^\s*(?:(?:const|let|var)\s+|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+|(?:export\s+)?(?:abstract\s+)?class\s+|(?:export\s+)?interface\s+|(?:export\s+)?type\s+)(?<name>[A-Za-z_$][\w$]*)\b",
@@ -27,24 +27,51 @@ internal static class TypeScriptReferenceExtractor
         IReadOnlyList<string> preparedLines)
     {
         var bindings = new List<NamespaceAliasBinding>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
         for (var index = 0; index < originalLines.Count; index++)
         {
             var line = originalLines[index];
             var match = NamespaceImportExportRegex.Match(line);
-            if (!match.Success)
-                match = DynamicImportNamespaceRegex.Match(line);
             if (match.Success)
             {
-                AddNamespaceAliasBinding(bindings, preparedLines, match.Groups["alias"].Value, match.Groups["module"].Value, index + 1);
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    match.Groups["alias"].Value,
+                    match.Groups["module"].Value,
+                    index + 1,
+                    endLine: null);
                 continue;
             }
 
-            match = NamedImportExportRegex.Match(line);
+            match = DynamicImportNamespaceRegex.Match(line);
+            if (match.Success)
+            {
+                var bindingLine = index + 1;
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    match.Groups["alias"].Value,
+                    match.Groups["module"].Value,
+                    bindingLine,
+                    FindDynamicImportAliasEndLine(preparedLines, braceDepths, index));
+                continue;
+            }
+
+            match = NamedImportRegex.Match(line);
             if (!match.Success)
                 continue;
 
             foreach (var alias in ExtractNamedImportExportAliases(match.Groups["body"].Value))
-                AddNamespaceAliasBinding(bindings, preparedLines, alias, match.Groups["module"].Value, index + 1);
+            {
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    alias,
+                    match.Groups["module"].Value,
+                    index + 1,
+                    endLine: null);
+            }
         }
 
         return bindings;
@@ -55,13 +82,14 @@ internal static class TypeScriptReferenceExtractor
         IReadOnlyList<string> preparedLines,
         string alias,
         string module,
-        int bindingLine)
+        int bindingLine,
+        int? endLine)
     {
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
             return;
 
         var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
-        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine));
+        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine));
     }
 
     private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
@@ -181,8 +209,12 @@ internal static class TypeScriptReferenceExtractor
 
         foreach (var binding in namespaceAliases)
         {
-            if (lineNumber <= binding.BindingLine || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine))
+            if (lineNumber <= binding.BindingLine
+                || (binding.EndLine is int endLine && lineNumber > endLine)
+                || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine))
+            {
                 continue;
+            }
 
             foreach (Match match in Regex.Matches(
                          preparedLine,
@@ -216,6 +248,43 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return null;
+    }
+
+    private static int[] BuildBraceDepthsBeforeLine(IReadOnlyList<string> preparedLines)
+    {
+        var depths = new int[preparedLines.Count];
+        var depth = 0;
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            depths[index] = depth;
+            foreach (var ch in preparedLines[index])
+            {
+                if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+            }
+        }
+
+        return depths;
+    }
+
+    private static int? FindDynamicImportAliasEndLine(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        int bindingLineIndex)
+    {
+        var bindingDepth = braceDepths[bindingLineIndex];
+        if (bindingDepth <= 0)
+            return null;
+
+        for (var index = bindingLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] < bindingDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
     }
 
     private static void EmitHeritageTypeReferences(
