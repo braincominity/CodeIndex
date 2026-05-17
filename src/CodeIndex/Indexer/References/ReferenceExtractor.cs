@@ -2408,16 +2408,18 @@ public static partial class ReferenceExtractor
                     return false;
                 }
 
-                  // C# positional patterns such as `case Point(var x, var y):` are type-pattern
-                  // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
-                  // phantom `call` edge alongside the real `type_reference`.
-                  // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
-                  // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
-                  // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
-                  var isCSharpPatternHeadCallSite = language == "csharp"
-                      && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
-                  if (isCSharpPatternHeadCallSite)
-                      return false;
+                // C# positional patterns such as `case Point(var x, var y):` are type-pattern
+                // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
+                // phantom `call` edge alongside the real `type_reference`.
+                // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
+                // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
+                // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
+                var isCSharpPatternHeadCallSite = language == "csharp"
+                    && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
+                if (isCSharpPatternHeadCallSite)
+                    return false;
+                if (language == "typescript" && TypeScriptReferenceExtractor.IsSatisfiesTypeOperand(preparedLine, callIndex))
+                    return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
