@@ -165,6 +165,10 @@ jobs:
       - name: Test
         run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
 
+      - name: Summarize TRX telemetry
+        if: always()
+        run: dotnet run --project tools/CodeIndex.TestTelemetry -- summarize --results-directory ./TestResults --top 10
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
