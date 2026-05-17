@@ -14,6 +14,7 @@ GitHub releases publish and checksum these first-class runtime identifiers:
 | `linux-arm64` | `CodeIndex-linux-arm64.tar.gz` | Requires glibc. |
 | `osx-arm64` | `CodeIndex-osx-arm64.tar.gz` | Apple Silicon macOS. |
 | `win-x64` | `CodeIndex-win-x64.zip` | 64-bit Windows. |
+| `win-arm64` | `CodeIndex-win-arm64.zip` | Windows on ARM64. |
 
 The one-line `install.sh` installer supports the Unix tarball path for Linux and
 macOS. Windows users should install from the release ZIP, use the NuGet global
@@ -62,6 +63,7 @@ checksum 対象にしています。
 | `linux-arm64` | `CodeIndex-linux-arm64.tar.gz` | glibc が必要です。 |
 | `osx-arm64` | `CodeIndex-osx-arm64.tar.gz` | Apple Silicon macOS 向けです。 |
 | `win-x64` | `CodeIndex-win-x64.zip` | 64-bit Windows 向けです。 |
+| `win-arm64` | `CodeIndex-win-arm64.zip` | Windows on ARM64 向けです。 |
 
 ワンライナーの `install.sh` は Linux と macOS の Unix tarball 経路を対象に
 しています。Windows では release ZIP、NuGet global tool、または source build
