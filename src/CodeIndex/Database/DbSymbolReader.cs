@@ -3175,7 +3175,7 @@ public partial class DbReader
                         var closeRun = 0;
                         while (i + closeRun < line.Length && line[i + closeRun] == '"')
                             closeRun++;
-                        if (closeRun >= runLength)
+                        if (closeRun == runLength)
                         {
                             i += closeRun;
                             break;
@@ -3237,7 +3237,7 @@ public partial class DbReader
                         var closeRun = 0;
                         while (i + closeRun < line.Length && line[i + closeRun] == '"')
                             closeRun++;
-                        if (closeRun >= rawRunLength)
+                        if (closeRun == rawRunLength)
                         {
                             i += closeRun;
                             break;

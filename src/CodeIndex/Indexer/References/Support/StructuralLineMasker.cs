@@ -220,11 +220,18 @@ internal static class StructuralLineMasker
                         if (stringFrame.Kind == StringKind.Raw)
                         {
                             var closeLength = CountQuoteRun(line, searchStart);
-                            if (closeLength >= stringFrame.DelimiterLength)
+                            if (closeLength == stringFrame.DelimiterLength)
                             {
                                 ReplaceWithSpaces(masked, searchStart, closeLength);
                                 searchStart += closeLength;
                                 frames.Pop();
+                                continue;
+                            }
+
+                            if (closeLength > 0)
+                            {
+                                ReplaceWithSpaces(masked, searchStart, closeLength);
+                                searchStart += closeLength;
                                 continue;
                             }
 
