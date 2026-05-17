@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -2123,6 +2124,7 @@ public class FileIndexerTests
 
         var tempRoot = TestProjectHelper.CreateTempProject("cdidx_long_path");
         var projectRoot = Path.Combine(tempRoot, "node_modules");
+        DbContext? db = null;
         try
         {
             Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(projectRoot));
@@ -2135,7 +2137,7 @@ public class FileIndexerTests
             Assert.Contains(scannedFiles, path => PathsEqual(path, leafPath));
 
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            db = new DbContext(dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
 
@@ -2150,6 +2152,12 @@ public class FileIndexerTests
         }
         finally
         {
+            if (db is not null)
+            {
+                SqliteConnection.ClearPool(db.Connection);
+                db.Dispose();
+            }
+
             DeleteLongPathDirectory(tempRoot);
         }
     }
