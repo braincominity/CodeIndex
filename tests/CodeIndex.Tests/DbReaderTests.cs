@@ -6690,6 +6690,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceKindMatrix_CallersIncludesReactHookConsumption()
+    {
+        InsertIndexedFile("src/hooks.tsx", "typescript",
+            """
+            export const useSharedValue = () => {
+              return 1;
+            };
+            """);
+        InsertIndexedFile("src/Widget.tsx", "typescript",
+            """
+            import { useSharedValue } from "./hooks";
+
+            export function Widget() {
+              return useSharedValue();
+            }
+            """);
+
+        var callers = _reader.GetCallers("useSharedValue", lang: "typescript", exact: true);
+
+        Assert.Contains(callers, caller =>
+            caller.CallerName == "Widget"
+            && caller.ReferenceKind == "consumes_hook");
+    }
+
+    [Fact]
     public void GetFileDependencies_MatchesCSharpAttributeSuffixConvention()
     {
         // issue #293 follow-up: C# convention — a class `FooAttribute` is used in
