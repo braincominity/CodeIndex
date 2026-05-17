@@ -12056,11 +12056,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            // #501: the scalar `reference_kind` is retained for back-compat, and for
-            // single-kind rows it matches the only kind in `reference_kinds`.
-            // #501: scalar な `reference_kind` は後方互換のため残しており、single-kind
-            // 行では `reference_kinds` の唯一の kind と一致する。
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
             // #501: every grouped caller row carries `reference_kinds` +
             // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
@@ -12069,8 +12065,16 @@ jobs:
             // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
             // 「空配列」を判別せずに済む。
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "subscribe" }, kinds);
+            Assert.Equal(new[] { "event" }, kinds);
             Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+
+            var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact", "--raw-kinds"],
+                _jsonOptions));
+            using var rawDocument = ParseJsonOutput(rawStdout);
+            Assert.Equal(CommandExitCodes.Success, rawExitCode);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Equal("subscribe", rawDocument.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -12127,25 +12131,28 @@ jobs:
             Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "call", "subscribe" }, kinds);
-            // #501: the scalar `reference_kind` is kept for back-compat and reports the
-            // preferred summary kind (`instantiate` > `subscribe` > `MIN(call)`);
-            // callers who need the full picture read `reference_kinds` +
-            // `has_mixed_reference_kinds` instead.
-            // #501: scalar `reference_kind` は後方互換で残し、preferred 順
-            // （`instantiate` > `subscribe` > `MIN(call)`）の要約 kind を返す。混在時の
-            // 全容は `reference_kinds` / `has_mixed_reference_kinds` を参照する。
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
                 ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("call+subscribe", humanStdout);
+            Assert.Contains("event+invoke", humanStdout);
             Assert.Contains("SetupAndFire", humanStdout);
             Assert.Contains("-> Changed (2 refs)", humanStdout);
             Assert.Contains("(1 callers in 1 files)", humanStderr);
+
+            var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact", "--raw-kinds"],
+                _jsonOptions));
+            using var rawDocument = ParseJsonOutput(rawStdout);
+            var rawKinds = rawDocument.RootElement.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(CommandExitCodes.Success, rawExitCode);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Equal(new[] { "call", "subscribe" }, rawKinds);
+            Assert.Equal("subscribe", rawDocument.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -12277,9 +12284,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("call         function   DerivedWidget", stdout);
+            Assert.Contains("invoke       function   DerivedWidget", stdout);
             Assert.Contains("src/DerivedWidget.cs:3  -> BaseWidget (1 refs)", stdout);
-            Assert.Contains("instantiate  function   Make", stdout);
+            Assert.Contains("invoke       function   Make", stdout);
             Assert.Contains("src/Factory.cs:3  -> BaseWidget (1 refs)", stdout);
             Assert.Contains("(2 callers in 2 files)", stderr);
         }
@@ -12332,7 +12339,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
@@ -13280,7 +13287,7 @@ jobs:
             Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
             Assert.Equal("A", json.GetProperty("caller_name").GetString());
             Assert.Equal("B", json.GetProperty("callee_name").GetString());
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("invoke", json.GetProperty("reference_kind").GetString());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
@@ -16323,7 +16330,7 @@ jobs:
             Assert.Equal(2, callersRows.Count);
             Assert.All(callersRows, row => Assert.Contains(row.RootElement.GetProperty("caller_name").GetString(), [".button", ".card"]));
             Assert.All(callersRows, row => Assert.Equal("primary", row.RootElement.GetProperty("callee_name").GetString()));
-            Assert.All(callersRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
+            Assert.All(callersRows, row => Assert.Equal("invoke", row.RootElement.GetProperty("reference_kind").GetString()));
 
             Assert.Equal(CommandExitCodes.Success, callersCountExitCode);
             Assert.Equal(string.Empty, callersCountStderr);
@@ -16335,7 +16342,7 @@ jobs:
             var calleesRow = Assert.Single(calleesRows);
             Assert.Equal("rounded", calleesRow.RootElement.GetProperty("caller_name").GetString());
             Assert.Equal("radius", calleesRow.RootElement.GetProperty("callee_name").GetString());
-            Assert.Equal("call", calleesRow.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("invoke", calleesRow.RootElement.GetProperty("reference_kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, calleesCountExitCode);
             Assert.Equal(string.Empty, calleesCountStderr);
@@ -24491,7 +24498,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", callee.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", callee.GetProperty("callee_name").GetString());
-            Assert.Equal("subscribe", callee.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", callee.GetProperty("reference_kind").GetString());
         }
         finally
         {

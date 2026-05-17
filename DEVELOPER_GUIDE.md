@@ -171,6 +171,16 @@ files 1──N symbols
 files 1──N symbol_references
 ```
 
+### Reference taxonomy
+
+`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
+
+| Raw kind | Logical graph kind | Notes |
+|---|---|---|
+| `call`, `instantiate` | `invoke` | Executable invocation edges. |
+| `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
+| `attribute`, `annotation`, `type_reference` | raw label | Dependency/reference-only metadata and type-position edges; excluded from default call-graph rows. |
+
 ## Why a database instead of grep?
 
 On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. cdidx solves this by **reading every file once at index time** and building a search structure so that queries never need to touch the original files again.
@@ -1585,6 +1595,16 @@ files 1──N chunks 1──1 fts_chunks（コンテンツミラー）
 files 1──N symbols
 files 1──N symbol_references
 ```
+
+### 参照 taxonomy
+
+`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は logical label を返し、下流の集計で collapse 済み kind と raw event kind が混在しないようにする。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
+
+| Raw kind | Logical graph kind | 備考 |
+|---|---|---|
+| `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
+| `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
+| `attribute`, `annotation`, `type_reference` | raw label | 依存関係 / reference 専用の metadata と型位置エッジ。既定の call-graph 行からは除外する。 |
 
 ## なぜgrepではなくデータベースなのか？
 
