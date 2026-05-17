@@ -33,7 +33,7 @@ The test project mirrors the production areas closely.
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
 - `FileIndexerTests.cs`
-  File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap and binary/NUL-byte rejection.
+  File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`
@@ -206,7 +206,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
 - `FileIndexerTests.cs`
-  ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」と binary/NUL byte 除外も含みます。
+  ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
 - `LegacySchemaMigrationTests.cs`
