@@ -132,7 +132,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- referenced symbol name
-    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "friend", "attribute", "annotation", "decorator", "type_reference", "implicit_implementation"
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "razor_event_binding", "friend", "attribute", "annotation", "decorator", "type_reference", "implicit_implementation"
     line            INTEGER,                 -- 1-based line number
     column_number   INTEGER,                 -- 1-based column number
     context         TEXT,                    -- trimmed source line
@@ -207,7 +207,7 @@ files 1──N symbol_references
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
-| `razor_event_binding` | raw label | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
+| `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
@@ -1589,7 +1589,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- 参照先シンボル名
-    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "decorator", "type_reference", "implicit_implementation"
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "razor_event_binding", "attribute", "annotation", "decorator", "type_reference", "implicit_implementation"
     line            INTEGER,                 -- 1始まりの行番号
     column_number   INTEGER,                 -- 1始まりの列番号
     context         TEXT,                    -- trim済みソース行
