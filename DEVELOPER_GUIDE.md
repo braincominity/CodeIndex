@@ -65,6 +65,12 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### Extractor concurrency contract
+
+`SymbolExtractor` and `ReferenceExtractor` must be safe to call concurrently for different files or repeated calls on the same file content. Shared `Regex` instances and static lookup tables are initialized once by the CLR and treated as immutable after type initialization. Per-extraction state belongs in local variables, method parameters, caller-owned collections, or language-specific state objects created for that extraction call.
+
+Do not add mutable static caches, shared `StringBuilder` instances, reused `MatchCollection` enumerators, or singleton scanner state to extractor code. If a future extractor needs cross-call memoization, use an explicit thread-safe collection and add a targeted parallel regression test that proves deterministic output under concurrent calls.
+
 ### Status freshness age threshold
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
