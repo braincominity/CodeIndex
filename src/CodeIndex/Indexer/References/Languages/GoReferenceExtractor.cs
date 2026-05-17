@@ -94,7 +94,7 @@ internal static class GoReferenceExtractor
         while (cursor >= 0 && IsGoIdentifierPart(line[cursor]))
             cursor--;
         var token = cursor + 1 < tokenEnd ? line[(cursor + 1)..tokenEnd] : string.Empty;
-        return token is "case" or "return" or "select";
+        return token is "case" or "return" or "select" or "if" or "for" or "switch";
     }
 
     private static bool IsGoExpressionEnd(char ch)

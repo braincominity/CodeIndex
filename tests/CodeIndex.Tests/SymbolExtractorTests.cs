@@ -160,6 +160,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DoesNotClassifyTestRolesOutsideTestFiles()
+    {
+        const string content = """
+            package demo
+
+            import "testing"
+
+            func init() {}
+            func TestWidget(t *testing.T) {}
+            func BenchmarkWidget(b *testing.B) {}
+            func FuzzWidget(f *testing.F) {}
+            func ExampleWidget() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content, filePath: "widget.go");
+
+        Assert.Contains(symbols, symbol => symbol.Name == "init" && symbol.SubKind == "init");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == null);
+    }
+
+    [Fact]
     public void Extract_Go_QualifiedPointerReceiverUsesBareTypeContainer()
     {
         const string content = """

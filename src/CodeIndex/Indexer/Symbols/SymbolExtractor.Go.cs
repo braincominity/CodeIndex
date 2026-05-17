@@ -634,6 +634,9 @@ public static partial class SymbolExtractor
             return "init";
         }
 
+        if (!isTestFile)
+            return null;
+
         if (string.Equals(symbol.Name, "TestMain", StringComparison.Ordinal)
             && GoSignatureHasParameterType(signature, "testing.M"))
         {

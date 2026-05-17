@@ -27,6 +27,12 @@ public class ReferenceExtractorTests
                 case value = <-ch:
                 default:
                 }
+                if <-ch {
+                }
+                for <-ch {
+                }
+                switch <-ch {
+                }
             }
             """;
 
@@ -61,6 +67,18 @@ public class ReferenceExtractorTests
             reference.SymbolName == "ch"
             && reference.ReferenceKind == "channel_receive"
             && reference.Line == 11);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 14);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 16);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 18);
     }
 
     [Theory]
