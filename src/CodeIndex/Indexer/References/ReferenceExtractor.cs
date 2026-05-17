@@ -26,6 +26,9 @@ public static partial class ReferenceExtractor
         public bool Active { get; set; }
         public HashSet<string> HeaderGenericParameterNames { get; } = new(StringComparer.Ordinal);
         public HashSet<string> IgnoredSegments { get; } = new(StringComparer.Ordinal);
+        public bool CollectingHeaderGenericParameters { get; set; }
+        public int HeaderGenericParameterDepth { get; set; }
+        public string HeaderGenericParameterText { get; set; } = string.Empty;
     }
     private static readonly HashSet<string> SupportedLanguages =
     [
@@ -617,7 +620,7 @@ public static partial class ReferenceExtractor
     };
     private static readonly HashSet<string> CSharpWhereConstraintIgnoredSegments = new(StringComparer.Ordinal)
     {
-        "allows", "notnull", "ref", "unmanaged",
+        "allows", "default", "notnull", "ref", "unmanaged",
     };
     private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
     {

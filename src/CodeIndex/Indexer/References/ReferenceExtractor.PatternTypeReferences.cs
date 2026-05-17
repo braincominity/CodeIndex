@@ -554,11 +554,7 @@ public static partial class ReferenceExtractor
         IReadOnlySet<string> declarationGenericParameterNames,
         CSharpWhereConstraintState pendingWhereConstraint)
     {
-        if (declarationGenericParameterNames.Count > 0)
-        {
-            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
-            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(declarationGenericParameterNames);
-        }
+        UpdateCSharpWhereHeaderGenericParameterNames(line, declarationGenericParameterNames, pendingWhereConstraint);
 
         var searchStart = 0;
         if (pendingWhereConstraint.Active)
@@ -659,6 +655,95 @@ public static partial class ReferenceExtractor
         {
             pendingWhereConstraint.HeaderGenericParameterNames.Clear();
         }
+    }
+
+    private static void UpdateCSharpWhereHeaderGenericParameterNames(
+        string line,
+        IReadOnlySet<string> declarationGenericParameterNames,
+        CSharpWhereConstraintState pendingWhereConstraint)
+    {
+        if (declarationGenericParameterNames.Count > 0)
+        {
+            pendingWhereConstraint.CollectingHeaderGenericParameters = false;
+            pendingWhereConstraint.HeaderGenericParameterDepth = 0;
+            pendingWhereConstraint.HeaderGenericParameterText = string.Empty;
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(declarationGenericParameterNames);
+            return;
+        }
+
+        if (pendingWhereConstraint.Active)
+            return;
+
+        if (pendingWhereConstraint.CollectingHeaderGenericParameters)
+        {
+            pendingWhereConstraint.HeaderGenericParameterText += " " + line.Trim();
+            pendingWhereConstraint.HeaderGenericParameterDepth += CountCSharpGenericParameterAngleDelta(line);
+            if (pendingWhereConstraint.HeaderGenericParameterDepth <= 0)
+            {
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+                pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(
+                    CollectCSharpGenericParameterNamesFromClause(pendingWhereConstraint.HeaderGenericParameterText, 0));
+                pendingWhereConstraint.CollectingHeaderGenericParameters = false;
+                pendingWhereConstraint.HeaderGenericParameterDepth = 0;
+                pendingWhereConstraint.HeaderGenericParameterText = string.Empty;
+            }
+
+            return;
+        }
+
+        var genericOpen = FindPotentialCSharpGenericDeclarationOpen(line);
+        if (genericOpen < 0)
+            return;
+
+        var genericClose = FindMatchingChar(line, genericOpen, '<', '>');
+        if (genericClose > genericOpen)
+        {
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(
+                CollectCSharpGenericParameterNamesFromClause(line, genericOpen));
+            return;
+        }
+
+        pendingWhereConstraint.CollectingHeaderGenericParameters = true;
+        pendingWhereConstraint.HeaderGenericParameterDepth = CountCSharpGenericParameterAngleDelta(line[genericOpen..]);
+        pendingWhereConstraint.HeaderGenericParameterText = line[genericOpen..].Trim();
+    }
+
+    private static int FindPotentialCSharpGenericDeclarationOpen(string line)
+    {
+        var whereIndex = line.IndexOf(" where ", StringComparison.Ordinal);
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (line[index] != '<')
+                continue;
+            if (whereIndex >= 0 && index > whereIndex)
+                return -1;
+
+            var before = line[..index].TrimEnd();
+            if (before.Length == 0)
+                continue;
+            if (!IsTypeExpressionIdentifierPart("csharp", before[^1]))
+                continue;
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int CountCSharpGenericParameterAngleDelta(string text)
+    {
+        var depth = 0;
+        foreach (var c in text)
+        {
+            if (c == '<')
+                depth++;
+            else if (c == '>')
+                depth--;
+        }
+
+        return depth;
     }
 
     private static void EmitCSharpWhereConstraintSegments(
