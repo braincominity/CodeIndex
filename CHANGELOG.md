@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.22.1] - 2026-05-17
+
+#### Fixed
+
+- **Release install verification accepts the `--version` build-metadata suffix** — the release workflow's install check compared `cdidx --version` for an exact `cdidx v<tag>` match, so it failed on every release after the build-aware `--version` change (#1550) because the binary now prints a trailing ` (commit <sha>, built <date>, <clean|dirty>)` block. The check is now anchored on the `cdidx v<tag>` prefix, matching the `install.sh` validator.
+- **Tagged release builds no longer stamp `--version` as `dirty`** — the RID-targeted `dotnet publish` step rewrites `packages.lock.json` with runtime-specific entries before the build-metadata target re-runs, which made a clean tagged release report `dirty`. The dirty probe now excludes every `packages.lock.json`; genuine lock drift is still caught by the locked-mode restore in CI.
+
 ### [1.22.0] - 2026-05-17
 
 #### Added
@@ -2370,6 +2377,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.22.1] - 2026-05-17
+
+#### 修正
+
+- **リリースのインストール検証が `--version` のビルドメタデータ接尾辞を受け入れるようになりました** — release workflow のインストール検証は `cdidx --version` を `cdidx v<tag>` と完全一致で比較していたため、ビルド情報付き `--version` 化 (#1550) 以降はバイナリが末尾に ` (commit <sha>, built <date>, <clean|dirty>)` を出力するようになり、すべてのリリースで失敗していました。検証を `cdidx v<tag>` 接頭辞での照合に変更し、`install.sh` のバリデータと揃えました。
+- **タグ付きリリースビルドの `--version` が `dirty` と刻まれなくなりました** — RID 指定の `dotnet publish` がビルドメタデータターゲット再実行前に `packages.lock.json` へ runtime 固有エントリを書き込むため、クリーンなタグ付きリリースまで `dirty` と報告されていました。dirty 判定からすべての `packages.lock.json` を除外しました。lock の本当のドリフトは CI の locked-mode restore が引き続き検出します。
+
 ### [1.22.0] - 2026-05-17
 
 #### 追加
@@ -4718,7 +4732,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...HEAD
+[1.22.1]: https://github.com/Widthdom/CodeIndex/compare/v1.22.0...v1.22.1
 [1.22.0]: https://github.com/Widthdom/CodeIndex/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/Widthdom/CodeIndex/compare/v1.20.1...v1.21.0
 [1.20.1]: https://github.com/Widthdom/CodeIndex/compare/v1.20.0...v1.20.1
