@@ -20,6 +20,13 @@ public class SearchResult
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public enum ReferenceRankMode
+{
+    Weighted,
+    Count,
+    Kind,
+}
+
 public class SymbolResult
 {
     [JsonPropertyName("api_version")]
@@ -205,6 +212,8 @@ public class CallerResult
     public string ReferenceKind { get; set; } = string.Empty;
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
+    public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -221,6 +230,8 @@ public class CalleeResult
     public string ReferenceKind { get; set; } = string.Empty;
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
+    public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
