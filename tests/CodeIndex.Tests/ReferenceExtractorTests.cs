@@ -740,6 +740,73 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonMultilineAnnotations_CapturesSignatureTypeReferences()
+    {
+        const string content = """
+            def build(
+                value: int | "User",
+                fallback: list[int | str],
+            ) -> "Result":
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "int"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "list"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "str"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+    }
+
+    [Fact]
+    public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
+    {
+        const string content = """
+            from __future__ import annotations
+
+            def load(value: Optional["User"]) -> "Result | None":
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Optional"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "None"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+    }
+
+    [Fact]
     public void Extract_PythonQualifiedCast_CapturesTargetTypeReference()
     {
         const string content = """

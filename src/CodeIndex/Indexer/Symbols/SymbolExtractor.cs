@@ -732,7 +732,7 @@ public static partial class SymbolExtractor
     {
         ["python"] =
         [
-            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*\(", RegexOptions.Compiled), BodyStyle.Indent),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|collections)\.)?(?:NamedTuple|namedtuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None),
@@ -2690,8 +2690,17 @@ public static partial class SymbolExtractor
                     // Python @property decorator: reclassify the def as property
                     // Python @property デコレータ: def を property に再分類
                     var kind = pattern.Kind;
+                    string? pythonSubKind = null;
                     if (kind == "function" && lang == "python" && HasPythonPropertyDecorator(lines, i))
+                    {
                         kind = "property";
+                        pythonSubKind = GetPythonPropertyAccessorSubKind(lines, i);
+                    }
+                    else if (kind == "function" && lang == "python" && IsPythonClassHook(name))
+                    {
+                        kind = "class_hook";
+                        pythonSubKind = "dunder";
+                    }
 
                     if (lang == "css")
                         name = ResolveCssSymbolName(matchLine[absoluteStartColumn..], name, lines, i, endLine);
@@ -3024,6 +3033,8 @@ public static partial class SymbolExtractor
                             ? patternMatchLine[absoluteStartColumn..].Trim()
                             : line[absoluteStartColumn..].Trim();
                     }
+                    if (lang == "python" && pattern.Kind is "function" or "class")
+                        signature = BuildPythonLogicalHeaderSignature(lines, i, absoluteStartColumn);
 
                     List<string>? fortranProcedureNames = null;
                     if (lang == "fortran"
@@ -3301,7 +3312,7 @@ public static partial class SymbolExtractor
                                         BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     FamilyKey = lang == "cpp" && kind == "specialization" ? name : null,
-                                    SubKind = ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
+                                    SubKind = pythonSubKind ?? ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
@@ -3788,6 +3799,8 @@ public static partial class SymbolExtractor
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         if (lang == "python")
             ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
+        if (lang == "python")
+            ExtractPythonWalrusSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         if (lang == "php")

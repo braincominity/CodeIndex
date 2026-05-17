@@ -221,6 +221,10 @@ files 1──N symbol_references
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
 
+### Python symbol taxonomy
+
+Python extraction uses `function` for ordinary functions and methods, `class` for class declarations and dynamic class factories, `property` for class attributes, `@property` descriptors, accessor decorators, `Final` constants, and walrus-assigned names, and `class_hook` for lifecycle dunder hooks such as `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__`. `SubKind` refines Python property accessors as `getter` / `setter` / `deleter`, walrus assignments as `walrus`, and class hooks as `dunder`.
+
 ## Why a database instead of grep?
 
 On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. cdidx solves this by **reading every file once at index time** and building a search structure so that queries never need to touch the original files again.

@@ -1140,6 +1140,15 @@ public static partial class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
+            if (language == "python")
+            {
+                var pythonHeaderSymbol = symbols.FirstOrDefault(symbol =>
+                    symbol.Line == lineNumber
+                    && symbol.Signature != null
+                    && symbol.Kind is "function" or "class" or "property" or "class_hook");
+                if (pythonHeaderSymbol?.Signature != null)
+                    preparedLine = pythonHeaderSymbol.Signature;
+            }
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             SymbolRecord? phpLineContainer = null;
