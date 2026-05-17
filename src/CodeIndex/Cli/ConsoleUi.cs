@@ -1322,12 +1322,14 @@ public static class ConsoleUi
         => ShouldUseInteractiveConsole(
             Console.IsOutputRedirected,
             Console.Out.Encoding,
+            Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
             OperatingSystem.IsWindows());
 
     internal static bool ShouldUseInteractiveConsole(
         bool isOutputRedirected,
         Encoding outputEncoding,
+        bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
         bool isWindows)
     {
@@ -1336,10 +1338,10 @@ public static class ConsoleUi
 
         // StringWriter-based test capture leaves the process console attached, so
         // Console.IsOutputRedirected stays false even though interactive terminal
-        // behavior would be unsafe. Keep that guard, but do not treat UTF-16 as a
-        // terminal capability signal on Windows because real hosts can expose
-        // UTF-8 or UTF-16 encodings independently of ConPTY/ANSI support.
-        if (!hasTerminalEnvironmentHint && IsLikelyTextWriterCapture(outputEncoding))
+        // behavior would be unsafe. Detect it directly instead of inferring from
+        // encoding, because real terminals may expose UTF-8 or UTF-16 independently
+        // of ConPTY/ANSI support.
+        if (isTextWriterCapture)
             return false;
 
         return true;
@@ -1349,6 +1351,7 @@ public static class ConsoleUi
         => ShouldUseAnsiOutput(
             Console.IsOutputRedirected,
             Console.Out.Encoding,
+            Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
             OperatingSystem.IsWindows(),
             GetWindowsVirtualTerminalProcessingEnabled());
@@ -1356,11 +1359,12 @@ public static class ConsoleUi
     internal static bool ShouldUseAnsiOutput(
         bool isOutputRedirected,
         Encoding outputEncoding,
+        bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
         bool isWindows,
         bool windowsVirtualTerminalProcessingEnabled)
     {
-        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, hasTerminalEnvironmentHint, isWindows))
+        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isWindows))
             return false;
 
         if (!isWindows)
@@ -1390,9 +1394,6 @@ public static class ConsoleUi
             return false;
         return ShouldUseAnsiOutput();
     }
-
-    private static bool IsLikelyTextWriterCapture(Encoding outputEncoding)
-        => outputEncoding.Equals(Encoding.Unicode) || outputEncoding.Equals(Encoding.BigEndianUnicode);
 
     private static bool HasTerminalEnvironmentHint()
     {

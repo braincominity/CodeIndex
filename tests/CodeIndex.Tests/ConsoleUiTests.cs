@@ -654,6 +654,7 @@ public class ConsoleUiTests
         Assert.True(ConsoleUi.ShouldUseInteractiveConsole(
             isOutputRedirected: false,
             outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
             isWindows: true));
     }
@@ -664,8 +665,55 @@ public class ConsoleUiTests
         Assert.False(ConsoleUi.ShouldUseInteractiveConsole(
             isOutputRedirected: false,
             outputEncoding: Encoding.Unicode,
+            isTextWriterCapture: true,
             hasTerminalEnvironmentHint: false,
             isWindows: false));
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_StringWriterCaptureWinsOverTerminalHint()
+    {
+        Assert.False(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.Unicode,
+            isTextWriterCapture: true,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true));
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_WindowsUtf16TerminalHint_IsInteractiveWhenNotCaptured()
+    {
+        Assert.True(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.Unicode,
+            isTextWriterCapture: false,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true));
+    }
+
+    [Fact]
+    public void ShouldUseAnsiOutput_StringWriterCaptureWinsOverTerminalHint()
+    {
+        Assert.False(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.Unicode,
+            isTextWriterCapture: true,
+            hasTerminalEnvironmentHint: true,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: true));
+    }
+
+    [Fact]
+    public void ShouldUseAnsiOutput_WindowsUtf16VirtualTerminal_IsAnsiWhenNotCaptured()
+    {
+        Assert.True(ConsoleUi.ShouldUseAnsiOutput(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.Unicode,
+            isTextWriterCapture: false,
+            hasTerminalEnvironmentHint: false,
+            isWindows: true,
+            windowsVirtualTerminalProcessingEnabled: true));
     }
 
     [Fact]
@@ -674,6 +722,7 @@ public class ConsoleUiTests
         Assert.True(ConsoleUi.ShouldUseAnsiOutput(
             isOutputRedirected: false,
             outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
             hasTerminalEnvironmentHint: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
@@ -681,6 +730,7 @@ public class ConsoleUiTests
         Assert.True(ConsoleUi.ShouldUseAnsiOutput(
             isOutputRedirected: false,
             outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: false));
@@ -688,6 +738,7 @@ public class ConsoleUiTests
         Assert.False(ConsoleUi.ShouldUseAnsiOutput(
             isOutputRedirected: false,
             outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
             hasTerminalEnvironmentHint: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: false));
@@ -699,6 +750,7 @@ public class ConsoleUiTests
         Assert.False(ConsoleUi.ShouldUseAnsiOutput(
             isOutputRedirected: true,
             outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
