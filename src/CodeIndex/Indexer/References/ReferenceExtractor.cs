@@ -2301,6 +2301,25 @@ public static partial class ReferenceExtractor
 
             if (language is "javascript" or "typescript")
             {
+                JavaScriptReferenceExtractor.EmitOptionalMemberChainReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+
+                JavaScriptReferenceExtractor.EmitDiscriminantStringGuardReferences(
+                    referenceStructuralLines[i],
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+
                 JavaScriptReferenceExtractor.EmitParenlessConstructorReferences(
                     preparedLine,
                     preparedLines,

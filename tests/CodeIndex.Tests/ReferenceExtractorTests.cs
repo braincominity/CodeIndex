@@ -30641,6 +30641,79 @@ public class ReferenceExtractorTests
             && r.ContainerName == "render");
     }
 
+    [Fact]
+    public void Extract_TypeScriptOptionalChains_EmitsFullMemberChains()
+    {
+        const string content = """
+            export function render(viewModel: ViewModel) {
+                viewModel?.profile?.avatar?.url ?? fallbackUrl;
+                viewModel?.profile?.load?.();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.avatar"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.avatar.url"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.load"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDiscriminantStringGuard_EmitsPropertyAndTypeTag()
+    {
+        const string content = """
+            type Shape =
+                | { type: 'circle'; radius: number }
+                | { type: 'square'; side: number };
+
+            export function area(shape: Shape) {
+                if (shape.type === 'circle') {
+                    return shape.radius;
+                }
+                /* x.kind === 'fake' */ if (shape.type === 'circle' || shape.type === 'square') {
+                    return 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "type"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type=circle"
+            && r.ReferenceKind == "type_tag"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type=square"
+            && r.ReferenceKind == "type_tag"
+            && r.ContainerName == "area");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "shape.type=fake"
+            && r.ReferenceKind == "type_tag");
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {
