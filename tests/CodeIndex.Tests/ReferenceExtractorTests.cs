@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 
@@ -12114,6 +12115,28 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_RazorBlazor_ManyControlDirectives_MasksControlCodeComponents()
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < 250; i++)
+        {
+            builder.AppendLine($"<VisiblePanel{i} />");
+            builder.AppendLine($"@if (Show{i})");
+            builder.AppendLine("{");
+            builder.AppendLine($"    var hidden = \"<HiddenPanel{i} />\";");
+            builder.AppendLine("}");
+        }
+
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content, "Pages/Dashboard.razor");
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols, "Pages/Dashboard.razor");
+
+        Assert.Contains(references, r => r.SymbolName == "VisiblePanel0" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "VisiblePanel249" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("HiddenPanel", StringComparison.Ordinal));
     }
 
     [Fact]
