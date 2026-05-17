@@ -10,6 +10,60 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTsDefaultExportAsyncArrow_AttachesCallsToDefaultFunction(string language)
+    {
+        const string content = """
+            import { db } from "./db";
+            export default async (req, res) => {
+                return db.users.findById(req.id);
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "default"
+            && symbol.BodyStartLine == 2
+            && symbol.BodyEndLine == 4);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "findById"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_CsharpRawStringLongerQuoteRun_DoesNotLeakCallReferences()
+    {
+        // Regression for #1453: a raw string opened with four quotes must only
+        // close on exactly four quotes. A longer quote run inside the content
+        // stays masked so call-shaped text does not become a phantom reference.
+        // #1453 の回帰: 4 個の quote で始まった raw string は、ちょうど 4 個の
+        // quote でのみ閉じる。本文中のより長い quote run はマスクされたままになり、
+        // 呼び出し風テキストが疑似参照になってはならない。
+        const string content = """""""
+            class Service
+            {
+                void Real()
+                {
+                    var s = """"hello """""" PhantomCall() world"""";
+                    ActualCall();
+                }
+            }
+            """"""";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+    }
+
     [Fact]
     public void Extract_TypeScriptGenericConditionalConstraint_EmitsBranchTypeReferences()
     {
@@ -29258,6 +29312,38 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "readyFlag" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "input" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDecoratedMembers_CaptureDecoratorAndTypeReferences()
+    {
+        const string content = """
+            class Controller {
+                @Get("/users") find(@Optional() @Inject(USER_REPOSITORY) repo: UserRepository, @Param("id") id: UserId): Promise<UserDto> {
+                    return repo.find(id);
+                }
+
+                @Input() profile: UserProfile;
+                @Column({ type: "json" }) settings!: SettingsDocument;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Get" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Optional" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Inject" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Param" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Input" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Column" && r.ReferenceKind == "annotation");
+
+        Assert.Contains(references, r => r.SymbolName == "UserRepository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserId" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Promise" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserDto" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserProfile" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "SettingsDocument" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
