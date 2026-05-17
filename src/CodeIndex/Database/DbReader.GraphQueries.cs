@@ -11,7 +11,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -38,7 +38,11 @@ public partial class DbReader
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
+                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
             WHERE " + BuildCallerContainerPredicate("f", "r");
@@ -90,7 +94,11 @@ public partial class DbReader
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
                    MIN(line) AS first_line, COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
+                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -98,7 +106,7 @@ public partial class DbReader
         {
             sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name";
         }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -134,6 +142,7 @@ public partial class DbReader
         {
             var primaryKind = reader.GetString(5);
             var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
+            var counts = BuildReferenceKindCounts(reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11));
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -144,6 +153,8 @@ public partial class DbReader
                 ReferenceKind = primaryKind,
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
+                ReferenceKindCounts = counts,
+                ReferenceWeightScore = reader.GetDouble(12),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -327,7 +338,7 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
@@ -350,7 +361,11 @@ public partial class DbReader
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
+                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
+                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
@@ -397,7 +412,11 @@ public partial class DbReader
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
                    reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds
+                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
+                   " + ReferenceKindCountSql("reference_kind", "call") + @" AS call_count,
+                   " + ReferenceKindCountSql("reference_kind", "instantiate") + @" AS instantiate_count,
+                   " + ReferenceKindCountSql("reference_kind", "subscribe") + @" AS subscribe_count,
+                   " + ReferenceWeightedScoreSql("reference_kind") + @" AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         }
@@ -405,7 +424,7 @@ public partial class DbReader
         {
             sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind";
         }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -444,6 +463,7 @@ public partial class DbReader
         {
             var primaryKind = reader.GetString(5);
             var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
+            var counts = BuildReferenceKindCounts(reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11));
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -454,6 +474,8 @@ public partial class DbReader
                 ReferenceKind = primaryKind,
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
+                ReferenceKindCounts = counts,
+                ReferenceWeightScore = reader.GetDouble(12),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -632,6 +654,34 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
+    }
+
+    private static string ReferenceKindCountSql(string columnSql, string kind) =>
+        $"SUM(CASE WHEN {columnSql} = '{kind}' THEN 1 ELSE 0 END)";
+
+    private static string ReferenceWeightedScoreSql(string columnSql) => $@"
+        SUM(CASE {columnSql}
+            WHEN 'instantiate' THEN 3.0
+            WHEN 'call' THEN 1.0
+            WHEN 'subscribe' THEN 0.1
+            ELSE 0.0
+        END)";
+
+    private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
+    {
+        ReferenceRankMode.Count => "reference_count DESC",
+        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'subscribe' THEN 2 ELSE 3 END, reference_count DESC",
+        _ => "weighted_score DESC, reference_count DESC",
+    };
+
+    private static IReadOnlyDictionary<string, int> BuildReferenceKindCounts(int callCount, int instantiateCount, int subscribeCount)
+    {
+        return new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["call"] = callCount,
+            ["instantiate"] = instantiateCount,
+            ["subscribe"] = subscribeCount,
+        };
     }
 
     /// <summary>

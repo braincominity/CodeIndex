@@ -223,6 +223,33 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void InsertManualReferences(string path, string containerName, string target, string kind, int count)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 100,
+            Lines = count + 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var references = Enumerable.Range(1, count)
+            .Select(line => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = target,
+                ReferenceKind = kind,
+                Line = line,
+                Column = 9,
+                Context = $"{kind} {target}",
+                ContainerKind = "class",
+                ContainerName = containerName,
+            })
+            .ToList();
+        _writer.InsertReferences(references);
+    }
+
     [Fact]
     public void Search_FindsMatchingChunks()
     {
@@ -300,6 +327,30 @@ public class DbReaderTests : IDisposable
         Assert.Equal("SubscribeOnlyTarget", hotspots[1].Symbol.Name);
         Assert.Equal(5, hotspots[1].ReferenceCount);
         Assert.Equal(1.5, hotspots[1].ReferenceScore, precision: 6);
+    }
+
+    [Fact]
+    public void GetCallers_DefaultWeightedRankingPrioritizesInstantiateOverNoisySubscriptions()
+    {
+        const string target = "TargetService";
+        InsertManualReferences("src/Factory.cs", "Factory", target, "instantiate", 3);
+        InsertManualReferences("src/EventBus.cs", "EventBus", target, "subscribe", 50);
+
+        var weighted = _reader.GetCallers(target, lang: "csharp", exact: true);
+        var countRanked = _reader.GetCallers(target, lang: "csharp", exact: true, rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal("Factory", weighted[0].CallerName);
+        Assert.Equal(3, weighted[0].ReferenceCount);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["call"]);
+        Assert.Equal(3, weighted[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["subscribe"]);
+        Assert.Equal(9.0, weighted[0].ReferenceWeightScore, precision: 3);
+
+        Assert.Equal("EventBus", countRanked[0].CallerName);
+        Assert.Equal(50, countRanked[0].ReferenceCount);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
     }
 
     [Fact]
