@@ -92,6 +92,59 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
+    {
+        using var cts = new CancellationTokenSource();
+        var firstCancelHandled = false;
+
+        var firstEventShouldCancelDefaultExit = IndexCommandRunner.HandleIndexCancelKeyPress(cts, ref firstCancelHandled);
+        var secondEventShouldCancelDefaultExit = IndexCommandRunner.HandleIndexCancelKeyPress(cts, ref firstCancelHandled);
+
+        Assert.True(firstEventShouldCancelDefaultExit);
+        Assert.True(cts.IsCancellationRequested);
+        Assert.False(secondEventShouldCancelDefaultExit);
+    }
+
+    [Fact]
+    public void Run_IndexCancellation_ReturnsInterruptedExitCodeAndMessage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_cancel_index");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "class Program { static void Main() {} }");
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    Console.SetError(stderr);
+
+                    var exitCode = IndexCommandRunner.Run([projectRoot], _jsonOptions, cts);
+
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    Assert.Contains($"Error [{CommandErrorCodes.Interrupted}]: Interrupted; partial progress saved", stderr.ToString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_WatchFlag_SetsWatch()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--watch"]);
