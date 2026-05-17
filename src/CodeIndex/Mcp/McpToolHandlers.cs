@@ -2351,9 +2351,12 @@ public partial class McpServer
         // 2. Validate optional parameters / 任意パラメータのバリデーション
         var language = args?["language"]?.GetValue<string>();
         var context = args?["context"]?.GetValue<string>();
+        var toolInvocationContext = args?["toolInvocationContext"]?.GetValue<string>();
 
         if (context != null && context.Length > MaxContextLength)
             return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
+        if (toolInvocationContext != null && toolInvocationContext.Length > MaxContextLength)
+            return CreateToolErrorResponse(id, $"Tool invocation context too long ({toolInvocationContext.Length} chars, max {MaxContextLength})");
 
         // 3. Source code leak detection — reject if code is detected
         //    ソースコード漏洩検出 — コードが検出されたら拒否
@@ -2362,6 +2365,8 @@ public partial class McpServer
 
         if (context != null && SourceCodeDetector.ContainsSourceCode(context))
             return CreateToolErrorResponse(id, "Context appears to contain source code. Please describe what you were trying to do without including code.");
+        if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
+            return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -2393,6 +2398,12 @@ public partial class McpServer
             Context = context,
             Hash = hash,
             CreatedAt = DateTime.UtcNow,
+            CreatedByAgent = ResolveSuggestionAgent(),
+            SessionId = _sessionId,
+            ClientVersion = _version,
+            McpClientName = _clientName,
+            McpClientVersion = _clientVersion,
+            ToolInvocationContext = toolInvocationContext,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -2437,6 +2448,11 @@ public partial class McpServer
         if (result.GitHubIssueUrl != null)
             payload["github_issue_url"] = result.GitHubIssueUrl;
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private string ResolveSuggestionAgent()
+    {
+        return string.IsNullOrWhiteSpace(_caller) ? "unknown" : _caller;
     }
 
 }
