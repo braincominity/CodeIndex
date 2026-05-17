@@ -208,7 +208,7 @@ sections below show examples and option details for the most common workflows.
 | Navigation | `symbols` | Search extracted symbols by name, kind, language, and path | `symbols` |
 | Navigation | `outline` | Show the symbol outline for one indexed file | `outline` |
 | Navigation | `inspect` | Bundle definition, references, callers, callees, nearby symbols, and trust metadata | `analyze_symbol` |
-| Repository map | `files` | List indexed files with language, size, and line counts | -- |
+| Repository map | `files` | List indexed files with language, size, and line counts | `files` |
 | Repository map | `map` | Summarize languages, modules, hotspots, and likely entrypoints | `map` |
 | Graph | `references` | Find indexed references for a symbol name | `references` |
 | Graph | `callers` | Find callers of a symbol in graph-supported languages | `callers` |
@@ -1888,7 +1888,7 @@ cdidx index . --quiet
 | Navigation | `symbols` | name / kind / language / path で symbol を検索 | `symbols` |
 | Navigation | `outline` | 1 ファイルの symbol outline を表示 | `outline` |
 | Navigation | `inspect` | definition / references / callers / callees / nearby symbols / trust metadata をまとめて取得 | `analyze_symbol` |
-| Repository map | `files` | indexed files を language / size / lines 付きで一覧 | -- |
+| Repository map | `files` | indexed files を language / size / lines 付きで一覧 | `files` |
 | Repository map | `map` | languages / modules / hotspots / likely entrypoints を要約 | `map` |
 | Graph | `references` | symbol name の indexed references を検索 | `references` |
 | Graph | `callers` | graph-supported language で symbol の callers を検索 | `callers` |
