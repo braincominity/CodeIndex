@@ -683,9 +683,34 @@ public static partial class SymbolExtractor
             return false;
 
         var parameters = signature[(open + 1)..close].Replace("*", string.Empty, StringComparison.Ordinal);
-        return parameters.Contains(typeName, StringComparison.Ordinal)
-            || parameters.Contains(GetGoReceiverTypeLookupName(typeName), StringComparison.Ordinal);
+        var bareTypeName = GetGoReceiverTypeLookupName(typeName);
+        return ContainsGoTypeToken(parameters, typeName)
+            || ContainsGoTypeToken(parameters, bareTypeName);
     }
+
+    private static bool ContainsGoTypeToken(string text, string typeName)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(typeName, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + typeName.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsGoTypeTokenPart(before) && !IsGoTypeTokenPart(after))
+                return true;
+
+            searchStart = afterIndex;
+        }
+
+        return false;
+    }
+
+    private static bool IsGoTypeTokenPart(char ch)
+        => ch == '_' || ch == '.' || char.IsLetterOrDigit(ch);
 
     private static bool GoSignatureHasNoParameters(string signature)
     {

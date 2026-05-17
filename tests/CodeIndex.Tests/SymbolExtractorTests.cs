@@ -135,6 +135,9 @@ public class SymbolExtractorTests
             func ExampleWidget() {}
             func helper() {}
             func TestExporter() {}
+            func TestTransaction(t Transaction) {}
+            func BenchmarkBuilder(b Builder) {}
+            func FuzzFactory(f Factory) {}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content, filePath: "widget_test.go");
@@ -151,6 +154,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == "example");
         Assert.Contains(symbols, symbol => symbol.Name == "helper" && symbol.SubKind == "test_helper");
         Assert.Contains(symbols, symbol => symbol.Name == "TestExporter" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestTransaction" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkBuilder" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzFactory" && symbol.SubKind == "test_helper");
     }
 
     [Fact]

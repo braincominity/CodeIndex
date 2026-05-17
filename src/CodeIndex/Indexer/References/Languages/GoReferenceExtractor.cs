@@ -63,6 +63,9 @@ internal static class GoReferenceExtractor
 
         foreach (System.Text.RegularExpressions.Match match in ChannelReceiveRegex.Matches(preparedLine))
         {
+            if (!IsGoChannelReceiveArrow(preparedLine, match.Index))
+                continue;
+
             ReferenceExtractor.AddReference(
                 references,
                 seen,
@@ -75,6 +78,30 @@ internal static class GoReferenceExtractor
                 resolveContainerForColumn(match.Groups["name"].Index));
         }
     }
+
+    private static bool IsGoChannelReceiveArrow(string line, int arrowIndex)
+    {
+        var cursor = arrowIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+            cursor--;
+        if (cursor < 0)
+            return true;
+
+        if (!IsGoExpressionEnd(line[cursor]))
+            return true;
+
+        var tokenEnd = cursor + 1;
+        while (cursor >= 0 && IsGoIdentifierPart(line[cursor]))
+            cursor--;
+        var token = cursor + 1 < tokenEnd ? line[(cursor + 1)..tokenEnd] : string.Empty;
+        return token is "case" or "return" or "select";
+    }
+
+    private static bool IsGoExpressionEnd(char ch)
+        => ch == '_' || char.IsLetterOrDigit(ch) || ch is ')' or ']';
+
+    private static bool IsGoIdentifierPart(char ch)
+        => ch == '_' || char.IsLetterOrDigit(ch);
 
     public static void EmitTypePositionReferences(
         string preparedLine,

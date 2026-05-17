@@ -53,6 +53,10 @@ public class ReferenceExtractorTests
             reference.SymbolName == "ch"
             && reference.ReferenceKind == "channel_send"
             && reference.Line == 10);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "value"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 10);
         Assert.Contains(references, reference =>
             reference.SymbolName == "ch"
             && reference.ReferenceKind == "channel_receive"
