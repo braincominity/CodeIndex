@@ -281,21 +281,17 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
-    public void StreamingReadShare_AllowsConcurrentReplacementWrite()
+    public void Load_FilteredReadDoesNotBlockSubsequentReplacementWrite()
     {
-        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
         _store.TryAdd(MakeRecord("other", null, "Existing suggestion"));
 
-        using var readHandle = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            SuggestionStore.StreamingReadFileShare);
+        var loaded = _store.LoadByStatus(submittedToGitHub: false);
 
         var record = MakeRecord("other", null, "Concurrent write suggestion");
 
         var ex = Record.Exception(() => _store.TryAdd(record));
 
+        Assert.Single(loaded);
         Assert.Null(ex);
         Assert.Contains(_store.LoadAll(), s => s.Hash == record.Hash);
     }

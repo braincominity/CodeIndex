@@ -301,15 +301,16 @@ public class SuggestionStore
         if (!File.Exists(_filePath))
             return new List<SuggestionRecord>();
 
-        if (new FileInfo(_filePath).Length == 0)
+        var snapshot = File.ReadAllBytes(_filePath);
+        if (snapshot.Length == 0)
             return new List<SuggestionRecord>();
 
-        if (IsEmptyOrWhitespaceStoreFile())
+        if (IsEmptyOrJsonWhitespace(snapshot))
             return new List<SuggestionRecord>();
 
         try
         {
-            return ReadFilteredUnlockedAsync(predicate, skip, take).GetAwaiter().GetResult();
+            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take).GetAwaiter().GetResult();
         }
         catch (JsonException)
         {
@@ -320,21 +321,25 @@ public class SuggestionStore
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
     }
 
-    private bool IsEmptyOrWhitespaceStoreFile()
+    private static bool IsEmptyOrJsonWhitespace(byte[] bytes)
     {
-        using var stream = new FileStream(
-            _filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            StreamingReadFileShare);
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var buffer = new char[4096];
-        int read;
-        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        var offset = bytes.Length >= 3
+            && bytes[0] == 0xEF
+            && bytes[1] == 0xBB
+            && bytes[2] == 0xBF
+            ? 3
+            : 0;
+
+        for (var i = offset; i < bytes.Length; i++)
         {
-            for (var i = 0; i < read; i++)
+            switch (bytes[i])
             {
-                if (!char.IsWhiteSpace(buffer[i]))
+                case (byte)' ':
+                case (byte)'\t':
+                case (byte)'\r':
+                case (byte)'\n':
+                    continue;
+                default:
                     return false;
             }
         }
@@ -342,7 +347,8 @@ public class SuggestionStore
         return true;
     }
 
-    private async Task<List<SuggestionRecord>> ReadFilteredUnlockedAsync(
+    private static async Task<List<SuggestionRecord>> ReadFilteredSnapshotAsync(
+        byte[] snapshot,
         Func<SuggestionRecord, bool> predicate,
         int skip,
         int? take)
@@ -350,13 +356,7 @@ public class SuggestionStore
         var results = new List<SuggestionRecord>();
         var skipped = 0;
 
-        await using var stream = new FileStream(
-            _filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            StreamingReadFileShare,
-            bufferSize: 16 * 1024,
-            useAsync: true);
+        await using var stream = new MemoryStream(snapshot, writable: false);
 
         await foreach (var record in JsonSerializer.DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions))
         {
