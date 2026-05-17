@@ -14,7 +14,7 @@ public static partial class SymbolExtractor
         @"\binline\s+class\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex KotlinInlineFunctionSignatureRegex = new(
-        @"\binline\s+fun\b",
+        @"\binline\b(?:(?:\s+(?:suspend|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)))*\s+fun\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex KotlinReifiedTypeParameterSignatureRegex = new(
         @"<[^>\r\n]*\breified\b[^>\r\n]*>",

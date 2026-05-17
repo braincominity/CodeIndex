@@ -15010,6 +15010,7 @@ public class SymbolExtractorTests
             inline class LegacyId(val value: String)
             inline fun <reified T> parse(): T = TODO()
             inline fun render(block: () -> Unit) = block()
+            inline suspend fun <reified T> load(): T = TODO()
             fun value(inline: String): String = inline
             """;
 
@@ -15019,6 +15020,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyId" && s.SubKind == "kotlin_inline_class");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.SubKind == "kotlin_inline_reified_function");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render" && s.SubKind == "kotlin_inline_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.SubKind == "kotlin_inline_reified_function");
         Assert.DoesNotContain(symbols, s => s.Name == "value" && s.SubKind != null);
     }
 
