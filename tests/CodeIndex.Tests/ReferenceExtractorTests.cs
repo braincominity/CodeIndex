@@ -71,6 +71,176 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpStaticInterfaceMembers_EmitImplicitImplementationReferences()
+    {
+        const string content = """
+            public interface IParseable<T>
+            {
+                static abstract T Parse(string s);
+                static virtual T Create() => default!;
+                static abstract int Scale { get; }
+            }
+
+            public interface ICodeParseable<T>
+            {
+                static abstract T Parse(int code);
+            }
+
+            public interface IAdditive<TSelf>
+            {
+                static abstract TSelf Add(TSelf left, TSelf right);
+                static abstract bool TryParse(string s, out TSelf value);
+            }
+
+            public interface IWrongReturn<T>
+            {
+                static abstract int Parse(string s);
+            }
+
+            public interface IWrongProperty
+            {
+                static abstract string Scale { get; }
+            }
+
+            public readonly struct Money : IParseable<Money>, IAdditive<Money>
+            {
+                public static Money Parse(string s) => new();
+                public static Money Create() => new();
+                public static int Scale => 1;
+                public static Money Add(Money left, Money right) => new();
+                public static bool TryParse(string s, out Money value)
+                {
+                    value = new();
+                    return true;
+                }
+            }
+
+            public readonly struct TextOnly : ICodeParseable<TextOnly>
+            {
+                public static TextOnly Parse(string s) => new();
+            }
+
+            public readonly struct WrongRef : IAdditive<WrongRef>
+            {
+                public static WrongRef Add(WrongRef left, WrongRef right) => new();
+                public static bool TryParse(string s, ref WrongRef value) => true;
+            }
+
+            public readonly struct WrongReturn : IWrongReturn<WrongReturn>
+            {
+                public static WrongReturn Parse(string s) => new();
+            }
+
+            public readonly struct WrongProperty : IWrongProperty
+            {
+                public static int Scale => 2;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Parse"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static abstract", StringComparison.Ordinal) == true);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Create"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static virtual", StringComparison.Ordinal) == true);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.Name == "Scale"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static abstract", StringComparison.Ordinal) == true);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Parse"
+            && reference.Context == "public static Money Parse(string s) => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Create"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Create"
+            && reference.Context == "public static Money Create() => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Scale"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Scale"
+            && reference.Context == "public static int Scale => 1;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Add"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Add"
+            && reference.Context == "public static Money Add(Money left, Money right) => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "TryParse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "TryParse"
+            && reference.Context == "public static bool TryParse(string s, out Money value)");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static TextOnly Parse(string s) => new();");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "TryParse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static bool TryParse(string s, ref WrongRef value) => true;");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static WrongReturn Parse(string s) => new();");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Scale"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static int Scale => 2;");
+    }
+
+    [Fact]
+    public void Extract_CsharpStaticInterfaceMembers_UsesWorkspaceContractsAcrossFiles()
+    {
+        const string interfaceContent = """
+            public interface IParseable<T>
+            {
+                static abstract T Parse(string s);
+            }
+            """;
+        const string implementationContent = """
+            public readonly struct Money : IParseable<Money>
+            {
+                public static Money Parse(string s) => new();
+            }
+            """;
+
+        var interfaceSymbols = SymbolExtractor.Extract(1, "csharp", interfaceContent, "IParseable.cs");
+        var implementationSymbols = SymbolExtractor.Extract(2, "csharp", implementationContent, "Money.cs");
+        var sameFileOnlyReferences = ReferenceExtractor.Extract(2, "csharp", implementationContent, implementationSymbols, "Money.cs");
+        var workspaceReferences = ReferenceExtractor.Extract(
+            2,
+            "csharp",
+            implementationContent,
+            implementationSymbols,
+            "Money.cs",
+            interfaceSymbols.Concat(implementationSymbols).ToList());
+
+        Assert.DoesNotContain(sameFileOnlyReferences, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static Money Parse(string s) => new();");
+        Assert.Contains(workspaceReferences, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Parse"
+            && reference.Context == "public static Money Parse(string s) => new();");
+    }
+
+    [Fact]
     public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
     {
         var outer = Container("outer", "class", 1, 100);
@@ -26192,6 +26362,43 @@ public class ReferenceExtractorTests
         var myAudit = Assert.Single(references.Where(r => r.SymbolName == "MyAudit"));
         Assert.Equal("attribute", myAudit.ReferenceKind);
         Assert.Equal(2, references.Count(r => r.SymbolName == "MyAttr" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericNoArgAttribute_RecordsTypeArgumentReferences()
+    {
+        // Regression (issue #1455): C# 11 generic attributes must still emit references for
+        // custom type arguments inside the attribute's `<...>` list.
+        // リグレッション (issue #1455): C# 11 の generic attribute では、属性の `<...>` 内に
+        // 現れるユーザー定義型引数も参照として記録すること。
+        const string content = """
+            public class Payload
+            {
+            }
+
+            public class Converter
+            {
+            }
+
+            [Serializable<Payload>]
+            [MyAttr<Dictionary<string, Converter>>]
+            public class Data
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var serializable = Assert.Single(references.Where(r => r.SymbolName == "Serializable"));
+        Assert.Equal("attribute", serializable.ReferenceKind);
+        var myAttr = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", myAttr.ReferenceKind);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Converter" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
     }
 

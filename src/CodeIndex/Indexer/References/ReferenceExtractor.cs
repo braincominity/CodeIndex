@@ -849,7 +849,8 @@ public static partial class ReferenceExtractor
         string? lang,
         string content,
         IReadOnlyList<SymbolRecord> symbols,
-        string? path = null)
+        string? path = null,
+        IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
     {
         var requestedLanguage = lang;
         if (!SupportsLanguage(lang))
@@ -1112,7 +1113,17 @@ public static partial class ReferenceExtractor
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         if (language == "csharp")
+        {
             EmitCSharpAsyncIteratorReferences(fileId, lines, structuralLines, symbols, references, seen);
+            EmitCSharpStaticInterfaceMemberImplementationReferences(
+                fileId,
+                lines,
+                structuralLines,
+                symbols,
+                workspaceSymbols ?? symbols,
+                references,
+                seen);
+        }
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
@@ -2746,6 +2757,27 @@ public static partial class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    var genericStart = nameIndex + rawName.Length;
+                    while (genericStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[genericStart]))
+                        genericStart++;
+                    if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
+                    {
+                        var genericEnd = genericStart;
+                        if (TrySkipBalancedGenericArgs(preparedLine, ref genericEnd, out _)
+                            && genericEnd > genericStart + 2)
+                        {
+                            AddTypeExpressionSegments(
+                                references,
+                                seen,
+                                fileId,
+                                preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
+                                genericStart + 1,
+                                context,
+                                lineNumber,
+                                container,
+                                "csharp");
+                        }
+                    }
                     if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName, preparedLine, nameIndex) is { } callerInfoAttributeTypeName)
                     {
                         AddReference(
