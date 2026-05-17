@@ -4865,7 +4865,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct", "union"];
+        ["class", "delegate", "enum", "event", "function", "hook", "import", "interface", "namespace", "property", "struct", "union"];
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
@@ -4876,7 +4876,7 @@ public static class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -4885,7 +4885,7 @@ public static class QueryCommandRunner
     // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
     // C++ の `friend` は graph に出す coupling edge。
     private static readonly string[] CallGraphOnlyReferenceKinds =
-        ["call", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
+        ["call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {

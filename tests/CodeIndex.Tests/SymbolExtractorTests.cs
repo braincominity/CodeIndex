@@ -12,6 +12,34 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_ClassifiesReactCustomHookFunctions(string language)
+    {
+        var content = """
+            import { useEffect, useState } from "react";
+
+            const useLocalState = () => {
+              const [value, setValue] = useState(0);
+              useEffect(() => setValue(value + 1), [value]);
+              return value;
+            };
+
+            export const useComposedHook = () => {
+              return useLocalState();
+            };
+
+            const ordinaryFunction = () => useLocalState();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useLocalState");
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useComposedHook");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "ordinaryFunction");
+    }
+
     [Fact]
     public void Extract_AllPatternLanguages_IsDeterministicUnderParallelCalls()
     {

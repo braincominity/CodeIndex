@@ -1023,7 +1023,7 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                              (symbol.Kind == "function" || symbol.Kind == "class"
+                              (symbol.Kind == "function" || symbol.Kind == "hook" || symbol.Kind == "class"
                                || symbol.Kind == "struct" || symbol.Kind == "namespace"
                                || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
@@ -2375,6 +2375,13 @@ public static partial class ReferenceExtractor
                 if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return true;
+                }
+
+                if (language is "javascript" or "typescript"
+                    && SymbolExtractor.IsJavaScriptTypeScriptReactHookName(normalizedName))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "consumes_hook", context, lineNumber, callContainer);
                     return true;
                 }
 
