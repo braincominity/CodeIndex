@@ -1194,7 +1194,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
 - JavaScript/TypeScript exports: barrel re-exports, local and string-literal export aliases, exported variables, default exports, destructured exports, and CommonJS named/default exports are indexed as exported symbols.
 - React hooks: JavaScript/TypeScript functions whose names follow `use[A-Z]...` are indexed as `hook` symbols, and calls to `useFoo()` / built-in hooks such as `useState()` are recorded as `consumes_hook` references for hook-composition graph queries.
-- JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static.
+- JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
@@ -2862,7 +2862,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
 - JavaScript/TypeScript export: barrel re-export、local / string-literal export alias、exported variable、default export、destructured export、CommonJS named/default export を exported symbol として索引します。
 - React hooks: JavaScript/TypeScript で `use[A-Z]...` の命名規則に従う関数は `hook` シンボルとして索引し、`useFoo()` や `useState()` などの hook 呼び出しは hook composition graph 用の `consumes_hook` 参照として記録します。
-- JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。
+- JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
