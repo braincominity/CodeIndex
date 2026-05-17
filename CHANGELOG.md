@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.22.3] - 2026-05-17
+
+#### Fixed
+
+- **Release verification now waits for uploaded assets before probing downloads** — the release workflow now waits until every release file is visible in the GitHub API as an uploaded, non-empty asset, then verifies the installer assets with ranged GET requests for up to ten minutes so newly created releases do not fail on slow GitHub asset processing or HEAD/CDN mismatches.
+
 ### [1.22.2] - 2026-05-17
 
 #### Fixed
@@ -2383,6 +2389,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.22.3] - 2026-05-17
+
+#### 修正
+
+- **リリース検証が download 確認前に asset の upload 完了を待つようになりました** — release workflow は公開対象の全ファイルが GitHub API 上で uploaded かつ非空として見えるまで待ってから、installer が取得する asset を最大 10 分間 Range GET で確認するようになり、新規リリース時の GitHub asset 処理遅延や HEAD/CDN の不一致による失敗を防ぎます。
+
 ### [1.22.2] - 2026-05-17
 
 #### 修正
@@ -4744,7 +4756,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...HEAD
+[1.22.3]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...v1.22.3
 [1.22.2]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...v1.22.2
 [1.22.1]: https://github.com/Widthdom/CodeIndex/compare/v1.22.0...v1.22.1
 [1.22.0]: https://github.com/Widthdom/CodeIndex/compare/v1.21.0...v1.22.0
