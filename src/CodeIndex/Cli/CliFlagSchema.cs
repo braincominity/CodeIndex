@@ -171,6 +171,8 @@ internal static class CliFlagSchema
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
             new() { Name = "--path", ValuePlaceholder = "<glob>", Description = "Path filter", Commands = Set(PathFilterCommands) },
+            new() { Name = "--project", ValuePlaceholder = "<name|path>", Description = "Filter to a .sln/.csproj project", Commands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
+            new() { Name = "--solution", ValuePlaceholder = "<path>", Description = "Solution file used to resolve --project", Commands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--exclude-path", ValuePlaceholder = "<glob>", Description = "Exclude path", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },

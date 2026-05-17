@@ -771,6 +771,7 @@ public class DbContext : IDisposable
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 kind            TEXT,
+                sub_kind        TEXT,
                 name            TEXT,
                 line            INTEGER,
                 start_line      INTEGER,
@@ -828,6 +829,7 @@ public class DbContext : IDisposable
         EnsureColumn("files", "modified", "DATETIME");
         EnsureColumn("files", "indexed_at", "DATETIME");
         EnsureColumn("symbols", "start_line", "INTEGER");
+        EnsureColumn("symbols", "sub_kind", "TEXT");
         EnsureColumn("symbols", "start_column", "INTEGER");
         EnsureColumn("symbols", "end_line", "INTEGER");
         EnsureColumn("symbols", "body_start_line", "INTEGER");

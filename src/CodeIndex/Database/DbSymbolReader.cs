@@ -373,7 +373,7 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
-            SELECT f.path, f.lang, s.kind, s.name, s.line,
+            SELECT f.path, f.lang, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
                    {GetSymbolColumnSql("body_start_line")} AS body_start_line,
@@ -507,17 +507,18 @@ public partial class DbReader
                 Path = reader.GetString(0),
                 Lang = GetNullableString(reader, 1),
                 Kind = reader.GetString(2),
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = GetInt32OrFallback(reader, 5, 4),
-                EndLine = GetInt32OrFallback(reader, 6, 4),
-                BodyStartLine = GetNullableInt32(reader, 7),
-                BodyEndLine = GetNullableInt32(reader, 8),
-                Signature = GetNullableString(reader, 9),
-                ContainerKind = GetNullableString(reader, 10),
-                ContainerName = GetNullableString(reader, 11),
-                Visibility = GetNullableString(reader, 12),
-                ReturnType = GetNullableString(reader, 13),
+                SubKind = GetNullableString(reader, 3),
+                Name = reader.GetString(4),
+                Line = reader.GetInt32(5),
+                StartLine = GetInt32OrFallback(reader, 6, 5),
+                EndLine = GetInt32OrFallback(reader, 7, 5),
+                BodyStartLine = GetNullableInt32(reader, 8),
+                BodyEndLine = GetNullableInt32(reader, 9),
+                Signature = GetNullableString(reader, 10),
+                ContainerKind = GetNullableString(reader, 11),
+                ContainerName = GetNullableString(reader, 12),
+                Visibility = GetNullableString(reader, 13),
+                ReturnType = GetNullableString(reader, 14),
             });
         }
         return results;
@@ -550,6 +551,7 @@ public partial class DbReader
                 Path = symbol.Path,
                 Lang = symbol.Lang,
                 Kind = symbol.Kind,
+                SubKind = symbol.SubKind,
                 Name = symbol.Name,
                 Line = symbol.Line,
                 StartLine = symbol.StartLine,
@@ -1639,6 +1641,21 @@ public partial class DbReader
                         THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
                     ELSE NULL
                 END";
+        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
+            && _symbolColumns.Contains("body_end_line")
+            && _symbolColumns.Contains("signature")
+            && _symbolColumns.Contains("container_kind")
+            ? @"
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND s.container_kind = 'function'
+                      AND (
+                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
+                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
+                      )
+                  )"
+            : string.Empty;
         // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
         // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
         // back to codebase-wide counting. Cross-file grouping is allowed only when the
@@ -1666,7 +1683,7 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')";
+                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql;
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
@@ -1998,6 +2015,21 @@ public partial class DbReader
                         THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
                     ELSE NULL
                 END";
+        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
+            && _symbolColumns.Contains("body_end_line")
+            && _symbolColumns.Contains("signature")
+            && _symbolColumns.Contains("container_kind")
+            ? @"
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND s.container_kind = 'function'
+                      AND (
+                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
+                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
+                      )
+                  )"
+            : string.Empty;
         var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         var sql = $@"
             WITH all_candidate_symbols AS (
@@ -2014,7 +2046,7 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')";
+                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql;
 
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;

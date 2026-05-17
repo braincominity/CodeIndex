@@ -380,8 +380,13 @@ public class FileIndexer
     }
 
     public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
-    // Default maximum file size to index (10 MiB) / インデックス対象の既定最大ファイルサイズ (10 MiB)
-    public const long DefaultMaxFileSizeBytes = 10 * 1024 * 1024;
+    // Default maximum file size to index (4 MiB). Larger generated/vendor payloads
+    // can still be opted in with --max-file-bytes, but the default path should not
+    // allocate a single multi-megabyte byte[] for common source scans.
+    // インデックス対象の既定最大ファイルサイズ (4 MiB)。生成物や vendor の大容量 payload は
+    // --max-file-bytes で明示的に opt-in できるが、既定経路では一般的な source scan で
+    // multi-MB の単一 byte[] を確保しない。
+    public const long DefaultMaxFileSizeBytes = 4 * 1024 * 1024;
     // Extensionless shebang detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.

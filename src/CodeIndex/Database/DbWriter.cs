@@ -532,7 +532,7 @@ public class DbWriter
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO symbols (
-                    file_id, kind, name, line, start_line, start_column, end_line,
+                    file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
@@ -540,7 +540,7 @@ public class DbWriter
                     name_folded
                 )
                 VALUES (
-                    @fid, @kind, @name, @line, @startLine, @startColumn, @endLine,
+                    @fid, @kind, @subKind, @name, @line, @startLine, @startColumn, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
                     @containerKind, @containerName, @containerQualifiedName, @familyKey,
                     @visibility, @returnType,
@@ -549,6 +549,7 @@ public class DbWriter
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
+            var pSubKind = cmd.Parameters.Add("@subKind", SqliteType.Text);
             var pName = cmd.Parameters.Add("@name", SqliteType.Text);
             var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
             var pStartLine = cmd.Parameters.Add("@startLine", SqliteType.Integer);
@@ -574,6 +575,7 @@ public class DbWriter
                 var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
                 pFid.Value = symbol.FileId;
                 pKind.Value = symbol.Kind;
+                pSubKind.Value = (object?)symbol.SubKind ?? DBNull.Value;
                 pName.Value = symbol.Name;
                 pLine.Value = symbol.Line;
                 pStartLine.Value = startLine;
