@@ -2040,6 +2040,9 @@ public partial class McpServer
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
 
+        var hadCSharpStaticInterfaceContractsBeforePurge =
+            writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
+
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
         if (purged > 0)
@@ -2052,6 +2055,8 @@ public partial class McpServer
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files);
+        if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
+            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         int processed = 0, skipped = 0, errors = 0;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
