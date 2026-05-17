@@ -379,8 +379,9 @@ public class FileIndexer
         return fileName.StartsWith(AppleDoublePrefix, StringComparison.Ordinal);
     }
 
-    // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)
-    private const long MaxFileSize = 10 * 1024 * 1024;
+    public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
+    // Default maximum file size to index (10 MiB) / インデックス対象の既定最大ファイルサイズ (10 MiB)
+    public const long DefaultMaxFileSizeBytes = 10 * 1024 * 1024;
     // Extensionless shebang detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
@@ -390,6 +391,7 @@ public class FileIndexer
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
+    private readonly long _maxFileSizeBytes;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -890,14 +892,60 @@ public class FileIndexer
     {
     }
 
-    public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot)
+    public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot, long? maxFileSizeBytes = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
+        _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
+    }
+
+    internal static bool TryParseMaxFileSizeBytes(string? value, out long bytes)
+    {
+        bytes = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var trimmed = value.Trim();
+        var splitAt = trimmed.Length;
+        while (splitAt > 0 && char.IsLetter(trimmed[splitAt - 1]))
+            splitAt--;
+
+        var numberPart = trimmed[..splitAt].Trim();
+        var suffix = trimmed[splitAt..].Trim().ToLowerInvariant();
+        if (!long.TryParse(numberPart, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var number) || number <= 0)
+            return false;
+
+        long multiplier = suffix switch
+        {
+            "" or "b" or "byte" or "bytes" => 1,
+            "k" or "kb" or "kib" => 1024L,
+            "m" or "mb" or "mib" => 1024L * 1024L,
+            "g" or "gb" or "gib" => 1024L * 1024L * 1024L,
+            _ => 0,
+        };
+        if (multiplier == 0)
+            return false;
+
+        if (number > int.MaxValue / multiplier)
+            return false;
+
+        bytes = number * multiplier;
+        return true;
+    }
+
+    private static long ResolveMaxFileSizeBytes(long? explicitMaxFileSizeBytes)
+    {
+        if (explicitMaxFileSizeBytes is > 0 and <= int.MaxValue)
+            return explicitMaxFileSizeBytes.Value;
+
+        var envValue = Environment.GetEnvironmentVariable(MaxFileSizeEnvironmentVariable);
+        return TryParseMaxFileSizeBytes(envValue, out var envBytes)
+            ? envBytes
+            : DefaultMaxFileSizeBytes;
     }
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
@@ -1961,22 +2009,22 @@ public class FileIndexer
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
 
         // Read raw bytes through a single FileStream and cap the accumulated payload at
-        // MaxFileSize so a file that grew between the size probe and the read can no
+        // the configured max-file limit so a file that grew between the size probe and the read can no
         // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
         // left a TOCTOU window where an attacker (or any build/log emitter rapidly
         // appending to a generated file) could grow a 1 MB file to multi-GB between
         // stat and read and force the indexer into an OOM-sized allocation; reading
         // through one open handle removes the second stat call, and the read loop's
-        // running total guarantees we never accumulate more than MaxFileSize bytes
+        // running total guarantees we never accumulate more than the configured max-file bytes
         // regardless of how aggressively a concurrent writer extends the file.
-        // ファイルを 1 本の FileStream で開き、MaxFileSize を上限として累積バッファを
+        // ファイルを 1 本の FileStream で開き、設定された max-file byte 上限として累積バッファを
         // 制限することで、サイズ確認と読み込みの間にファイルが肥大化しても上限を
         // 回避できないようにする。`FileInfo.Length` と `File.ReadAllBytes` を分離して
         // いた従来実装では、stat と read の間に攻撃者 (もしくは自動生成ファイルを高速
         // に追記し続けるビルド/ログ系) が 1 MB のファイルを数 GB まで肥大化させて
         // インデクサに巨大確保を強制できる TOCTOU 経路があったが、1 本のオープン
         // ハンドルで読むことで 2 回目の stat を排除し、ループ側の総バイト数チェック
-        // により並行追記がどれほど激しくても MaxFileSize 以上の確保は発生しない。
+        // により並行追記がどれほど激しくても設定上限以上の確保は発生しない。
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
@@ -1990,14 +2038,14 @@ public class FileIndexer
             useAsync: false))
         {
             var initialLength = stream.Length;
-            if (initialLength > MaxFileSize)
-                throw new InvalidOperationException($"File too large ({initialLength / 1024 / 1024} MB > {MaxFileSize / 1024 / 1024} MB limit)");
+            if (initialLength > _maxFileSizeBytes)
+                throw new InvalidOperationException(BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
 
             // Pre-size the accumulator to the observed length but cap initial capacity
-            // at MaxFileSize so a tampered Length cannot force a huge up-front allocation.
-            // 初期容量は観測した長さに合わせるが MaxFileSize で打ち切り、Length を偽装
+            // at the configured limit so a tampered Length cannot force a huge up-front allocation.
+            // 初期容量は観測した長さに合わせるが設定上限で打ち切り、Length を偽装
             // されても巨大な事前確保を起こさないようにする。
-            var initialCapacity = (int)Math.Min(initialLength, MaxFileSize);
+            var initialCapacity = (int)Math.Min(initialLength, _maxFileSizeBytes);
             using var accumulator = new MemoryStream(initialCapacity);
             var buffer = new byte[81920];
             long total = 0;
@@ -2005,8 +2053,8 @@ public class FileIndexer
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
                 total += read;
-                if (total > MaxFileSize)
-                    throw new InvalidOperationException($"File too large (> {MaxFileSize / 1024 / 1024} MB limit; grew during read)");
+                if (total > _maxFileSizeBytes)
+                    throw new InvalidOperationException(BuildFileTooLargeMessage(total, grewDuringRead: true));
                 accumulator.Write(buffer, 0, read);
             }
             bytes = accumulator.ToArray();
@@ -2119,6 +2167,25 @@ public class FileIndexer
         };
 
         return (record, content, bytes, warning);
+    }
+
+    private string BuildFileTooLargeMessage(long actualBytes, bool grewDuringRead)
+    {
+        var actual = FormatBytesForError(actualBytes);
+        var limit = FormatBytesForError(_maxFileSizeBytes);
+        var observed = grewDuringRead
+            ? $"File too large (> {limit} limit; grew during read)"
+            : $"File too large ({actual} > {limit} limit)";
+        return $"{observed}. Override with --max-file-bytes <bytes> or {MaxFileSizeEnvironmentVariable}=<bytes> when this source file is intentionally indexable.";
+    }
+
+    private static string FormatBytesForError(long bytes)
+    {
+        if (bytes % (1024L * 1024L) == 0)
+            return $"{bytes / 1024L / 1024L} MiB";
+        if (bytes % 1024L == 0)
+            return $"{bytes / 1024L} KiB";
+        return $"{bytes} bytes";
     }
 
     /// <summary>

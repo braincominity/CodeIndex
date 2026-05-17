@@ -155,7 +155,10 @@ public class DbWriter
         public void Commit()
         {
             if (_transaction != null)
+            {
                 _transaction.Commit();
+                _writer.RunPassiveWalCheckpoint();
+            }
             else
                 ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
             // Set _committed after success so Dispose() will rollback if Commit/Release throws
@@ -228,6 +231,13 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RunPassiveWalCheckpoint()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(PASSIVE)";
         cmd.ExecuteNonQuery();
     }
 

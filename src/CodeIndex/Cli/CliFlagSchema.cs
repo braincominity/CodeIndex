@@ -150,6 +150,13 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
     ];
 
+    private static readonly string[] ProfileCommands =
+    [
+        "search", "definition", "references", "callers", "callees", "symbols", "files",
+        "find", "excerpt", "map", "inspect", "outline", "status", "validate", "deps",
+        "impact", "unused", "hotspots",
+    ];
+
     public static IReadOnlyList<CliFlag> All { get; } = BuildAll();
 
     private static IReadOnlyList<CliFlag> BuildAll()
@@ -158,6 +165,8 @@ internal static class CliFlagSchema
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
             new() { Name = "--json", Description = "JSON output", Commands = Set(JsonCommands) },
+            new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
+            new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
             new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
@@ -204,6 +213,7 @@ internal static class CliFlagSchema
             new() { Name = "--dry-run", Description = "Scan files without writing", Commands = Set("index") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },
+            new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", Commands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<id>", Description = "Update files changed in given git commits", Commands = Set("index") },
             new() { Name = "--changed-between", ValuePlaceholder = "<old-ref> <new-ref>", Description = "Update files changed between two git refs", Commands = Set("index") },
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },

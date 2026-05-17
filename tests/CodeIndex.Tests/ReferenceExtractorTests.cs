@@ -27167,6 +27167,224 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpStaticMemberAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public static class Program
+            {
+                public static int Main(string[] args)
+                {
+                    return ProgramRunner.Run(args);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ProgramRunner"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Main");
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedStaticMemberAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public static class Program
+            {
+                public static int Main(string[] args)
+                {
+                    return global::ProgramRunner.Run(args);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ProgramRunner"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Main");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "global::ProgramRunner"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStatementStaticMemberAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public void Run()
+                {
+                    using var stream = FileFactory.OpenRead();
+                    using (ResourceFactory.Acquire())
+                    {
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "FileFactory"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ResourceFactory"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpStaticFieldAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public int Read() => Options.DefaultTimeout;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Options"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Read");
+    }
+
+    [Fact]
+    public void Extract_CsharpNamespaceAndInstanceMemberAccess_DoesNotCaptureQualifierReference()
+    {
+        const string content = """
+            namespace Demo.Tools;
+
+            public class Consumer
+            {
+                public void Run(Service service)
+                {
+                    service.Start();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Demo"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "service"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedStaticMemberAccess_CapturesRightmostTypeQualifier()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public void Run()
+                {
+                    System.Console.WriteLine("ok");
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Console"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "System"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpPascalCaseInstanceMemberChain_DoesNotCaptureMiddleQualifierReference()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public int Read(Config config, Request request)
+                {
+                    _ = config.Options.DefaultTimeout;
+                    return request.User.Name.Length;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Options"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedTypeDeclarations_DoNotCaptureNamespaceSegmentsAsCallReferences()
+    {
+        const string content = """
+            public class Consumer
+            {
+                private System.Text.StringBuilder _builder;
+
+                public System.Text.StringBuilder Builder => _builder;
+
+                public System.Text.StringBuilder Create(System.Text.StringBuilder input)
+                {
+                    return input;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Text"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedTypeExpressions_DoNotCaptureNamespaceSegmentsAsCallReferences()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public object Convert(object value, List<System.Text.StringBuilder> builders)
+                {
+                    var builder = (System.Text.StringBuilder)value;
+                    return builders.Count > 0 ? builder : value;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Text"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
     {
         // Mid-file BOM right before a call site: the reference must still be captured
