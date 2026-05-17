@@ -51,6 +51,77 @@ public static partial class ReferenceExtractor
         return null;
     }
 
+    internal sealed class InnermostContainerResolver
+    {
+        private readonly IReadOnlyList<SymbolRecord> candidates;
+        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)> candidatesByStart;
+        private readonly SortedSet<ActiveContainer> activeContainers = new();
+        private int nextCandidateIndex;
+        private int currentLine;
+        private int? cachedLine;
+        private SymbolRecord? cachedContainer;
+
+        internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
+        {
+            this.candidates = candidates;
+            candidatesByStart = candidates
+                .Select((symbol, index) => (Symbol: symbol, SpanLength: GetContainerSpanLength(symbol), OriginalIndex: index))
+                .OrderBy(item => item.Symbol.BodyStartLine!.Value)
+                .ThenBy(item => item.Symbol.BodyEndLine!.Value)
+                .ThenBy(item => item.SpanLength)
+                .ThenBy(item => item.OriginalIndex)
+                .ToList();
+        }
+
+        internal SymbolRecord? Find(int lineNumber)
+        {
+            if (cachedLine == lineNumber)
+                return cachedContainer;
+
+            if (lineNumber < currentLine)
+                return Cache(lineNumber, FindInnermostContainer(candidates, lineNumber));
+
+            AdvanceTo(lineNumber);
+            return Cache(lineNumber, activeContainers.Count == 0 ? null : activeContainers.Min.Symbol);
+        }
+
+        private void AdvanceTo(int lineNumber)
+        {
+            while (nextCandidateIndex < candidatesByStart.Count
+                   && candidatesByStart[nextCandidateIndex].Symbol.BodyStartLine!.Value <= lineNumber)
+            {
+                var candidate = candidatesByStart[nextCandidateIndex];
+                activeContainers.Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
+                nextCandidateIndex++;
+            }
+
+            activeContainers.RemoveWhere(active => active.Symbol.BodyEndLine!.Value < lineNumber);
+            currentLine = lineNumber;
+        }
+
+        private SymbolRecord? Cache(int lineNumber, SymbolRecord? container)
+        {
+            cachedLine = lineNumber;
+            cachedContainer = container;
+            return container;
+        }
+
+        private static int GetContainerSpanLength(SymbolRecord symbol) =>
+            (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+
+        private readonly record struct ActiveContainer(SymbolRecord Symbol, int SpanLength, int OriginalIndex) : IComparable<ActiveContainer>
+        {
+            public int CompareTo(ActiveContainer other)
+            {
+                var spanComparison = SpanLength.CompareTo(other.SpanLength);
+                if (spanComparison != 0)
+                    return spanComparison;
+
+                return OriginalIndex.CompareTo(other.OriginalIndex);
+            }
+        }
+    }
+
     private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
         SymbolRecord? innermostContainer,
         IReadOnlyList<SymbolRecord>? scopeCandidates,
