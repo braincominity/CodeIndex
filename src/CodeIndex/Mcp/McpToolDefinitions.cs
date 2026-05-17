@@ -467,6 +467,8 @@ public partial class McpServer
                 SuggestionAnnotations())
         };
 
+        AddProjectScopeProperties(tools);
+
         // Per-deployment enablement gate (#1561). Drop any tool the operator disabled via
         // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` so AI clients never see destructive
         // or out-of-scope tools advertised in the first place.
@@ -484,5 +486,48 @@ public partial class McpServer
 
         var result = new JsonObject { ["tools"] = filtered };
         return CreateSuccessResponse(id, result);
+    }
+
+    private static void AddProjectScopeProperties(JsonArray tools)
+    {
+        var scopedTools = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "search",
+            "definition",
+            "references",
+            "callers",
+            "callees",
+            "symbols",
+            "files",
+            "map",
+            "analyze_symbol",
+            "impact_analysis",
+            "deps",
+            "validate",
+            "unused_symbols",
+            "symbol_hotspots",
+        };
+
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            var name = tool["name"]?.GetValue<string>();
+            if (name == null || !scopedTools.Contains(name))
+                continue;
+
+            var properties = tool["inputSchema"]?["properties"] as JsonObject;
+            if (properties == null || !properties.ContainsKey("path") || properties.ContainsKey("project"))
+                continue;
+
+            properties["project"] = new JsonObject
+            {
+                ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } },
+                ["description"] = "Restrict to .sln/.csproj project name or project path. Accepts a single string or array; combines with path filters.",
+            };
+            properties["solution"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = "Solution file used to resolve project filters when the workspace has multiple .sln files.",
+            };
+        }
     }
 }
