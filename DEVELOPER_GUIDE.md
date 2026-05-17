@@ -75,6 +75,10 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
 
+### SQLite WAL durability policy
+
+`DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes; a crash can lose the last uncheckpointed transaction, but it must not corrupt committed database structure. `DbWriter` also runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit so batch boundaries give SQLite a chance to checkpoint without blocking active readers. `status --json` exposes these resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
+
 ## Database schema
 
 ### Tables
@@ -1510,6 +1514,10 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ### status freshness age threshold
 
 `status --check` の DB/worktree checksum 比較は `IndexFreshnessChecker` に置き、ユーザー向け age hint のしきい値は `QueryCommandRunner` で解決する。優先順位は CLI の `--stale-after <duration>`、`CDIDX_STALE_AFTER`、`.cdidxrc.json` の `stale_after`、24 時間の既定値。duration suffix は `m` / `h` / `d` をサポートする。JSON 出力では `--check` 時のみ `stale_after_seconds` と `index_age_seconds` を返し、クライアントが text を解析せずに適用しきい値を確認できるようにする。
+
+### SQLite WAL durability policy
+
+`DbContext` は writable な index を WAL mode で開き、`PRAGMA synchronous=NORMAL` を設定し、`PRAGMA wal_autocheckpoint=1000` を固定する。WAL では `NORMAL` により 500 行単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency は保つ。crash で最後の未 checkpoint transaction が失われる可能性はあるが、committed database structure を壊してはならない。`DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` も実行し、active reader を block せず batch 境界で checkpoint 機会を与える。`status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) で公開する。
 
 ## データベーススキーマ
 
