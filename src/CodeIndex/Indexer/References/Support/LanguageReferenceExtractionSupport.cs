@@ -534,11 +534,14 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex RazorDirectiveTypeRegex = new(
         @"^\s*@(?:inherits|implements|model)\s+(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RazorAttributeTypeRegex = new(
+        @"^\s*@attribute\s+\[\s*(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RazorInjectRegex = new(
         @"^\s*@inject\s+(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RazorEventHandlerRegex = new(
-        @"@on[A-Za-z_]\w*\s*=\s*""(?<name>[A-Za-z_]\w*)""",
+        @"@on[A-Za-z_]\w*\s*=\s*""@?(?<name>[A-Za-z_]\w*)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitTypePositionReferences(
@@ -643,7 +646,9 @@ internal static class LanguageReferenceExtractionSupport
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        IReadOnlySet<string>? definitionNames)
+        IReadOnlySet<string>? definitionNames,
+        IReadOnlySet<string>? fileDefinitionNames,
+        IReadOnlyList<string>? implementedTypeNames)
     {
         foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
         {
@@ -667,7 +672,9 @@ internal static class LanguageReferenceExtractionSupport
                 resolveContainerForColumn(nameIndex));
         }
 
-        foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine).Concat(EnumerateMatches(RazorInjectRegex, originalLine)))
+        foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine)
+                     .Concat(EnumerateMatches(RazorAttributeTypeRegex, originalLine))
+                     .Concat(EnumerateMatches(RazorInjectRegex, originalLine)))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
@@ -685,20 +692,61 @@ internal static class LanguageReferenceExtractionSupport
         foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
         {
             var name = match.Groups["name"].Value;
-            if (definitionNames?.Contains(name) == true)
-                continue;
+            var nameIndex = match.Groups["name"].Index;
+            var container = resolveContainerForColumn(nameIndex);
+            var kind = "razor_event_binding";
 
             ReferenceExtractor.AddReference(
                 references,
                 seen,
                 fileId,
                 name,
-                match.Groups["name"].Index,
-                "call",
+                nameIndex,
+                kind,
                 context,
                 lineNumber,
-                resolveContainerForColumn(match.Groups["name"].Index));
+                container);
+
+            if (fileDefinitionNames?.Contains(name) == true || implementedTypeNames is not { Count: > 0 })
+                continue;
+
+            foreach (var implementedTypeName in implementedTypeNames)
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    "implicit_implementation",
+                    context,
+                    lineNumber,
+                    new SymbolRecord
+                    {
+                        Kind = "interface",
+                        Name = LastQualifiedSegment(implementedTypeName),
+                        Line = lineNumber,
+                        StartLine = lineNumber,
+                        EndLine = lineNumber
+                    });
+            }
         }
+    }
+
+    public static IReadOnlyList<string> ExtractRazorImplementedTypeNames(IReadOnlyList<string> originalLines)
+    {
+        List<string>? result = null;
+        foreach (var line in originalLines)
+        {
+            var match = RazorDirectiveTypeRegex.Match(line);
+            if (!match.Success || !line.TrimStart().StartsWith("@implements", StringComparison.Ordinal))
+                continue;
+
+            result ??= new List<string>();
+            result.Add(match.Groups["type"].Value);
+        }
+
+        return result ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
 
     public static bool[] BuildGoImportBlockLineMap(IReadOnlyList<string> originalLines)

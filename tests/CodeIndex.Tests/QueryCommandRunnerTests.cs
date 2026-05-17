@@ -12170,6 +12170,56 @@ jobs:
     }
 
     [Fact]
+    public void RunCallers_JsonKeepsRazorEventBindingsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_razor_event_binding");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "Pages"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Pages", "User.razor"),
+                """
+                <button @onclick="HandleClick">Save</button>
+                <button @onclick="@HandleClick">Save explicit</button>
+
+                @code {
+                    void HandleClick() { }
+                }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["HandleClick", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("HandleClick", json.GetProperty("callee_name").GetString());
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.DoesNotContain("not a known reference kind", referencesStderr);
+            Assert.Contains("razor_event_binding", referencesStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_SurfacesMixedReferenceKindsWhenContainerMixesCallAndSubscribe()
     {
         // #501: a single container that reaches the same callee via both `call` and
