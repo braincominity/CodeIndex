@@ -15420,6 +15420,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CppTemplateSpecializations_DistinguishesDeclarationSites()
+    {
+        var content = """
+            template <typename T>
+            class Box {};
+
+            template<>
+            class Box<int> {};
+
+            template <typename U>
+            class Box<U*> {};
+
+            template<>
+            void Save<int>(int value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        var specializations = symbols.Where(s => s.Kind == "specialization" && s.Name == "Box").ToList();
+        Assert.Equal(2, specializations.Count);
+        Assert.All(specializations, s => Assert.Equal("Box", s.FamilyKey));
+        Assert.Contains(symbols, s => s.Kind == "specialization" && s.Name == "Save" && s.ReturnType == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Signature?.Contains("Box<int>", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void Extract_Cpp_DetectsClassBodyMembers()
     {
         // C++: constructors, destructors, operator overloads / C++: コンストラクタ、デストラクタ、演算子オーバーロード
