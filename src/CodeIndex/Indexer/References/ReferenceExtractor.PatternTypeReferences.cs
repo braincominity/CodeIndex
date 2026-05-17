@@ -1855,6 +1855,22 @@ public static partial class ReferenceExtractor
         {
             char c = expression[i];
             if (language == "rust"
+                && c == '\''
+                && i + 1 < expression.Length
+                && IsRustLifetimeStart(expression[i + 1]))
+            {
+                var lifetimeStart = i;
+                i += 2;
+                while (i < expression.Length && IsRustLifetimePart(expression[i]))
+                    i++;
+
+                var lifetime = expression.Substring(lifetimeStart, i - lifetimeStart);
+                AddReference(references, seen, fileId, lifetime, expressionStartInLine + lifetimeStart, "lifetime_reference", context, lineNumber, container);
+                i--;
+                continue;
+            }
+
+            if (language == "rust"
                 && c == 'r'
                 && i + 2 < expression.Length
                 && expression[i + 1] == '#'
@@ -1956,12 +1972,6 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            if (language == "rust" && IsRustAssociatedTypeBindingKey(expression, i))
-            {
-                i--;
-                continue;
-            }
-
             if (language == "swift" && IsSwiftTupleElementLabelSegment(expression, segmentStart, i))
             {
                 i--;
@@ -1985,14 +1995,11 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static bool IsRustAssociatedTypeBindingKey(string expression, int segmentEnd)
-    {
-        var index = segmentEnd;
-        while (index < expression.Length && char.IsWhiteSpace(expression[index]))
-            index++;
+    private static bool IsRustLifetimeStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
 
-        return index < expression.Length && expression[index] == '=';
-    }
+    private static bool IsRustLifetimePart(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static bool IsSwiftTupleElementLabelSegment(string expression, int segmentStart, int segmentEnd)
     {
