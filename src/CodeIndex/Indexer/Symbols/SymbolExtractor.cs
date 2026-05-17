@@ -85,15 +85,16 @@ public static partial class SymbolExtractor
     // Allow those prefixes so annotated declarations still index by their actual names.
     // Swift の宣言では、宣言キーワードと同じ行に属性が付くことが多い。
     // その前置きを許容し、注釈付き宣言でも実際の名前でインデックスできるようにする。
-    private const string SwiftAttributePattern = @"(?:@\w+(?:\([^)]*\))?\s+)*";
+    private const string SwiftAttributeNamePattern = @"\w+(?:\.\w+)*";
+    private const string SwiftAttributePattern = @"(?:@" + SwiftAttributeNamePattern + @"(?:\([^)]*\))?\s+)*";
     private static readonly Regex SwiftPropertyDeclarationRegex = new(
-        @"^\s*(?<attributes>(?:@\w+(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)",
+        @"^\s*(?<attributes>(?:@" + SwiftAttributeNamePattern + @"(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SwiftPropertyWrapperAttributeRegex = new(
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SwiftAccessorDeclarationRegex = new(
-        @"(?<![\w`])(?<name>get|set|willSet|didSet)\b",
+        @"^\s*(?:(?:mutating|nonmutating)\s+)?(?<name>get|set|willSet|didSet)\b(?:\s*\([^)]*\))?(?:\s+(?:async|throws|rethrows))*\s*(?:\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> SwiftNonWrapperPropertyAttributes = new(StringComparer.Ordinal)
     {

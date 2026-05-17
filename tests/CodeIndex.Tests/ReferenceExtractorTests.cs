@@ -177,6 +177,7 @@ public class ReferenceExtractorTests
                 @State private var count = 0
                 @Environment(\.colorScheme) var scheme
                 @MyWrapper var value: Int
+                @MyLib.State var qualifiedCount = 0
                 @IBOutlet weak var titleLabel: UILabel!
                 @NSManaged var persistedName: String
             }
@@ -197,6 +198,10 @@ public class ReferenceExtractorTests
             reference.SymbolName == "MyWrapper"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "value");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "qualifiedCount");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "IBOutlet" or "NSManaged"
             && reference.ReferenceKind == "type_reference");
