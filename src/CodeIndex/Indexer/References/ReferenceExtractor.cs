@@ -1037,6 +1037,9 @@ public static partial class ReferenceExtractor
                 .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
                 .ToList()
             : null;
+        var pythonDefinitionContainersByLineAndKind = language == "python"
+            ? BuildPythonDefinitionContainersByLineAndKind(symbols)
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -1557,6 +1560,15 @@ public static partial class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
+            {
+                if (pythonDefinitionContainersByLineAndKind == null)
+                    return null;
+                return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
+                    ? symbol
+                    : null;
             }
 
             if (isJsxFile && (language is "javascript" or "typescript"))
@@ -2773,9 +2785,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "class", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "class"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionReturnReferences(
                     preparedLine,
@@ -2786,9 +2796,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionParameterReferences(
                     preparedLine,
@@ -2799,9 +2807,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitVariableAnnotationReferences(
                     preparedLine,
@@ -3131,6 +3137,20 @@ public static partial class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static Dictionary<(int Line, string Kind), SymbolRecord> BuildPythonDefinitionContainersByLineAndKind(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var containers = new Dictionary<(int Line, string Kind), SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "function"))
+                continue;
+
+            containers.TryAdd((symbol.Line, symbol.Kind), symbol);
+        }
+
+        return containers;
     }
 
     private static bool IsJsxFilePath(string? path)
