@@ -1797,7 +1797,7 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("Hook", callee["callerName"]!.GetValue<string>());
         Assert.Equal("Changed", callee["calleeName"]!.GetValue<string>());
-        Assert.Equal("subscribe", callee["referenceKind"]!.GetValue<string>());
+        Assert.Equal("event", callee["referenceKind"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1915,10 +1915,10 @@ public class McpServerTests : IDisposable
         Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
         // #501: MCP wire format exposes referenceKind (preferred summary), referenceKinds (sorted distinct), and hasMixedReferenceKinds
         // #501: MCP のワイヤ形式は referenceKind（要約）、referenceKinds（ソート済み distinct）、hasMixedReferenceKinds を返す
-        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        Assert.Equal("event", row["referenceKind"]!.GetValue<string>());
         Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
         var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
-        Assert.Equal(new[] { "subscribe" }, kinds);
+        Assert.Equal(new[] { "event" }, kinds);
     }
 
     [Fact]
@@ -1952,10 +1952,8 @@ public class McpServerTests : IDisposable
         Assert.Equal(2, row["referenceCount"]!.GetValue<int>());
         Assert.True(row["hasMixedReferenceKinds"]!.GetValue<bool>());
         var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
-        Assert.Equal(new[] { "call", "subscribe" }, kinds);
-        // #501: preferred summary (`instantiate` > `subscribe` > `MIN(call)`) is `subscribe` for the mixed call+subscribe set
-        // #501: 混在時の preferred 要約（`instantiate` > `subscribe` > `MIN(call)`）は `subscribe`
-        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        Assert.Equal(new[] { "event", "invoke" }, kinds);
+        Assert.Equal("event", row["referenceKind"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1985,10 +1983,10 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("SetupAndFire", caller["callerName"]!.GetValue<string>());
         Assert.Equal("Changed", caller["calleeName"]!.GetValue<string>());
-        Assert.Equal("subscribe", caller["referenceKind"]!.GetValue<string>());
+        Assert.Equal("event", caller["referenceKind"]!.GetValue<string>());
         Assert.True(caller["hasMixedReferenceKinds"]!.GetValue<bool>());
         var kinds = caller["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
-        Assert.Equal(new[] { "call", "subscribe" }, kinds);
+        Assert.Equal(new[] { "event", "invoke" }, kinds);
     }
 
     [Fact]
@@ -2025,12 +2023,12 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("Hook", row["callerName"]!.GetValue<string>());
         Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
-        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        Assert.Equal("event", row["referenceKind"]!.GetValue<string>());
         // #501: callees rows stay split per kind so referenceKinds is a single-element array and hasMixedReferenceKinds is false
         // #501: callees 行は kind 単位で分かれるため referenceKinds は単要素、hasMixedReferenceKinds は false
         Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
         var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
-        Assert.Equal(new[] { "subscribe" }, kinds);
+        Assert.Equal(new[] { "event" }, kinds);
     }
 
     [Fact]
