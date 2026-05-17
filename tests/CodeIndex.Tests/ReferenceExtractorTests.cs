@@ -2506,6 +2506,7 @@ public class ReferenceExtractorTests
                     val masked = value and 15
                     val ranged = 1 until 10
                     val countdown = 10 downTo 1
+                    val evens = 0..10 step 2
                     val combined = value or 2
                     val toggled = value xor 3
                     val shrunk = value shr 1
@@ -2521,7 +2522,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
         var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
 
-        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "or", "xor", "shr", "add", "merge", "combine", "link" })
+        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "step", "or", "xor", "shr", "add", "merge", "combine", "link" })
         {
             Assert.True(
                 references.Any(r => r.SymbolName == name && r.ReferenceKind == "call"),

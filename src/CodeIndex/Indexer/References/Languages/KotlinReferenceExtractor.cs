@@ -33,7 +33,7 @@ internal static class KotlinReferenceExtractor
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
     private static readonly HashSet<string> BuiltInInfixFunctionNames = new(StringComparer.Ordinal)
     {
-        "and", "downTo", "or", "shl", "shr", "to", "until", "ushr", "xor",
+        "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
     };
 
     public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
