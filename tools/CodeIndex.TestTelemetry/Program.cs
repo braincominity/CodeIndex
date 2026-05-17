@@ -118,7 +118,7 @@ public static class TrxTelemetry
         }
 
         var passed = tests.Count(result => IsOutcome(result, "Passed"));
-        var failed = tests.Count(result => IsOutcome(result, "Failed") || IsOutcome(result, "Error"));
+        var failed = tests.Count(IsFailureOutcome);
         var skipped = tests.Count(result => IsOutcome(result, "NotExecuted") || IsOutcome(result, "Skipped"));
         var other = tests.Count - passed - failed - skipped;
 
@@ -129,7 +129,7 @@ public static class TrxTelemetry
             .ToList();
 
         var failures = tests
-            .Where(result => IsOutcome(result, "Failed") || IsOutcome(result, "Error"))
+            .Where(IsFailureOutcome)
             .OrderByDescending(result => result.Duration)
             .ThenBy(result => result.TestName, StringComparer.Ordinal)
             .Take(top)
@@ -178,6 +178,14 @@ public static class TrxTelemetry
 
     private static bool IsOutcome(TrxTestResult result, string outcome) =>
         string.Equals(result.Outcome, outcome, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFailureOutcome(TrxTestResult result) =>
+        IsOutcome(result, "Failed") ||
+        IsOutcome(result, "Error") ||
+        IsOutcome(result, "Timeout") ||
+        IsOutcome(result, "Aborted") ||
+        IsOutcome(result, "NotRunnable") ||
+        IsOutcome(result, "Disconnected");
 }
 
 public static class TrxTelemetryRenderer

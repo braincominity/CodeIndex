@@ -20,6 +20,8 @@ public sealed class TestTelemetryTests
                     <UnitTestResult testName="FastPass" outcome="Passed" duration="00:00:00.1000000" />
                     <UnitTestResult testName="SlowPass" outcome="Passed" duration="00:00:03.5000000" />
                     <UnitTestResult testName="BrokenTest" outcome="Failed" duration="00:00:01.2500000" />
+                    <UnitTestResult testName="TimeoutTest" outcome="Timeout" duration="00:00:02.0000000" />
+                    <UnitTestResult testName="AbortedTest" outcome="Aborted" duration="00:00:01.5000000" />
                     <UnitTestResult testName="SkippedTest" outcome="NotExecuted" />
                   </Results>
                 </TestRun>
@@ -28,12 +30,12 @@ public sealed class TestTelemetryTests
             var summary = TrxTelemetry.Load(resultsDirectory, top: 2);
 
             Assert.Equal(1, summary.TrxFileCount);
-            Assert.Equal(4, summary.Total);
+            Assert.Equal(6, summary.Total);
             Assert.Equal(2, summary.Passed);
-            Assert.Equal(1, summary.Failed);
+            Assert.Equal(3, summary.Failed);
             Assert.Equal(1, summary.Skipped);
-            Assert.Equal(["SlowPass", "BrokenTest"], summary.Slowest.Select(result => result.TestName));
-            Assert.Equal(["BrokenTest"], summary.Failures.Select(result => result.TestName));
+            Assert.Equal(["SlowPass", "TimeoutTest"], summary.Slowest.Select(result => result.TestName));
+            Assert.Equal(["TimeoutTest", "AbortedTest"], summary.Failures.Select(result => result.TestName));
         }
         finally
         {
