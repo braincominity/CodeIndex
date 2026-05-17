@@ -145,6 +145,7 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
 
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitTypeAliasTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitFunctionPropertyTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitDecoratedMemberTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -309,6 +310,129 @@ internal static class TypeScriptReferenceExtractor
 
         EmitHeritageKeyword(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageKeyword(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitTypeAliasTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (!TryFindTypeAliasShape(preparedLine, out var nameEnd, out var assignmentIndex))
+            return;
+
+        var genericOpen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<', nameEnd);
+        if (genericOpen >= 0 && genericOpen < assignmentIndex)
+        {
+            var genericClose = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpen, '<', '>');
+            if (genericClose > genericOpen && genericClose < assignmentIndex)
+            {
+                EmitTypeParameterDefaultReferences(
+                    preparedLine,
+                    genericOpen + 1,
+                    genericClose,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn);
+            }
+        }
+
+        var rhsStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, assignmentIndex + 1);
+        if (rhsStart >= preparedLine.Length)
+            return;
+
+        var rhsEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(
+            preparedLine,
+            rhsStart,
+            stopAtComma: false,
+            stopAtArrow: false);
+        if (rhsEnd <= rhsStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(rhsStart, rhsEnd - rhsStart),
+            rhsStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(rhsStart));
+    }
+
+    private static bool TryFindTypeAliasShape(string line, out int nameEnd, out int assignmentIndex)
+    {
+        nameEnd = -1;
+        assignmentIndex = -1;
+
+        var index = 0;
+        SkipWhitespace(line, ref index);
+        TryConsumeKeyword(line, "export", ref index);
+        SkipWhitespace(line, ref index);
+        TryConsumeKeyword(line, "declare", ref index);
+        SkipWhitespace(line, ref index);
+        if (!TryConsumeKeyword(line, "type", ref index))
+            return false;
+
+        SkipWhitespace(line, ref index);
+        if (index >= line.Length || !IsTypeScriptIdentifierStart(line[index]))
+            return false;
+
+        index++;
+        while (index < line.Length && IsTypeScriptIdentifierPart(line[index]))
+            index++;
+
+        nameEnd = index;
+        assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(line, '=', nameEnd);
+        return assignmentIndex > nameEnd;
+    }
+
+    private static void EmitTypeParameterDefaultReferences(
+        string line,
+        int listStart,
+        int listEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var parameterList = line.Substring(listStart, listEnd - listStart);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
+        {
+            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=');
+            if (equalsIndex < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, equalsIndex + 1);
+            if (typeStart >= fragment.Length)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart, stopAtArrow: false);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = listStart + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "typescript",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart));
+        }
     }
 
     private static void EmitHeritageKeyword(
@@ -718,7 +842,7 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsTypeScriptIdentifier(string text)
     {
-        if (text.Length == 0 || !(text[0] == '_' || text[0] == '$' || char.IsLetter(text[0])))
+        if (text.Length == 0 || !IsTypeScriptIdentifierStart(text[0]))
             return false;
 
         for (var index = 1; index < text.Length; index++)
@@ -729,4 +853,7 @@ internal static class TypeScriptReferenceExtractor
 
         return true;
     }
+
+    private static bool IsTypeScriptIdentifierStart(char ch) =>
+        ch == '_' || ch == '$' || char.IsLetter(ch);
 }
