@@ -191,6 +191,154 @@ made the command fail. To check only selected readiness areas, pass
 `--check=fold,graph,hotspot,csharp`; `workspace`, `issues`, `sql`, and `newer`
 are also accepted scopes.
 
+## Command reference
+
+Use this table when you need to discover the command surface quickly. The detailed
+sections below show examples and option details for the most common workflows.
+
+| Category | Command | What it does | Related MCP tool |
+|---|---|---|---|
+| Index | `index <projectPath>` / `cdidx <projectPath>` | Build or incrementally refresh `.cdidx/codeindex.db` | `index` |
+| Index | `backfill-fold` | Upgrade Unicode folded-name metadata in an existing DB | `backfill_fold` |
+| Index | `hooks` | Install, remove, or inspect the optional git pre-commit hook | -- |
+| Search | `search` | Full-text search across indexed chunks | `search` |
+| Search | `find` | Literal substring search inside one known indexed file | `find_in_file` |
+| Search | `excerpt` | Reconstruct a focused line range from indexed chunks | `excerpt` |
+| Navigation | `definition` | Resolve symbol definitions and optional bodies | `definition` |
+| Navigation | `symbols` | Search extracted symbols by name, kind, language, and path | `symbols` |
+| Navigation | `outline` | Show the symbol outline for one indexed file | `outline` |
+| Navigation | `inspect` | Bundle definition, references, callers, callees, nearby symbols, and trust metadata | `analyze_symbol` |
+| Repository map | `files` | List indexed files with language, size, and line counts | `files` |
+| Repository map | `map` | Summarize languages, modules, hotspots, and likely entrypoints | `map` |
+| Graph | `references` | Find indexed references for a symbol name | `references` |
+| Graph | `callers` | Find callers of a symbol in graph-supported languages | `callers` |
+| Graph | `callees` | Find callees used by a caller symbol | `callees` |
+| Graph | `deps` | Show file-level dependency edges | `deps` |
+| Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
+| Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
+| Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
+| Analysis | `validate` | Report encoding and line-ending issues in indexed files | `validate` |
+| Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
+| Status | `languages` | List language extensions and symbol/graph capabilities | `languages` |
+| Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
+| Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
+| Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
+| MCP | `mcp` | Start the MCP server for AI tools | server transport |
+| Legal | `license` | Show the license and commercial-use summary | -- |
+
+Stable since values are intentionally not repeated in this guide because the
+release changelog is the source of truth for when each command first shipped.
+Run `cdidx --help` for the full syntax line for every command.
+
+## Documented defaults and drift guard
+
+`cdidx --help` and the source constants are the canonical defaults. This guide
+lists defaults only when they matter for decision-making, and those values should
+be audited whenever the matching help text changes.
+
+| Setting | Current default | Source of truth |
+|---|---|---|
+| Query result limit | `20` (`--limit`, alias `--top`) | CLI help and query runners |
+| Search snippet lines | `8` (`--snippet-lines`, max `20`) | CLI help and search runner |
+| Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
+| Index max file size | `10MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
+| Watch debounce | `500` ms (`--debounce`) | index watch runner |
+| Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json` | status runner |
+| Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
+| ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
+| Report log tail | `200` lines (`--log-lines`) | report runner help |
+
+When a default changes, update the help text, this table, affected examples, and
+the changelog fragment in the same PR so users are not asked to reconcile
+conflicting instructions.
+
+## Advanced analysis examples
+
+### Validate indexed files
+
+```bash
+cdidx validate
+cdidx validate --kind replacement-character --path src/
+cdidx validate --json --path legacy/
+```
+
+`validate` reports indexed files that are likely to produce misleading snippets
+or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
+CR-only line endings, and likely non-UTF-8 content. Treat failures as source
+encoding or repository hygiene work; after fixing files, rerun `cdidx index .`
+and then `cdidx validate` again.
+
+### Find potentially unused symbols
+
+```bash
+cdidx unused --lang csharp --exclude-tests
+cdidx unused --kind function --path src/ --limit 50
+cdidx unused --json --count
+```
+
+`unused` compares definitions with indexed references and groups results by
+confidence. Public APIs, framework entrypoints, generated hooks, reflection, and
+configuration-based usage can be false positives. C# `nameof(...)`, `typeof(...)`,
+and direct reflection member-name literals such as `GetMethod("Foo")` are
+indexed, but dynamically constructed names still require manual review.
+
+### Rank hotspots
+
+```bash
+cdidx hotspots --lang csharp --exclude-tests
+cdidx hotspots --group-by=file --json
+cdidx hotspots --group-by-name --limit 30
+```
+
+`hotspots` ranks symbols, files, or statements by incoming reference volume so
+you can find central code before refactoring. SQL scopes default to statement
+grouping; non-SQL scopes default to symbol grouping. If `status --json` reports
+`hotspot_family_ready: false`, duplicate-name grouping uses a conservative
+fallback until you re-index with a current binary.
+
+### Trace impact
+
+```bash
+cdidx impact Run --depth 2 --exclude-tests
+cdidx impact Run --depth 0 --json
+cdidx impact FolderDiffService --with-paths --json
+```
+
+`impact` resolves a symbol and walks transitive callers through call-graph edges.
+`--depth 0` resolves without traversing, while `--with-paths` emits shortest call
+chains for converging routes. Metadata-only edges such as attributes,
+annotations, and type-position references are excluded from the symbol-level BFS
+so metadata cycles do not inflate caller counts; single-type queries may still
+return heuristic file-level dependency hints.
+
+## Performance tuning for large repositories
+
+Start by measuring before changing knobs:
+
+```bash
+cdidx status --check --json
+cdidx index . --dry-run --verbose
+cdidx index . --duration-format seconds
+```
+
+Use the smallest change that reduces the expensive part of your run.
+
+| Knob | Default | When to tune | Trade-off |
+|---|---|---|---|
+| `.gitignore` / `.cdidxignore` | project rules | Generated, vendored, or build-output trees dominate scan time | Excluded files disappear from all search and graph results |
+| `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
+| `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
+| `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
+| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `10MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
+| `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
+| `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
+| `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
+
+For very large repos, index from the repository root once, exclude generated
+trees early, then use scoped refreshes for daily work. If a branch switch,
+rebase, reset, or merge makes freshness ambiguous, prefer a full `cdidx index .`
+or `cdidx . --json` refresh so stale paths are purged.
+
 ## Installation
 
 ### Option A: One-liner install (no .NET required)
@@ -1049,6 +1197,29 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
+### Language extraction matrix
+
+Use `cdidx languages --json` as the live capability probe. This matrix explains
+the common extraction behavior so users know when to trust structured commands
+and when to fall back to `search`.
+
+| Language family | Symbols | References / graph | Notes and example query |
+|---|---|---|---|
+| C# / Razor / Blazor | namespaces, types, members, properties, imports | calls, constructors, events, attributes, annotations, type references, metadata edges | Modern partial members and metadata targets are indexed. `cdidx inspect Run --lang csharp --exact-name` |
+| Java / Kotlin / Scala | packages/imports, classes/interfaces, methods, properties | calls, constructors, annotations, type references | Kotlin inline lambda body modeling is limited; verify with `references` before relying on deep call chains. |
+| JavaScript / TypeScript / Vue / Svelte | functions, classes, exports, imports, variables | calls, constructors, static/dynamic imports, workers, service workers | Dynamic property calls and computed module specifiers are best-effort. `cdidx references render --lang typescript` |
+| Python / Ruby / PHP / Perl / R | functions, classes/modules, imports where supported | calls, constructors, decorators/annotations where supported | Dynamic dispatch and metaprogramming may require `search`. PHPDoc/static import patterns are indexed when statically visible. |
+| C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
+| Shell / PowerShell / Batch / Makefile / Gradle | functions, labels, tasks, imports where applicable | command-style calls and control-flow targets | Runtime command construction is not resolved. |
+| SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
+| Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
+
+The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
+MCP outputs when a language filter is provided. An empty unsupported-language
+graph result is not the same as "no callers"; check the metadata before making a
+cleanup decision.
+
 ## Prerequisites: sqlite3
 
 AI agents that query the database directly via SQL need the `sqlite3` CLI.
@@ -1699,6 +1870,152 @@ cdidx index . --quiet
 完全な status object に加えて、失敗原因の配列 `failed_checks` が含まれます。
 特定の readiness だけを確認する場合は `--check=fold,graph,hotspot,csharp` を指定できます。
 `workspace`、`issues`、`sql`、`newer` も scope として受け付けます。
+
+## コマンドリファレンス
+
+コマンド全体を素早く把握したい場合はこの表を使ってください。詳細な例と option は
+後続の各セクションにあります。
+
+| カテゴリ | コマンド | できること | 関連 MCP ツール |
+|---|---|---|---|
+| Index | `index <projectPath>` / `cdidx <projectPath>` | `.cdidx/codeindex.db` を作成または差分更新 | `index` |
+| Index | `backfill-fold` | 既存 DB の Unicode folded-name metadata を更新 | `backfill_fold` |
+| Index | `hooks` | 任意の git pre-commit hook を install / remove / inspect | -- |
+| Search | `search` | indexed chunk の全文検索 | `search` |
+| Search | `find` | 既知の indexed file 内で literal substring 検索 | `find_in_file` |
+| Search | `excerpt` | indexed chunk から指定行範囲を復元 | `excerpt` |
+| Navigation | `definition` | symbol definition と任意の body を解決 | `definition` |
+| Navigation | `symbols` | name / kind / language / path で symbol を検索 | `symbols` |
+| Navigation | `outline` | 1 ファイルの symbol outline を表示 | `outline` |
+| Navigation | `inspect` | definition / references / callers / callees / nearby symbols / trust metadata をまとめて取得 | `analyze_symbol` |
+| Repository map | `files` | indexed files を language / size / lines 付きで一覧 | `files` |
+| Repository map | `map` | languages / modules / hotspots / likely entrypoints を要約 | `map` |
+| Graph | `references` | symbol name の indexed references を検索 | `references` |
+| Graph | `callers` | graph-supported language で symbol の callers を検索 | `callers` |
+| Graph | `callees` | caller symbol が使う callees を検索 | `callees` |
+| Graph | `deps` | file-level dependency edges を表示 | `deps` |
+| Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
+| Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
+| Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
+| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告 | `validate` |
+| Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
+| Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
+| Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
+| Diagnostics | `report --output <path>` | redact 済み bug-report bundle を作成 | -- |
+| Feedback | `suggestions` | local suggestion history を list / inspect / export | -- |
+| MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
+| Legal | `license` | license と commercial-use summary を表示 | -- |
+
+Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
+release changelog を source of truth とします。完全な syntax line は `cdidx --help`
+を参照してください。
+
+## 既定値と drift 防止
+
+`cdidx --help` と source constants が canonical な既定値です。このガイドでは、
+意思決定に影響する既定値だけを記載し、対応する help text を変えた場合はここも
+同時に audit してください。
+
+| 設定 | 現在の既定値 | Source of truth |
+|---|---|---|
+| Query result limit | `20`（`--limit`、alias `--top`） | CLI help と query runners |
+| Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
+| Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
+| Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `10MiB` | index runner help |
+| Watch debounce | `500` ms（`--debounce`） | index watch runner |
+| Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
+| Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
+| ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
+| Report log tail | `200` lines（`--log-lines`） | report runner help |
+
+既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
+同じ PR で更新してください。
+
+## 高度な analysis 例
+
+### Indexed files を validate する
+
+```bash
+cdidx validate
+cdidx validate --kind replacement-character --path src/
+cdidx validate --json --path legacy/
+```
+
+`validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
+対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
+ending、likely non-UTF-8 content などです。失敗は source encoding または repository
+hygiene の問題として扱い、修正後に `cdidx index .`、続いて `cdidx validate` を再実行してください。
+
+### 未使用の可能性がある symbols を探す
+
+```bash
+cdidx unused --lang csharp --exclude-tests
+cdidx unused --kind function --path src/ --limit 50
+cdidx unused --json --count
+```
+
+`unused` は definitions と indexed references を比較し、confidence ごとに結果を
+分類します。Public API、framework entrypoint、generated hook、reflection、config
+経由の使用は false positive になりえます。C# の `nameof(...)`、`typeof(...)`、
+`GetMethod("Foo")` のような直接的な reflection member-name literal は indexed されますが、
+動的に組み立てられる名前は手動確認が必要です。
+
+### Hotspots を ranking する
+
+```bash
+cdidx hotspots --lang csharp --exclude-tests
+cdidx hotspots --group-by=file --json
+cdidx hotspots --group-by-name --limit 30
+```
+
+`hotspots` は incoming reference volume で symbols / files / statements を ranking し、
+refactor 前に中心的なコードを見つけます。SQL scope は既定で statement grouping、
+非 SQL scope は symbol grouping です。`status --json` が `hotspot_family_ready: false`
+を返す場合、current binary で再 index するまで duplicate-name grouping は保守的な
+fallback になります。
+
+### Impact を追跡する
+
+```bash
+cdidx impact Run --depth 2 --exclude-tests
+cdidx impact Run --depth 0 --json
+cdidx impact FolderDiffService --with-paths --json
+```
+
+`impact` は symbol を解決し、call-graph edges を通じて transitive callers を探索します。
+`--depth 0` は traversal せず resolve のみ行い、`--with-paths` は収束する経路の shortest
+call chains を出力します。Attributes、annotations、type-position references のような
+metadata-only edges は symbol-level BFS から除外されるため、metadata cycle で caller
+count が膨らむことはありません。ただし single-type query では heuristic file-level
+dependency hints が返る場合があります。
+
+## 大規模リポジトリの performance tuning
+
+knob を変える前に、まず測定してください。
+
+```bash
+cdidx status --check --json
+cdidx index . --dry-run --verbose
+cdidx index . --duration-format seconds
+```
+
+実行時間を支配している部分を減らす最小の変更から始めます。
+
+| Knob | 既定値 | いつ調整するか | Trade-off |
+|---|---|---|---|
+| `.gitignore` / `.cdidxignore` | project rules | generated / vendored / build output が scan time を支配している | 除外した file は search / graph から消える |
+| `--files <path...>` | off | editor/save hook や既知の in-place edit | rename/delete 旧 path は明示しない限り purge されない |
+| `--commits <id...>` | off | 通常の commit 後 | git history が必要だが rename/delete paths も扱える |
+| `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
+| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `10MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
+| `--watch --debounce <ms>` | `500` ms | 編集中の worktree を live に保つ | long-running process。commit/file scoped refresh flags とは併用不可 |
+| `--snippet-lines` / `--max-line-width` | `8` / `512` | AI context に対して query payload が大きすぎる | 小さくしすぎると周辺文脈が見えない |
+| `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
+
+非常に大きい repo では、repo root で一度 index し、generated tree を早めに除外し、
+日々の作業は scoped refresh を使ってください。branch switch、rebase、reset、merge で
+freshness が曖昧になった場合は、stale paths を purge できるように full `cdidx index .`
+または `cdidx . --json` refresh を優先します。
 
 ## インストール
 
@@ -2546,6 +2863,27 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
+
+### 言語別 extraction matrix
+
+現在の capability は `cdidx languages --json` を live probe として確認してください。
+この matrix は、構造化 command を信頼できる場面と `search` に戻るべき場面を判断するための概要です。
+
+| 言語ファミリ | Symbols | References / graph | メモと例 |
+|---|---|---|---|
+| C# / Razor / Blazor | namespace、type、member、property、import | call、constructor、event、attribute、annotation、type reference、metadata edge | modern partial member と metadata target を索引します。`cdidx inspect Run --lang csharp --exact-name` |
+| Java / Kotlin / Scala | package/import、class/interface、method、property | call、constructor、annotation、type reference | Kotlin inline lambda body の modeling は限定的です。深い call chain を信頼する前に `references` で確認してください。 |
+| JavaScript / TypeScript / Vue / Svelte | function、class、export、import、variable | call、constructor、static/dynamic import、worker、service worker | dynamic property call と computed module specifier は best-effort です。`cdidx references render --lang typescript` |
+| Python / Ruby / PHP / Perl / R | function、class/module、対応言語の import | call、constructor、対応言語の decorator/annotation | dynamic dispatch と metaprogramming は `search` が必要な場合があります。PHPDoc/static import pattern は静的に見える範囲で索引されます。 |
+| C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
+| Shell / PowerShell / Batch / Makefile / Gradle | function、label、task、対応言語の import | command-style call と control-flow target | runtime で組み立てられる command は解決しません。 |
+| SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
+| Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
+
+Language filter を指定した graph commands は、JSON / MCP 出力に
+`graph_supported` / `graph_support_reason` を含めます。Unsupported language の空結果は
+「caller がない」とは別物です。cleanup 判断の前に metadata を確認してください。
 
 ## 前提条件: sqlite3
 
