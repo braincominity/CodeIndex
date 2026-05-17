@@ -126,8 +126,8 @@ public partial class DbReader
             ELSE 0
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
-    private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe')";
-    private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe')";
+    private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe', 'razor_event_binding')";
+    private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')";
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
     // with non-call edges (issue #293); C++ `friend` declarations are retained because they are
@@ -135,7 +135,7 @@ public partial class DbReader
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。C++ の
     // `friend` 宣言は access/coupling edge として依存関係 graph query に含める (issue #1943)。
-    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'friend')";
+    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 

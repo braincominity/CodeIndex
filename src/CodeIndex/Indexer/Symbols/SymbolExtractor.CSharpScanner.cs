@@ -458,9 +458,18 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
+                if (ch == '"')
                 {
                     var quoteRunLength = GetCSharpQuoteRunLength(line, i);
+                    if (quoteRunLength != state.RawDelimiterLength)
+                    {
+                        for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
+                            sanitized[i + j] = ' ';
+
+                        i += quoteRunLength;
+                        continue;
+                    }
+
                     for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
                         sanitized[i + j] = ' ';
 
