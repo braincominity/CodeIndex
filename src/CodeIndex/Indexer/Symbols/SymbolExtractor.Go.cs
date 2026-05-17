@@ -671,7 +671,7 @@ public static partial class SymbolExtractor
     private static bool IsGoExportedPrefixedName(string name, string prefix)
         => name.Length > prefix.Length
            && name.StartsWith(prefix, StringComparison.Ordinal)
-           && char.IsUpper(name[prefix.Length]);
+           && !char.IsLower(name[prefix.Length]);
 
     private static bool GoSignatureHasParameterType(string signature, string typeName)
     {

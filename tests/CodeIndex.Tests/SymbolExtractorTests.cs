@@ -126,8 +126,12 @@ public class SymbolExtractorTests
             func init() {}
             func TestMain(m *testing.M) {}
             func TestWidget(t *testing.T) {}
+            func Test1(t *testing.T) {}
+            func Test_HTTP(t *testing.T) {}
             func BenchmarkWidget(b *testing.B) {}
+            func Benchmark1(b *testing.B) {}
             func FuzzWidget(f *testing.F) {}
+            func Fuzz_HTTP(f *testing.F) {}
             func ExampleWidget() {}
             func helper() {}
             func TestExporter() {}
@@ -138,8 +142,12 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Name == "init" && symbol.SubKind == "init");
         Assert.Contains(symbols, symbol => symbol.Name == "TestMain" && symbol.SubKind == "test_main");
         Assert.Contains(symbols, symbol => symbol.Name == "TestWidget" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "Test1" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "Test_HTTP" && symbol.SubKind == "test");
         Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkWidget" && symbol.SubKind == "benchmark");
+        Assert.Contains(symbols, symbol => symbol.Name == "Benchmark1" && symbol.SubKind == "benchmark");
         Assert.Contains(symbols, symbol => symbol.Name == "FuzzWidget" && symbol.SubKind == "fuzz");
+        Assert.Contains(symbols, symbol => symbol.Name == "Fuzz_HTTP" && symbol.SubKind == "fuzz");
         Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == "example");
         Assert.Contains(symbols, symbol => symbol.Name == "helper" && symbol.SubKind == "test_helper");
         Assert.Contains(symbols, symbol => symbol.Name == "TestExporter" && symbol.SubKind == "test_helper");
