@@ -4358,7 +4358,6 @@ public class McpServerTests : IDisposable
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
-                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
             }
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
@@ -5569,6 +5568,7 @@ public class McpServerTests : IDisposable
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
             }
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
