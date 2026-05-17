@@ -608,12 +608,18 @@ public partial class DbReader
             ? "(SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id)"
             : "0";
 
-    // C# top-level statements emit reference rows without a container symbol.
-    // Graph readers should surface those rows as a synthetic `<top-level>` caller.
-    // C# の top-level statements は container symbol なしの参照行を出すため、
-    // graph reader では合成 `<top-level>` caller として扱う。
+    // Script-style top-level code emits reference rows without a container symbol.
+    // Graph readers should surface those rows as a synthetic `<top-level>` caller only for
+    // languages where such rows naturally represent executable top-level statements. Java and
+    // other class/module-only languages stay excluded so unknown containers do not become
+    // false call-graph roots.
+    // script 形式の top-level code は container symbol なしの参照行を出す。実行可能な top-level
+    // 文として自然に解釈できる言語だけを合成 `<top-level>` caller として扱い、Java などの
+    // class/module 中心言語では unknown container を偽の call-graph root にしない。
+    private const string SyntheticTopLevelCallerLanguagesSql = "('csharp', 'javascript', 'typescript', 'python')";
+
     private static string BuildCallerContainerPredicate(string fileAlias, string referenceAlias) =>
-        $"({referenceAlias}.container_name IS NOT NULL OR ({fileAlias}.lang = 'csharp' AND {referenceAlias}.container_name IS NULL))";
+        $"({referenceAlias}.container_name IS NOT NULL OR ({fileAlias}.lang IN {SyntheticTopLevelCallerLanguagesSql} AND {referenceAlias}.container_name IS NULL))";
 
     private static string BuildCallerKindProjectionSql(string referenceAlias) =>
         $"CASE WHEN {referenceAlias}.container_name IS NULL THEN '{SyntheticTopLevelCallerKind}' ELSE {referenceAlias}.container_kind END";
