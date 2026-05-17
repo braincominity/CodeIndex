@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -8,6 +9,25 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Fact]
+    public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
+    {
+        var outer = Container("outer", "class", 1, 100);
+        var method = Container("method", "function", 10, 90);
+        var local = Container("local", "function", 20, 25);
+        var later = Container("later", "function", 60, 70);
+        var candidates = new[] { local, later, method, outer };
+        var resolver = new ReferenceExtractor.InnermostContainerResolver(candidates);
+
+        Assert.Same(method, resolver.Find(12));
+        Assert.Same(local, resolver.Find(20));
+        Assert.Same(local, resolver.Find(20));
+        Assert.Same(method, resolver.Find(26));
+        Assert.Same(later, resolver.Find(65));
+        Assert.Same(method, resolver.Find(80));
+        Assert.Same(local, resolver.Find(22));
+    }
+
     [Fact]
     public void Extract_PythonCall_AssignsCallerContainer()
     {
@@ -29939,4 +29959,15 @@ public class ReferenceExtractorTests
             && r.ContainerKind == "function"
             && r.ContainerName == "render");
     }
+
+    private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
+        new()
+        {
+            Name = name,
+            Kind = kind,
+            StartLine = startLine,
+            EndLine = endLine,
+            BodyStartLine = startLine,
+            BodyEndLine = endLine,
+        };
 }
