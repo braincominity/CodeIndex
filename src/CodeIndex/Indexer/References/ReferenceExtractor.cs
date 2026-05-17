@@ -2282,8 +2282,8 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
 
                 JavaScriptReferenceExtractor.EmitDiscriminantStringGuardReferences(
-                    preparedLine,
-                    context,
+                    referenceStructuralLines[i],
+                    originalLine,
                     references,
                     seen,
                     fileId,

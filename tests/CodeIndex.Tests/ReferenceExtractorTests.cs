@@ -30518,7 +30518,7 @@ public class ReferenceExtractorTests
                 if (shape.type === 'circle') {
                     return shape.radius;
                 }
-                if (shape.type === 'circle' || shape.type === 'square') {
+                /* x.kind === 'fake' */ if (shape.type === 'circle' || shape.type === 'square') {
                     return 0;
                 }
             }
@@ -30543,6 +30543,9 @@ public class ReferenceExtractorTests
             r.SymbolName == "shape.type=square"
             && r.ReferenceKind == "type_tag"
             && r.ContainerName == "area");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "shape.type=fake"
+            && r.ReferenceKind == "type_tag");
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>

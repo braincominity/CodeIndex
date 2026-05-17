@@ -65,8 +65,8 @@ internal static class JavaScriptReferenceExtractor
     }
 
     public static void EmitDiscriminantStringGuardReferences(
-        string preparedLine,
-        string contextLine,
+        string detectionLine,
+        string sourceLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -74,20 +74,15 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        var contextMatches = DiscriminantStringGuardRegex.Matches(contextLine);
-        var matchOrdinal = 0;
-        foreach (Match match in DiscriminantStringGuardRegex.Matches(preparedLine))
+        foreach (Match match in DiscriminantStringGuardRegex.Matches(detectionLine))
         {
             var objectName = match.Groups["object"].Value;
             var propertyName = match.Groups["property"].Value;
             var propertyIndex = match.Groups["property"].Index;
             var literalGroup = match.Groups["literal"];
-            var rawLiteral = matchOrdinal < contextMatches.Count
-                ? contextMatches[matchOrdinal].Groups["literal"].Value
-                : literalGroup.Index >= 0 && literalGroup.Index + literalGroup.Length <= contextLine.Length
-                ? contextLine.Substring(literalGroup.Index, literalGroup.Length)
+            var rawLiteral = literalGroup.Index >= 0 && literalGroup.Index + literalGroup.Length <= sourceLine.Length
+                ? sourceLine.Substring(literalGroup.Index, literalGroup.Length)
                 : literalGroup.Value;
-            matchOrdinal++;
             var literalValue = UnescapeSimpleStringLiteral(rawLiteral);
             var chain = $"{objectName}.{propertyName}";
             var container = resolveContainerForCall(match.Groups["object"].Index);
