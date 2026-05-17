@@ -2751,6 +2751,27 @@ public static partial class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    var genericStart = nameIndex + rawName.Length;
+                    while (genericStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[genericStart]))
+                        genericStart++;
+                    if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
+                    {
+                        var genericEnd = genericStart;
+                        if (TrySkipBalancedGenericArgs(preparedLine, ref genericEnd, out _)
+                            && genericEnd > genericStart + 2)
+                        {
+                            AddTypeExpressionSegments(
+                                references,
+                                seen,
+                                fileId,
+                                preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
+                                genericStart + 1,
+                                context,
+                                lineNumber,
+                                container,
+                                "csharp");
+                        }
+                    }
                     if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName, preparedLine, nameIndex) is { } callerInfoAttributeTypeName)
                     {
                         AddReference(

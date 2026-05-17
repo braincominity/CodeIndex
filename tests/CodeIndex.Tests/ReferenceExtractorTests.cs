@@ -26350,6 +26350,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericNoArgAttribute_RecordsTypeArgumentReferences()
+    {
+        // Regression (issue #1455): C# 11 generic attributes must still emit references for
+        // custom type arguments inside the attribute's `<...>` list.
+        // リグレッション (issue #1455): C# 11 の generic attribute では、属性の `<...>` 内に
+        // 現れるユーザー定義型引数も参照として記録すること。
+        const string content = """
+            public class Payload
+            {
+            }
+
+            public class Converter
+            {
+            }
+
+            [Serializable<Payload>]
+            [MyAttr<Dictionary<string, Converter>>]
+            public class Data
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var serializable = Assert.Single(references.Where(r => r.SymbolName == "Serializable"));
+        Assert.Equal("attribute", serializable.ReferenceKind);
+        var myAttr = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", myAttr.ReferenceKind);
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Converter" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpNestedGenericNoArgAttribute_ClassifiedAsAttribute()
     {
         // Regression (issue #293 round-16 follow-up): nested generic no-arg C#
