@@ -402,6 +402,19 @@ internal static class TypeScriptReferenceExtractor
         foreach (var range in ranges)
         {
             if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+    public static bool IsSatisfiesTypeOperand(string preparedLine, int tokenIndex)
+    {
+        foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "satisfies"))
+        {
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, keywordIndex + "satisfies".Length);
+            if (typeStart >= preparedLine.Length || tokenIndex < typeStart)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindKeywordFollowingTypeExpressionEnd(preparedLine, typeStart, "typescript");
+            if (typeEnd <= typeStart)
+                continue;
+
+            if (tokenIndex < typeEnd)
                 return true;
         }
 
