@@ -223,6 +223,33 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void InsertManualReferences(string path, string containerName, string target, string kind, int count)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 100,
+            Lines = count + 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var references = Enumerable.Range(1, count)
+            .Select(line => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = target,
+                ReferenceKind = kind,
+                Line = line,
+                Column = 9,
+                Context = $"{kind} {target}",
+                ContainerKind = "class",
+                ContainerName = containerName,
+            })
+            .ToList();
+        _writer.InsertReferences(references);
+    }
+
     [Fact]
     public void Search_FindsMatchingChunks()
     {
@@ -230,6 +257,30 @@ public class DbReaderTests : IDisposable
         Assert.Single(results);
         Assert.Equal("src/auth.py", results[0].Path);
         Assert.Equal(1, results[0].StartLine);
+    }
+
+    [Fact]
+    public void GetCallers_DefaultWeightedRankingPrioritizesInstantiateOverNoisySubscriptions()
+    {
+        const string target = "TargetService";
+        InsertManualReferences("src/Factory.cs", "Factory", target, "instantiate", 3);
+        InsertManualReferences("src/EventBus.cs", "EventBus", target, "subscribe", 50);
+
+        var weighted = _reader.GetCallers(target, lang: "csharp", exact: true);
+        var countRanked = _reader.GetCallers(target, lang: "csharp", exact: true, rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal("Factory", weighted[0].CallerName);
+        Assert.Equal(3, weighted[0].ReferenceCount);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["call"]);
+        Assert.Equal(3, weighted[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["subscribe"]);
+        Assert.Equal(9.0, weighted[0].ReferenceWeightScore, precision: 3);
+
+        Assert.Equal("EventBus", countRanked[0].CallerName);
+        Assert.Equal(50, countRanked[0].ReferenceCount);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
     }
 
     [Fact]
@@ -9481,6 +9532,94 @@ public class DbReaderTests : IDisposable
         Assert.Null(truncatedReason);
         var caller = Assert.Single(impact);
         Assert.Equal("Hook", caller.CallerName);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CallCycleDoesNotReAddResolvedRoot()
+    {
+        // Issue #1864: cycles must not inflate impact by reporting the resolved root as one of
+        // its own transitive callers. Mutual recursion is still a valid call graph, but impact
+        // should stop when traversal returns to the original query symbol.
+        // issue #1864: サイクルで解決済み root 自身が transitive caller として再登場し、
+        // impact 件数を膨らませてはいけない。相互再帰は有効な call graph だが、元の
+        // query symbol に戻った時点で traversal を止める。
+        InsertIndexedFile("src/impact_call_cycle.cs", "csharp",
+            """
+            public static class ImpactCallCycle
+            {
+                public static void ImpactCycleA() { ImpactCycleB(); }
+                public static void ImpactCycleB() { ImpactCycleA(); }
+            }
+            """);
+
+        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+            "ImpactCycleA", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_call_cycle"]);
+
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
+        var caller = Assert.Single(impact);
+        Assert.Equal("ImpactCycleB", caller.CallerName);
+        Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_MetadataCycleDoesNotParticipateInBfs()
+    {
+        // Issue #1864: metadata-only edges are compile-time dependency edges, not runtime
+        // caller edges. Even if metadata rows form a cycle, impact's symbol-level BFS must
+        // ignore them so they cannot inflate caller counts or rankings.
+        // issue #1864: metadata-only edge は compile-time dependency であり runtime caller
+        // ではない。metadata 行がサイクルを形成しても、impact の symbol-level BFS は
+        // それらを辿らず、caller 件数や ranking を膨らませない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/impact_metadata_cycle.cs",
+            Lang = "csharp",
+            Size = 128,
+            Lines = 6,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 6,
+                Content = "[ImpactMetadataConsumer]\nclass ImpactMetadataTarget {}\nclass ImpactMetadataConsumer {}\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "ImpactMetadataTarget",
+                ReferenceKind = "attribute",
+                Line = 1,
+                Column = 2,
+                Context = "[ImpactMetadataTarget]",
+                ContainerKind = "class",
+                ContainerName = "ImpactMetadataConsumer",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "ImpactMetadataConsumer",
+                ReferenceKind = "type_reference",
+                Line = 2,
+                Column = 28,
+                Context = "class ImpactMetadataTarget : ImpactMetadataConsumer {}",
+                ContainerKind = "class",
+                ContainerName = "ImpactMetadataTarget",
+            },
+        ]);
+
+        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+            "ImpactMetadataTarget", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_metadata_cycle"]);
+
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
+        Assert.Empty(impact);
     }
 
     [Fact]

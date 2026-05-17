@@ -99,6 +99,7 @@ public partial class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Callee symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
+                        ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -120,6 +121,7 @@ public partial class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Caller/container symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
+                        ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -254,7 +256,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "impact_analysis",
-                "Compute the transitive caller chain for a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, may return heuristic file-level dependency hints instead; check `impact_mode`, `heuristic`, and `file_impacts`. When `truncated` is true, inspect `truncated_reason` (`user_limit` means raising `limit` returns more; `safety_cap` means the graph is likely pathological and raising `limit` will not help). Pass `withPaths: true` when you need the call chain via specific intermediates — each caller then carries a `paths` array of shortest routes (issue #1536). / シンボルの推移的呼び出しチェーンを算出。scoped query が単一の class / struct / interface に解決されても symbol-level caller が無い場合は、代わりに heuristic な file-level dependency hint を返すことがあるため、`impact_mode`・`heuristic`・`file_impacts` を確認すること。`truncated` が真のときは `truncated_reason` を見て、`user_limit` なら `limit` を増やせば残りも取得可能、`safety_cap` ならグラフが病的で `limit` を増やしても解消しないことを区別すること。中間シンボル経由の経路が必要な場合は `withPaths: true` を渡すと、各 caller に経路配列 `paths` が付く（issue #1536）。",
+                "Compute the transitive caller chain for a symbol. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, may return heuristic file-level dependency hints instead; those file hints can include metadata edges, so check `impact_mode`, `heuristic`, and `file_impacts`. When `truncated` is true, inspect `truncated_reason` (`user_limit` means raising `limit` returns more; `safety_cap` means the graph is likely pathological and raising `limit` will not help). Pass `withPaths: true` when you need the call chain via specific intermediates — each caller then carries a `paths` array of shortest routes (issue #1536). / シンボルの推移的呼び出しチェーンを算出。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。scoped query が単一の class / struct / interface に解決されても symbol-level caller が無い場合は、代わりに heuristic な file-level dependency hint を返すことがある。この file hint は metadata edge を含み得るため、`impact_mode`・`heuristic`・`file_impacts` を確認すること。`truncated` が真のときは `truncated_reason` を見て、`user_limit` なら `limit` を増やせば残りも取得可能、`safety_cap` ならグラフが病的で `limit` を増やしても解消しないことを区別すること。中間シンボル経由の経路が必要な場合は `withPaths: true` を渡すと、各 caller に経路配列 `paths` が付く（issue #1536）。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -456,7 +458,8 @@ public partial class McpServer
                         },
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Programming language this applies to (optional)" },
                         ["description"] = new JsonObject { ["type"] = "string", ["description"] = "What gap or improvement you observed, or what error occurred (NOT source code)" },
-                        ["context"] = new JsonObject { ["type"] = "string", ["description"] = "What you were trying to do when you noticed the gap (NOT source code)" }
+                        ["context"] = new JsonObject { ["type"] = "string", ["description"] = "What you were trying to do when you noticed the gap (NOT source code)" },
+                        ["toolInvocationContext"] = new JsonObject { ["type"] = "string", ["description"] = "Natural-language context for the current tool invocation or workflow (optional, NOT source code)" }
                     },
                     ["required"] = new JsonArray { "category", "description" }
                 },
