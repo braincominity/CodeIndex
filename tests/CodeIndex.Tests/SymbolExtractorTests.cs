@@ -8483,6 +8483,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilineGenericMethodOverloadsKeepDistinctSignatures()
+    {
+        var content = """
+            public class Service
+            {
+                public void M<T>(
+                    T value)
+                {
+                }
+
+                public void M<T,
+                    U>(
+                    T first,
+                    U second)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var overloads = symbols
+            .Where(s => s.Kind == "function" && s.Name == "M")
+            .OrderBy(s => s.StartLine)
+            .ToArray();
+
+        Assert.Equal(2, overloads.Length);
+        Assert.Equal("public void M<T>( T value) {", overloads[0].Signature);
+        Assert.Equal("public void M<T, U>( T first, U second) {", overloads[1].Signature);
+        Assert.NotEqual(overloads[0].Signature, overloads[1].Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_CtorRegex_StillCapturesAllValidCtorForms()
     {
         // The #349 fix tightens the ctor regex with a negative lookahead that rejects lines where
