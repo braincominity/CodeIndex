@@ -22378,6 +22378,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDefaultInterfaceMethod_SameLineOuterWhere_DoesNotCaptureTypeConstraint()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public interface IWorker<T> where T : IDisposable { void Do<U>() where U : T { } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference" && r.ContainerName == "Do");
+    }
+
+    [Fact]
     public void ParseJavaBaseType_TypeUseAnnotation_Stripped()
     {
         // Java type-use annotations (JLS 9.7.4) can precede the base type or sit between nested

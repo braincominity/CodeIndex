@@ -1551,7 +1551,9 @@ public static partial class ReferenceExtractor
                     {
                         var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
                             containerCandidates,
-                            lineNumber);
+                            structuralLines[i],
+                            lineNumber,
+                            column);
                         if (declarationRangeContainer != null)
                             return declarationRangeContainer;
                     }
@@ -1563,6 +1565,15 @@ public static partial class ReferenceExtractor
                         column);
                     if (sameLineContainer != null)
                         return sameLineContainer;
+
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine)
+                        && container?.Kind == "function"
+                        && container.StartLine == lineNumber
+                        && (!TryFindCSharpFunctionNameColumn(structuralLines[i], container.Name, out var containerNameColumn)
+                            || column < containerNameColumn))
+                    {
+                        return null;
+                    }
                 }
 
                 return container;

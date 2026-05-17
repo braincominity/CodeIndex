@@ -726,6 +726,13 @@ public static partial class ReferenceExtractor
             if (column < startColumn || column >= endColumn)
                 continue;
 
+            if (candidate.Kind == "function"
+                && (!TryFindCSharpFunctionNameColumn(structuralLine, candidate.Name, out var nameColumn)
+                    || column < nameColumn))
+            {
+                continue;
+            }
+
             var spanLength = endColumn - startColumn;
             var kindRank = GetSameLineContainerKindRank(candidate.Kind);
             if (best == null
@@ -745,17 +752,28 @@ public static partial class ReferenceExtractor
 
     private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
         IReadOnlyList<SymbolRecord> candidates,
-        int lineNumber)
+        string structuralLine,
+        int lineNumber,
+        int column)
     {
         SymbolRecord? best = null;
         var bestRange = int.MaxValue;
 
         foreach (var candidate in candidates)
         {
-            if (candidate.Kind is not ("function" or "property")
+            if (candidate.Kind != "function"
+                || candidate.BodyStartLine == null
                 || candidate.BodyEndLine == null
                 || candidate.StartLine > lineNumber
+                || candidate.BodyStartLine.Value < lineNumber
                 || candidate.BodyEndLine.Value < lineNumber)
+            {
+                continue;
+            }
+
+            if (candidate.StartLine == lineNumber
+                && (!TryFindCSharpFunctionNameColumn(structuralLine, candidate.Name, out var nameColumn)
+                    || column < nameColumn))
             {
                 continue;
             }
@@ -769,6 +787,53 @@ public static partial class ReferenceExtractor
         }
 
         return best;
+    }
+
+    private static bool TryFindCSharpFunctionNameColumn(string structuralLine, string? name, out int column)
+    {
+        column = -1;
+        if (string.IsNullOrWhiteSpace(structuralLine) || string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var searchStart = 0;
+        while (searchStart < structuralLine.Length)
+        {
+            var index = structuralLine.IndexOf(name, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var before = index - 1;
+            if (before >= 0 && IsTypeExpressionIdentifierPart("csharp", structuralLine[before]))
+            {
+                searchStart = index + name.Length;
+                continue;
+            }
+
+            var afterName = index + name.Length;
+            if (afterName < structuralLine.Length && IsTypeExpressionIdentifierPart("csharp", structuralLine[afterName]))
+            {
+                searchStart = afterName;
+                continue;
+            }
+
+            var after = SkipWhitespace(structuralLine, afterName);
+            if (after < structuralLine.Length && structuralLine[after] == '<')
+            {
+                var genericClose = FindMatchingChar(structuralLine, after, '<', '>');
+                if (genericClose > after)
+                    after = SkipWhitespace(structuralLine, genericClose + 1);
+            }
+
+            if (after < structuralLine.Length && structuralLine[after] == '(')
+            {
+                column = index;
+                return true;
+            }
+
+            searchStart = afterName;
+        }
+
+        return false;
     }
 
     private static bool TryGetSameLineSignatureSpan(
