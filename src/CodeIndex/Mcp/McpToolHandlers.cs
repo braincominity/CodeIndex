@@ -1961,8 +1961,6 @@ public partial class McpServer
         }
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
-        var projectFilters = ReadPathList(args, "project") ?? [];
-        var solutionPath = args?["solution"]?.GetValue<string>();
         var projectPath = Path.GetFullPath(path);
 
         // Prevent path traversal — only allow indexing within current working directory
@@ -2069,16 +2067,6 @@ public partial class McpServer
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
-        if (projectFilters.Count > 0)
-        {
-            var relativeProjectFiles = SolutionProjectResolver.ResolveProjectFiles(projectPath, projectFilters, solutionPath)
-                .ToHashSet(StringComparer.Ordinal);
-            files = files
-                .Where(file => relativeProjectFiles.Contains(Path.GetRelativePath(projectPath, file)
-                    .Replace(Path.DirectorySeparatorChar, '/')
-                    .Replace(Path.AltDirectorySeparatorChar, '/')))
-                .ToList();
-        }
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };

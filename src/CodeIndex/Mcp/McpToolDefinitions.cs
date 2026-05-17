@@ -506,7 +506,6 @@ public partial class McpServer
             "validate",
             "unused_symbols",
             "symbol_hotspots",
-            "index",
         };
 
         foreach (var tool in tools.OfType<JsonObject>())
