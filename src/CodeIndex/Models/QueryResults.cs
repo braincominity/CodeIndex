@@ -35,6 +35,8 @@ public class SymbolResult
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string Kind { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SubKind { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int StartLine { get; set; }
