@@ -29285,6 +29285,7 @@ public class ReferenceExtractorTests
             const wrapped = (x: number) => x satisfies Brand;
             const chained = config satisfies ServerConfig satisfies RuntimeConfig;
             const nested = wrap<ServerConfig satisfies RuntimeConfig>(config);
+            const parser = {} satisfies { parse(input: Request): Response };
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -29293,9 +29294,12 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "parse" && r.ReferenceKind == "call");
     }
 
     [Fact]
