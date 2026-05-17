@@ -7,6 +7,9 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    // THREAD-SAFETY: The C# scanner keeps all scan state in parameters, locals, or caller-owned
+    // collections. It may read shared Regex fields from SymbolExtractor, but must not add static
+    // mutable scanner state.
     private static void ExtractCSharpEnumMembers(long fileId, string[] rawLines, string[] enumScannerLines, string[] csharpMatchLines, List<SymbolRecord> symbols)
     {
         var enumDeclarations = symbols
