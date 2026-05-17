@@ -65,6 +65,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptGenericConditionalConstraint_EmitsBranchTypeReferences()
+    {
+        const string content = """
+            export function unwrap<T extends Array<infer U> ? Promise<U[]> : Nested<Fallback>>(value: T): T {
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Array"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "U"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Promise"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Nested"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Fallback"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "infer"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpAsyncIterator_EmitsTypeAndImplicitImplementationReferences()
     {
         const string content = """

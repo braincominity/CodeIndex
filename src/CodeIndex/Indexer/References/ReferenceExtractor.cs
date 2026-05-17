@@ -627,7 +627,7 @@ public static partial class ReferenceExtractor
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "any", "bigint", "boolean", "false", "never", "null", "number", "object", "string",
-            "symbol", "true", "undefined", "unknown", "void",
+            "infer", "keyof", "readonly", "symbol", "true", "undefined", "unique", "unknown", "void",
         },
         ["kotlin"] = new HashSet<string>(StringComparer.Ordinal)
         {

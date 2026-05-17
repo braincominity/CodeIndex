@@ -1149,7 +1149,7 @@ public static partial class ReferenceExtractor
             ignoredSegments: ignoredSegments);
     }
 
-    private static void AddTypeScriptTypeExpressionSegments(
+    internal static void AddTypeScriptTypeExpressionSegments(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
