@@ -22246,6 +22246,41 @@ public class SymbolExtractorTests
         Assert.Contains(tsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_CrlfTemplateLiteralKeepsColumnsAligned(string language)
+    {
+        // Regression for issue #1465: CRLF input is normalized before JS/TS lexing, so a
+        // multi-line template literal must not shift columns for later real symbols.
+        // issue #1465 の回帰: JS/TS lexing 前に CRLF 入力を正規化するため、複数行
+        // template literal が後続の本物のシンボル列をずらしてはならない。
+        const string content = """
+            const src = `
+            class FakeClassInTemplate {}
+            function fakeFromTemplate() {}
+            `;
+
+            export function realFunction() {
+              return src;
+            }
+            """;
+        var lfContent = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var crlfContent = lfContent.Replace("\n", "\r\n", StringComparison.Ordinal);
+
+        var lfSymbols = SymbolExtractor.Extract(1, language, lfContent);
+        var crlfSymbols = SymbolExtractor.Extract(1, language, crlfContent);
+
+        var lfRealFunction = Assert.Single(lfSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        var crlfRealFunction = Assert.Single(crlfSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        Assert.Equal(lfRealFunction.Line, crlfRealFunction.Line);
+        Assert.Equal(lfRealFunction.StartColumn, crlfRealFunction.StartColumn);
+        Assert.Equal(lfRealFunction.Signature, crlfRealFunction.Signature);
+
+        Assert.DoesNotContain(crlfSymbols, s => s.Name == "fakeFromTemplate");
+        Assert.DoesNotContain(crlfSymbols, s => s.Name == "FakeClassInTemplate");
+    }
+
     [Fact]
     public void Extract_CSharp_WrappedStaticConstructor_EmitsOnceAtNameLine()
     {
