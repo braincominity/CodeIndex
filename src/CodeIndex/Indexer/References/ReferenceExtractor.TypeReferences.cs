@@ -68,7 +68,8 @@ public static partial class ReferenceExtractor
                 symbol.StartLine,
                 symbol);
 
-            var moveNextLine = FindFirstCSharpYieldReturnLine(structuralLines, symbol) ?? symbol.StartLine;
+            var moveNextPosition = FindFirstCSharpYieldReturnPosition(structuralLines, symbol);
+            var moveNextLine = moveNextPosition?.Line ?? symbol.StartLine;
             var moveNextContext = moveNextLine > 0 && moveNextLine <= lines.Length
                 ? lines[moveNextLine - 1].Trim()
                 : context;
@@ -77,7 +78,7 @@ public static partial class ReferenceExtractor
                 seen,
                 fileId,
                 "MoveNextAsync",
-                0,
+                moveNextPosition?.Column ?? nameIndex,
                 CSharpImplicitImplementationReferenceKind,
                 moveNextContext,
                 moveNextLine,
@@ -93,7 +94,7 @@ public static partial class ReferenceExtractor
             return false;
 
         return ContainsCSharpAsyncIteratorReturnType(symbol.ReturnType)
-            || FindFirstCSharpYieldReturnLine(structuralLines, symbol).HasValue;
+            || FindFirstCSharpYieldReturnPosition(structuralLines, symbol).HasValue;
     }
 
     private static bool ContainsCSharpAsyncIteratorReturnType(string? returnType)
@@ -101,7 +102,7 @@ public static partial class ReferenceExtractor
             && (returnType.Contains("IAsyncEnumerable", StringComparison.Ordinal)
                 || returnType.Contains("IAsyncEnumerator", StringComparison.Ordinal));
 
-    private static int? FindFirstCSharpYieldReturnLine(string[] structuralLines, SymbolRecord symbol)
+    private static (int Line, int Column)? FindFirstCSharpYieldReturnPosition(string[] structuralLines, SymbolRecord symbol)
     {
         var start = Math.Max(0, (symbol.BodyStartLine ?? symbol.StartLine) - 1);
         var end = Math.Min(structuralLines.Length - 1, (symbol.BodyEndLine ?? symbol.EndLine) - 1);
@@ -110,8 +111,9 @@ public static partial class ReferenceExtractor
 
         for (var i = start; i <= end; i++)
         {
-            if (ContainsCSharpWordPair(structuralLines[i], "yield", "return"))
-                return i + 1;
+            var yieldIndex = IndexOfCSharpWordPair(structuralLines[i], "yield", "return");
+            if (yieldIndex >= 0)
+                return (i + 1, yieldIndex);
         }
 
         return null;
@@ -130,12 +132,17 @@ public static partial class ReferenceExtractor
     }
 
     private static bool ContainsCSharpWordPair(string text, string first, string second)
+        => IndexOfCSharpWordPair(text, first, second) >= 0;
+
+    private static int IndexOfCSharpWordPair(string text, string first, string second)
     {
         var firstIndex = IndexOfCSharpWord(text, first, 0);
         if (firstIndex < 0)
-            return false;
+            return -1;
 
-        return IndexOfCSharpWord(text, second, firstIndex + first.Length) >= 0;
+        return IndexOfCSharpWord(text, second, firstIndex + first.Length) >= 0
+            ? firstIndex
+            : -1;
     }
 
     private static bool ContainsCSharpWord(string text, string word)
