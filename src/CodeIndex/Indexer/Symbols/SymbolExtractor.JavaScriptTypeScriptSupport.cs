@@ -160,6 +160,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptDynamicImportSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -223,7 +226,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -236,6 +239,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptStaticImportModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -269,7 +275,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -287,6 +293,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptRequireModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -347,7 +356,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -443,6 +452,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptNewUrlModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -498,7 +510,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -615,6 +627,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -662,7 +677,7 @@ public static partial class SymbolExtractor
                     {
                         FileId = fileId,
                         Kind = "import",
-                        Name = moduleName,
+                        Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                         Line = moduleLineIndex + 1,
                         StartLine = moduleLineIndex + 1,
                         StartColumn = moduleStartColumn,
@@ -785,6 +800,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -792,6 +810,9 @@ public static partial class SymbolExtractor
     {
         ExtractJavaScriptTypeScriptExactModuleCallSymbols(
             fileId,
+            lang,
+            filePath,
+            projectRoot,
             rawLines,
             sanitizedLines,
             lineIndex,
@@ -799,6 +820,9 @@ public static partial class SymbolExtractor
             "navigator.serviceWorker.register");
         ExtractJavaScriptTypeScriptExactModuleCallSymbols(
             fileId,
+            lang,
+            filePath,
+            projectRoot,
             rawLines,
             sanitizedLines,
             lineIndex,
@@ -808,46 +832,58 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
         List<SymbolRecord> symbols)
     {
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "import.meta.resolve");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "import.meta.resolve");
     }
 
     private static void ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
         List<SymbolRecord> symbols)
     {
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "audioWorklet.addModule");
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "paintWorklet.addModule");
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "layoutWorklet.addModule");
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "animationWorklet.addModule");
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "CSS.paintWorklet.addModule");
-        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "CSS.layoutWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "audioWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "paintWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "layoutWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "animationWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "CSS.paintWorklet.addModule");
+        ExtractJavaScriptTypeScriptExactModuleCallSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "CSS.layoutWorklet.addModule");
     }
 
     private static void ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
         List<SymbolRecord> symbols)
     {
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "Worker");
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "SharedWorker");
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "window.Worker");
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "window.SharedWorker");
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.Worker");
-        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.SharedWorker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "SharedWorker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "window.Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "window.SharedWorker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.Worker");
+        ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(fileId, lang, filePath, projectRoot, rawLines, sanitizedLines, lineIndex, symbols, "globalThis.SharedWorker");
     }
 
     private static void ExtractJavaScriptTypeScriptNewConstructorModuleSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -905,7 +941,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -918,6 +954,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptExactModuleCallSymbols(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string[] rawLines,
         string[] sanitizedLines,
         int lineIndex,
@@ -968,7 +1007,7 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = moduleName,
+                    Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                     Line = moduleLineIndex + 1,
                     StartLine = moduleLineIndex + 1,
                     StartColumn = moduleStartColumn,
@@ -1640,6 +1679,9 @@ public static partial class SymbolExtractor
 
     private static bool TryHandleJavaScriptTypeScriptImportEqualsLine(
         long fileId,
+        string lang,
+        string? filePath,
+        string? projectRoot,
         string rawLine,
         int lineNumber,
         List<SymbolRecord> symbols)
@@ -1768,7 +1810,7 @@ public static partial class SymbolExtractor
             {
                 FileId = fileId,
                 Kind = "import",
-                Name = moduleName,
+                Name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, moduleName),
                 Line = lineNumber,
                 StartLine = lineNumber,
                 StartColumn = moduleLiteralStart,

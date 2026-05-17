@@ -5304,6 +5304,107 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_ResolvesTypeScriptPathAliasesFromProjectRoot()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ts_alias_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_ts_alias_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(fixtureDir, "src", "components"));
+            Directory.CreateDirectory(Path.Combine(fixtureDir, "src", "pages"));
+            File.WriteAllText(Path.Combine(fixtureDir, "tsconfig.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            File.WriteAllText(Path.Combine(fixtureDir, "src", "components", "Button.tsx"), "export const Button = () => null;\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "src", "pages", "Page.tsx"), "import { Button } from \"@/components/Button\";\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["rebuild"] = true,
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbols
+                    WHERE kind = 'import'
+                      AND name = 'src/components/Button.tsx'
+                    """;
+                Assert.Equal(1L, (long)command.ExecuteScalar()!);
+            }
+
+            Directory.CreateDirectory(Path.Combine(fixtureDir, "app", "components"));
+            File.WriteAllText(Path.Combine(fixtureDir, "app", "components", "Button.tsx"), "export const UpdatedButton = () => null;\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "tsconfig.json"), """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["app/*"]
+                    }
+                  }
+                }
+                """);
+
+            response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT name, COUNT(*)
+                    FROM symbols
+                    WHERE kind = 'import'
+                      AND name IN ('src/components/Button.tsx', 'app/components/Button.tsx')
+                    GROUP BY name
+                    """;
+                using var reader = command.ExecuteReader();
+                var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+                while (reader.Read())
+                    counts[reader.GetString(0)] = reader.GetInt64(1);
+
+                Assert.Equal(1L, counts["app/components/Button.tsx"]);
+                Assert.False(counts.ContainsKey("src/components/Button.tsx"));
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RestampsHotspotFamilyReadyWhenMarkerFingerprintChanges()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_marker_fingerprint_{Guid.NewGuid():N}");
