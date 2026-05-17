@@ -248,7 +248,7 @@ internal static class IndexWatchRunner
     {
         var prefix = status == "rescanned" ? "[watch] rescanned" : "[watch] updated";
         var batchLabel = batchSize is int n
-            ? $" {n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} path(s)"
+            ? $" {ConsoleUi.Counted(n, "path", format: "N0")}"
             : string.Empty;
 
         // Best-effort parse of the sub-run JSON to surface updated/removed/errors counts.

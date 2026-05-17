@@ -153,6 +153,12 @@ public class SuggestionStoreTests : IDisposable
             Status = SuggestionStatus.Draft,
             UpstreamIssueNumber = null,
             UpstreamUrl = null,
+            CreatedByAgent = "codex/5",
+            SessionId = "session-123",
+            ClientVersion = "1.2.3",
+            McpClientName = "codex",
+            McpClientVersion = "5",
+            ToolInvocationContext = "MCP regression triage",
         };
 
         _store.TryAdd(record);
@@ -168,6 +174,39 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(SuggestionStatus.Draft, r.Status);
         Assert.Null(r.UpstreamIssueNumber);
         Assert.Null(r.UpstreamUrl);
+        Assert.Equal("codex/5", r.CreatedByAgent);
+        Assert.Equal("session-123", r.SessionId);
+        Assert.Equal("1.2.3", r.ClientVersion);
+        Assert.Equal("codex", r.McpClientName);
+        Assert.Equal("5", r.McpClientVersion);
+        Assert.Equal("MCP regression triage", r.ToolInvocationContext);
+        Assert.Null(r.SubmittedToGitHub);
+        Assert.Null(r.GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void LoadAll_LegacyRecordsDefaultMissingAttribution()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"),
+            """
+            [
+              {
+                "category": "other",
+                "description": "Legacy suggestion without attribution",
+                "hash": "abc123",
+                "created_at": "2026-04-12T10:00:00Z"
+              }
+            ]
+            """);
+
+        var loaded = _store.LoadAll();
+
+        Assert.Single(loaded);
+        Assert.Equal("unknown", loaded[0].CreatedByAgent);
+        Assert.Equal("unknown", loaded[0].SessionId);
+        Assert.Equal("unknown", loaded[0].ClientVersion);
+        Assert.Null(loaded[0].McpClientName);
+        Assert.Null(loaded[0].McpClientVersion);
     }
 
     // --- MarkSubmitted tests / MarkSubmitted テスト ---
@@ -277,6 +316,26 @@ public class SuggestionStoreTests : IDisposable
         var all = _store.LoadAll();
         Assert.Single(all);
         Assert.Equal("Post-corruption suggestion", all[0].Description);
+    }
+
+    [Fact]
+    public void TryAdd_MoveFailure_DoesNotLeaveOrphanTmpFile()
+    {
+        // Force File.Move to fail by pre-creating the destination as a directory.
+        // The write-to-temp succeeds, but the rename onto a directory throws and
+        // the temp file must be cleaned up so `.cdidx/` does not accumulate orphans (#1574).
+        // File.Move を失敗させるため、宛先パスをディレクトリとして事前作成する。
+        // 一時ファイルへの書き込みは成功するが、ディレクトリに対する rename は失敗するため、
+        // `.cdidx/` に孤児が蓄積しないよう一時ファイルがクリーンアップされる必要がある (#1574)。
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var tmpPath = filePath + ".tmp";
+        Directory.CreateDirectory(filePath);
+
+        var record = MakeRecord("other", null, "Move failure cleanup");
+        var ex = Record.Exception(() => _store.TryAdd(record));
+
+        Assert.NotNull(ex);
+        Assert.False(File.Exists(tmpPath), $"Orphan .tmp file should be cleaned up after Move failure: {tmpPath}");
     }
 
     // --- Helpers / ヘルパー ---

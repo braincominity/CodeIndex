@@ -561,6 +561,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Description text (natural language, validated by SourceCodeDetector)
 - Context text (natural language, validated by SourceCodeDetector)
 - cdidx version string
+- Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
 
 ### Local lifecycle fields
@@ -576,7 +577,7 @@ Local suggestion records use the `status` lifecycle field instead of a binary su
 
 ### Heuristic source code guard (not a security boundary)
 
-The description and context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
+The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
 
 ### SourceCodeDetector design
 
@@ -856,10 +857,12 @@ What `install.sh` does, in order (see `install.sh`):
 
 1. **Detect platform.** `uname -s` / `uname -m` are normalized to the
    `<os>-<arch>` RID the release workflow publishes (`linux-x64`,
-   `linux-arm64`, `osx-arm64`, `win-x64`). Alpine / musl is rejected up
-   front with an actionable error because the self-contained binary
-   links against glibc. `osx-x64` is rejected because the release matrix
-   does not ship that RID.
+   `linux-arm64`, `osx-arm64`, `win-x64`; see
+   [Platform Support](docs/platform-support.md)). Alpine / musl is
+   rejected up front with an actionable error because the self-contained
+   binary links against glibc. `osx-x64` is rejected because the release
+   matrix does not ship that RID, with NuGet global-tool and source-build
+   alternatives in the error text.
 2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
    exists, the installer caches its parsed `--version` output before any
    network work so later version-selection and repair decisions can
@@ -1358,7 +1361,7 @@ flowchart TD
 | `cdidx --version` prints `cdidx v0.0.0` | `version.json` not next to the binary in `$HOME/.local/bin/` | Re-run the fixed `install.sh`; verify `ls $HOME/.local/bin/version.json` exists |
 | `DllNotFoundException: Unable to load shared library 'e_sqlite3'` on any command | `libe_sqlite3.so` (or `.dylib`) not next to the binary | Re-run the fixed `install.sh`; verify `ls $HOME/.local/bin/libe_sqlite3.*` exists |
 | `install.sh` error: `musl-based Linux (e.g. Alpine) is not supported` | Container uses musl libc | Switch to a glibc-based image (debian/ubuntu) or install via `dotnet tool install -g cdidx` in an environment with the SDK |
-| `install.sh` error: `macOS x86_64 (Intel) binaries are not published` | Intel Mac hitting `osx-x64` RID | Run under Rosetta 2 with `osx-arm64`, or use `dotnet tool install -g cdidx` |
+| `install.sh` error: `macOS x86_64 (Intel) binaries are not published` | Intel Mac hitting `osx-x64` RID | Use `dotnet tool install -g cdidx` in a .NET SDK environment, or build from source with `dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r osx-x64 --self-contained true` |
 | `install.sh` error: `Checksum mismatch!` | Tarball tampered with or transport corrupted | Retry; if persistent, check the `sha256sums.txt` and the tarball on the release page |
 | `Error: --json is not available on this trimmed build.` | Manual/custom build reached a reflection-based `JsonSerializer` path that is not covered by source generation | Use the official `install.sh` release or NuGet/global-tool build, omit `--json`, use MCP, or add the missing DTO to `CliJsonSerializerContext` before publishing |
 | `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
@@ -2175,7 +2178,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
-1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
+1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否し、エラー文で NuGet global tool と source build の代替手段を案内する。
 2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
 3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
@@ -2434,7 +2437,7 @@ flowchart TD
 | `cdidx --version` が `cdidx v0.0.0` | `version.json` が `$HOME/.local/bin/` のバイナリの隣に無い | 修正後の `install.sh` を再実行。`ls $HOME/.local/bin/version.json` を確認 |
 | 任意のコマンドで `DllNotFoundException: Unable to load shared library 'e_sqlite3'` | `libe_sqlite3.so`（または `.dylib`）がバイナリの隣に無い | 修正後の `install.sh` を再実行。`ls $HOME/.local/bin/libe_sqlite3.*` を確認 |
 | `install.sh` のエラー: `musl-based Linux (e.g. Alpine) is not supported` | コンテナが musl libc を使用 | glibc ベース（debian/ubuntu）に切り替えるか、SDK のある環境で `dotnet tool install -g cdidx` を使う |
-| `install.sh` のエラー: `macOS x86_64 (Intel) binaries are not published` | Intel Mac が `osx-x64` RID に到達 | Rosetta 2 下で `osx-arm64` を使うか、`dotnet tool install -g cdidx` を使う |
+| `install.sh` のエラー: `macOS x86_64 (Intel) binaries are not published` | Intel Mac が `osx-x64` RID に到達 | .NET SDK のある環境で `dotnet tool install -g cdidx` を使うか、`dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r osx-x64 --self-contained true` で source build する |
 | `install.sh` のエラー: `Checksum mismatch!` | tarball の改ざんまたは転送時破損 | 再実行。それでも起きるならリリースページの `sha256sums.txt` と tarball を確認 |
 | `Error: --json is not available on this trimmed build.` | 手動/custom build が source generation 未対応の reflection-based `JsonSerializer` 経路に到達した | 公式 `install.sh` release または NuGet グローバルツール版を使う、`--json` を外す、MCP を使う、または publish 前に不足 DTO を `CliJsonSerializerContext` へ追加する |
 | 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |

@@ -221,8 +221,7 @@ public class SuggestionStore
         {
             var records = JsonSerializer.Deserialize<List<SuggestionRecord>>(json, s_readOptions)
                           ?? new List<SuggestionRecord>();
-            foreach (var record in records)
-                NormalizeLegacyFields(record);
+            NormalizeRecordDefaults(records);
             return records;
         }
         catch (JsonException)
@@ -236,11 +235,29 @@ public class SuggestionStore
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
     }
 
+    private static void NormalizeRecordDefaults(List<SuggestionRecord> records)
+    {
+        foreach (var record in records)
+        {
+            NormalizeLegacyFields(record);
+            if (string.IsNullOrWhiteSpace(record.CreatedByAgent))
+                record.CreatedByAgent = "unknown";
+            if (string.IsNullOrWhiteSpace(record.SessionId))
+                record.SessionId = "unknown";
+            if (string.IsNullOrWhiteSpace(record.ClientVersion))
+                record.ClientVersion = "unknown";
+        }
+    }
+
     /// <summary>
     /// Write suggestions atomically without acquiring the lock (caller must hold it).
-    /// Uses write-to-temp-and-rename to prevent partial writes.
+    /// Uses write-to-temp-and-rename to prevent partial writes. If either the write
+    /// or the rename throws, the temp file is best-effort deleted so that repeated
+    /// failures do not accumulate orphaned <c>.tmp</c> files in <c>.cdidx/</c>.
     /// ロックを取得せずにアトミックに提案を書き込む（呼び出し元がロックを保持していること）。
     /// 部分書き込みを防ぐため一時ファイル→リネームを使用。
+    /// write または rename が失敗した場合、一時ファイルをベストエフォートで削除して
+    /// <c>.cdidx/</c> に孤児 <c>.tmp</c> が蓄積するのを防ぐ。
     /// </summary>
     private void SaveUnlocked(List<SuggestionRecord> records)
     {
@@ -248,13 +265,20 @@ public class SuggestionStore
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        foreach (var record in records)
-            NormalizeLegacyFields(record);
+        NormalizeRecordDefaults(records);
 
         var tempPath = _filePath + ".tmp";
         var json = JsonSerializer.Serialize(records, s_jsonOptions);
-        File.WriteAllText(tempPath, json);
-        File.Move(tempPath, _filePath, overwrite: true);
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, _filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
+            throw;
+        }
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>

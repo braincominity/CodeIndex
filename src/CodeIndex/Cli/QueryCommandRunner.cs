@@ -25,6 +25,9 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
+    private const string HotspotsGroupedBySymbol = "symbol";
+    private const string HotspotsGroupedByFile = "file";
+    private const string HotspotsGroupedByStatement = "statement";
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
@@ -56,16 +59,19 @@ public static class QueryCommandRunner
         "--after",
         "--name",
         "--snippet-lines",
+        "--snippet-focus",
         "--path",
         "--exclude-path",
         "--depth",
         "--query",
+        "--group-by",
         "--focus-line",
         "--focus-column",
         "--focus-length",
         "--max-line-width",
         "--stale-after",
         "--explain",
+        "--rank-by",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -222,7 +228,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                     Console.WriteLine(JsonSerializer.Serialize(
-                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang),
+                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
                         CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
             }
             else
@@ -230,7 +236,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -569,7 +575,7 @@ public static class QueryCommandRunner
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                     r => r.CalleeName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -583,14 +589,14 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RankMode);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                 r => r.CalleeName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -693,7 +699,7 @@ public static class QueryCommandRunner
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                     r => r.CallerName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -707,14 +713,14 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RankMode);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                 r => r.CallerName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -1863,7 +1869,7 @@ public static class QueryCommandRunner
                 if (status.IndexedHeadTimestamp != null)
                     Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
                 if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
-                    Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
+                    Console.WriteLine($"Idx Drift: workspace is {ConsoleUi.Counted(ahead, "commit")} ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
                 {
                     WriteStatusAge(status, staleAfter.Value);
@@ -2339,6 +2345,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
+        if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
+        {
+            Console.Error.WriteLine(groupByError);
+            Console.Error.WriteLine("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -2346,7 +2358,7 @@ public static class QueryCommandRunner
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-            if (groupByName)
+            if (groupBy == HotspotsGroupedByNameKind)
             {
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var effectiveSqlGraphSignal = groupedResults.Count == 0
@@ -2450,6 +2462,145 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
+            if (groupBy == HotspotsGroupedByFile)
+            {
+                var symbolRows = reader.GetSymbolHotspots(int.MaxValue, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var fileResults = symbolRows
+                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
+                    .Select(group =>
+                    {
+                        var first = group.First();
+                        return new
+                        {
+                            Path = first.Symbol.Path,
+                            Lang = first.Symbol.Lang,
+                            ReferenceCount = group.Sum(row => row.ReferenceCount),
+                            SymbolCount = group.Count(),
+                        };
+                    })
+                    .OrderByDescending(row => row.ReferenceCount)
+                    .ThenBy(row => row.Path, StringComparer.Ordinal)
+                    .Take(options.Limit)
+                    .ToList();
+                var effectiveSqlGraphSignal = fileResults.Count == 0
+                    ? zeroResultSqlGraphSignal
+                    : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, fileResults.Select(result => result.Lang), options.Lang);
+                var fileHotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
+
+                if (fileResults.Count == 0)
+                {
+                    if (options.CountOnly)
+                    {
+                        if (options.Json)
+                        {
+                            var payload = new JsonObject
+                            {
+                                ["count"] = 0,
+                                ["files"] = 0,
+                                ["graph_table_available"] = reader._hasReferencesTable,
+                                ["grouped_by"] = groupBy,
+                            };
+                            AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                            AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                            AddFreshnessHint(payload, reader);
+                            Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        }
+                        else
+                        {
+                            Console.WriteLine("0");
+                            WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                            WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                        }
+                    }
+                    else if (options.Json)
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(
+                            reader,
+                            jsonOptions,
+                            resultsKey: "hotspots",
+                            graphTableAvailable: reader._hasReferencesTable,
+                            degraded: !reader._hasReferencesTable || !fileHotspotSignal.Ready,
+                            extraFields: payload =>
+                            {
+                                payload["grouped_by"] = groupBy;
+                                AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                                AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                            }).ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("No symbol hotspots found.");
+                        WriteZeroResultHints(options, reader);
+                        WriteKindHint(options.Kind, reader);
+                        WriteLangHint(options.Lang, reader);
+                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                        WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    }
+                    return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                }
+
+                if (options.CountOnly)
+                {
+                    if (options.Json)
+                    {
+                        var payload = new JsonObject
+                        {
+                            ["count"] = fileResults.Count,
+                            ["files"] = fileResults.Count,
+                            ["graph_table_available"] = reader._hasReferencesTable,
+                            ["grouped_by"] = groupBy,
+                        };
+                        AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                        AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{fileResults.Count}");
+                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                    }
+                    return CommandExitCodes.Success;
+                }
+
+                if (options.Json)
+                {
+                    var hotspots = new JsonArray();
+                    foreach (var result in fileResults)
+                    {
+                        hotspots.Add(new JsonObject
+                        {
+                            ["path"] = result.Path,
+                            ["lang"] = result.Lang,
+                            ["reference_count"] = result.ReferenceCount,
+                            ["symbol_count"] = result.SymbolCount,
+                        });
+                    }
+                    var payload = new JsonObject
+                    {
+                        ["count"] = fileResults.Count,
+                        ["files"] = fileResults.Count,
+                        ["grouped_by"] = groupBy,
+                        ["hotspots"] = hotspots,
+                    };
+                    AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
+                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    foreach (var result in fileResults)
+                    {
+                        Console.WriteLine($"{result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
+                    }
+                    Console.Error.WriteLine($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
+                    WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                }
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
@@ -2473,6 +2624,7 @@ public static class QueryCommandRunner
                             ["count"] = 0,
                             ["files"] = 0,
                             ["graph_table_available"] = reader._hasReferencesTable,
+                            ["grouped_by"] = groupBy,
                         };
                         if (!reader._hasReferencesTable)
                             payload["degraded"] = true;
@@ -2485,6 +2637,7 @@ public static class QueryCommandRunner
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload =>
                     {
+                        payload["grouped_by"] = groupBy;
                         AddHotspotFamilyJsonFields(payload, hotspotSignal);
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     });
@@ -2497,6 +2650,7 @@ public static class QueryCommandRunner
                         degraded: !hotspotSignal.Ready,
                         extraFields: payload =>
                         {
+                            payload["grouped_by"] = groupBy;
                             AddHotspotFamilyJsonFields(payload, hotspotSignal);
                             AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                         }).ToJsonString(jsonOptions));
@@ -2523,6 +2677,7 @@ public static class QueryCommandRunner
                         ["count"] = results.Count,
                         ["files"] = fc,
                         ["graph_table_available"] = reader._hasReferencesTable,
+                        ["grouped_by"] = groupBy,
                     };
                     AddHotspotFamilyJsonFields(payload, hotspotSignal);
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2552,6 +2707,7 @@ public static class QueryCommandRunner
                 var payload = new JsonObject
                 {
                     ["count"] = results.Count,
+                    ["grouped_by"] = groupBy,
                     ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult)
                 };
                 AddHotspotFamilyJsonFields(payload, hotspotSignal);
@@ -2565,7 +2721,7 @@ public static class QueryCommandRunner
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                     Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
-                Console.Error.WriteLine($"({results.Count} symbol hotspots)");
+                Console.Error.WriteLine($"({results.Count} symbol hotspots; grouped_by={groupBy})");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
@@ -2921,6 +3077,7 @@ public static class QueryCommandRunner
         int? focusColumn = null;
         int focusLength = 1;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        var snippetFocus = SearchSnippetFocusMode.Quality;
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
@@ -2938,8 +3095,10 @@ public static class QueryCommandRunner
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
+        string? groupBy = null;
         bool rawBytes = false;
         string? statusExplainField = null;
+        var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -3097,6 +3256,18 @@ public static class QueryCommandRunner
                     else
                         AddParseError(kindError!);
                     break;
+                case "--rank-by":
+                    if (TryReadStringOptionValue(args, ref i, "--rank-by", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var rankByValue, out var rankByError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--rank-by", rankByValue!);
+                        if (TryParseReferenceRankMode(rankByValue!, out var parsedRankMode))
+                            rankMode = parsedRankMode;
+                        else
+                            AddParseError($"Error: --rank-by must be one of weighted, count, kind; got '{rankByValue}'.");
+                    }
+                    else
+                        AddParseError(rankByError!);
+                    break;
                 case "--fts":
                     rawFts = true;
                     break;
@@ -3136,6 +3307,15 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--group-by-name":
+                    break;
+                case "--group-by":
+                    if (TryReadStringOptionValue(args, ref i, "--group-by", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var groupByValue, out var groupByError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--group-by", groupByValue!);
+                        groupBy = groupByValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(groupByError!);
                     break;
                 case "--with-paths":
                     withPaths = true;
@@ -3318,6 +3498,21 @@ public static class QueryCommandRunner
                     else
                         AddParseError(snippetLinesError!);
                     break;
+                case "--snippet-focus":
+                    if (!TryReadStringOptionValue(args, ref i, "--snippet-focus", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var snippetFocusValue, out var snippetFocusError))
+                    {
+                        AddParseError(snippetFocusError!);
+                    }
+                    else if (TryParseSnippetFocusMode(snippetFocusValue!, out var parsedSnippetFocus))
+                    {
+                        WarnIfDuplicateSingleValueOption("--snippet-focus", snippetFocusValue!);
+                        snippetFocus = parsedSnippetFocus;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: invalid --snippet-focus value '{snippetFocusValue}'. Use leftmost, quality, or proximity.");
+                    }
+                    break;
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
@@ -3369,6 +3564,7 @@ public static class QueryCommandRunner
             FocusColumn = focusColumn,
             FocusLength = focusLength,
             SnippetLines = snippetLines,
+            SnippetFocus = snippetFocus,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
             ExcludePaths = excludePaths,
@@ -3384,12 +3580,76 @@ public static class QueryCommandRunner
             StaleAfter = staleAfter,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
+            GroupBy = groupBy,
             RawBytes = rawBytes,
             StatusExplainField = statusExplainField,
+            RankMode = rankMode,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
+
+    internal static bool TryParseReferenceRankMode(string value, out ReferenceRankMode rankMode)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "weighted":
+                rankMode = ReferenceRankMode.Weighted;
+                return true;
+            case "count":
+                rankMode = ReferenceRankMode.Count;
+                return true;
+            case "kind":
+                rankMode = ReferenceRankMode.Kind;
+                return true;
+            default:
+                rankMode = ReferenceRankMode.Weighted;
+                return false;
+        }
+    }
+
+    private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
+    {
+        groupBy = string.Empty;
+        error = string.Empty;
+
+        if (groupByName && requestedGroupBy != null)
+        {
+            error = "Error: --group-by-name cannot be combined with --group-by.";
+            return false;
+        }
+
+        if (groupByName)
+        {
+            groupBy = HotspotsGroupedByNameKind;
+            return true;
+        }
+
+        if (requestedGroupBy == null)
+        {
+            groupBy = IsSqlLanguageFilter(lang) ? HotspotsGroupedByStatement : HotspotsGroupedBySymbol;
+            return true;
+        }
+
+        switch (requestedGroupBy)
+        {
+            case HotspotsGroupedBySymbol:
+            case HotspotsGroupedByFile:
+            case HotspotsGroupedByStatement:
+                groupBy = requestedGroupBy;
+                return true;
+            case "name":
+            case HotspotsGroupedByNameKind:
+                groupBy = HotspotsGroupedByNameKind;
+                return true;
+            default:
+                error = $"Error: unsupported hotspots --group-by value '{requestedGroupBy}'. Use symbol, file, or statement.";
+                return false;
+        }
+    }
+
+    private static bool IsSqlLanguageFilter(string? lang) =>
+        string.Equals(lang, "sql", StringComparison.Ordinal);
 
     internal static string? NormalizeLangFilterValue(string? langValue)
     {
@@ -3398,6 +3658,20 @@ public static class QueryCommandRunner
 
     internal static IReadOnlyList<string> GetLanguageAliases(string lang)
         => LanguageDisplayAliases.TryGetValue(lang, out var aliases) ? aliases : [];
+
+    internal static bool TryParseSnippetFocusMode(string value, out SearchSnippetFocusMode mode)
+    {
+        mode = value.Trim().ToLowerInvariant() switch
+        {
+            "leftmost" => SearchSnippetFocusMode.Leftmost,
+            "quality" => SearchSnippetFocusMode.Quality,
+            "proximity" => SearchSnippetFocusMode.Proximity,
+            _ => default,
+        };
+        return value.Trim().Equals("leftmost", StringComparison.OrdinalIgnoreCase)
+            || value.Trim().Equals("quality", StringComparison.OrdinalIgnoreCase)
+            || value.Trim().Equals("proximity", StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static IReadOnlyCollection<string> GetCompletionLanguageAliases()
         => LanguageDisplayAliases.Values.SelectMany(aliases => aliases).ToArray();
@@ -3677,6 +3951,14 @@ public static class QueryCommandRunner
                 return true;
             }
 
+            if (normalizedArg == "--group-by")
+            {
+                Console.Error.WriteLine("Error: --group-by is only supported by 'hotspots'.");
+                Console.Error.WriteLine("Hint: remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.");
+                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                return true;
+            }
+
             if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                 i++;
 
@@ -3714,7 +3996,7 @@ public static class QueryCommandRunner
         if (options.ExtraNames.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: unexpected extra positional argument(s) for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
+        Console.Error.WriteLine($"Error: unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
         Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
@@ -3730,7 +4012,7 @@ public static class QueryCommandRunner
             return false;
 
         Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
-        Console.Error.WriteLine("Hint: remove the extra positional argument(s) and use the documented flags only.");
+        Console.Error.WriteLine("Hint: remove the extra positional arguments and use the documented flags only.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
     }
@@ -3872,6 +4154,8 @@ public static class QueryCommandRunner
             yield return $"lang: {options.Lang}";
         if (options.Kind != null)
             yield return $"kind: {options.Kind}";
+        if (options.RankMode != ReferenceRankMode.Weighted)
+            yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
         if (options.Since.HasValue)
@@ -3910,6 +4194,8 @@ public static class QueryCommandRunner
             query["lang"] = options.Lang;
         if (options.Kind != null)
             query["kind"] = options.Kind;
+        if (options.RankMode != ReferenceRankMode.Weighted)
+            query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
         if (options.Since.HasValue)
@@ -4612,7 +4898,7 @@ public static class QueryCommandRunner
             var extra = analysis.DefinitionFileCount > pathPreview.Count
                 ? $" (+{analysis.DefinitionFileCount - pathPreview.Count} more)"
                 : string.Empty;
-            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {analysis.DefinitionCount} definition(s) across {analysis.DefinitionFileCount} file(s): {string.Join(", ", pathPreview)}{extra}");
+            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {ConsoleUi.Counted(analysis.DefinitionCount, "definition")} across {ConsoleUi.Counted(analysis.DefinitionFileCount, "file")}: {string.Join(", ", pathPreview)}{extra}");
         }
         else if (analysis.ZeroResultReason == "no_matching_definition")
         {
@@ -4916,6 +5202,7 @@ public static class QueryCommandRunner
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--rank-by"] = "pass `weighted`, `count`, or `kind` (callers/callees only).",
         ["--depth"] = "pass a non-negative integer, e.g. `--depth 5` (default 5).",
         ["--path"] = "pass a glob-style path pattern, e.g. `--path src/**`. Repeat `--path` to add more patterns.",
         ["--exclude-path"] = "pass a glob-style path pattern to exclude, e.g. `--exclude-path tests/**`. Repeat `--exclude-path` to add more.",
@@ -4929,6 +5216,7 @@ public static class QueryCommandRunner
         ["--focus-length"] = "pass a positive integer for the focused span width, e.g. `--focus-length 1` (default 1).",
         ["--name"] = "pass a literal symbol name, e.g. `--name UserService`. Repeat `--name` to add more names.",
         ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
+        ["--snippet-focus"] = "pass one of `leftmost`, `quality`, or `proximity`, e.g. `--snippet-focus quality` (default quality).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
     };
@@ -5176,6 +5464,13 @@ public static class QueryCommandRunner
         result = default;
         return false;
     }
+
+    public static string FormatReferenceRankMode(ReferenceRankMode mode) => mode switch
+    {
+        ReferenceRankMode.Count => "count",
+        ReferenceRankMode.Kind => "kind",
+        _ => "weighted",
+    };
 }
 
 public sealed class QueryCommandOptions
@@ -5198,6 +5493,7 @@ public sealed class QueryCommandOptions
     public int? FocusColumn { get; init; }
     public int FocusLength { get; init; } = 1;
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
+    public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
@@ -5213,8 +5509,10 @@ public sealed class QueryCommandOptions
     public TimeSpan? StaleAfter { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
+    public string? GroupBy { get; init; }
     public bool RawBytes { get; init; }
     public string? StatusExplainField { get; init; }
+    public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

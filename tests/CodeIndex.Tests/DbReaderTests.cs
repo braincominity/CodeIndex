@@ -223,6 +223,33 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void InsertManualReferences(string path, string containerName, string target, string kind, int count)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 100,
+            Lines = count + 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var references = Enumerable.Range(1, count)
+            .Select(line => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = target,
+                ReferenceKind = kind,
+                Line = line,
+                Column = 9,
+                Context = $"{kind} {target}",
+                ContainerKind = "class",
+                ContainerName = containerName,
+            })
+            .ToList();
+        _writer.InsertReferences(references);
+    }
+
     [Fact]
     public void Search_FindsMatchingChunks()
     {
@@ -230,6 +257,30 @@ public class DbReaderTests : IDisposable
         Assert.Single(results);
         Assert.Equal("src/auth.py", results[0].Path);
         Assert.Equal(1, results[0].StartLine);
+    }
+
+    [Fact]
+    public void GetCallers_DefaultWeightedRankingPrioritizesInstantiateOverNoisySubscriptions()
+    {
+        const string target = "TargetService";
+        InsertManualReferences("src/Factory.cs", "Factory", target, "instantiate", 3);
+        InsertManualReferences("src/EventBus.cs", "EventBus", target, "subscribe", 50);
+
+        var weighted = _reader.GetCallers(target, lang: "csharp", exact: true);
+        var countRanked = _reader.GetCallers(target, lang: "csharp", exact: true, rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal("Factory", weighted[0].CallerName);
+        Assert.Equal(3, weighted[0].ReferenceCount);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["call"]);
+        Assert.Equal(3, weighted[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(0, weighted[0].ReferenceKindCounts["subscribe"]);
+        Assert.Equal(9.0, weighted[0].ReferenceWeightScore, precision: 3);
+
+        Assert.Equal("EventBus", countRanked[0].CallerName);
+        Assert.Equal(50, countRanked[0].ReferenceCount);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
+        Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
+        Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
     }
 
     [Fact]
@@ -10990,6 +11041,38 @@ public class DbReaderTests : IDisposable
         for (int i = 1; i < outline.Symbols.Count; i++)
             Assert.True(outline.Symbols[i].Line >= outline.Symbols[i - 1].Line,
                 $"Symbol at index {i} (line {outline.Symbols[i].Line}) should be >= previous (line {outline.Symbols[i - 1].Line})");
+    }
+
+    [Fact]
+    public void GetOutline_SameLineSymbols_UsesStableTieBreakers()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/same-line.cs",
+            Lang = "csharp",
+            Size = 45,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 1,
+            Content = "public class First { } public class Second { }",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "property", Name = "Zoo", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Second", Line = 1, StartLine = 1, StartColumn = 23, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "property", Name = "Alpha", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "First", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 1 },
+        ]);
+
+        var outline = _reader.GetOutline("src/same-line.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(["First", "Second", "Alpha", "Zoo"], outline!.Symbols.Select(symbol => symbol.Name));
     }
 
     [Fact]

@@ -65,6 +65,24 @@ public class SuggestionRecord
     /// <summary>Current lifecycle status / 現在のライフサイクル状態</summary>
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Draft;
 
+    /// <summary>Agent or client identity that created the suggestion / 提案を作成したエージェントまたはクライアントID</summary>
+    public string CreatedByAgent { get; set; } = "unknown";
+
+    /// <summary>Opaque cdidx MCP session identifier / cdidx MCP セッションの不透明ID</summary>
+    public string SessionId { get; set; } = "unknown";
+
+    /// <summary>cdidx version that recorded the suggestion / 提案を記録した cdidx バージョン</summary>
+    public string ClientVersion { get; set; } = "unknown";
+
+    /// <summary>MCP client name from initialize.clientInfo, when available / initialize.clientInfo 由来の MCP クライアント名（取得可能な場合）</summary>
+    public string? McpClientName { get; set; }
+
+    /// <summary>MCP client version from initialize.clientInfo, when available / initialize.clientInfo 由来の MCP クライアントバージョン（取得可能な場合）</summary>
+    public string? McpClientVersion { get; set; }
+
+    /// <summary>Optional natural-language invocation context supplied by the caller / 呼び出し元が渡す任意の自然言語コンテキスト</summary>
+    public string? ToolInvocationContext { get; set; }
+
     /// <summary>Upstream GitHub Issue number when known / 判明している場合の upstream GitHub Issue 番号</summary>
     public int? UpstreamIssueNumber { get; set; }
 
