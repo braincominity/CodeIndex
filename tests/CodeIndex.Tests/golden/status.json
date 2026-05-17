@@ -76,5 +76,10 @@
   "sql_graph_contract_ready": true,
   "fold_ready": false,
   "fold_ready_reason": "missing_fold_backfill",
-  "index_newer_than_reader": false
+  "index_newer_than_reader": false,
+  "db_pragma_settings": {
+    "journal_mode": "wal",
+    "synchronous": "NORMAL",
+    "wal_autocheckpoint": 1000
+  }
 }

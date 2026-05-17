@@ -424,7 +424,7 @@ public class DbReaderTests : IDisposable
         const string target = "TargetService";
         InsertManualReference(path, lang, containerKind: null, containerName: null, target, "call");
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
 
         var result = Assert.Single(results);
         Assert.Equal(path, result.Path);
@@ -448,7 +448,7 @@ public class DbReaderTests : IDisposable
             target: "TargetService",
             kind: "call");
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
 
         Assert.Empty(results);
         Assert.False(truncated);
@@ -2290,6 +2290,32 @@ public class DbReaderTests : IDisposable
         var planText = plan.ToString();
         Assert.Contains("idx_symbols_name_nocase", planText);
         Assert.DoesNotContain("SCAN symbols", planText);
+    }
+
+    [Fact]
+    public void SearchSymbols_LangKindPredicateUsesFileKindPlan()
+    {
+        // Guard #1933: keep the language + kind symbol query shaped so SQLite can
+        // first resolve matching files via files(lang), then probe symbols(file_id, kind).
+        // #1933: lang + kind のシンボル検索が idx_symbols_kind から全 kind を走査しないよう固定する。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            EXPLAIN QUERY PLAN
+            SELECT s.name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind = @kind
+              AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
+        cmd.Parameters.AddWithValue("@kind", "class");
+        cmd.Parameters.AddWithValue("@lang", "javascript");
+        using var reader = cmd.ExecuteReader();
+        var plan = new System.Text.StringBuilder();
+        while (reader.Read())
+            plan.AppendLine(reader.GetString(3));
+        var planText = plan.ToString();
+        Assert.Contains("idx_symbols_file_kind", planText);
+        Assert.Contains("idx_files_lang", planText);
+        Assert.DoesNotContain("idx_symbols_kind", planText);
     }
 
     [Fact]
@@ -11070,6 +11096,16 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, status.Languages["python"]);
         Assert.Equal(1, status.Languages["javascript"]);
         Assert.Equal(1, status.Languages["markdown"]);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesDbPragmaSettings()
+    {
+        var status = _reader.GetStatus();
+
+        Assert.Equal("wal", status.DbPragmaSettings.JournalMode);
+        Assert.Equal(DbContext.DefaultSynchronousMode, status.DbPragmaSettings.Synchronous);
+        Assert.Equal(DbContext.DefaultWalAutocheckpointPages, status.DbPragmaSettings.WalAutocheckpoint);
     }
 
     [Fact]

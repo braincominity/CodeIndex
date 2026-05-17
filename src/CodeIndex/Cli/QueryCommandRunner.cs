@@ -72,6 +72,7 @@ public static class QueryCommandRunner
         "--stale-after",
         "--explain",
         "--rank-by",
+        "--slow-query-ms",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -152,6 +153,7 @@ public static class QueryCommandRunner
         "--group-by-name",
         "--with-paths",
         "--bytes",
+        "--profile",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -192,7 +194,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
@@ -295,7 +297,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("definition", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
@@ -445,7 +447,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("references", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -569,7 +571,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("callers", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -693,7 +695,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("callees", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -843,7 +845,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
@@ -962,7 +964,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("files", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
@@ -1062,7 +1064,7 @@ public static class QueryCommandRunner
         }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.FocusLine.HasValue)
             {
@@ -1170,7 +1172,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
@@ -1390,7 +1392,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
@@ -1493,7 +1495,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
@@ -1595,7 +1597,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var outline = reader.GetOutline(filePath);
             if (outline == null)
@@ -1778,7 +1780,7 @@ public static class QueryCommandRunner
             return WriteStatusReadinessExplanation(options.StatusExplainField);
         }
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var staleAfter = (Value: DefaultStaleAfter, Error: (string?)null);
             if (options.CheckWorkspace || options.StaleAfter.HasValue)
@@ -1999,7 +2001,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("impact", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --depth is parsed into ContextAfter; 0 means resolve-only
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
@@ -2303,7 +2305,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("deps", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
             var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
@@ -2377,7 +2379,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
@@ -2773,7 +2775,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
@@ -2964,7 +2966,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedPositionals("validate", options))
             return CommandExitCodes.UsageError;
 
-        return WithDb(options.DbPath, reader =>
+        return WithDb(options, jsonOptions, reader =>
         {
             var issues = reader.GetIssues(options.Kind, options.PathPatterns);
             var issuesAvailable = reader._hasIssuesTable;
@@ -3127,6 +3129,8 @@ public static class QueryCommandRunner
         string? groupBy = null;
         bool rawBytes = false;
         bool rawKinds = false;
+        bool profile = false;
+        int? slowQueryMs = null;
         string? statusExplainField = null;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
@@ -3358,6 +3362,20 @@ public static class QueryCommandRunner
                     break;
                 case "--raw-kinds":
                     rawKinds = true;
+                    break;
+                case "--profile":
+                    profile = true;
+                    break;
+                case "--slow-query-ms":
+                    if (!TryReadRawOptionValue(args, ref i, "--slow-query-ms", inlineValue, out var slowQueryValue, out var missingSlowQueryError))
+                        AddParseError(missingSlowQueryError!);
+                    else if (TryParseNonNegativeInt(slowQueryValue!, "--slow-query-ms", out var parsedSlowQueryMs, out var slowQueryError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--slow-query-ms", slowQueryValue!);
+                        slowQueryMs = parsedSlowQueryMs;
+                    }
+                    else
+                        AddParseError(slowQueryError!);
                     break;
                 case "--check":
                     if (allowStatusCheck)
@@ -3620,6 +3638,8 @@ public static class QueryCommandRunner
             GroupBy = groupBy,
             RawBytes = rawBytes,
             RawKinds = rawKinds,
+            Profile = profile,
+            SlowQueryMs = slowQueryMs,
             StatusExplainField = statusExplainField,
             RankMode = rankMode,
             ExtraNames = extraNames,
@@ -3839,8 +3859,9 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(string dbPath, Func<DbReader, int> action)
+    private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action)
     {
+        var dbPath = options.DbPath;
         if (string.IsNullOrWhiteSpace(dbPath))
         {
             Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
@@ -3862,12 +3883,19 @@ public static class QueryCommandRunner
         }
 
         Database.DbDebug.ResetContext();
+        var profiling = options.Profile || options.SlowQueryMs.HasValue;
+        if (profiling)
+            Database.DbDebug.BeginProfile(options.SlowQueryMs);
         try
         {
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db);
-            return action(reader);
+            var exitCode = action(reader);
+            var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
+            if (options.Profile)
+                WriteProfilePayload(profileEntries, jsonOptions);
+            return exitCode;
         }
         catch (FtsQuerySyntaxException ex)
         {
@@ -3918,8 +3946,54 @@ public static class QueryCommandRunner
         }
         finally
         {
+            if (profiling)
+                Database.DbDebug.EndProfile();
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static void WriteProfilePayload(IReadOnlyList<QueryProfileEntry> entries, JsonSerializerOptions jsonOptions)
+    {
+        var phases = new JsonArray();
+        var queryPlan = new JsonArray();
+        var queries = new JsonArray();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var name = "sql_" + (i + 1).ToString(CultureInfo.InvariantCulture);
+            var entry = entries[i];
+            phases.Add(new JsonObject
+            {
+                ["name"] = name,
+                ["elapsed_ms"] = Math.Round(entry.ElapsedMs, 3),
+                ["rows_scanned"] = entry.RowsScanned,
+            });
+            queries.Add(new JsonObject
+            {
+                ["name"] = name,
+                ["sql"] = entry.Sql,
+            });
+            foreach (var row in entry.QueryPlan)
+            {
+                queryPlan.Add(new JsonObject
+                {
+                    ["phase"] = name,
+                    ["id"] = row.Id,
+                    ["parent"] = row.Parent,
+                    ["not_used"] = row.NotUsed,
+                    ["detail"] = row.Detail,
+                });
+            }
+        }
+
+        Console.WriteLine(new JsonObject
+        {
+            ["profile"] = new JsonObject
+            {
+                ["phases"] = phases,
+                ["query_plan"] = queryPlan,
+                ["queries"] = queries,
+            },
+        }.ToJsonString(jsonOptions));
     }
 
     private static void WriteNumberedExcerpt(int startLine, string content)
@@ -5218,6 +5292,7 @@ public static class QueryCommandRunner
             ["--limit"] = 10_000,
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
+            ["--slow-query-ms"] = 3_600_000,
             ["--depth"] = 64,
             ["--before"] = 1_000,
             ["--after"] = 1_000,
@@ -5259,6 +5334,7 @@ public static class QueryCommandRunner
         ["--snippet-focus"] = "pass one of `leftmost`, `quality`, or `proximity`, e.g. `--snippet-focus quality` (default quality).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
+        ["--slow-query-ms"] = "pass a non-negative millisecond threshold, e.g. `--slow-query-ms 500`; use 0 to log every profiled SQL statement.",
     };
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
@@ -5553,6 +5629,8 @@ public sealed class QueryCommandOptions
     public string? GroupBy { get; init; }
     public bool RawBytes { get; init; }
     public bool RawKinds { get; init; }
+    public bool Profile { get; init; }
+    public int? SlowQueryMs { get; init; }
     public string? StatusExplainField { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
