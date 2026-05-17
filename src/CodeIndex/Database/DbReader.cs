@@ -50,6 +50,9 @@ public partial class DbReader
     private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpUsingAliasScope>> _csharpUsingAliasScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpTypeNamespacesByPathLine = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, List<CSharpContainingTypeScope>>> _activeCSharpContainingTypeScopesByPathLine = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpUsingStaticTargetsByPathLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<CSharpTypeNamespaceCandidate>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<CSharpContainingTypeCandidate>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
@@ -124,6 +127,7 @@ public partial class DbReader
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
     private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe')";
+    private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe')";
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
     // with non-call edges (issue #293); C++ `friend` declarations are retained because they are
