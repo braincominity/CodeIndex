@@ -377,6 +377,9 @@ public class DbReaderTests : IDisposable
                 Line = 1,
                 StartLine = 1,
                 EndLine = 3,
+                BodyStartLine = 2,
+                BodyEndLine = 3,
+                Signature = "public void RealCallTarget()",
             },
             new SymbolRecord
             {
@@ -386,6 +389,9 @@ public class DbReaderTests : IDisposable
                 Line = 5,
                 StartLine = 5,
                 EndLine = 7,
+                BodyStartLine = 6,
+                BodyEndLine = 7,
+                Signature = "public void SubscribeOnlyTarget()",
             },
         ]);
 
@@ -2760,6 +2766,72 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/api.cs", run.Symbol.Path);
         Assert.Equal("Api", run.Symbol.ContainerName);
         Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CSharpSkipsBodylessCallSiteFunctionCandidates()
+    {
+        InsertIndexedFile("src/reader.cs", "csharp",
+            """
+            public class Reader
+            {
+                public void Load(Microsoft.Data.Sqlite.SqliteDataReader reader)
+                {
+                    var first = reader.GetInt32(0);
+                    var second = reader.GetInt32(1);
+                    var max = Math.Max(
+                        first,
+                        second);
+                }
+            }
+
+            public class App
+            {
+                public void Run(Reader reader, Microsoft.Data.Sqlite.SqliteDataReader dataReader)
+                {
+                    reader.Load(dataReader);
+                    reader.Load(dataReader);
+                }
+            }
+
+            public sealed class TeeWriter : System.IO.TextWriter
+            {
+                public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+
+                public override void WriteLine(string? value)
+                {
+                    System.Console.WriteLine(value);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/reader.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "GetInt32");
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Max");
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "WriteLine");
+        var load = Assert.Single(results.Where(result => result.Symbol.Name == "Load"));
+        Assert.Equal(2, load.ReferenceCount);
+
+        var groupedResults = _reader.GetGroupedSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/reader.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "GetInt32");
+        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "Max");
+        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "WriteLine");
+        var groupedLoad = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Load"));
+        Assert.Equal(2, groupedLoad.ReferenceCount);
     }
 
     [Fact]

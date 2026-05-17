@@ -1666,7 +1666,16 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')";
+                WHERE s.kind NOT IN ('import', 'namespace')
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND (
+                          ({GetSymbolColumnSql("body_start_line")} IS NULL AND {GetSymbolColumnSql("body_end_line")} IS NULL)
+                          OR {GetSymbolColumnSql("signature", "''")} NOT LIKE '% ' || s.name || '(%'
+                          OR {GetSymbolColumnSql("signature", "''")} LIKE '% override %'
+                      )
+                  )";
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
@@ -2014,7 +2023,16 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')";
+                WHERE s.kind NOT IN ('import', 'namespace')
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND (
+                          ({GetSymbolColumnSql("body_start_line")} IS NULL AND {GetSymbolColumnSql("body_end_line")} IS NULL)
+                          OR {GetSymbolColumnSql("signature", "''")} NOT LIKE '% ' || s.name || '(%'
+                          OR {GetSymbolColumnSql("signature", "''")} LIKE '% override %'
+                      )
+                  )";
 
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;
