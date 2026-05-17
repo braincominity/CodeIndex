@@ -2492,8 +2492,12 @@ public class ReferenceExtractorTests
             class Bag {
                 infix fun add(item: String): Bag = this
                 infix fun merge(other: Bag): Bag = this
+                infix fun List<String>.combine(other: List<String>): List<String> = this
+                infix fun demo.Box.link(other: demo.Box): demo.Box = this
 
                 fun build(other: Bag, value: Int) {
+                    val xs = listOf("a")
+                    val box = demo.Box()
                     val pair = 1 to "one"
                     val shifted = value shl 4
                     val masked = value and 15
@@ -2504,6 +2508,8 @@ public class ReferenceExtractorTests
                     val shrunk = value shr 1
                     this add "item"
                     this merge other
+                    xs combine xs
+                    box link box
                     val words = "plain text to ignore"
                 }
             }
@@ -2512,7 +2518,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
         var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
 
-        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "or", "xor", "shr", "add", "merge" })
+        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "or", "xor", "shr", "add", "merge", "combine", "link" })
         {
             Assert.Contains(references, r => r.SymbolName == name && r.ReferenceKind == "call");
         }

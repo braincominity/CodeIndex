@@ -20,7 +20,7 @@ internal static class KotlinReferenceExtractor
         @"(?<![\w$])(?<name>`[^`\r\n]+`)(?:\s*<[^()\r\n]+>)?\s*\(",
         RegexOptions.Compiled);
     private static readonly Regex InfixFunctionDeclarationRegex = new(
-        @"(?<![\w$])infix\s+fun\s+(?:<[^()\r\n]+>\s*)?(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)\s*\.\s*)?(?<name>[_\p{L}][\w$]*)\b",
+        @"(?<![\w$])infix\s+fun\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex InfixCallRegex = new(
         @"(?<![\w$])(?<left>(?:[_\p{L}][\w$]*|\d+))\s+(?<name>[_\p{L}][\w$]*)\s+(?<right>\S+)",
@@ -72,12 +72,11 @@ internal static class KotlinReferenceExtractor
 
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Signature))
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.Signature))
                 continue;
 
-            var match = InfixFunctionDeclarationRegex.Match(symbol.Signature);
-            if (match.Success)
-                names.Add(match.Groups["name"].Value);
+            if (InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
+                names.Add(symbol.Name);
         }
 
         return names;
