@@ -43,6 +43,14 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_ConfiguresWalDurabilityPragmas()
+    {
+        Assert.Equal("wal", ExecuteScalarString("PRAGMA journal_mode"));
+        Assert.Equal(1L, ExecuteScalarLong("PRAGMA synchronous"));
+        Assert.Equal(DbContext.DefaultWalAutocheckpointPages, ExecuteScalarLong("PRAGMA wal_autocheckpoint"));
+    }
+
+    [Fact]
     public void UpsertFile_InsertsAndReturnsId()
     {
         var file = new FileRecord
@@ -588,5 +596,19 @@ public class DatabaseTests : IDisposable
             if (File.Exists(_dbPath))
                 File.Delete(_dbPath);
         }
+    }
+
+    private string ExecuteScalarString(string sql)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString() ?? string.Empty;
+    }
+
+    private long ExecuteScalarLong(string sql)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = sql;
+        return Convert.ToInt64(cmd.ExecuteScalar());
     }
 }

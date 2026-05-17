@@ -272,6 +272,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchHighlight))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]

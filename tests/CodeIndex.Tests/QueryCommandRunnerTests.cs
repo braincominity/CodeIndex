@@ -28725,6 +28725,10 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("index fresh", json.GetProperty("summary").GetString());
             Assert.DoesNotContain("index stale", json.GetProperty("summary").GetString());
+            var pragmas = json.GetProperty("db_pragma_settings");
+            Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
+            Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
+            Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
         }
         finally
         {

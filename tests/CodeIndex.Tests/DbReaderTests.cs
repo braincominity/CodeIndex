@@ -10891,6 +10891,16 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_ExposesDbPragmaSettings()
+    {
+        var status = _reader.GetStatus();
+
+        Assert.Equal("wal", status.DbPragmaSettings.JournalMode);
+        Assert.Equal(DbContext.DefaultSynchronousMode, status.DbPragmaSettings.Synchronous);
+        Assert.Equal(DbContext.DefaultWalAutocheckpointPages, status.DbPragmaSettings.WalAutocheckpoint);
+    }
+
+    [Fact]
     public void GetStatus_ExposesCSharpMetadataTargetReadyForWorkspaceWithoutCSharpFiles()
     {
         // #435 codex review iter 3: README / CLAUDE.md advertise `csharp_metadata_target_ready`

@@ -85,8 +85,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `stale_after_seconds`, `index_age_seconds`,
-  `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
+  `path_case_sensitive`, `db_pragma_settings`, `stale_after_seconds`,
+  `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
@@ -226,8 +226,8 @@ cdidx mcp
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`stale_after_seconds`、`index_age_seconds`、
-  `degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
+  `path_case_sensitive`、`db_pragma_settings`、`stale_after_seconds`、
+  `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。

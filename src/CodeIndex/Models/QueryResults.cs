@@ -550,6 +550,21 @@ public class StatusResult
     [JsonPropertyName("path_case_sensitive")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PathCaseSensitive { get; set; }
+    /// <summary>
+    /// Connection-level SQLite PRAGMA values that affect WAL durability and checkpoint
+    /// behavior for the current reader. Exposed so automation can verify the index DB is
+    /// running under cdidx's documented WAL policy (#1925).
+    /// 現在の reader 接続に適用されている WAL durability / checkpoint 関連 PRAGMA。
+    /// </summary>
+    [JsonPropertyName("db_pragma_settings")]
+    public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+}
+
+public class StatusDbPragmaSettings
+{
+    public string? JournalMode { get; set; }
+    public string? Synchronous { get; set; }
+    public long? WalAutocheckpoint { get; set; }
 }
 
 public class RepoMapResult
