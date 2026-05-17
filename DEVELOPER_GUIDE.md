@@ -162,8 +162,10 @@ idx_symbol_refs_name_kind ON symbol_references(symbol_name, reference_kind)
 idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)
 idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)
 idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)
+idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)
 idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
 idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
+idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
 ```
 
 ### FTS5 sync triggers

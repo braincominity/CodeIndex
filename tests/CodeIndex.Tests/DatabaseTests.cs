@@ -51,8 +51,17 @@ public class DatabaseTests : IDisposable
         Assert.Contains("idx_symbol_refs_name_file", indexes);
         Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
         Assert.Contains("idx_symbol_refs_name_nocase_file", indexes);
+        Assert.Contains("idx_symbol_refs_container_nocase_kind", indexes);
         Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
         Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
+        Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_kind", [("symbol_name", "NOCASE"), ("reference_kind", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_file", [("symbol_name", "NOCASE"), ("file_id", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_kind", [("symbol_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_file", [("symbol_name_folded", "BINARY"), ("file_id", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
     }
 
     [Fact]
@@ -99,8 +108,13 @@ public class DatabaseTests : IDisposable
             Assert.Contains("idx_symbol_refs_name_file", indexes);
             Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
             Assert.Contains("idx_symbol_refs_name_nocase_file", indexes);
+            Assert.Contains("idx_symbol_refs_container_nocase_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
+            Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
         }
         finally
         {
@@ -286,6 +300,24 @@ public class DatabaseTests : IDisposable
         while (reader.Read())
             indexes.Add(reader.GetString(0));
         return indexes;
+    }
+
+    private static void AssertIndexColumns(SqliteConnection connection, string indexName, IReadOnlyList<(string Name, string Collation)> expected)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA index_xinfo('{indexName.Replace("'", "''")}')";
+
+        var actual = new List<(string Name, string Collation)>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var isKey = reader.GetInt32(5) == 1;
+            if (!isKey)
+                continue;
+            actual.Add((reader.GetString(2), reader.GetString(4)));
+        }
+
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
