@@ -1105,6 +1105,8 @@ public static partial class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (language == "csharp")
+            EmitCSharpAsyncIteratorReferences(fileId, lines, structuralLines, symbols, references, seen);
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;

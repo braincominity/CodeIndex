@@ -11,6 +11,66 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void Extract_CsharpAsyncIterator_EmitsTypeAndImplicitImplementationReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            class Item {}
+
+            class Service
+            {
+                public async IAsyncEnumerable<Item> StreamAsync()
+                {
+                    await Task.Yield();
+                    yield return new Item();
+                }
+
+                public void UseLocal()
+                {
+                    async IAsyncEnumerable<Item> LocalStream()
+                    {
+                        yield return new Item();
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "StreamAsync"
+            && symbol.ReturnType?.Contains("IAsyncEnumerable<Item>", StringComparison.Ordinal) == true);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "LocalStream"
+            && symbol.ReturnType?.Contains("IAsyncEnumerable<Item>", StringComparison.Ordinal) == true);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IAsyncEnumerable"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "StreamAsync");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IAsyncEnumerator"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "StreamAsync");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Item"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "LocalStream");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "GetAsyncEnumerator"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "StreamAsync");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MoveNextAsync"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "LocalStream");
+    }
+
+    [Fact]
     public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
     {
         var outer = Container("outer", "class", 1, 100);
