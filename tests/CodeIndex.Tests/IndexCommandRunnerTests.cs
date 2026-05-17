@@ -1476,6 +1476,112 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ReadOnlyDbFile_ReturnsDatabaseErrorWithoutStackTrace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SqliteConnection.ClearAllPools();
+            SetUnixPermissions(dbPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "app.cs"), DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--files", "app.cs", "--json"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            AssertNoRawStackTrace(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+            Assert.Contains(dbPath, json.GetProperty("message").GetString());
+            Assert.Contains("writable", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+                SetUnixPermissions(dbPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_MissingCdidxDirectoryInReadOnlyProject_ReturnsDatabaseErrorWithoutStackTrace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            SetUnixPermissions(projectRoot, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--json"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            AssertNoRawStackTrace(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+            Assert.Contains(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), json.GetProperty("message").GetString());
+            Assert.Contains("writable", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot))
+                SetUnixPermissions(projectRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExplicitDbInReadOnlyParent_ReturnsDatabaseErrorWithoutStackTrace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbParent = Path.Combine(Path.GetTempPath(), $"cdidx_readonly_db_parent_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dbParent);
+        var dbPath = Path.Combine(dbParent, "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            SetUnixPermissions(dbParent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--db", dbPath, "--json"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            AssertNoRawStackTrace(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+            Assert.Contains(dbPath, json.GetProperty("message").GetString());
+            Assert.Contains("writable", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(dbParent))
+                SetUnixPermissions(dbParent, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+            if (Directory.Exists(dbParent))
+                DeleteDirectory(dbParent);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");
@@ -5468,6 +5574,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanJson_WritesLivenessToStderrOnly()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("cdidx: scanning files...", stderr);
+            Assert.Contains("cdidx: indexing...", stderr);
+            Assert.Contains("cdidx: indexed 0/1 file(s)...", stderr);
+            Assert.Contains("cdidx: indexed 1/1 file(s)...", stderr);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_NonGitWorkspace_DoesNotReportHeadChange()
     {
         var projectRoot = CreateTempProject();
@@ -5619,6 +5749,31 @@ public class IndexCommandRunnerTests
             finally
             {
                 Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                return (exitCode, document.RootElement.Clone(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
             }
         }
     }
@@ -5934,6 +6089,15 @@ public class IndexCommandRunnerTests
         return count;
     }
 
+    private static void AssertNoRawStackTrace(string stderr)
+    {
+        Assert.DoesNotContain("Unhandled exception", stderr);
+        Assert.DoesNotContain("System.UnauthorizedAccessException", stderr);
+        Assert.DoesNotContain("Microsoft.Data.Sqlite.SqliteException", stderr);
+        Assert.DoesNotContain(" at CodeIndex.", stderr);
+        Assert.DoesNotContain(".cs:line ", stderr);
+    }
+
     [UnsupportedOSPlatform("windows")]
     private static void SetUnixPermissions(string path, UnixFileMode mode)
     {
@@ -6149,6 +6313,41 @@ public class IndexCommandRunnerTests
                 File.Delete(dbPath);
             if (File.Exists(infoPath))
                 File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void Run_LockHeldWithoutHolderInfo_ReportsDbLocked()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_no_info_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Contains("another cdidx index is already running", json.GetProperty("message").GetString());
+                Assert.Contains("--force", json.GetProperty("hint").GetString());
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(lockPath + ".info"))
+                File.Delete(lockPath + ".info");
             if (File.Exists(lockPath))
                 File.Delete(lockPath);
         }

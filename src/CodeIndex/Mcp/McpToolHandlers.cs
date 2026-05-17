@@ -1621,6 +1621,8 @@ public partial class McpServer
                 ["max_depth_requested"] = maxDepthRequested,
                 ["actual_depth"] = maxActualDepth,
                 ["truncated"] = analysis.Truncated,
+                ["termination_reason"] = analysis.TerminationReason,
+                ["cycle_detected"] = analysis.CycleDetected,
                 ["impact_mode"] = analysis.ImpactMode,
                 ["heuristic"] = analysis.Heuristic,
                 ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
@@ -1635,6 +1637,8 @@ public partial class McpServer
             };
             if (analysis.TruncatedReason != null)
                 payload["truncated_reason"] = analysis.TruncatedReason;
+            if (analysis.Cycles is { Count: > 0 })
+                payload["cycles"] = JsonSerializer.SerializeToNode(analysis.Cycles, _jsonOptions);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             string? maxDepthClampWarning = null;
             if (maxDepthRequested != maxDepth)
@@ -1657,14 +1661,17 @@ public partial class McpServer
                 truncatedTail = " Results truncated by internal safety cap (graph likely pathological); raising limit will not help.";
             else
                 truncatedTail = " Results truncated — increase limit for more.";
+            var cycleTail = analysis.CycleDetected
+                ? $" Cycle detected ({ConsoleUi.Counted(analysis.Cycles?.Count ?? 0, "cycle")})."
+                : "";
 
             var summary = analysis.ImpactMode switch
             {
                 "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {ConsoleUi.Counted(hintCount, "possible file-level dependent")} across {ConsoleUi.Counted(hintFileCount, "file")}. These hints are heuristic only."
-                    + truncatedTail,
+                    + truncatedTail + cycleTail,
                 _ when count > 0 => $"Found {ConsoleUi.Counted(count, "transitive caller")} across {ConsoleUi.Counted(fileCount, "file")} (depth {maxActualDepth})."
-                    + truncatedTail,
-                _ => "No impact found.",
+                    + truncatedTail + cycleTail,
+                _ => "No impact found." + cycleTail,
             };
             if (maxDepthClampWarning != null)
                 summary += $" Warning: {maxDepthClampWarning}";

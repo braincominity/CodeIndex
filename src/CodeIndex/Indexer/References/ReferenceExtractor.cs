@@ -10,6 +10,10 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class ReferenceExtractor
 {
+    // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
+    // lookup tables are initialized once and then read concurrently; language-specific state
+    // must be created per extraction call (for example via CreateState helpers) rather than
+    // stored in mutable static fields.
     internal readonly record struct CSharpMultiLineTypePatternState(
         bool WaitingForHead,
         string? PendingTypeExpression,

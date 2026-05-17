@@ -5,6 +5,9 @@ namespace CodeIndex.Indexer;
 
 internal static class LanguageReferenceExtractionSupport
 {
+    // THREAD-SAFETY: This support surface only owns immutable post-construction Regex fields.
+    // Any state accumulated while extracting references must stay in caller-provided collections
+    // or local variables so concurrent ReferenceExtractor calls cannot share mutable state.
     private static readonly Regex CppIncludeRegex = new(
         @"^(?:\s*#\s*(?:include(?:_next)?|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>[^\s]+))|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

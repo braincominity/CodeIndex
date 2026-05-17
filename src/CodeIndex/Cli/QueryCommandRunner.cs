@@ -2046,6 +2046,7 @@ public static class QueryCommandRunner
                                 zeroPayload["truncated"] = analysis.Truncated;
                                 if (analysis.TruncatedReason != null)
                                     zeroPayload["truncated_reason"] = analysis.TruncatedReason;
+                                AddImpactTerminationJsonFields(zeroPayload, analysis, jsonOptions);
                                 zeroPayload["impact_mode"] = analysis.ImpactMode;
                                 zeroPayload["heuristic"] = analysis.Heuristic;
                                 zeroPayload["file_impacts"] = new JsonArray();
@@ -2096,6 +2097,7 @@ public static class QueryCommandRunner
                             ["graph_table_available"] = analysis.GraphTableAvailable,
                             ["degraded"] = !analysis.GraphTableAvailable,
                         };
+                        AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                         if (analysis.ZeroResultReason != null)
                             payload["zero_result_reason"] = analysis.ZeroResultReason;
                         if (analysis.Suggestion != null)
@@ -2135,6 +2137,7 @@ public static class QueryCommandRunner
                             zeroPayload["truncated"] = analysis.Truncated;
                             if (analysis.TruncatedReason != null)
                                 zeroPayload["truncated_reason"] = analysis.TruncatedReason;
+                            AddImpactTerminationJsonFields(zeroPayload, analysis, jsonOptions);
                             zeroPayload["impact_mode"] = analysis.ImpactMode;
                             zeroPayload["heuristic"] = analysis.Heuristic;
                             zeroPayload["file_impacts"] = new JsonArray();
@@ -2182,6 +2185,7 @@ public static class QueryCommandRunner
                         ["hint_file_count"] = hintFileCount,
                         ["truncated"] = analysis.Truncated,
                     };
+                    AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                     if (analysis.TruncatedReason != null)
                         payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2220,6 +2224,7 @@ public static class QueryCommandRunner
                     ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
                     ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult),
                 };
+                AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                 if (analysis.TruncatedReason != null)
                     payload["truncated_reason"] = analysis.TruncatedReason;
                 if (analysis.Suggestion != null)
@@ -2272,6 +2277,14 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static void AddImpactTerminationJsonFields(JsonObject payload, ImpactAnalysisResult analysis, JsonSerializerOptions jsonOptions)
+    {
+        payload["termination_reason"] = analysis.TerminationReason;
+        payload["cycle_detected"] = analysis.CycleDetected;
+        if (analysis.Cycles is { Count: > 0 })
+            payload["cycles"] = JsonSerializer.SerializeToNode(analysis.Cycles, CliJsonSerializerContextFactory.Create(jsonOptions).ListImpactCycleResult);
     }
 
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
