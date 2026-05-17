@@ -31,6 +31,9 @@ jobs:
             cross_compile: true
           - os: windows-latest
             rid: win-x64
+          - os: windows-latest
+            rid: win-arm64
+            cross_compile: true
           - os: macos-latest
             rid: osx-arm64
     runs-on: ${{ matrix.os }}
