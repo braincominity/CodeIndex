@@ -943,6 +943,9 @@ public static partial class ReferenceExtractor
         var razorImplementedTypeNames = isRazorFile
             ? LanguageReferenceExtractionSupport.ExtractRazorImplementedTypeNames(lines)
             : null;
+        var typeScriptNamespaceAliases = language == "typescript"
+            ? TypeScriptReferenceExtractor.BuildNamespaceAliasBindings(lines, preparedLines)
+            : [];
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -1880,7 +1883,8 @@ public static partial class ReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    ResolveContainerForCall);
+                    ResolveContainerForCall,
+                    typeScriptNamespaceAliases);
 
                 TypeScriptReferenceExtractor.EmitDeclarationTypeReferences(
                     preparedLine,

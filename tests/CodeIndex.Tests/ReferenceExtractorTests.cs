@@ -30416,6 +30416,101 @@ public class ReferenceExtractorTests
             && r.ContainerName == "render");
     }
 
+    [Fact]
+    public void Extract_TypeScriptNamespaceReExportQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            export * as Widgets from "./widgets";
+
+            export function render() {
+                return Widgets.Button.create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./widgets"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r => r.SymbolName == "create" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsAfterLocalShadow()
+    {
+        const string content = """
+            import * as Api from "./api";
+
+            export function before() {
+                Api.Client.connect();
+            }
+
+            const Api = localFactory();
+
+            export function after() {
+                Api.Client.connect();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "before");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 10);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedReExportAliasQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            export { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "render");
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {

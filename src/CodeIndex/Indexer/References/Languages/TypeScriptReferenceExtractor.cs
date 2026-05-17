@@ -1,11 +1,83 @@
+using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
 internal static class TypeScriptReferenceExtractor
 {
+    internal sealed record NamespaceAliasBinding(string Alias, string ModuleSpecifier, int BindingLine, int? ShadowLine);
+
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
+    private static readonly Regex NamespaceImportExportRegex = new(
+        @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
+        RegexOptions.Compiled);
+    private static readonly Regex DynamicImportNamespaceRegex = new(
+        @"^\s*(?:const|let|var)\s+(?<alias>[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\s*\(\s*[""'](?<module>[^""']+)[""']\s*\)",
+        RegexOptions.Compiled);
+    private static readonly Regex NamedImportExportRegex = new(
+        @"^\s*(?:import|export)\s+(?:type\s+)?\{(?<body>[^}]*)\}\s+from\s*[""'](?<module>[^""']+)[""']",
+        RegexOptions.Compiled);
+    private static readonly Regex LocalDeclarationRegex = new(
+        @"^\s*(?:(?:const|let|var)\s+|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+|(?:export\s+)?(?:abstract\s+)?class\s+|(?:export\s+)?interface\s+|(?:export\s+)?type\s+)(?<name>[A-Za-z_$][\w$]*)\b",
+        RegexOptions.Compiled);
+
+    public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
+        IReadOnlyList<string> originalLines,
+        IReadOnlyList<string> preparedLines)
+    {
+        var bindings = new List<NamespaceAliasBinding>();
+        for (var index = 0; index < originalLines.Count; index++)
+        {
+            var line = originalLines[index];
+            var match = NamespaceImportExportRegex.Match(line);
+            if (!match.Success)
+                match = DynamicImportNamespaceRegex.Match(line);
+            if (match.Success)
+            {
+                AddNamespaceAliasBinding(bindings, preparedLines, match.Groups["alias"].Value, match.Groups["module"].Value, index + 1);
+                continue;
+            }
+
+            match = NamedImportExportRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            foreach (var alias in ExtractNamedImportExportAliases(match.Groups["body"].Value))
+                AddNamespaceAliasBinding(bindings, preparedLines, alias, match.Groups["module"].Value, index + 1);
+        }
+
+        return bindings;
+    }
+
+    private static void AddNamespaceAliasBinding(
+        List<NamespaceAliasBinding> bindings,
+        IReadOnlyList<string> preparedLines,
+        string alias,
+        string module,
+        int bindingLine)
+    {
+        if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
+            return;
+
+        var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
+        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine));
+    }
+
+    private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
+    {
+        foreach (var part in body.Split(','))
+        {
+            var item = part.Trim();
+            if (item.Length == 0)
+                continue;
+
+            var asIndex = item.LastIndexOf(" as ", StringComparison.Ordinal);
+            var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
+            if (IsTypeScriptIdentifier(alias))
+                yield return alias;
+        }
+    }
 
     public static void EmitTypePositionReferences(
         IReadOnlyList<string> preparedLines,
@@ -17,8 +89,21 @@ internal static class TypeScriptReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyList<NamespaceAliasBinding> namespaceAliases)
     {
+        EmitNamespaceAliasQualifiedReferences(
+            preparedLines,
+            lineIndex,
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            namespaceAliases);
+
         ReferenceExtractor.EmitTypeScriptTypePositionReferences(
             preparedLines,
             lineIndex,
@@ -76,6 +161,60 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitNamespaceAliasQualifiedReferences(
+        IReadOnlyList<string> preparedLines,
+        int lineIndex,
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyList<NamespaceAliasBinding> namespaceAliases)
+    {
+        if (namespaceAliases.Count == 0 || IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
+            return;
+
+        foreach (var binding in namespaceAliases)
+        {
+            if (lineNumber <= binding.BindingLine || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine))
+                continue;
+
+            foreach (Match match in Regex.Matches(
+                         preparedLine,
+                         $@"(?<![\w$]){Regex.Escape(binding.Alias)}\s*\.\s*[A-Za-z_$][\w$]*"))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    binding.ModuleSpecifier,
+                    match.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(match.Index));
+            }
+        }
+    }
+
+    private static int? FindShadowLine(IReadOnlyList<string> preparedLines, string alias, int bindingLine)
+    {
+        for (var index = bindingLine; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            if (NamespaceImportExportRegex.IsMatch(line) || DynamicImportNamespaceRegex.IsMatch(line))
+                continue;
+
+            var match = LocalDeclarationRegex.Match(line);
+            if (match.Success && string.Equals(match.Groups["name"].Value, alias, StringComparison.Ordinal))
+                return index + 1;
+        }
+
+        return null;
     }
 
     private static void EmitHeritageTypeReferences(
@@ -424,4 +563,18 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsTypeScriptIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
+
+    private static bool IsTypeScriptIdentifier(string text)
+    {
+        if (text.Length == 0 || !(text[0] == '_' || text[0] == '$' || char.IsLetter(text[0])))
+            return false;
+
+        for (var index = 1; index < text.Length; index++)
+        {
+            if (!IsTypeScriptIdentifierPart(text[index]))
+                return false;
+        }
+
+        return true;
+    }
 }
