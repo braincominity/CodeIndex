@@ -2085,6 +2085,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_LangKindPredicateUsesFileKindPlan()
+    {
+        // Guard #1933: keep the language + kind symbol query shaped so SQLite can
+        // first resolve matching files via files(lang), then probe symbols(file_id, kind).
+        // #1933: lang + kind のシンボル検索が idx_symbols_kind から全 kind を走査しないよう固定する。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            EXPLAIN QUERY PLAN
+            SELECT s.name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind = @kind
+              AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
+        cmd.Parameters.AddWithValue("@kind", "class");
+        cmd.Parameters.AddWithValue("@lang", "javascript");
+        using var reader = cmd.ExecuteReader();
+        var plan = new System.Text.StringBuilder();
+        while (reader.Read())
+            plan.AppendLine(reader.GetString(3));
+        var planText = plan.ToString();
+        Assert.Contains("idx_symbols_file_kind", planText);
+        Assert.Contains("idx_files_lang", planText);
+        Assert.DoesNotContain("idx_symbols_kind", planText);
+    }
+
+    [Fact]
     public void SearchSymbols_EmptyNameListBehavesLikeNoFilter()
     {
         var all = _reader.SearchSymbols((IReadOnlyList<string>?)null);
