@@ -3807,12 +3807,29 @@ public static partial class SymbolExtractor
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
+        if (lang is "javascript" or "typescript")
+            ClassifyJavaScriptTypeScriptReactHooks(symbols);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
+
+    private static void ClassifyJavaScriptTypeScriptReactHooks(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
+                symbol.Kind = "hook";
+        }
+    }
+
+    internal static bool IsJavaScriptTypeScriptReactHookName(string name)
+        => name.Length >= 4
+           && name.StartsWith("use", StringComparison.Ordinal)
+           && IsJavaScriptTypeScriptIdentifierStart(name[3])
+           && char.IsUpper(name[3]);
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {

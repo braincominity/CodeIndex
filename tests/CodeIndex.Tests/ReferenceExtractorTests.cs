@@ -37,6 +37,46 @@ public class ReferenceExtractorTests
             && reference.ContainerName == "default");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_EmitsConsumesHookReferences(string language)
+    {
+        const string content = """
+            import { useEffect, useState } from "react";
+
+            const useLocalState = () => {
+              const [value] = useState(0);
+              useEffect(() => {}, [value]);
+              return value;
+            };
+
+            export function Widget() {
+              const value = useLocalState();
+              if (value) {
+                useEffect(() => {}, []);
+              }
+              return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useState"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "useLocalState");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useLocalState"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "Widget");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useEffect"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "Widget");
+    }
+
     [Fact]
     public void Extract_TsxGenericComponentInvocations_EmitsComponentCallsAndTypeArguments()
     {
