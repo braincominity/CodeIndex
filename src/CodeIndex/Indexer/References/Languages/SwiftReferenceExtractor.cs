@@ -13,6 +13,14 @@ internal static class SwiftReferenceExtractor
     private static readonly Regex PropertyWrapperAttributeRegex = new(
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> NonWrapperPropertyAttributes = new(StringComparer.Ordinal)
+    {
+        "IBOutlet",
+        "IBOutletCollection",
+        "IBInspectable",
+        "NSManaged",
+        "GKInspectable",
+    };
 
     public static void EmitTrailingClosureReferences(
         string preparedLine,
@@ -95,6 +103,9 @@ internal static class SwiftReferenceExtractor
             var name = nameGroup.Value;
             var shortNameStart = name.LastIndexOf('.') + 1;
             var emittedName = shortNameStart > 0 ? name[shortNameStart..] : name;
+            if (NonWrapperPropertyAttributes.Contains(emittedName))
+                continue;
+
             var column = attributes.Index + nameGroup.Index + shortNameStart;
             ReferenceExtractor.AddReference(
                 references,

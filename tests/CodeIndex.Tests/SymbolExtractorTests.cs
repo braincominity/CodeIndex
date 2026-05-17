@@ -156,6 +156,9 @@ public class SymbolExtractorTests
                 @State private var count = 0
                 @Environment(\.colorScheme) var scheme
                 @MyWrapper var value: Int
+                @IBOutlet weak var titleLabel: UILabel!
+                @NSManaged var persistedName: String
+                @objc var exposedName: String = ""
                 var fullName: String {
                     get {
                         "A"
@@ -205,6 +208,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$scheme" && s.SubKind == "swift_projected_value");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.SubKind == "swift_wrapped_property");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$value" && s.SubKind == "swift_projected_value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "titleLabel" && s.SubKind != "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "persistedName" && s.SubKind != "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "exposedName" && s.SubKind != "swift_wrapped_property");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "$titleLabel" or "$persistedName" or "$exposedName");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "fullName" && s.SubKind == "swift_computed_property");
         Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.get" && s.ContainerName == "fullName");
         Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.set" && s.ContainerName == "fullName");

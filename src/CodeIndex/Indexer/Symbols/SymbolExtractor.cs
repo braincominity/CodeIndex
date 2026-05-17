@@ -89,9 +89,20 @@ public static partial class SymbolExtractor
     private static readonly Regex SwiftPropertyDeclarationRegex = new(
         @"^\s*(?<attributes>(?:@\w+(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SwiftPropertyWrapperAttributeRegex = new(
+        @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SwiftAccessorDeclarationRegex = new(
         @"(?<![\w`])(?<name>get|set|willSet|didSet)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> SwiftNonWrapperPropertyAttributes = new(StringComparer.Ordinal)
+    {
+        "IBOutlet",
+        "IBOutletCollection",
+        "IBInspectable",
+        "NSManaged",
+        "GKInspectable",
+    };
     // C++ return-type atoms need to accept both ordinary word tokens and `decltype(...)`.
     // The decltype branch allows nested parentheses so modern forms such as
     // `decltype(auto)`, `decltype((value))`, and `decltype(foo<T>(x))` stay searchable.
@@ -3863,7 +3874,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var attributes = declarationMatch.Groups["attributes"].Value;
-            if (attributes.Length > 0)
+            if (HasSwiftPropertyWrapperAttribute(attributes))
             {
                 property.SubKind = CombineSubKinds(property.SubKind, "swift_wrapped_property");
                 AddSwiftProjectedValueSymbol(fileId, lines, symbols, existing, property, propertyLine);
@@ -3952,6 +3963,20 @@ public static partial class SymbolExtractor
             Visibility = property.Visibility,
             ReturnType = property.ReturnType,
         });
+    }
+
+    private static bool HasSwiftPropertyWrapperAttribute(string attributes)
+    {
+        foreach (Match match in SwiftPropertyWrapperAttributeRegex.Matches(attributes))
+        {
+            var name = match.Groups["name"].Value;
+            var shortNameStart = name.LastIndexOf('.') + 1;
+            var shortName = shortNameStart > 0 ? name[shortNameStart..] : name;
+            if (!SwiftNonWrapperPropertyAttributes.Contains(shortName))
+                return true;
+        }
+
+        return false;
     }
 
     private static int FindBraceRangeEndLine(string[] structuralLines, int openBraceLine, int openBraceColumn)
