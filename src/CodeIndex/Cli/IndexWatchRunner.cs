@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Indexer;
 
@@ -195,6 +196,11 @@ internal static class IndexWatchRunner
         }
         if (baseOptions.Verbose && baseOptions.Json)
             args.Add("--verbose");
+        if (baseOptions.MaxFileSizeBytes is { } maxFileSizeBytes)
+        {
+            args.Add("--max-file-bytes");
+            args.Add(maxFileSizeBytes.ToString(CultureInfo.InvariantCulture));
+        }
         return args;
     }
 
