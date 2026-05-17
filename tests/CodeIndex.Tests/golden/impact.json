@@ -45,5 +45,7 @@
       "return_type": null
     }
   ],
+  "termination_reason": "completed",
+  "cycle_detected": false,
   "suggestion": "These file-level dependents are heuristic only; confirm with \u0060cdidx deps --path \u003Cdefinition-path\u003E --reverse\u0060 and a member-level \u0060impact\u0060 query."
 }
