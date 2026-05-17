@@ -1586,6 +1586,17 @@ public static partial class ReferenceExtractor
 
                 if (language == "csharp")
                 {
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine))
+                    {
+                        var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
+                            containerCandidates,
+                            structuralLines[i],
+                            lineNumber,
+                            column);
+                        if (declarationRangeContainer != null)
+                            return declarationRangeContainer;
+                    }
+
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
                         containerCandidates,
                         structuralLines[i],
@@ -1593,6 +1604,15 @@ public static partial class ReferenceExtractor
                         column);
                     if (sameLineContainer != null)
                         return sameLineContainer;
+
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine)
+                        && container?.Kind == "function"
+                        && container.StartLine == lineNumber
+                        && (!TryFindCSharpFunctionNameColumn(structuralLines[i], container.Name, out var containerNameColumn)
+                            || column < containerNameColumn))
+                    {
+                        return null;
+                    }
                 }
 
                 return container;
