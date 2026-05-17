@@ -2720,8 +2720,42 @@ public static partial class SymbolExtractor
                 rawSlice.Append(line, from, to - from);
         }
 
-        return SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+        var sanitized = SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
     }
+
+    private static string NormalizeCSharpConstraintGenericWhitespace(string signature)
+    {
+        var whereIndex = FindCSharpWhereConstraintToken(signature);
+        if (whereIndex < 0)
+            return signature;
+
+        var prefix = signature[..whereIndex];
+        var constraints = CollapseCSharpGenericTypeWhitespace(signature[whereIndex..]);
+        return prefix + constraints;
+    }
+
+    private static int FindCSharpWhereConstraintToken(string signature)
+    {
+        for (int i = 0; i < signature.Length; i++)
+        {
+            if (!signature.AsSpan(i).StartsWith("where".AsSpan(), StringComparison.Ordinal))
+                continue;
+
+            var before = i == 0 ? '\0' : signature[i - 1];
+            var afterIndex = i + "where".Length;
+            var after = afterIndex < signature.Length ? signature[afterIndex] : '\0';
+            if (!IsCSharpWhereTokenBoundary(before) || !IsCSharpWhereTokenBoundary(after))
+                continue;
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCSharpWhereTokenBoundary(char ch)
+        => ch == '\0' || !(char.IsLetterOrDigit(ch) || ch == '_' || ch == '@');
 
     private enum CSharpHeaderFrameKind
     {
