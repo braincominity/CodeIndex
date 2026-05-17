@@ -2988,16 +2988,17 @@ public class FileIndexerTests
     [Fact]
     public void BuildRecord_ThrowsForOversizedFile()
     {
-        // Files exceeding 10 MB should throw InvalidOperationException
-        // 10MBを超えるファイルはInvalidOperationExceptionを投げる
+        // Files exceeding the default cap should throw InvalidOperationException
+        // 既定上限を超えるファイルはInvalidOperationExceptionを投げる
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "large.py");
-            // Create a file just over 10 MB / 10MBを少し超えるファイルを作成
-            var data = new byte[10 * 1024 * 1024 + 1];
-            File.WriteAllBytes(filePath, data);
+            // Create a sparse file just over the default cap without allocating a matching test buffer.
+            // 既定上限を少し超える sparse file を作り、同サイズのテスト用 buffer 確保を避ける。
+            using (var stream = File.Create(filePath))
+                stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
 
             var indexer = new FileIndexer(tempDir);
             Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
@@ -3009,15 +3010,46 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_DefaultRejectsTenMiBFileBeforeReadingPayload()
+    {
+        // Regression for #1695: a 10 MiB source file must be rejected from the
+        // observed stream length before the indexer accumulates one contiguous
+        // 10 MiB byte array on the LOH.
+        // #1695 の回帰: 10 MiB の source file は stream length の確認時点で拒否し、
+        // インデクサが LOH 上に連続した 10 MiB byte 配列を累積しないことを固定する。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "large.py");
+            using (var stream = File.Create(filePath))
+                stream.SetLength(10 * 1024 * 1024);
+
+            var indexer = new FileIndexer(tempDir);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+
+            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Contains("File too large", ex.Message);
+            Assert.True(allocated < 1024 * 1024, $"Expected rejection before a 10 MiB payload allocation, saw {allocated} bytes allocated.");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_AcceptsFileAtSizeLimitBoundary()
     {
         // Regression for #1529: the TOCTOU fix reads through one FileStream and caps the
-        // accumulator at MaxFileSize. A file at exactly 10 MB must still be accepted so
-        // the boundary contract documented by the oversize test stays symmetric (>10MB
-        // throws, ==10MB succeeds).
+        // accumulator at MaxFileSize. A file at exactly the default cap must still be accepted so
+        // the boundary contract documented by the oversize test stays symmetric (>cap
+        // throws, ==cap succeeds).
         // #1529 のリグレッション: TOCTOU 修正で 1 本の FileStream を通して MaxFileSize で
-        // 累積バッファを打ち切る実装にした際、ちょうど 10 MB のファイルは引き続き受け
-        // 入れる必要がある (>10MB が throw / ==10MB が成功という対称契約を維持)。
+        // 累積バッファを打ち切る実装にした際、ちょうど既定上限のファイルは引き続き受け
+        // 入れる必要がある (>上限 が throw / ==上限 が成功という対称契約を維持)。
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3025,7 +3057,7 @@ public class FileIndexerTests
             var filePath = Path.Combine(tempDir, "boundary.py");
             // Exactly MaxFileSize bytes — ASCII so UTF-8 decode succeeds without warning.
             // ちょうど MaxFileSize バイト — ASCII なら UTF-8 デコードで警告無く成功する。
-            var data = new byte[10 * 1024 * 1024];
+            var data = new byte[(int)FileIndexer.DefaultMaxFileSizeBytes];
             for (int i = 0; i < data.Length; i++)
                 data[i] = (byte)'a';
             File.WriteAllBytes(filePath, data);

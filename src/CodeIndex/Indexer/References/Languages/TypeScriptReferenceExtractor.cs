@@ -152,6 +152,7 @@ internal static class TypeScriptReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
+        EmitGenericConstraintTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypeAliasTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -405,6 +406,62 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return false;
+    }
+
+    private static void EmitGenericConstraintTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var index = 0; index < preparedLine.Length; index++)
+        {
+            if (preparedLine[index] != '<')
+                continue;
+
+            var closeIndex = ReferenceExtractor.FindMatchingChar(preparedLine, index, '<', '>');
+            if (closeIndex <= index)
+                continue;
+
+            var clauseStart = index + 1;
+            var clause = preparedLine.Substring(clauseStart, closeIndex - clauseStart);
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+            {
+                var fragment = clause.Substring(segmentStart, segmentLength);
+                foreach (var extendsIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(fragment, "extends"))
+                {
+                    var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, extendsIndex + "extends".Length);
+                    if (typeStart >= fragment.Length)
+                        continue;
+
+                    var typeEnd = FindGenericConstraintExpressionEnd(fragment, typeStart);
+                    if (typeEnd <= typeStart)
+                        continue;
+
+                    var absoluteStart = clauseStart + segmentStart + typeStart;
+                    ReferenceExtractor.AddTypeScriptTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        fragment.Substring(typeStart, typeEnd - typeStart),
+                        absoluteStart,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(absoluteStart));
+                }
+            }
+
+            index = closeIndex;
+        }
+    }
+
+    private static int FindGenericConstraintExpressionEnd(string fragment, int typeStart)
+    {
+        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=', typeStart);
+        return equalsIndex >= 0 ? equalsIndex : fragment.Length;
     }
 
     private static void EmitHeritageTypeReferences(

@@ -12,6 +12,34 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_ClassifiesReactCustomHookFunctions(string language)
+    {
+        var content = """
+            import { useEffect, useState } from "react";
+
+            const useLocalState = () => {
+              const [value, setValue] = useState(0);
+              useEffect(() => setValue(value + 1), [value]);
+              return value;
+            };
+
+            export const useComposedHook = () => {
+              return useLocalState();
+            };
+
+            const ordinaryFunction = () => useLocalState();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useLocalState");
+        Assert.Contains(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "useComposedHook");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "hook" && symbol.Name == "ordinaryFunction");
+    }
+
     [Fact]
     public void Extract_AllPatternLanguages_IsDeterministicUnderParallelCalls()
     {
@@ -14999,6 +15027,29 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
+    }
+
+    [Fact]
+    public void Extract_Kotlin_DistinguishesValueClassesAndInlineReifiedFunctions()
+    {
+        var content = """
+            @JvmInline
+            value class UserId(val id: Long)
+            inline class LegacyId(val value: String)
+            inline fun <reified T> parse(): T = TODO()
+            inline fun render(block: () -> Unit) = block()
+            inline suspend fun <reified T> load(): T = TODO()
+            fun value(inline: String): String = inline
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserId" && s.SubKind == "kotlin_value_class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyId" && s.SubKind == "kotlin_inline_class");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.SubKind == "kotlin_inline_reified_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render" && s.SubKind == "kotlin_inline_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.SubKind == "kotlin_inline_reified_function");
+        Assert.DoesNotContain(symbols, s => s.Name == "value" && s.SubKind != null);
     }
 
     [Fact]

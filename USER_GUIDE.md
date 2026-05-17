@@ -241,7 +241,7 @@ be audited whenever the matching help text changes.
 | Query result limit | `20` (`--limit`, alias `--top`) | CLI help and query runners |
 | Search snippet lines | `8` (`--snippet-lines`, max `20`) | CLI help and search runner |
 | Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
-| Index max file size | `10MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
+| Index max file size | `4MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
 | Watch debounce | `500` ms (`--debounce`) | index watch runner |
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
@@ -329,7 +329,7 @@ Use the smallest change that reduces the expensive part of your run.
 | `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
 | `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
-| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `10MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
+| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
 | `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
@@ -851,7 +851,7 @@ cdidx report --output report.tgz --json
 | `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
-| `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 10MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
+| `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
@@ -1193,6 +1193,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
 - JavaScript/TypeScript exports: barrel re-exports, local and string-literal export aliases, exported variables, default exports, destructured exports, and CommonJS named/default exports are indexed as exported symbols.
+- React hooks: JavaScript/TypeScript functions whose names follow `use[A-Z]...` are indexed as `hook` symbols, and calls to `useFoo()` / built-in hooks such as `useState()` are recorded as `consumes_hook` references for hook-composition graph queries.
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
@@ -1921,7 +1922,7 @@ release changelog を source of truth とします。完全な syntax line は `
 | Query result limit | `20`（`--limit`、alias `--top`） | CLI help と query runners |
 | Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
-| Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `10MiB` | index runner help |
+| Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
 | Watch debounce | `500` ms（`--debounce`） | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
@@ -2007,7 +2008,7 @@ cdidx index . --duration-format seconds
 | `--files <path...>` | off | editor/save hook や既知の in-place edit | rename/delete 旧 path は明示しない限り purge されない |
 | `--commits <id...>` | off | 通常の commit 後 | git history が必要だが rename/delete paths も扱える |
 | `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
-| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `10MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
+| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
 | `--watch --debounce <ms>` | `500` ms | 編集中の worktree を live に保つ | long-running process。commit/file scoped refresh flags とは併用不可 |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | AI context に対して query payload が大きすぎる | 小さくしすぎると周辺文脈が見えない |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
@@ -2520,7 +2521,7 @@ cdidx report --output report.tgz --json
 | `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
-| `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 10MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
+| `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 4MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
@@ -2860,6 +2861,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
 - JavaScript/TypeScript export: barrel re-export、local / string-literal export alias、exported variable、default export、destructured export、CommonJS named/default export を exported symbol として索引します。
+- React hooks: JavaScript/TypeScript で `use[A-Z]...` の命名規則に従う関数は `hook` シンボルとして索引し、`useFoo()` や `useState()` などの hook 呼び出しは hook composition graph 用の `consumes_hook` 参照として記録します。
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
