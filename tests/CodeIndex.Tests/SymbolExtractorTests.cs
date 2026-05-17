@@ -6856,6 +6856,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RawStringLongerQuoteRunDoesNotLeakPhantomSymbols()
+    {
+        // Regression for #1453 on the C# symbol scanner path: a raw string opened
+        // with four quotes must not close on a longer quote run, including from
+        // the middle of that longer run.
+        // #1453 の C# symbol scanner 経路の回帰: 4 個の quote で始まった raw
+        // string は、より長い quote run では閉じず、その途中からも閉じてはならない。
+        var content = """""""
+            namespace CsRawStringLongQuoteRun;
+
+            public class Svc
+            {
+                public string DocsExample() => """"
+                    public class HiddenBefore { }
+                    """""" public class Phantom { public void Ghost() { } }
+                    public class HiddenAfter { }
+                    """";
+
+                public int RealMethod() => 0;
+            }
+            """"""";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "CsRawStringLongQuoteRun");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Svc");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "DocsExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealMethod");
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "HiddenBefore");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Phantom");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Ghost");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "HiddenAfter");
+    }
+
+    [Fact]
     public void Extract_CSharp_PlainInterpolatedStringHoleWithNestedStringLiteral_DoesNotDropLaterHelpers()
     {
         var content = """
