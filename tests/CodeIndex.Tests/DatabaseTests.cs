@@ -43,6 +43,73 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_CreatesReferenceCompositeIndexesForGraphLookups()
+    {
+        var indexes = ReadIndexNames(_db.Connection, "symbol_references");
+
+        Assert.Contains("idx_symbol_refs_name_kind", indexes);
+        Assert.Contains("idx_symbol_refs_name_file", indexes);
+        Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
+        Assert.Contains("idx_symbol_refs_name_nocase_file", indexes);
+        Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
+        Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
+    }
+
+    [Fact]
+    public void TryMigrateForRead_CreatesReferenceCompositeIndexesForGraphLookups()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_index_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    );";
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var indexes = ReadIndexNames(db.Connection, "symbol_references");
+
+            Assert.Contains("idx_symbol_refs_name_kind", indexes);
+            Assert.Contains("idx_symbol_refs_name_file", indexes);
+            Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
+            Assert.Contains("idx_symbol_refs_name_nocase_file", indexes);
+            Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
+            Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void UpsertFile_InsertsAndReturnsId()
     {
         var file = new FileRecord
@@ -206,6 +273,19 @@ public class DatabaseTests : IDisposable
 
         var (_, _, _, referenceCount) = _writer.GetCounts();
         Assert.Equal(1, referenceCount);
+    }
+
+    private static HashSet<string> ReadIndexNames(SqliteConnection connection, string tableName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=@tableName";
+        cmd.Parameters.AddWithValue("@tableName", tableName);
+
+        var indexes = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            indexes.Add(reader.GetString(0));
+        return indexes;
     }
 
     [Fact]
