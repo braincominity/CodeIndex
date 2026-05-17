@@ -86,16 +86,34 @@ public class ReferenceExtractorTests
                 static abstract T Parse(int code);
             }
 
-            public readonly struct Money : IParseable<Money>
+            public interface IAdditive<TSelf>
+            {
+                static abstract TSelf Add(TSelf left, TSelf right);
+                static abstract bool TryParse(string s, out TSelf value);
+            }
+
+            public readonly struct Money : IParseable<Money>, IAdditive<Money>
             {
                 public static Money Parse(string s) => new();
                 public static Money Create() => new();
                 public static int Scale => 1;
+                public static Money Add(Money left, Money right) => new();
+                public static bool TryParse(string s, out Money value)
+                {
+                    value = new();
+                    return true;
+                }
             }
 
             public readonly struct TextOnly : ICodeParseable<TextOnly>
             {
                 public static TextOnly Parse(string s) => new();
+            }
+
+            public readonly struct WrongRef : IAdditive<WrongRef>
+            {
+                public static WrongRef Add(WrongRef left, WrongRef right) => new();
+                public static bool TryParse(string s, ref WrongRef value) => true;
             }
             """;
 
@@ -136,10 +154,24 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "implicit_implementation"
             && reference.ContainerName == "Scale"
             && reference.Context == "public static int Scale => 1;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Add"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Add"
+            && reference.Context == "public static Money Add(Money left, Money right) => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "TryParse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "TryParse"
+            && reference.Context == "public static bool TryParse(string s, out Money value)");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "Parse"
             && reference.ReferenceKind == "implicit_implementation"
             && reference.Context == "public static TextOnly Parse(string s) => new();");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "TryParse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static bool TryParse(string s, ref WrongRef value) => true;");
     }
 
     [Fact]
