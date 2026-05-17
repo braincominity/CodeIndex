@@ -940,6 +940,9 @@ public static partial class ReferenceExtractor
         var razorReferenceLines = isRazorFile
             ? RazorReferenceExtractor.MaskCommentLines(lines)
             : null;
+        var razorImplementedTypeNames = isRazorFile
+            ? LanguageReferenceExtractionSupport.ExtractRazorImplementedTypeNames(lines)
+            : null;
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -999,6 +1002,9 @@ public static partial class ReferenceExtractor
 
                     return names;
                 });
+        var fileDefinitionNames = isRazorFile
+            ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
+            : null;
         var sqlDefinitionLeafSpansByLine = language == "sql"
             ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
             : null;
@@ -2843,7 +2849,9 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    definitionNames);
+                    definitionNames,
+                    fileDefinitionNames,
+                    razorImplementedTypeNames);
             }
 
             if (language == "python")

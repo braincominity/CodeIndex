@@ -15,7 +15,9 @@ internal static class RazorReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        IReadOnlySet<string>? definitionNames)
+        IReadOnlySet<string>? definitionNames,
+        IReadOnlySet<string>? fileDefinitionNames,
+        IReadOnlyList<string>? implementedTypeNames)
     {
         LanguageReferenceExtractionSupport.EmitRazorReferences(
             originalLine,
@@ -25,6 +27,8 @@ internal static class RazorReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn,
-            definitionNames);
+            definitionNames,
+            fileDefinitionNames,
+            implementedTypeNames);
     }
 }
