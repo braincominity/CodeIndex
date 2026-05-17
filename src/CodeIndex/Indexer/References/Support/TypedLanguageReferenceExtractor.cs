@@ -531,12 +531,21 @@ internal static class TypedLanguageReferenceExtractor
     private static int FindTypeExpressionEndForLanguage(string text, int startIndex, string language, bool stopAtComma = true)
         => FindTypeExpressionEnd(text, startIndex, stopAtComma, stopAtArrow: language is not ("typescript" or "swift"));
 
-    private static int FindKeywordFollowingTypeExpressionEnd(string text, int startIndex, string language)
-        => FindTypeExpressionEnd(
+    public static int FindKeywordFollowingTypeExpressionEnd(string text, int startIndex, string language)
+    {
+        if (language == "typescript" && startIndex < text.Length && text[startIndex] == '{')
+        {
+            var closeBrace = ReferenceExtractor.FindMatchingChar(text, startIndex, '{', '}');
+            if (closeBrace >= 0)
+                return closeBrace + 1;
+        }
+
+        return FindTypeExpressionEnd(
             text,
             startIndex,
             stopAtArrow: language != "typescript",
             stopAtRuntimeOperator: true);
+    }
 
     private static bool IsRuntimeExpressionOperatorTerminator(string text, int index, char ch)
     {
