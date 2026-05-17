@@ -6554,6 +6554,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsScopedMethodParametersAsProperties()
+    {
+        var content = """
+            public class RefService
+            {
+                public void Update<T>(scoped ref T value, scoped Span<int> data)
+                {
+                }
+
+                public Buffer[] Buffer(scoped ref int value)
+                {
+                    return [];
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "value"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Update"
+            && s.ReturnType == "T"
+            && s.Signature == "scoped ref T value");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "data"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Update"
+            && s.ReturnType == "Span<int>"
+            && s.Signature == "scoped Span<int> data");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "value"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Buffer"
+            && s.ReturnType == "int"
+            && s.Signature == "scoped ref int value");
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesVerbatimIdentifiers()
     {
         var content = """
@@ -7545,6 +7586,68 @@ public class SymbolExtractorTests
         Assert.Equal(
             "public readonly struct Value<T> : IEquatable<Value<T>> where T : IComparable<T>",
             value.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedTypeHeaderWithSplitGenericConstraints_PreservesNestedConstraintTypes()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T, U>
+                where T : IEnumerable<
+                    U>,
+                    IComparable<
+                    string>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo<T, U> where T : IEnumerable<U>, IComparable<string>",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithWhereInStringDefault_PreservesLiteralWhitespace()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string label = "where X< T >")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string label = \"where X< T >\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithWhereParameterName_PreservesLiteralWhitespace()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string where = "X< T >")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string where = \"X< T >\") : BaseFoo",
+            foo.Signature);
     }
 
     [Fact]
