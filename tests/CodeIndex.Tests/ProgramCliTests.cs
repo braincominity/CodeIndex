@@ -165,7 +165,7 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains(csharp.Hash[..12], stdout);
-        Assert.Contains("unsubmitted", stdout);
+        Assert.Contains("draft", stdout);
         Assert.Contains("Missing record extraction", stdout);
         Assert.DoesNotContain("Improve macro handling", stdout);
     }
@@ -182,7 +182,7 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
         Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
-        Assert.Equal("submitted", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("submitted_pending_triage", doc.RootElement.GetProperty("status").GetString());
         Assert.Equal("JSON export needed", doc.RootElement.GetProperty("description").GetString());
     }
 

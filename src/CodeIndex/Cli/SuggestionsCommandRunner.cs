@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]";
+    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]";
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
@@ -107,9 +107,11 @@ internal static class SuggestionsCommandRunner
             Console.WriteLine($"cdidx_version: {record.ClientVersion}");
         if (!string.IsNullOrWhiteSpace(record.SessionId) && record.SessionId != "unknown")
             Console.WriteLine($"session_id: {record.SessionId}");
-        Console.WriteLine($"submitted_to_github: {record.SubmittedToGitHub.ToString().ToLowerInvariant()}");
-        if (!string.IsNullOrWhiteSpace(record.GitHubIssueUrl))
-            Console.WriteLine($"github_issue_url: {record.GitHubIssueUrl}");
+        Console.WriteLine($"submitted_to_github: {IsSubmitted(record).ToString().ToLowerInvariant()}");
+        if (!string.IsNullOrWhiteSpace(record.UpstreamUrl))
+            Console.WriteLine($"upstream_url: {record.UpstreamUrl}");
+        if (record.UpstreamIssueNumber != null)
+            Console.WriteLine($"upstream_issue_number: {record.UpstreamIssueNumber}");
         Console.WriteLine();
         Console.WriteLine(record.Description);
         if (!string.IsNullOrWhiteSpace(record.Context))
@@ -155,7 +157,7 @@ internal static class SuggestionsCommandRunner
     {
         foreach (var record in records)
         {
-            if (options.Status != "all" && !string.Equals(GetStatus(record), options.Status, StringComparison.OrdinalIgnoreCase))
+            if (options.Status != "all" && !MatchesStatus(record, options.Status))
                 continue;
             if (options.Language != null && !string.Equals(record.Language, options.Language, StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -178,7 +180,37 @@ internal static class SuggestionsCommandRunner
         return matches.Count == 1 ? matches[0] : records.FirstOrDefault(r => string.Equals(r.Hash, id, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string GetStatus(SuggestionRecord record) => record.SubmittedToGitHub ? "submitted" : "unsubmitted";
+    private static string GetStatus(SuggestionRecord record) => ToSnakeCase(record.Status);
+
+    private static bool IsSubmitted(SuggestionRecord record) =>
+        record.Status != SuggestionStatus.Draft
+        || record.SubmittedToGitHub == true
+        || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
+        || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
+
+    private static bool MatchesStatus(SuggestionRecord record, string status)
+    {
+        if (status == "submitted")
+            return IsSubmitted(record);
+        if (status == "unsubmitted")
+            return !IsSubmitted(record);
+        return string.Equals(GetStatus(record), status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToSnakeCase(SuggestionStatus status) => status switch
+    {
+        SuggestionStatus.Draft => "draft",
+        SuggestionStatus.SubmittedPendingTriage => "submitted_pending_triage",
+        SuggestionStatus.OpenInUpstream => "open_in_upstream",
+        SuggestionStatus.ResolvedInUpstream => "resolved_in_upstream",
+        SuggestionStatus.WontFix => "wont_fix",
+        SuggestionStatus.Duplicate => "duplicate",
+        SuggestionStatus.Superseded => "superseded",
+        _ => status.ToString().ToLowerInvariant(),
+    };
+
+    private static bool IsValidStatusFilter(string status) =>
+        status is "all" or "submitted" or "unsubmitted" or "draft" or "submitted_pending_triage" or "open_in_upstream" or "resolved_in_upstream" or "wont_fix" or "duplicate" or "superseded";
 
     private static string? GetAgent(SuggestionRecord record)
     {
@@ -218,8 +250,9 @@ internal static class SuggestionsCommandRunner
         record.McpClientName,
         record.McpClientVersion,
         FormatTitle(record.Description, 120),
-        record.SubmittedToGitHub,
-        record.GitHubIssueUrl);
+        IsSubmitted(record),
+        record.UpstreamUrl,
+        record.UpstreamIssueNumber);
 
     private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => new(
         JsonOutputContract.ApiVersion,
@@ -237,8 +270,13 @@ internal static class SuggestionsCommandRunner
         record.ToolInvocationContext,
         record.Description,
         record.Context,
-        record.SubmittedToGitHub,
-        record.GitHubIssueUrl);
+        IsSubmitted(record),
+        record.UpstreamUrl,
+        record.UpstreamIssueNumber,
+        record.LastSyncedAt,
+        record.ResolvedAt,
+        record.Supersedes,
+        record.SupersededBy);
 
     private static string FormatMarkdown(List<SuggestionRecord> records)
     {
@@ -265,8 +303,10 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine($"- mcp_client: `{record.McpClientName}{(string.IsNullOrWhiteSpace(record.McpClientVersion) ? string.Empty : " " + record.McpClientVersion)}`");
             if (!string.IsNullOrWhiteSpace(record.SessionId) && record.SessionId != "unknown")
                 sb.AppendLine($"- session_id: `{record.SessionId}`");
-            if (!string.IsNullOrWhiteSpace(record.GitHubIssueUrl))
-                sb.AppendLine($"- github_issue_url: {record.GitHubIssueUrl}");
+            if (!string.IsNullOrWhiteSpace(record.UpstreamUrl))
+                sb.AppendLine($"- upstream_url: {record.UpstreamUrl}");
+            if (record.UpstreamIssueNumber != null)
+                sb.AppendLine($"- upstream_issue_number: `{record.UpstreamIssueNumber}`");
             sb.AppendLine();
             sb.AppendLine(record.Description);
             if (!string.IsNullOrWhiteSpace(record.Context))
@@ -320,8 +360,8 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Status = status;
-                    if (options.Status is not ("all" or "submitted" or "unsubmitted"))
-                        options.Error = "Error: --status must be one of all, submitted, unsubmitted.";
+                    if (!IsValidStatusFilter(options.Status))
+                        options.Error = "Error: --status must be one of all, draft, submitted_pending_triage, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, superseded, submitted, unsubmitted.";
                     break;
                 case "--language":
                 case "--lang":
@@ -407,8 +447,8 @@ internal static class SuggestionsCommandRunner
 
         options.Status = options.Status.ToLowerInvariant();
         options.ExportFormat = options.ExportFormat.ToLowerInvariant();
-        if (options.Status is not ("all" or "submitted" or "unsubmitted"))
-            options.Error = "Error: --status must be one of all, submitted, unsubmitted.";
+        if (!IsValidStatusFilter(options.Status))
+            options.Error = "Error: --status must be one of all, draft, submitted_pending_triage, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, superseded, submitted, unsubmitted.";
         if (options.ExportFormat is not ("json" or "markdown"))
             options.Error = "Error: --format must be one of json, markdown.";
         return options;
@@ -458,7 +498,8 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("mcp_client_version")] string? McpClientVersion,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
-    [property: JsonPropertyName("github_issue_url")] string? GitHubIssueUrl);
+    [property: JsonPropertyName("upstream_url")] string? UpstreamUrl,
+    [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber);
 
 internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -477,7 +518,12 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("context")] string? Context,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
-    [property: JsonPropertyName("github_issue_url")] string? GitHubIssueUrl);
+    [property: JsonPropertyName("upstream_url")] string? UpstreamUrl,
+    [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber,
+    [property: JsonPropertyName("last_synced_at")] DateTime? LastSyncedAt,
+    [property: JsonPropertyName("resolved_at")] DateTime? ResolvedAt,
+    [property: JsonPropertyName("supersedes")] string? Supersedes,
+    [property: JsonPropertyName("superseded_by")] string? SupersededBy);
 
 internal sealed record SuggestionExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,

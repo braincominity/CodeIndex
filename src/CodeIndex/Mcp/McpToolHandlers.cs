@@ -2380,11 +2380,11 @@ public partial class McpServer
 
         // 6. Store locally and attempt GitHub submission atomically.
         //    TryAddAndSubmit runs the entire sequence under a single file lock:
-        //    read → dedup check → write → GitHub submit → mark submitted.
+        //    read → dedup check → write → GitHub submit → record lifecycle state.
         //    This prevents concurrent callers from both creating duplicate GitHub issues.
         //    ローカル保存と GitHub 送信をアトミックに実行する。
         //    TryAddAndSubmit は全シーケンスを1つのファイルロック内で実行:
-        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → 送信済みマーク。
+        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → lifecycle 状態を記録。
         //    並行呼び出しで重複 GitHub Issue が作られることを防ぐ。
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
@@ -2425,13 +2425,17 @@ public partial class McpServer
                 ["hash"] = hash,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
-                    : result.GitHubIssueUrl != null
+                    : result.UpstreamUrl != null
                         ? "This suggestion was already recorded. GitHub submission retried successfully."
                         : "This suggestion has already been recorded.",
-                ["submitted_to_github"] = result.AlreadySubmitted || result.GitHubIssueUrl != null,
+                ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
+                ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             };
-            if (result.GitHubIssueUrl != null)
-                dupPayload["github_issue_url"] = result.GitHubIssueUrl;
+            if (result.UpstreamUrl != null)
+            {
+                dupPayload["upstream_url"] = result.UpstreamUrl;
+                dupPayload["github_issue_url"] = result.UpstreamUrl;
+            }
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -2443,10 +2447,14 @@ public partial class McpServer
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
-            ["submitted_to_github"] = result.GitHubIssueUrl != null,
+            ["submitted_to_github"] = result.UpstreamUrl != null,
+            ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
         };
-        if (result.GitHubIssueUrl != null)
-            payload["github_issue_url"] = result.GitHubIssueUrl;
+        if (result.UpstreamUrl != null)
+        {
+            payload["upstream_url"] = result.UpstreamUrl;
+            payload["github_issue_url"] = result.UpstreamUrl;
+        }
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
     }
 
