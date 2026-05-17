@@ -37,6 +37,109 @@ public class ReferenceExtractorTests
             && reference.ContainerName == "default");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_EmitsConsumesHookReferences(string language)
+    {
+        const string content = """
+            import { useEffect, useState } from "react";
+
+            const useLocalState = () => {
+              const [value] = useState(0);
+              useEffect(() => {}, [value]);
+              return value;
+            };
+
+            export function Widget() {
+              const value = useLocalState();
+              if (value) {
+                useEffect(() => {}, []);
+              }
+              return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useState"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "useLocalState");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useLocalState"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "Widget");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "useEffect"
+            && reference.ReferenceKind == "consumes_hook"
+            && reference.ContainerName == "Widget");
+    }
+
+    [Fact]
+    public void Extract_TsxGenericComponentInvocations_EmitsComponentCallsAndTypeArguments()
+    {
+        const string content = """
+            type Item = { id: string };
+            type State = { count: number };
+            type Action = { type: string };
+
+            export function Screen({ items, ctx, rest }: Props) {
+                return (
+                    <>
+                        <List<Item> items={items} />
+                        <Provider<State, Action> value={ctx} />
+                        <Foo<{ a: number }> {...rest} />
+                        <Mapper<(item: Item) => Result> />
+                    </>
+                );
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols, path: "Screen.tsx");
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "List"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Provider"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Foo"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Mapper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Item"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Action"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "a" or "item"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "Item" or "State" or "Action" or "Result"
+            && reference.ReferenceKind == "call");
+    }
+
     [Fact]
     public void Extract_CsharpRawStringLongerQuoteRun_DoesNotLeakCallReferences()
     {
@@ -62,6 +165,43 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptGenericConditionalConstraint_EmitsBranchTypeReferences()
+    {
+        const string content = """
+            export function unwrap<T extends Array<infer U> ? Promise<U[]> : Nested<Fallback>>(value: T): T {
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Array"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "U"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Promise"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Nested"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Fallback"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "unwrap");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "infer"
+            && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -2486,6 +2626,61 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinInfixCalls_TrackBuiltInAndUserDefinedFunctions()
+    {
+        const string content = """
+            class Bag {
+                infix fun add(item: String): Bag = this
+                infix fun merge(other: Bag): Bag = this
+                infix fun List<String>.combine(other: List<String>): List<String> = this
+                infix fun demo.Box.link(other: demo.Box): demo.Box = this
+                private infix fun demo.Box.hidden(other: demo.Box): demo.Box = this
+
+                fun build(other: Bag, value: Int) {
+                    val xs = listOf("a")
+                    val box = demo.Box()
+                    val pair = 1 to "one"
+                    val named = "name" to value
+                    val summed = (1 + 2) to "sum"
+                    val shifted = value shl 4
+                    val masked = value and 15
+                    val ranged = 1 until 10
+                    val countdown = 10 downTo 1
+                    val evens = 0..10 step 2
+                    val combined = value or 2
+                    val toggled = value xor 3
+                    val shrunk = value shr 1
+                    this add "item"
+                    this merge other
+                    xs combine xs
+                    box link box
+                    val words = "plain text to ignore"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "step", "or", "xor", "shr", "add", "merge", "combine", "link" })
+        {
+            Assert.True(
+                references.Any(r => r.SymbolName == name && r.ReferenceKind == "call"),
+                $"Expected Kotlin infix call reference for {name}.");
+        }
+
+        Assert.True(references.Count(r => r.SymbolName == "to" && r.ReferenceKind == "call") >= 3);
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "to"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("plain text", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "hidden"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("private infix fun", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
     {
         const string content = """
@@ -4698,6 +4893,32 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasGenericDefaults_EmitsDefaultAndRhsTypeReferences()
+    {
+        const string content = """
+            type DefaultKey = string;
+            type DefaultValue = unknown;
+            type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultKey"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultValue"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Record"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
     }
 
     [Fact]
@@ -28118,9 +28339,9 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_KotlinTripleQuotedString_DoesNotLeakPhantomCallReferences()
     {
-        // Regression for issue #385: call-looking identifiers inside a Kotlin
+        // Regression for issues #385 and #1446: call-looking identifiers inside a Kotlin
         // multi-line raw string (""".. .""") must not be captured as references.
-        // issue #385 回帰: Kotlin の複数行 raw 文字列（"""..."""）の内側にある
+        // issue #385 / #1446 回帰: Kotlin の複数行 raw 文字列（"""..."""）の内側にある
         // 呼び出しらしい識別子は参照として抽出してはならない。
         const string content = """"
             package demo
@@ -28282,10 +28503,10 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_ScalaTripleQuotedString_DoesNotLeakPhantomCallReferences()
     {
-        // Regression for issue #385: call-looking identifiers inside a Scala
+        // Regression for issues #385 and #1446: call-looking identifiers inside a Scala
         // multi-line raw string (""".. .""", including interpolator-prefixed forms
         // such as `s"""..."""` / `raw"""..."""`) must not be captured as references.
-        // issue #385 回帰: Scala の複数行 raw 文字列（"""...""" および `s"""..."""` /
+        // issue #385 / #1446 回帰: Scala の複数行 raw 文字列（"""...""" および `s"""..."""` /
         // `raw"""..."""` などの interpolator 形式）の内側にある呼び出しらしい識別子は
         // 参照として抽出してはならない。
         const string content = """"
@@ -29275,6 +29496,38 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "readyFlag" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "input" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "string" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDecoratedMembers_CaptureDecoratorAndTypeReferences()
+    {
+        const string content = """
+            class Controller {
+                @Get("/users") find(@Optional() @Inject(USER_REPOSITORY) repo: UserRepository, @Param("id") id: UserId): Promise<UserDto> {
+                    return repo.find(id);
+                }
+
+                @Input() profile: UserProfile;
+                @Column({ type: "json" }) settings!: SettingsDocument;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Get" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Optional" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Inject" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Param" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Input" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Column" && r.ReferenceKind == "annotation");
+
+        Assert.Contains(references, r => r.SymbolName == "UserRepository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserId" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Promise" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserDto" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserProfile" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "SettingsDocument" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -30441,6 +30694,79 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerKind == "function"
             && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptOptionalChains_EmitsFullMemberChains()
+    {
+        const string content = """
+            export function render(viewModel: ViewModel) {
+                viewModel?.profile?.avatar?.url ?? fallbackUrl;
+                viewModel?.profile?.load?.();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.avatar"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.avatar.url"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "viewModel.profile.load"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDiscriminantStringGuard_EmitsPropertyAndTypeTag()
+    {
+        const string content = """
+            type Shape =
+                | { type: 'circle'; radius: number }
+                | { type: 'square'; side: number };
+
+            export function area(shape: Shape) {
+                if (shape.type === 'circle') {
+                    return shape.radius;
+                }
+                /* x.kind === 'fake' */ if (shape.type === 'circle' || shape.type === 'square') {
+                    return 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "type"
+            && r.ReferenceKind == "reference"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type=circle"
+            && r.ReferenceKind == "type_tag"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type=square"
+            && r.ReferenceKind == "type_tag"
+            && r.ContainerName == "area");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "shape.type=fake"
+            && r.ReferenceKind == "type_tag");
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>

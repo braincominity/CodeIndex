@@ -627,7 +627,7 @@ public static partial class ReferenceExtractor
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "any", "bigint", "boolean", "false", "never", "null", "number", "object", "string",
-            "symbol", "true", "undefined", "unknown", "void",
+            "infer", "keyof", "readonly", "symbol", "true", "undefined", "unique", "unknown", "void",
         },
         ["kotlin"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1023,7 +1023,7 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                              (symbol.Kind == "function" || symbol.Kind == "class"
+                              (symbol.Kind == "function" || symbol.Kind == "hook" || symbol.Kind == "class"
                                || symbol.Kind == "struct" || symbol.Kind == "namespace"
                                || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
@@ -1070,6 +1070,8 @@ public static partial class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
+        var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
+        KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
@@ -1646,12 +1648,17 @@ public static partial class ReferenceExtractor
 
             if (isJsxFile && (language is "javascript" or "typescript"))
             {
+                var jsxTypeArgumentSkipUntil = -1;
                 foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
                 {
+                    if (match.Index < jsxTypeArgumentSkipUntil)
+                        continue;
+
                     var fullName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
                     var jsxContainer = ResolveContainerForCall(nameIndex);
                     var firstDotIndex = fullName.IndexOf('.');
+                    var tagEndIndex = nameIndex + fullName.Length;
 
                     AddReference(
                         references,
@@ -1677,6 +1684,30 @@ public static partial class ReferenceExtractor
                             context,
                             lineNumber,
                             jsxContainer);
+                    }
+
+                    if (language == "typescript")
+                    {
+                        var genericStart = SkipWhitespace(preparedLine, tagEndIndex);
+                        if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
+                        {
+                            var genericEnd = genericStart;
+                            if (TrySkipTypeScriptJsxTypeArguments(preparedLine, ref genericEnd)
+                                && genericEnd > genericStart + 2)
+                            {
+                                jsxTypeArgumentSkipUntil = Math.Max(jsxTypeArgumentSkipUntil, genericEnd);
+                                AddTypeExpressionSegments(
+                                    references,
+                                    seen,
+                                    fileId,
+                                    preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
+                                    genericStart + 1,
+                                    context,
+                                    lineNumber,
+                                    jsxContainer,
+                                    "typescript");
+                            }
+                        }
                     }
                 }
             }
@@ -2272,6 +2303,25 @@ public static partial class ReferenceExtractor
 
             if (language is "javascript" or "typescript")
             {
+                JavaScriptReferenceExtractor.EmitOptionalMemberChainReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+
+                JavaScriptReferenceExtractor.EmitDiscriminantStringGuardReferences(
+                    referenceStructuralLines[i],
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+
                 JavaScriptReferenceExtractor.EmitParenlessConstructorReferences(
                     preparedLine,
                     preparedLines,
@@ -2298,6 +2348,8 @@ public static partial class ReferenceExtractor
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
                 if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
+                    return false;
+                if (language == "kotlin" && KotlinReferenceExtractor.IsInfixFunctionDeclarationSite(preparedLine, callIndex))
                     return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
@@ -2375,6 +2427,13 @@ public static partial class ReferenceExtractor
                 if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return true;
+                }
+
+                if (language is "javascript" or "typescript"
+                    && SymbolExtractor.IsJavaScriptTypeScriptReactHookName(normalizedName))
+                {
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "consumes_hook", context, lineNumber, callContainer);
                     return true;
                 }
 
@@ -2514,7 +2573,14 @@ public static partial class ReferenceExtractor
                 if (language == "swift")
                     SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
                 else if (language == "kotlin")
+                {
+                    KotlinReferenceExtractor.EmitInfixCallReferences(
+                        preparedLine,
+                        originalLine,
+                        kotlinInfixFunctionNames,
+                        AddCallLikeReference);
                     KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
+                }
 
                 if (language == "fsharp")
                 {
@@ -3286,6 +3352,56 @@ public static partial class ReferenceExtractor
         var extension = Path.GetExtension(path);
         return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TrySkipTypeScriptJsxTypeArguments(string preparedLine, ref int scan)
+    {
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var depth = 0;
+        while (scan < preparedLine.Length)
+        {
+            var ch = preparedLine[scan++];
+            if (ch == '\'' || ch == '"')
+            {
+                while (scan < preparedLine.Length)
+                {
+                    var quoted = preparedLine[scan++];
+                    if (quoted == '\\')
+                    {
+                        scan = Math.Min(scan + 1, preparedLine.Length);
+                        continue;
+                    }
+
+                    if (quoted == ch)
+                        break;
+                }
+
+                continue;
+            }
+
+            if (ch == '=' && scan < preparedLine.Length && preparedLine[scan] == '>')
+            {
+                scan++;
+                continue;
+            }
+
+            if (ch == '<')
+            {
+                depth++;
+            }
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return true;
+                if (depth < 0)
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsRazorFilePath(string? path)

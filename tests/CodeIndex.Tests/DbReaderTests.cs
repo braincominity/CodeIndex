@@ -70,6 +70,17 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_KotlinValueClassIncludesSubKind()
+    {
+        InsertIndexedFile("src/UserId.kt", "kotlin", "value class UserId(val id: Long)\n");
+
+        var analysis = _reader.AnalyzeSymbol("UserId", limit: 5, lang: "kotlin", exact: true);
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("kotlin_value_class", definition.SubKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");
@@ -377,6 +388,9 @@ public class DbReaderTests : IDisposable
                 Line = 1,
                 StartLine = 1,
                 EndLine = 3,
+                BodyStartLine = 2,
+                BodyEndLine = 3,
+                Signature = "public void RealCallTarget()",
             },
             new SymbolRecord
             {
@@ -386,6 +400,9 @@ public class DbReaderTests : IDisposable
                 Line = 5,
                 StartLine = 5,
                 EndLine = 7,
+                BodyStartLine = 6,
+                BodyEndLine = 7,
+                Signature = "public void SubscribeOnlyTarget()",
             },
         ]);
 
@@ -2760,6 +2777,87 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/api.cs", run.Symbol.Path);
         Assert.Equal("Api", run.Symbol.ContainerName);
         Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CSharpSkipsBodylessCallSiteFunctionCandidates()
+    {
+        InsertIndexedFile("src/reader.cs", "csharp",
+            """
+            public class Reader
+            {
+                public T Identity<T>(T value)
+                {
+                    return value;
+                }
+
+                public void Load(Microsoft.Data.Sqlite.SqliteDataReader reader)
+                {
+                    var first = reader.GetInt32(0);
+                    var second = reader.GetInt32(1);
+                    var max = Math.Max(
+                        first,
+                        second);
+                    _ = Identity(max);
+                }
+            }
+
+            public class App
+            {
+                public void Run(Reader reader, Microsoft.Data.Sqlite.SqliteDataReader dataReader)
+                {
+                    reader.Load(dataReader);
+                    reader.Load(dataReader);
+                }
+            }
+
+            public interface IService
+            {
+                void Execute();
+            }
+
+            public class ServiceConsumer
+            {
+                public void Run(IService service)
+                {
+                    service.Execute();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/reader.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "GetInt32");
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Max");
+        var load = Assert.Single(results.Where(result => result.Symbol.Name == "Load"));
+        Assert.Equal(2, load.ReferenceCount);
+        var identity = Assert.Single(results.Where(result => result.Symbol.Name == "Identity"));
+        Assert.Equal(1, identity.ReferenceCount);
+        var execute = Assert.Single(results.Where(result => result.Symbol.Name == "Execute"));
+        Assert.Equal(1, execute.ReferenceCount);
+
+        var groupedResults = _reader.GetGroupedSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/reader.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "GetInt32");
+        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "Max");
+        var groupedLoad = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Load"));
+        Assert.Equal(2, groupedLoad.ReferenceCount);
+        var groupedIdentity = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Identity"));
+        Assert.Equal(1, groupedIdentity.ReferenceCount);
+        var groupedExecute = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Execute"));
+        Assert.Equal(1, groupedExecute.ReferenceCount);
     }
 
     [Fact]
@@ -6687,6 +6785,31 @@ public class DbReaderTests : IDisposable
         var attrRefs = _reader.SearchReferences("MatrixTarget", limit: 10, lang: "csharp", referenceKind: "attribute", exact: true, pathPatterns: ["Matrix"]);
         Assert.Contains(attrRefs, r => r.Path == "src/MatrixAnnotated.cs" && r.ReferenceKind == "attribute");
         Assert.DoesNotContain(attrRefs, r => r.Path == "src/MatrixRuntimeCaller.cs");
+    }
+
+    [Fact]
+    public void ReferenceKindMatrix_CallersIncludesReactHookConsumption()
+    {
+        InsertIndexedFile("src/hooks.tsx", "typescript",
+            """
+            export const useSharedValue = () => {
+              return 1;
+            };
+            """);
+        InsertIndexedFile("src/Widget.tsx", "typescript",
+            """
+            import { useSharedValue } from "./hooks";
+
+            export function Widget() {
+              return useSharedValue();
+            }
+            """);
+
+        var callers = _reader.GetCallers("useSharedValue", lang: "typescript", exact: true);
+
+        Assert.Contains(callers, caller =>
+            caller.CallerName == "Widget"
+            && caller.ReferenceKind == "consumes_hook");
     }
 
     [Fact]

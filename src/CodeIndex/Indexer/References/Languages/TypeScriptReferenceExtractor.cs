@@ -31,9 +31,12 @@ internal static class TypeScriptReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
+        EmitGenericConstraintTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitTypeAliasTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitFunctionPropertyTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDecoratedMemberTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -78,6 +81,62 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
     }
 
+    private static void EmitGenericConstraintTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        for (var index = 0; index < preparedLine.Length; index++)
+        {
+            if (preparedLine[index] != '<')
+                continue;
+
+            var closeIndex = ReferenceExtractor.FindMatchingChar(preparedLine, index, '<', '>');
+            if (closeIndex <= index)
+                continue;
+
+            var clauseStart = index + 1;
+            var clause = preparedLine.Substring(clauseStart, closeIndex - clauseStart);
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+            {
+                var fragment = clause.Substring(segmentStart, segmentLength);
+                foreach (var extendsIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(fragment, "extends"))
+                {
+                    var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, extendsIndex + "extends".Length);
+                    if (typeStart >= fragment.Length)
+                        continue;
+
+                    var typeEnd = FindGenericConstraintExpressionEnd(fragment, typeStart);
+                    if (typeEnd <= typeStart)
+                        continue;
+
+                    var absoluteStart = clauseStart + segmentStart + typeStart;
+                    ReferenceExtractor.AddTypeScriptTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        fragment.Substring(typeStart, typeEnd - typeStart),
+                        absoluteStart,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(absoluteStart));
+                }
+            }
+
+            index = closeIndex;
+        }
+    }
+
+    private static int FindGenericConstraintExpressionEnd(string fragment, int typeStart)
+    {
+        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=', typeStart);
+        return equalsIndex >= 0 ? equalsIndex : fragment.Length;
+    }
+
     private static void EmitHeritageTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -100,6 +159,129 @@ internal static class TypeScriptReferenceExtractor
 
         EmitHeritageKeyword(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageKeyword(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitTypeAliasTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (!TryFindTypeAliasShape(preparedLine, out var nameEnd, out var assignmentIndex))
+            return;
+
+        var genericOpen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<', nameEnd);
+        if (genericOpen >= 0 && genericOpen < assignmentIndex)
+        {
+            var genericClose = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpen, '<', '>');
+            if (genericClose > genericOpen && genericClose < assignmentIndex)
+            {
+                EmitTypeParameterDefaultReferences(
+                    preparedLine,
+                    genericOpen + 1,
+                    genericClose,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn);
+            }
+        }
+
+        var rhsStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, assignmentIndex + 1);
+        if (rhsStart >= preparedLine.Length)
+            return;
+
+        var rhsEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(
+            preparedLine,
+            rhsStart,
+            stopAtComma: false,
+            stopAtArrow: false);
+        if (rhsEnd <= rhsStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(rhsStart, rhsEnd - rhsStart),
+            rhsStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(rhsStart));
+    }
+
+    private static bool TryFindTypeAliasShape(string line, out int nameEnd, out int assignmentIndex)
+    {
+        nameEnd = -1;
+        assignmentIndex = -1;
+
+        var index = 0;
+        SkipWhitespace(line, ref index);
+        TryConsumeKeyword(line, "export", ref index);
+        SkipWhitespace(line, ref index);
+        TryConsumeKeyword(line, "declare", ref index);
+        SkipWhitespace(line, ref index);
+        if (!TryConsumeKeyword(line, "type", ref index))
+            return false;
+
+        SkipWhitespace(line, ref index);
+        if (index >= line.Length || !IsTypeScriptIdentifierStart(line[index]))
+            return false;
+
+        index++;
+        while (index < line.Length && IsTypeScriptIdentifierPart(line[index]))
+            index++;
+
+        nameEnd = index;
+        assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(line, '=', nameEnd);
+        return assignmentIndex > nameEnd;
+    }
+
+    private static void EmitTypeParameterDefaultReferences(
+        string line,
+        int listStart,
+        int listEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var parameterList = line.Substring(listStart, listEnd - listStart);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
+        {
+            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=');
+            if (equalsIndex < 0)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, equalsIndex + 1);
+            if (typeStart >= fragment.Length)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart, stopAtArrow: false);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteStart = listStart + segmentStart + typeStart;
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                absoluteStart,
+                "typescript",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart));
+        }
     }
 
     private static void EmitHeritageKeyword(
@@ -142,7 +324,10 @@ internal static class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(');
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(
+            preparedLine,
+            '(',
+            SkipLeadingDecorators(preparedLine));
         if (openParen <= 0)
             return;
 
@@ -167,6 +352,51 @@ internal static class TypeScriptReferenceExtractor
             return;
 
         var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, returnColon + 1);
+        if (typeStart >= preparedLine.Length)
+            return;
+
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart, stopAtArrow: false);
+        if (typeEnd <= typeStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitDecoratedMemberTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var memberStart = SkipLeadingDecorators(preparedLine);
+        if (memberStart <= 0 || memberStart >= preparedLine.Length)
+            return;
+
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', memberStart);
+        if (colonIndex < 0)
+            return;
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(', memberStart);
+        if (openParen >= 0 && openParen < colonIndex)
+            return;
+
+        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', memberStart);
+        if (equalsIndex >= 0 && equalsIndex < colonIndex)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
         if (typeStart >= preparedLine.Length)
             return;
 
@@ -334,6 +564,40 @@ internal static class TypeScriptReferenceExtractor
         return false;
     }
 
+    private static int SkipLeadingDecorators(string line)
+    {
+        var index = 0;
+        while (index < line.Length)
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index >= line.Length || line[index] != '@')
+                return index;
+
+            index++;
+            while (index < line.Length && (IsTypeScriptIdentifierPart(line[index]) || line[index] == '.'))
+                index++;
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index < line.Length && line[index] == '(')
+            {
+                var closeParen = ReferenceExtractor.FindMatchingChar(line, index, '(', ')');
+                if (closeParen < 0)
+                    return index;
+
+                index = closeParen + 1;
+            }
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+        }
+
+        return index;
+    }
+
     private static bool IsImportExportOpeningBrace(IReadOnlyList<string> preparedLines, int openLineIndex, int openColumn)
     {
         var sameLinePrefix = preparedLines[openLineIndex].Substring(0, openColumn).Trim();
@@ -424,4 +688,7 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsTypeScriptIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
+
+    private static bool IsTypeScriptIdentifierStart(char ch) =>
+        ch == '_' || ch == '$' || char.IsLetter(ch);
 }

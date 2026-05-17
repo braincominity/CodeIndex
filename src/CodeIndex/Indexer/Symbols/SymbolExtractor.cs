@@ -1373,12 +1373,12 @@ public static partial class SymbolExtractor
             new("interface", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
             new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
-            // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
-            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Class/object with expanded modifiers: data, sealed, value, inline, inner, annotation, expect, actual
+            // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inline, inner, annotation, expect, actual
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|inline|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
-            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Secondary constructor / セカンダリコンストラクタ
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum entry / enum エントリ
@@ -3301,6 +3301,7 @@ public static partial class SymbolExtractor
                                         BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     FamilyKey = lang == "cpp" && kind == "specialization" ? name : null,
+                                    SubKind = ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
@@ -3809,12 +3810,29 @@ public static partial class SymbolExtractor
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
+        if (lang is "javascript" or "typescript")
+            ClassifyJavaScriptTypeScriptReactHooks(symbols);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
+
+    private static void ClassifyJavaScriptTypeScriptReactHooks(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
+                symbol.Kind = "hook";
+        }
+    }
+
+    internal static bool IsJavaScriptTypeScriptReactHookName(string name)
+        => name.Length >= 4
+           && name.StartsWith("use", StringComparison.Ordinal)
+           && IsJavaScriptTypeScriptIdentifierStart(name[3])
+           && char.IsUpper(name[3]);
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {

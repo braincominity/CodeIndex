@@ -12,6 +12,9 @@ public class SymbolRecord
     /// <summary>Symbol kind: 'function', 'class', or 'import' / シンボル種別</summary>
     public string Kind { get; set; } = string.Empty;
 
+    /// <summary>Language-specific sub-kind when known / 言語固有の細分類</summary>
+    public string? SubKind { get; set; }
+
     /// <summary>Symbol name / シンボル名</summary>
     public string Name { get; set; } = string.Empty;
 
