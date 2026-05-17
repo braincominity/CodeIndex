@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
+using CodeIndex.Database;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 
@@ -2113,6 +2114,45 @@ public class FileIndexerTests
     }
 
     [Fact]
+    [Trait("Platform", "Windows")]
+    public void ScanFiles_WindowsLongPath_IndexesAndSurvivesStalePurge()
+    {
+        // Windows-only syscall coverage: POSIX cannot exercise Win32 MAX_PATH behavior.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_long_path");
+        try
+        {
+            var leafPath = CreateWindowsLongPathFixture(projectRoot);
+            Assert.True(leafPath.Length >= 260, $"Fixture path length was {leafPath.Length}, expected >= 260.");
+
+            var indexer = new FileIndexer(projectRoot);
+            var scannedFiles = indexer.ScanFiles();
+
+            Assert.Contains(scannedFiles, path => PathsEqual(path, leafPath));
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            IndexScannedFiles(projectRoot, writer);
+            var relativeLeafPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, leafPath));
+
+            Assert.True(IndexedFileExists(db, relativeLeafPath));
+            Assert.Equal(0, writer.PurgeStaleFiles(projectRoot));
+
+            IndexScannedFiles(projectRoot, writer);
+            Assert.True(IndexedFileExists(db, relativeLeafPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -2995,6 +3035,56 @@ public class FileIndexerTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    private static string CreateWindowsLongPathFixture(string projectRoot)
+    {
+        var current = Path.Combine(
+            projectRoot,
+            "node_modules",
+            ".pnpm",
+            "fixture-pkg@1.0.0",
+            "node_modules",
+            "fixture-pkg");
+        var segment = 0;
+
+        while (Path.Combine(current, "long-file.js").Length < 260)
+            current = Path.Combine(current, $"segment{segment++:D2}");
+
+        Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(current));
+        var leafPath = Path.Combine(current, "long-file.js");
+        File.WriteAllText(LongPath.EnsureWindowsPrefix(leafPath), "export function longPathFixture() { return 42; }\n");
+        return leafPath;
+    }
+
+    private static void IndexScannedFiles(string projectRoot, DbWriter writer)
+    {
+        var indexer = new FileIndexer(projectRoot);
+        foreach (var filePath in indexer.ScanFiles())
+        {
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var fileId = writer.UpsertFile(record);
+            writer.DeleteFileData(fileId);
+            writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
+            writer.InsertSymbols(symbols);
+            writer.InsertReferences(ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path));
+            writer.InsertIssues(fileId, FileIndexer.ValidateContent(record.Path, rawBytes, content));
+        }
+    }
+
+    private static bool IndexedFileExists(DbContext db, string relativePath)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static void CreateUnixFifo(string path)
     {
