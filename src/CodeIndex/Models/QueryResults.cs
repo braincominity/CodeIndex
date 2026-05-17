@@ -58,8 +58,16 @@ public class GroupedHotspotResult
 {
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
+}
+
+public class SymbolHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
 }
 
 public class FileResult
