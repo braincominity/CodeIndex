@@ -2016,7 +2016,7 @@ public static partial class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum", "heading", "specialization"
+        "class", "struct", "interface", "namespace", "enum", "heading", "specialization", "class_hook"
     ];
 
     /// <summary>
@@ -2700,6 +2700,7 @@ public static partial class SymbolExtractor
                     {
                         kind = "class_hook";
                         pythonSubKind = "dunder";
+                        (endLine, bodyStartLine, bodyEndLine) = FindPythonIndentedBodyRange(lines, i);
                     }
 
                     if (lang == "css")

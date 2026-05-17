@@ -84,6 +84,30 @@ public static partial class SymbolExtractor
     private static bool IsPythonClassHook(string name) =>
         name is "__init_subclass__" or "__class_getitem__" or "__set_name__" or "__class_subclasses__";
 
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
+    {
+        var declarationIndent = CountIndent(lines[startLineIndex]);
+        int? firstBodyLine = null;
+        var lastBodyLine = startLineIndex + 1;
+
+        for (var i = startLineIndex + 1; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+                continue;
+
+            var indent = CountIndent(lines[i]);
+            if (indent <= declarationIndent)
+                break;
+
+            firstBodyLine ??= i + 1;
+            lastBodyLine = i + 1;
+        }
+
+        return firstBodyLine.HasValue
+            ? (lastBodyLine, firstBodyLine.Value, lastBodyLine)
+            : (startLineIndex + 1, null, null);
+    }
+
     private static string BuildPythonLogicalHeaderSignature(string[] lines, int startLineIndex, int startColumn)
     {
         var builder = new StringBuilder();
