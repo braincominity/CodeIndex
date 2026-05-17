@@ -146,7 +146,7 @@ public static class IndexCommandRunner
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
         {
-            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
+            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
             IReadOnlyList<string> dryCandidates;
             var errorList = new List<CliJsonMessage>();
             var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -379,7 +379,7 @@ public static class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db);
-        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
@@ -522,7 +522,8 @@ public static class IndexCommandRunner
     private static readonly string[] AcceptedIndexFlags =
     [
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
-        "--watch", "--debounce", "--commits", "--files", "--help",
+        "--watch", "--debounce", "--duration-format", "--max-file-bytes",
+        "--commits", "--files", "--help",
     ];
 
     private static readonly string[] AcceptedBackfillFoldFlags =
@@ -565,6 +566,7 @@ public static class IndexCommandRunner
         bool watch = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
+        long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -618,6 +620,12 @@ public static class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--duration-format=", StringComparison.Ordinal):
                     durationFormat = ParseDurationFormat(option["--duration-format=".Length..], durationFormat);
+                    break;
+                case "--max-file-bytes" when i + 1 < args.Length:
+                    maxFileSizeBytes = ParseMaxFileBytes(args[++i], maxFileSizeBytes);
+                    break;
+                case var option when option.StartsWith("--max-file-bytes=", StringComparison.Ordinal):
+                    maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -694,7 +702,30 @@ public static class IndexCommandRunner
             Watch = watch,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
+            MaxFileSizeBytes = maxFileSizeBytes,
         };
+    }
+
+    private static long? ReadMaxFileSizeBytesFromEnvironment()
+    {
+        var value = Environment.GetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
+            return parsed;
+
+        Console.Error.WriteLine($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{value}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{value}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        return null;
+    }
+
+    private static long? ParseMaxFileBytes(string value, long? fallback)
+    {
+        if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
+            return parsed;
+
+        Console.Error.WriteLine($"Warning: invalid --max-file-bytes value '{value}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{value}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        return fallback;
     }
 
     private static DurationOutputFormat ParseDurationFormat(string value, DurationOutputFormat fallback)
@@ -2593,6 +2624,7 @@ public sealed class IndexCommandOptions
     public bool Watch { get; init; }
     public int? WatchDebounceMs { get; init; }
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
+    public long? MaxFileSizeBytes { get; init; }
 }
 
 public sealed class BackfillFoldCommandOptions

@@ -134,6 +134,41 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void ParseArgs_MaxFileBytesFlag_ParsesSuffixValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "2M"]);
+
+        Assert.Equal(2L * 1024L * 1024L, options.MaxFileSizeBytes);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxFileBytesInlineFlag_ParsesBytesValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes=12345"]);
+
+        Assert.Equal(12345, options.MaxFileSizeBytes);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
+    {
+        var originalErr = Console.Error;
+        using var stderr = new StringWriter();
+        try
+        {
+            Console.SetError(stderr);
+            var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+
+            Assert.True(options.MaxFileSizeBytes is null or > 0);
+            Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
     [Theory]
     [InlineData("--duration-format", "auto", DurationOutputFormat.Auto)]
     [InlineData("--duration-format", "seconds", DurationOutputFormat.Seconds)]

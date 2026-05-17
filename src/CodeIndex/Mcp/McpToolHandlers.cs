@@ -1927,6 +1927,20 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: path");
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
+        long? maxFileBytes = null;
+        if (args?["maxFileBytes"] is { } maxFileBytesNode)
+        {
+            try
+            {
+                maxFileBytes = maxFileBytesNode.GetValue<long>();
+            }
+            catch (Exception)
+            {
+                return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
+            }
+        }
+        if (maxFileBytes is <= 0 or > int.MaxValue)
+            return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
         var projectPath = Path.GetFullPath(path);
 
         // Prevent path traversal — only allow indexing within current working directory
@@ -1980,7 +1994,7 @@ public partial class McpServer
         MarkSharedDbMigrated();
 
         var writer = new DbWriter(db);
-        var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath));
+        var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -2205,6 +2219,7 @@ public partial class McpServer
         {
             ["path"] = projectPath,
             ["rebuild"] = rebuild,
+            ["max_file_bytes"] = maxFileBytes,
             ["summary"] = new JsonObject
             {
                 ["files"] = totalFiles,

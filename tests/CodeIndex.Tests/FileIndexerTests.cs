@@ -247,6 +247,56 @@ public class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void BuildRecordWithRawBytes_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "class Program {}\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecordWithRawBytes(path));
+            Assert.Contains("File too large", ex.Message);
+            Assert.Contains("--max-file-bytes", ex.Message);
+            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecordWithRawBytes_ExplicitMaxFileBytes_AllowsLargerSourceFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "class Program {}\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 64);
+            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(path);
+
+            Assert.Equal("Program.cs", record.Path);
+            Assert.Equal("csharp", record.Lang);
+            Assert.Equal("class Program {}\n", content);
+            Assert.Equal(content.Length, rawBytes.Length);
+            Assert.Null(warning);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。
