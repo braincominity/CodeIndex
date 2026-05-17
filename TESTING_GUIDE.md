@@ -33,7 +33,7 @@ The test project mirrors the production areas closely.
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
 - `FileIndexerTests.cs`
-  File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap and binary/NUL-byte rejection.
+  File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`
@@ -57,7 +57,7 @@ The test project mirrors the production areas closely.
 - `PerformanceTests.cs`
   Large-scale data benchmarks (10K+ files). Skip-by-default; run manually with `--filter`.
 - `DbRecoveryTests.cs`
-  Database corruption recovery and graceful degradation behavior.
+  Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
   Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
 - `PropertyBasedParserTests.cs`
@@ -206,7 +206,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
 - `FileIndexerTests.cs`
-  ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」と binary/NUL byte 除外も含みます。
+  ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
 - `LegacySchemaMigrationTests.cs`
@@ -230,7 +230,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `PerformanceTests.cs`
   大規模データベンチマーク（10K+ファイル）。デフォルトSkip。`--filter` で手動実行。
 - `DbRecoveryTests.cs`
-  DB破損からの復旧とグレースフル劣化のテスト。
+  DB破損からの復旧とグレースフル劣化のテスト。`cdidx index` の filesystem setup failure（read-only DB file や書き込み不可の DB 親ディレクトリ）は、ユーザーが見る CLI JSON/stderr 境界を通すため `IndexCommandRunnerTests.cs` で扱います。
 - `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
   CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
 - `PropertyBasedParserTests.cs`

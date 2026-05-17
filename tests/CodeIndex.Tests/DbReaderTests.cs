@@ -2579,7 +2579,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", callee.Path);
         Assert.Equal("login", callee.CallerName);
         Assert.Equal("authenticate", callee.CalleeName);
-        Assert.Equal("call", callee.ReferenceKind);
+        Assert.Equal("invoke", callee.ReferenceKind);
     }
 
     [Fact]
@@ -3952,7 +3952,7 @@ public class DbReaderTests : IDisposable
 
         var callee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]));
         Assert.Equal("Target", callee.CalleeName);
-        Assert.Equal("instantiate", callee.ReferenceKind);
+        Assert.Equal("invoke", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
 
         var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
@@ -9552,7 +9552,7 @@ public class DbReaderTests : IDisposable
         var callee = Assert.Single(_reader.GetCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
         Assert.Equal("Hook", callee.CallerName);
         Assert.Equal("Changed", callee.CalleeName);
-        Assert.Equal("subscribe", callee.ReferenceKind);
+        Assert.Equal("event", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
         Assert.Equal(1, _reader.CountCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
 
@@ -9568,7 +9568,7 @@ public class DbReaderTests : IDisposable
         var bundledCallee = Assert.Single(callerAnalysis.Callees);
         Assert.Equal("Hook", bundledCallee.CallerName);
         Assert.Equal("Changed", bundledCallee.CalleeName);
-        Assert.Equal("subscribe", bundledCallee.ReferenceKind);
+        Assert.Equal("event", bundledCallee.ReferenceKind);
     }
 
     [Fact]
@@ -9706,11 +9706,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Changed", caller.CalleeName);
         Assert.Equal(2, caller.ReferenceCount);
         Assert.True(caller.HasMixedReferenceKinds);
-        Assert.Equal(new[] { "call", "subscribe" }, caller.ReferenceKinds);
-        // `subscribe` takes priority over `call` in the preferred-kind summary, matching
-        // GetGroupedCallerReferenceKindSql's ordering.
-        // 要約 kind は GetGroupedCallerReferenceKindSql の優先順位に従い `subscribe`。
-        Assert.Equal("subscribe", caller.ReferenceKind);
+        Assert.Equal(new[] { "event", "invoke" }, caller.ReferenceKinds);
+        Assert.Equal("event", caller.ReferenceKind);
 
         // `callees` rows are already split per kind, so each grouped row stays
         // single-kind with `has_mixed_reference_kinds = false`.
@@ -9719,12 +9716,61 @@ public class DbReaderTests : IDisposable
             .OrderBy(c => c.ReferenceKind, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(2, callees.Count);
-        Assert.Equal("call", callees[0].ReferenceKind);
+        Assert.Equal("event", callees[0].ReferenceKind);
         Assert.False(callees[0].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "call" }, callees[0].ReferenceKinds);
-        Assert.Equal("subscribe", callees[1].ReferenceKind);
+        Assert.Equal(new[] { "event" }, callees[0].ReferenceKinds);
+        Assert.Equal("invoke", callees[1].ReferenceKind);
         Assert.False(callees[1].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "subscribe" }, callees[1].ReferenceKinds);
+        Assert.Equal(new[] { "invoke" }, callees[1].ReferenceKinds);
+
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"], rawKinds: true));
+        Assert.Equal(new[] { "call", "subscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal("subscribe", rawCaller.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetCallers_RawKindsKeepsUnsubscribeVisible()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unsubscribe_kind_caller.cs",
+            Lang = "csharp",
+            Size = 256,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "unsubscribe",
+                Line = 1,
+                Column = 41,
+                Context = "Changed -= Handler;",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 62,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+        ]);
+
+        var logicalCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["unsubscribe_kind_caller"]));
+        Assert.Equal(new[] { "event", "invoke" }, logicalCaller.ReferenceKinds);
+        Assert.Equal("event", logicalCaller.ReferenceKind);
+
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["unsubscribe_kind_caller"], rawKinds: true));
+        Assert.Equal(new[] { "call", "unsubscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal("unsubscribe", rawCaller.ReferenceKind);
     }
 
     [Fact]

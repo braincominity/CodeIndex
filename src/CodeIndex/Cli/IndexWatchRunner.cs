@@ -187,7 +187,7 @@ internal static class IndexWatchRunner
         // human summary (user non-JSON). Otherwise each sub-run would reprint the banner.
         // 常に --json を付けてサブ実行の stdout を1行 JSON に揃える。watch ループ側で
         // 透過 or 整形してから出力する。
-        var args = new List<string>(8) { baseOptions.ProjectPath!, "--json" };
+        var args = new List<string>(8) { baseOptions.ProjectPath!, "--json", "--quiet" };
         if (!string.IsNullOrEmpty(baseOptions.DbPath))
         {
             args.Add("--db");

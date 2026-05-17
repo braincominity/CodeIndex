@@ -12,6 +12,10 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class SymbolExtractor
 {
+    // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
+    // instances and lookup tables are initialized once by the CLR and must be treated as
+    // immutable after type initialization; per-file extraction state belongs in local
+    // variables or per-call collections, never in static mutable caches.
     private const string CSharpVisibilityPattern = @"protected\s+internal|private\s+protected|public|protected|internal|private";
     // Return-type character class includes `*` so pointer and function-pointer returns
     // (`int*`, `void**`, `delegate*<int, int>`, `int*[]`) are not silently dropped.

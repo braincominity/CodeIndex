@@ -102,6 +102,7 @@ internal static class CliFlagSchema
     [
         "definition", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
     ];
+    private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
@@ -165,6 +166,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
+            new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },

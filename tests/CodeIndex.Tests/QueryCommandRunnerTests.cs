@@ -1102,7 +1102,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["vm:PersonViewModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -1151,7 +1151,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["vm:PersonViewModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -1198,7 +1198,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["vm:PersonViewModel", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -1242,7 +1242,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["vm:CustomButton", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -1288,7 +1288,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["local:App", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -3241,7 +3241,7 @@ jobs:
                 "class Mixed {}\r\nclass Other {}\n");
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json"],
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -3284,7 +3284,7 @@ jobs:
                 "class Clean {}\n");
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json"],
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -3492,7 +3492,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (buttonExitCode, buttonStdout, buttonStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Button", "--db", dbPath, "--json", "--exact-name", "--lang", "xml"],
@@ -3982,7 +3982,7 @@ jobs:
             File.WriteAllText(sourcePath, longLine);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -4964,7 +4964,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -5016,7 +5016,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -5063,7 +5063,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -5166,7 +5166,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -5214,7 +5214,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -5284,7 +5284,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5347,7 +5347,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5397,7 +5397,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5451,7 +5451,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5507,7 +5507,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5561,7 +5561,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -5655,7 +5655,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -6278,7 +6278,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (typealiasExitCode, typealiasStdout, typealiasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "swift", "--kind", "typealias"],
@@ -6329,7 +6329,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "swift", "--kind", "property", "--name", "`class`", "--exact-name", "--count"],
@@ -6801,7 +6801,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "csharp"],
@@ -6865,7 +6865,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 [".root", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
@@ -6970,7 +6970,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/styles.css", "--db", dbPath, "--json"],
@@ -7019,7 +7019,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["active", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7063,7 +7063,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7113,7 +7113,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (enumExitCode, enumStdout, enumStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["InlineB", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7287,7 +7287,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (aExitCode, aStdout, aStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7345,7 +7345,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (aExitCode, aStdout, aStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7397,7 +7397,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7442,7 +7442,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7487,7 +7487,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (valueExitCode, valueStdout, valueStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Value", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7524,7 +7524,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7569,7 +7569,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["After", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7615,7 +7615,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7666,7 +7666,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (xExitCode, xStdout, xStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["X", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7715,7 +7715,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (methodExitCode, methodStdout, methodStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["M", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7766,7 +7766,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Values", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7822,7 +7822,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["None", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7891,7 +7891,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (ageExitCode, ageStdout, ageStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Age", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -7968,7 +7968,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var expectedContainers = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -8050,7 +8050,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -8117,7 +8117,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -8373,7 +8373,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["AfterBraceLiteral", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -8426,7 +8426,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["AfterRawString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -8479,7 +8479,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["AfterVerbatimString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -8536,7 +8536,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
                 ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
             var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
@@ -8659,7 +8659,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
                 ["DescribeState", "--db", dbPath, "--json", "--exact", "--lang", "csharp"],
@@ -8718,7 +8718,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.rs", "--db", dbPath, "--json"],
@@ -8766,7 +8766,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -8823,7 +8823,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -8877,7 +8877,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -8930,7 +8930,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (staticExitCode, staticStdout, staticStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "StaticScript", "--exact-name"],
@@ -9003,7 +9003,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -9056,7 +9056,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -9117,7 +9117,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -9171,7 +9171,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -9218,7 +9218,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/example.js", "--db", dbPath, "--json"],
@@ -9270,7 +9270,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/example.js", "--db", dbPath, "--json"],
@@ -9322,7 +9322,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/example.ts", "--db", dbPath, "--json"],
@@ -10606,7 +10606,7 @@ jobs:
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var db = new DbContext(dbPath))
@@ -10654,7 +10654,7 @@ jobs:
             TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var staleHead = new string('b', 40);
@@ -10697,7 +10697,7 @@ jobs:
             TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var staleHead = new string('c', 40);
@@ -10732,7 +10732,7 @@ jobs:
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var db = new DbContext(dbPath))
@@ -10768,7 +10768,7 @@ jobs:
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var db = new DbContext(dbPath))
@@ -10817,7 +10817,7 @@ jobs:
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var dbDirectory = Path.GetDirectoryName(dbPath)!;
@@ -10866,7 +10866,7 @@ jobs:
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
 
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var dbDirectory = Path.GetDirectoryName(dbPath)!;
@@ -12056,11 +12056,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            // #501: the scalar `reference_kind` is retained for back-compat, and for
-            // single-kind rows it matches the only kind in `reference_kinds`.
-            // #501: scalar な `reference_kind` は後方互換のため残しており、single-kind
-            // 行では `reference_kinds` の唯一の kind と一致する。
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
             // #501: every grouped caller row carries `reference_kinds` +
             // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
@@ -12069,8 +12065,16 @@ jobs:
             // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
             // 「空配列」を判別せずに済む。
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "subscribe" }, kinds);
+            Assert.Equal(new[] { "event" }, kinds);
             Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+
+            var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact", "--raw-kinds"],
+                _jsonOptions));
+            using var rawDocument = ParseJsonOutput(rawStdout);
+            Assert.Equal(CommandExitCodes.Success, rawExitCode);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Equal("subscribe", rawDocument.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -12127,25 +12131,28 @@ jobs:
             Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "call", "subscribe" }, kinds);
-            // #501: the scalar `reference_kind` is kept for back-compat and reports the
-            // preferred summary kind (`instantiate` > `subscribe` > `MIN(call)`);
-            // callers who need the full picture read `reference_kinds` +
-            // `has_mixed_reference_kinds` instead.
-            // #501: scalar `reference_kind` は後方互換で残し、preferred 順
-            // （`instantiate` > `subscribe` > `MIN(call)`）の要約 kind を返す。混在時の
-            // 全容は `reference_kinds` / `has_mixed_reference_kinds` を参照する。
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
                 ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("call+subscribe", humanStdout);
+            Assert.Contains("event+invoke", humanStdout);
             Assert.Contains("SetupAndFire", humanStdout);
             Assert.Contains("-> Changed (2 refs)", humanStdout);
             Assert.Contains("(1 callers in 1 files)", humanStderr);
+
+            var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact", "--raw-kinds"],
+                _jsonOptions));
+            using var rawDocument = ParseJsonOutput(rawStdout);
+            var rawKinds = rawDocument.RootElement.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(CommandExitCodes.Success, rawExitCode);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Equal(new[] { "call", "subscribe" }, rawKinds);
+            Assert.Equal("subscribe", rawDocument.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -12277,9 +12284,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("call         function   DerivedWidget", stdout);
+            Assert.Contains("invoke       function   DerivedWidget", stdout);
             Assert.Contains("src/DerivedWidget.cs:3  -> BaseWidget (1 refs)", stdout);
-            Assert.Contains("instantiate  function   Make", stdout);
+            Assert.Contains("invoke       function   Make", stdout);
             Assert.Contains("src/Factory.cs:3  -> BaseWidget (1 refs)", stdout);
             Assert.Contains("(2 callers in 2 files)", stderr);
         }
@@ -12332,7 +12339,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
@@ -13280,7 +13287,7 @@ jobs:
             Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
             Assert.Equal("A", json.GetProperty("caller_name").GetString());
             Assert.Equal("B", json.GetProperty("callee_name").GetString());
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("invoke", json.GetProperty("reference_kind").GetString());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
@@ -14997,7 +15004,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15053,7 +15060,7 @@ jobs:
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
@@ -15115,7 +15122,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15172,7 +15179,7 @@ jobs:
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
@@ -15233,7 +15240,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15295,7 +15302,7 @@ jobs:
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
@@ -15357,7 +15364,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15416,7 +15423,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -15475,7 +15482,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -15534,7 +15541,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -15593,7 +15600,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -15650,7 +15657,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15706,7 +15713,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15762,7 +15769,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15818,7 +15825,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15875,7 +15882,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15932,7 +15939,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -15994,7 +16001,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -16051,7 +16058,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -16107,7 +16114,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -16165,7 +16172,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -16218,7 +16225,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (primaryExitCode, primaryStdout, primaryStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (spacingExitCode, spacingStdout, spacingStderr) = RunBuiltCli(["references", "spacing-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (buttonExitCode, buttonStdout, buttonStderr) = RunBuiltCli(["references", "%button-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
@@ -16296,7 +16303,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
             var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
@@ -16323,7 +16330,7 @@ jobs:
             Assert.Equal(2, callersRows.Count);
             Assert.All(callersRows, row => Assert.Contains(row.RootElement.GetProperty("caller_name").GetString(), [".button", ".card"]));
             Assert.All(callersRows, row => Assert.Equal("primary", row.RootElement.GetProperty("callee_name").GetString()));
-            Assert.All(callersRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
+            Assert.All(callersRows, row => Assert.Equal("invoke", row.RootElement.GetProperty("reference_kind").GetString()));
 
             Assert.Equal(CommandExitCodes.Success, callersCountExitCode);
             Assert.Equal(string.Empty, callersCountStderr);
@@ -16335,7 +16342,7 @@ jobs:
             var calleesRow = Assert.Single(calleesRows);
             Assert.Equal("rounded", calleesRow.RootElement.GetProperty("caller_name").GetString());
             Assert.Equal("radius", calleesRow.RootElement.GetProperty("callee_name").GetString());
-            Assert.Equal("call", calleesRow.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("invoke", calleesRow.RootElement.GetProperty("reference_kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, calleesCountExitCode);
             Assert.Equal(string.Empty, calleesCountStderr);
@@ -16371,7 +16378,7 @@ jobs:
                 MERGE TOP (5) #batch_log AS u USING staging_batch AS v ON u.id = v.id WHEN MATCHED THEN UPDATE SET action = v.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (insertedExitCode, insertedStdout, insertedStderr) = RunBuiltCli(["references", "inserted_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (insertedBatchExitCode, insertedBatchStdout, insertedBatchStderr) = RunBuiltCli(["references", "#inserted_batch", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16473,7 +16480,7 @@ jobs:
                 TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (logsExitCode, logsStdout, logsStderr) = RunBuiltCli(["references", "logs", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16556,7 +16563,7 @@ jobs:
                 WHERE audit_log.id = stage_log.id;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (stageExitCode, stageStdout, stageStderr) = RunBuiltCli(["references", "stage_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16642,7 +16649,7 @@ jobs:
                     UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunBuiltCli(["references", "audit_log_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunBuiltCli(["references", "staging_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16709,7 +16716,7 @@ jobs:
                     UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var stagingRows = ParseJsonLines(stagingStdout);
@@ -16747,7 +16754,7 @@ jobs:
                     UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (targetExitCode, targetStdout, targetStderr) = RunBuiltCli(["references", "#audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -16799,7 +16806,7 @@ jobs:
                     UPDATE SET action = v.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (targetExitCode, targetStdout, targetStderr) = RunBuiltCli(["references", "#audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunBuiltCli(["references", "#archive_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16868,7 +16875,7 @@ jobs:
                 SELECT * FROM #comment_temp;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (mergeExitCode, mergeStdout, mergeStderr) = RunBuiltCli(["references", "staging_merge", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#comment_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16930,7 +16937,7 @@ jobs:
                     UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#comment_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (mergeExitCode, mergeStdout, mergeStderr) = RunBuiltCli(["references", "staging_merge", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -16995,7 +17002,7 @@ jobs:
                 SELECT * FROM #create_temp;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (updateExitCode, updateStdout, updateStderr) = RunBuiltCli(["references", "#update_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "#delete_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -17059,7 +17066,7 @@ jobs:
                 TRUNCATE TABLE #future_temp;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "#truncate_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (futureExitCode, futureStdout, futureStderr) = RunBuiltCli(["references", "#future_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17103,7 +17110,7 @@ jobs:
                 TRUNCATE TABLE my$table;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (dollarExitCode, dollarStdout, dollarStderr) = RunBuiltCli(["references", "my$table", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (prefixExitCode, prefixStdout, prefixStderr) = RunBuiltCli(["references", "my", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17147,7 +17154,7 @@ jobs:
                 EXEC ユーザー;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (symbolExitCode, symbolStdout, symbolStderr) = RunBuiltCli(["references", "ユーザー", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var rows = ParseJsonLines(symbolStdout);
@@ -17185,7 +17192,7 @@ jobs:
                 DECLARE @first_id INT = (SELECT TOP (1) id FROM #declare_temp);
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (futureExitCode, futureStdout, futureStderr) = RunBuiltCli(["references", "#future_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (setExitCode, setStdout, setStderr) = RunBuiltCli(["references", "#set_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (declareExitCode, declareStdout, declareStderr) = RunBuiltCli(["references", "#declare_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -17233,7 +17240,7 @@ jobs:
                 WHILE 1 = 0 SELECT * FROM #while_temp;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (ifExitCode, ifStdout, ifStderr) = RunBuiltCli(["references", "#if_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (whileExitCode, whileStdout, whileStderr) = RunBuiltCli(["references", "#while_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17274,7 +17281,7 @@ jobs:
                 SELECT * FROM "users";
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var usersRows = ParseJsonLines(usersStdout);
@@ -17309,7 +17316,7 @@ jobs:
                 SELECT * FROM #temp_users;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "#temp_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -17349,7 +17356,7 @@ jobs:
                 END;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "#later_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17382,7 +17389,7 @@ jobs:
                 DO $$BEGIN END$$; SELECT * FROM users; DO $$BEGIN END$$;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var usersRows = ParseJsonLines(usersStdout);
@@ -17417,7 +17424,7 @@ jobs:
                 SELECT * FROM users # comment with comment_phantom;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17462,7 +17469,7 @@ jobs:
                 SELECT * FROM #temp_users;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#temp_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17515,7 +17522,7 @@ jobs:
                 DELETE FROM archived_accounts;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (accountsExitCode, accountsStdout, accountsStderr) = RunBuiltCli(["references", "accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
@@ -17581,7 +17588,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -17637,7 +17644,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17694,7 +17701,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17751,7 +17758,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17808,7 +17815,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17865,7 +17872,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -17931,7 +17938,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -17998,7 +18005,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18054,7 +18061,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18110,7 +18117,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18166,7 +18173,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18228,7 +18235,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18284,7 +18291,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18341,7 +18348,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18398,7 +18405,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18451,7 +18458,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18514,7 +18521,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -18577,7 +18584,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["inspect", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -18640,7 +18647,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout);
@@ -21647,7 +21654,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
                 ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
             var nonExactRows = ParseJsonLines(nonExactStdout)
@@ -21726,7 +21733,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
                 ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
             var nonExactRows = ParseJsonLines(nonExactStdout)
@@ -21806,7 +21813,7 @@ jobs:
             File.WriteAllText(Path.Combine(projectRoot, "src", "Use.cs"), sourceBuilder.ToString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
                 ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
             var nonExactRows = ParseJsonLines(nonExactStdout)
@@ -21933,7 +21940,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (referencesExitCode, referencesStdout, referencesStderr) = RunBuiltCli(
                 ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             using var referencesDocument = ParseJsonOutput(referencesStdout);
@@ -22561,7 +22568,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
@@ -22608,7 +22615,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
@@ -22656,7 +22663,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Wrapper", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
@@ -22705,7 +22712,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var rows = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
 
@@ -22805,7 +22812,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
@@ -22900,7 +22907,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
@@ -23156,7 +23163,7 @@ jobs:
                 """);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--max-line-width", "8"]);
 
             using var document = ParseJsonOutput(stdout);
@@ -23304,7 +23311,7 @@ jobs:
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
 
             var rows = ParseJsonLines(stdout).Select(doc => doc.RootElement).ToList();
@@ -24491,7 +24498,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", callee.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", callee.GetProperty("callee_name").GetString());
-            Assert.Equal("subscribe", callee.GetProperty("reference_kind").GetString());
+            Assert.Equal("event", callee.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -27862,7 +27869,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
@@ -27914,7 +27921,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
@@ -27953,7 +27960,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
@@ -28003,7 +28010,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
@@ -28056,7 +28063,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
@@ -28102,7 +28109,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
@@ -28146,7 +28153,7 @@ jobs:
                 """);
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
 
@@ -28245,7 +28252,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -28295,7 +28302,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Execute", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -28341,7 +28348,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
@@ -29279,7 +29286,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json"],
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -31723,7 +31730,7 @@ jobs:
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json"],
+                [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (phantomFnExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
