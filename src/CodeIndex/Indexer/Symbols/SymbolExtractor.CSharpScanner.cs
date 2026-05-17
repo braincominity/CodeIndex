@@ -1730,8 +1730,10 @@ public static partial class SymbolExtractor
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
+        var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
+        var isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
         if (string.IsNullOrWhiteSpace(matchLine)
-            || !CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine)
+            || (!isPropertyHeaderPrefix && !isMethodHeaderPrefix)
             || HasCSharpPropertyAccessorStart(matchLine)
             || CSharpWrappedHeaderModifierLineRegex.IsMatch(matchLine))
         {
@@ -1769,7 +1771,7 @@ public static partial class SymbolExtractor
             : (int?)null;
 
         if (HasCSharpTopLevelFieldInitializer(matchLine)
-            || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(matchLine))
+            || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(matchLine))
         {
             return ContinueConfirmedCSharpPropertyMatch(
                 lines,
@@ -1833,7 +1835,7 @@ public static partial class SymbolExtractor
             }
 
             if (HasCSharpTopLevelFieldInitializer(normalizedCombined)
-                || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(normalizedCombined))
+                || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(normalizedCombined))
             {
                 return ContinueConfirmedCSharpPropertyMatch(
                     lines,
@@ -1933,6 +1935,9 @@ public static partial class SymbolExtractor
 
         return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
     }
+
+    private static bool IsCSharpConfirmedMemberOrMethodPrefix(string line)
+        => CSharpConfirmedMemberPrefixRegex.IsMatch(line) || CSharpConfirmedMethodPrefixRegex.IsMatch(line);
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
     // falling back to the sanitized line only when the raw line hides the brace in a string
@@ -3331,6 +3336,9 @@ public static partial class SymbolExtractor
     // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
     private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:{CSharpIdentifierPattern})?\s*\{{?\s*$", RegexOptions.Compiled);
+    private static readonly Regex CSharpMethodHeaderPrefixRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|async|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*(?:<[^{{}};=]*|{CSharpMethodTypeParameterListPattern}\([^{{}};]*)\s*$",
+        RegexOptions.Compiled);
     // Limit only the lightweight confirmation phase. Once a candidate looks like a real
     // declaration (`name =`, or a named member header before `{`), BuildCSharpPropertyMatchLine
     // switches to a linear terminator/accessor scan so long raw strings / initializers are not
@@ -3345,6 +3353,9 @@ public static partial class SymbolExtractor
     private const int CSharpPropertyMatchLookaheadCharLimit = 4096;
     private static readonly Regex CSharpConfirmedMemberPrefixRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|operator|this|base)\b)(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*\{{?\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpConfirmedMethodPrefixRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|async|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\([^{{}};]*\)\s*\{{?\s*$",
         RegexOptions.Compiled);
     private static readonly Regex CSharpStandaloneAccessorRegex = new(
         @"^\s*(?:(?:protected\s+internal|private\s+protected|protected|internal|private|public)\s+)*(?:readonly\s+)*(?:get|set|init)\b",
