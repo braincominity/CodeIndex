@@ -6270,6 +6270,41 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_LockHeldWithoutHolderInfo_ReportsDbLocked()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_no_info_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Contains("another cdidx index is already running", json.GetProperty("message").GetString());
+                Assert.Contains("--force", json.GetProperty("hint").GetString());
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(lockPath + ".info"))
+                File.Delete(lockPath + ".info");
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
     public void Run_ForceFlag_BypassesLockEvenWhenHeld()
     {
         var projectRoot = CreateTempProject();

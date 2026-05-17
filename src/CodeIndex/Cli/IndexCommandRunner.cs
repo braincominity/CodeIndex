@@ -303,9 +303,6 @@ public static class IndexCommandRunner
                 }
                 catch (IndexLockConflictException ex)
                 {
-                    if (ex.Holder == null && ex.InnerException is { } inner && IsDatabaseFilesystemError(inner))
-                        return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, inner);
-
                     var holderDescription = DescribeLockHolder(ex.Holder);
                     var message = string.IsNullOrEmpty(holderDescription)
                         ? "another cdidx index is already running on this database"
