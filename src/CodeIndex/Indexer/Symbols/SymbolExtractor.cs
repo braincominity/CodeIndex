@@ -2002,7 +2002,7 @@ public static partial class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum", "heading"
+        "class", "struct", "interface", "namespace", "enum", "heading", "specialization"
     ];
 
     /// <summary>
