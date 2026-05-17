@@ -25613,7 +25613,9 @@ public class ReferenceExtractorTests
                     [CallerMemberName] string member = "",
                     [CallerFilePath] string file = "",
                     [CallerLineNumber] int line = 0,
-                    [CallerArgumentExpression("message")] string expression = "")
+                    [CallerArgumentExpression("message")] string expression = "",
+                    [CallerArgumentExpressionAttribute("message")] string expressionWithSuffix = "",
+                    [System.Runtime.CompilerServices.CallerArgumentExpression("message")] string qualifiedExpression = "")
                 {
                 }
             }
@@ -25625,11 +25627,12 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(r => r.SymbolName == "CallerMemberName" && r.ReferenceKind == "attribute"));
         Assert.Single(references.Where(r => r.SymbolName == "CallerFilePath" && r.ReferenceKind == "attribute"));
         Assert.Single(references.Where(r => r.SymbolName == "CallerLineNumber" && r.ReferenceKind == "attribute"));
-        Assert.Single(references.Where(r => r.SymbolName == "CallerArgumentExpression" && r.ReferenceKind == "attribute"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "CallerArgumentExpression" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerArgumentExpressionAttribute" && r.ReferenceKind == "attribute"));
         Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerMemberNameAttribute" && r.ReferenceKind == "type_reference"));
         Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerFilePathAttribute" && r.ReferenceKind == "type_reference"));
         Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerLineNumberAttribute" && r.ReferenceKind == "type_reference"));
-        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" && r.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("Caller", StringComparison.Ordinal) && r.ReferenceKind == "call");
     }
 
