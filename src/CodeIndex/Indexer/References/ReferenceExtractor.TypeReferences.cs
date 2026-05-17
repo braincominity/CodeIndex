@@ -743,6 +743,34 @@ public static partial class ReferenceExtractor
         return best;
     }
 
+    private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        int lineNumber)
+    {
+        SymbolRecord? best = null;
+        var bestRange = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind is not ("function" or "property")
+                || candidate.BodyEndLine == null
+                || candidate.StartLine > lineNumber
+                || candidate.BodyEndLine.Value < lineNumber)
+            {
+                continue;
+            }
+
+            var range = candidate.BodyEndLine.Value - candidate.StartLine;
+            if (best == null || range < bestRange)
+            {
+                best = candidate;
+                bestRange = range;
+            }
+        }
+
+        return best;
+    }
+
     private static bool TryGetSameLineSignatureSpan(
         SymbolRecord candidate,
         string structuralLine,

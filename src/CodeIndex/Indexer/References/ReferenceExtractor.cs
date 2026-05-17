@@ -1547,6 +1547,15 @@ public static partial class ReferenceExtractor
 
                 if (language == "csharp")
                 {
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine))
+                    {
+                        var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
+                            containerCandidates,
+                            lineNumber);
+                        if (declarationRangeContainer != null)
+                            return declarationRangeContainer;
+                    }
+
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
                         containerCandidates,
                         structuralLines[i],

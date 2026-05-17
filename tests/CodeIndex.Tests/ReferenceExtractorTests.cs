@@ -22341,6 +22341,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDefaultInterfaceMethod_GenericWhereConstraints_EmitsTypeReferences()
+    {
+        const string content = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public interface IWorker<T>
+                where T : IDisposable
+            {
+                void Do<U>(U item) where U : T
+                {
+                }
+
+                IAsyncEnumerable<U> Stream<U>()
+                    where U : IAsyncEnumerable<T>
+                    => default!;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference" && r.Line == 7);
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 9 && r.ContainerName == "Do");
+        Assert.Contains(references, r =>
+            r.SymbolName == "IAsyncEnumerable" && r.ReferenceKind == "type_reference" && r.Line == 14 && r.ContainerName == "Stream");
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 14 && r.ContainerName == "Stream");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "U" && r.ReferenceKind == "type_reference" && r.Line is 9 or 13 or 14);
+    }
+
+    [Fact]
     public void ParseJavaBaseType_TypeUseAnnotation_Stripped()
     {
         // Java type-use annotations (JLS 9.7.4) can precede the base type or sit between nested
