@@ -204,6 +204,7 @@ internal static class CliFlagSchema
             new() { Name = "--dry-run", Description = "Scan files without writing", Commands = Set("index") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },
+            new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", Commands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<id>", Description = "Update files changed in given git commits", Commands = Set("index") },
             new() { Name = "--changed-between", ValuePlaceholder = "<old-ref> <new-ref>", Description = "Update files changed between two git refs", Commands = Set("index") },
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },
