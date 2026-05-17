@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -280,47 +281,52 @@ public static class IndexCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var dbDir = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(dbDir))
-            Directory.CreateDirectory(dbDir);
-
-        // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
-        // same DB cannot interleave schema/data writes and corrupt the database.
-        // `--force` bypasses the check for users who knowingly accept the risk.
-        // 同一 DB に対する `cdidx index` の同時実行が schema / data 書き込みを交錯させ
-        // DB を壊さないよう排他ロックを取る。`--force` はリスクを承知の場合に bypass。
-        var lockPath = IndexLock.GetLockPath(resolvedDbPath);
-        IndexLock? indexLock = null;
-        if (!options.Force)
-        {
-            try
-            {
-                indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
-            }
-            catch (IndexLockConflictException ex)
-            {
-                var holderDescription = DescribeLockHolder(ex.Holder);
-                var message = string.IsNullOrEmpty(holderDescription)
-                    ? "another cdidx index is already running on this database"
-                    : $"another cdidx index is already running on this database ({holderDescription})";
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    message,
-                    CommandExitCodes.DatabaseError,
-                    "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.",
-                    CommandErrorCodes.DbLocked);
-            }
-        }
-        else if (!options.Json)
-        {
-            ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
-        }
-
         int initialExitCode;
-        using (indexLock)
+        try
         {
-            using var db = new DbContext(dbPath);
+            var dbDir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrEmpty(dbDir))
+                Directory.CreateDirectory(dbDir);
+
+            // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
+            // same DB cannot interleave schema/data writes and corrupt the database.
+            // `--force` bypasses the check for users who knowingly accept the risk.
+            // 同一 DB に対する `cdidx index` の同時実行が schema / data 書き込みを交錯させ
+            // DB を壊さないよう排他ロックを取る。`--force` はリスクを承知の場合に bypass。
+            var lockPath = IndexLock.GetLockPath(resolvedDbPath);
+            IndexLock? indexLock = null;
+            if (!options.Force)
+            {
+                try
+                {
+                    indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
+                }
+                catch (IndexLockConflictException ex)
+                {
+                    if (ex.Holder == null && ex.InnerException is { } inner && IsDatabaseFilesystemError(inner))
+                        return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, inner);
+
+                    var holderDescription = DescribeLockHolder(ex.Holder);
+                    var message = string.IsNullOrEmpty(holderDescription)
+                        ? "another cdidx index is already running on this database"
+                        : $"another cdidx index is already running on this database ({holderDescription})";
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        message,
+                        CommandExitCodes.DatabaseError,
+                        "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.",
+                        CommandErrorCodes.DbLocked);
+                }
+            }
+            else if (!options.Json)
+            {
+                ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
+            }
+
+            using (indexLock)
+            {
+                using var db = new DbContext(dbPath);
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
         // touches a subset of files, so trust bits the DB did NOT previously carry must not
@@ -386,6 +392,11 @@ public static class IndexCommandRunner
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
+            }
+        }
+        catch (Exception ex) when (IsDatabaseFilesystemError(ex))
+        {
+            return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, ex);
         }
 
         if (!options.Watch || initialExitCode != CommandExitCodes.Success)
@@ -1832,6 +1843,20 @@ public static class IndexCommandRunner
         }
         return exitCode;
     }
+
+    private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex) =>
+        WriteCommandError(
+            json,
+            jsonOptions,
+            $"database write failed for {dbPath}: {CollapseLineBreaks(ex.Message)}",
+            CommandExitCodes.DatabaseError,
+            "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.",
+            CommandErrorCodes.DbNotWritable);
+
+    private static bool IsDatabaseFilesystemError(Exception ex) =>
+        ex is UnauthorizedAccessException
+        || ex is IOException
+        || ex is SqliteException { SqliteErrorCode: 8 or 10 or 14 };
 
     private static int RunFullScan(
         DbWriter writer,
