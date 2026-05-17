@@ -152,6 +152,25 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn(typeStart),
             "typescript");
     }
+  
+    public static bool IsSatisfiesTypeOperand(string preparedLine, int tokenIndex)
+    {
+        foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "satisfies"))
+        {
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, keywordIndex + "satisfies".Length);
+            if (typeStart >= preparedLine.Length || tokenIndex < typeStart)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindKeywordFollowingTypeExpressionEnd(preparedLine, typeStart, "typescript");
+            if (typeEnd <= typeStart)
+                continue;
+
+            if (tokenIndex < typeEnd)
+                return true;
+        }
+
+        return false;
+    }
 
     private static void EmitGenericConstraintTypeReferences(
         string preparedLine,
