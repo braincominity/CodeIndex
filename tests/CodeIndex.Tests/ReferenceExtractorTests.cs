@@ -15161,6 +15161,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_SystemVariablesEmitsSystemVariableReferences()
+    {
+        const string content = """
+            CREATE PROCEDURE dbo.SaveOrder
+            AS
+            BEGIN
+                SELECT @@IDENTITY;
+                IF @@ROWCOUNT = 0 SELECT @@ERROR;
+                SELECT @@session.sql_mode, @@global.max_connections;
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "@@IDENTITY" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ROWCOUNT" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ERROR" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@session.sql_mode" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@global.max_connections" && r.ReferenceKind == "system_variable");
+    }
+
+    [Fact]
     public void Extract_SQL_AlterSecurityPolicyCapturesTargetReference()
     {
         const string content = """

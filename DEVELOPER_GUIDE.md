@@ -217,6 +217,7 @@ files 1──N symbol_references
 | `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
+| `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
