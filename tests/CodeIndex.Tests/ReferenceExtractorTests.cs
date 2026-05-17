@@ -10246,6 +10246,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockTagsInsideClass_ShareEnclosingContainer()
+    {
+        const string content = """
+            <?php
+            final class Controller {
+                /**
+                 * @param Request $request
+                 * @return Response
+                 */
+                public function handle($request) {}
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Controller");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Response"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Controller");
+    }
+
+    [Fact]
     public void Extract_PhpDocblockReturnTypes_EmitTypeReferences()
     {
         const string content = """
