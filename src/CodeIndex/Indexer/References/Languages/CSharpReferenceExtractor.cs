@@ -14,7 +14,7 @@ internal static class CSharpReferenceExtractor
     // C# コンストラクタ連鎖イニシャライザ
     private static readonly Regex CtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
     private static readonly Regex StaticMemberQualifierRegex = new(
-        @"(?<![\p{L}\p{Nd}_@])(?<qualifier>(?:global::)?@?[A-Z_][\p{L}\p{Nd}_]*(?:\.@?[A-Z_][\p{L}\p{Nd}_]*)*)\s*\.\s*@?[\p{L}_][\p{L}\p{Nd}_]*",
+        @"(?<![\p{L}\p{Nd}_@.])(?<qualifier>(?:global::)?@?[A-Z_][\p{L}\p{Nd}_]*(?:\.@?[A-Z_][\p{L}\p{Nd}_]*)*)\s*\.\s*@?[\p{L}_][\p{L}\p{Nd}_]*",
         RegexOptions.Compiled);
 
     public static void EmitCtorChainReferences(

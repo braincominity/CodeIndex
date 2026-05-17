@@ -27259,6 +27259,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpPascalCaseInstanceMemberChain_DoesNotCaptureMiddleQualifierReference()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public int Read(Config config, Request request)
+                {
+                    _ = config.Options.DefaultTimeout;
+                    return request.User.Name.Length;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Options"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
     {
         // Mid-file BOM right before a call site: the reference must still be captured
