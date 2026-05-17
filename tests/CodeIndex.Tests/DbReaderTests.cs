@@ -70,6 +70,17 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_KotlinValueClassIncludesSubKind()
+    {
+        InsertIndexedFile("src/UserId.kt", "kotlin", "value class UserId(val id: Long)\n");
+
+        var analysis = _reader.AnalyzeSymbol("UserId", limit: 5, lang: "kotlin", exact: true);
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("kotlin_value_class", definition.SubKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");

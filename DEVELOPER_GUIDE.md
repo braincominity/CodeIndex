@@ -112,6 +112,7 @@ symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     kind            TEXT,                    -- "function", "class", "import", "namespace", ...
+    sub_kind        TEXT,                    -- language-specific subtype such as kotlin_value_class
     name            TEXT,
     line            INTEGER,                 -- 1-based anchor line
     start_line      INTEGER,                 -- definition start line
@@ -1571,6 +1572,7 @@ symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     kind            TEXT,                    -- "function"、"class"、"import"、"namespace" など
+    sub_kind        TEXT,                    -- kotlin_value_class などの言語固有の細分類
     name            TEXT,
     line            INTEGER,                 -- 1始まりのアンカー行
     start_line      INTEGER,                 -- 定義開始行

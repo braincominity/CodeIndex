@@ -7,6 +7,43 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly Regex KotlinValueClassSignatureRegex = new(
+        @"\bvalue\s+class\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex KotlinInlineClassSignatureRegex = new(
+        @"\binline\s+class\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex KotlinInlineFunctionSignatureRegex = new(
+        @"\binline\s+fun\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex KotlinReifiedTypeParameterSignatureRegex = new(
+        @"<[^>\r\n]*\breified\b[^>\r\n]*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static string? ResolveLanguageSubKind(string lang, string kind, string signature, string matchLine)
+    {
+        if (lang != "kotlin")
+            return null;
+
+        var metadataSource = signature + "\n" + matchLine;
+        if (kind == "class")
+        {
+            if (KotlinValueClassSignatureRegex.IsMatch(metadataSource))
+                return "kotlin_value_class";
+            if (KotlinInlineClassSignatureRegex.IsMatch(metadataSource))
+                return "kotlin_inline_class";
+        }
+
+        if (kind == "function" && KotlinInlineFunctionSignatureRegex.IsMatch(signature))
+        {
+            return KotlinReifiedTypeParameterSignatureRegex.IsMatch(signature)
+                ? "kotlin_inline_reified_function"
+                : "kotlin_inline_function";
+        }
+
+        return null;
+    }
+
     private static bool TryFindKotlinScalaExpressionBodyEndLine(string line, int startColumn)
     {
         var parenDepth = 0;

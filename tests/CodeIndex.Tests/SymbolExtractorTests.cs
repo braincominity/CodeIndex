@@ -15002,6 +15002,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DistinguishesValueClassesAndInlineReifiedFunctions()
+    {
+        var content = """
+            @JvmInline
+            value class UserId(val id: Long)
+            inline class LegacyId(val value: String)
+            inline fun <reified T> parse(): T = TODO()
+            inline fun render(block: () -> Unit) = block()
+            fun value(inline: String): String = inline
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserId" && s.SubKind == "kotlin_value_class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LegacyId" && s.SubKind == "kotlin_inline_class");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse" && s.SubKind == "kotlin_inline_reified_function");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render" && s.SubKind == "kotlin_inline_function");
+        Assert.DoesNotContain(symbols, s => s.Name == "value" && s.SubKind != null);
+    }
+
+    [Fact]
     public void Extract_Kotlin_NormalizesBacktickedSymbolNames()
     {
         var content = """
