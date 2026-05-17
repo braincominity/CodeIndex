@@ -24136,4 +24136,268 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "My::Renderable");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
     }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesTsconfigPathAliasImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = () => null;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app/page.tsx", "import { Button } from \"@/components/Button\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesBaseUrlOnlyImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_baseurl_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": "src"
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app/page.tsx", "import { Button } from \"components/Button\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "components/Button");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesImportEqualsRequirePathAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_import_equals_alias_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "src/services/api.ts", "export = {};\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import Api = require(\"@/services/api\");\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Api");
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/services/api.ts");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "@/services/api");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesInheritedTsconfigPathAliasImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_extends_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.base.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~lib/*": ["lib/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "extends": "./tsconfig.base.json"
+                }
+                """);
+            WriteFile(projectRoot, "lib/math/index.ts", "export const sum = () => 0;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app.ts", "import { sum } from \"~lib/math\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "lib/math/index.ts");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesInheritedPathAliasesFromDeclaringBaseUrl()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_extends_baseurl_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.base.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~shared/*": ["shared/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "apps/web/tsconfig.json", """
+                {
+                  "extends": "../../tsconfig.base.json",
+                  "compilerOptions": {
+                    "baseUrl": "."
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "shared/api.ts", "export const api = 1;\n");
+            WriteFile(projectRoot, "apps/web/shared/api.ts", "export const wrong = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "apps/web/src/app.ts", "import { api } from \"~shared/api\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath, projectRoot);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "shared/api.ts");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "apps/web/shared/api.ts");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_PrefersMoreSpecificTsconfigPathAliasImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_specificity_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "*": ["fallback/*"],
+                      "@app/*": ["src/app/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "fallback/@app/Button.ts", "export const Wrong = 1;\n");
+            WriteFile(projectRoot, "src/app/Button.ts", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@app/Button\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/app/Button.ts");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "fallback/@app/Button.ts");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ResolvesNestedTsconfigAliasesRelativeToProjectRoot()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_nested_symbols");
+        try
+        {
+            WriteFile(projectRoot, "packages/app/tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "packages/app/src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "packages/app/src/page.tsx", "import { Button } from \"@/components/Button\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath, projectRoot);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "packages/app/src/components/Button.tsx");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_JavaScript_ResolvesJsconfigPathAliasImportsAndKeepsMissesLiteral()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("jsconfig_alias_symbols");
+        try
+        {
+            WriteFile(projectRoot, "jsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~components/*": ["components/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "components/Card.jsx", "export const Card = () => null;\n");
+            var sourcePath = WriteFile(projectRoot, "src/view.js", """
+                import Card from "~components/Card";
+                import Missing from "~components/Missing";
+                """);
+
+            var symbols = SymbolExtractor.Extract(1, "javascript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "components/Card.jsx");
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "~components/Missing");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string WriteFile(string projectRoot, string relativePath, string content)
+    {
+        var path = Path.Combine(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        return path;
+    }
 }
