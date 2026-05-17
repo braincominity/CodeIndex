@@ -30644,6 +30644,40 @@ public class ReferenceExtractorTests
             && r.Line == 4);
     }
 
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsInsideParameterShadowScope()
+    {
+        const string content = """
+            import * as Api from "./api";
+            import { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function before() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function shadowed(Api: LocalApi, PublicNamespace: LocalPublic) {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function after() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 10);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {

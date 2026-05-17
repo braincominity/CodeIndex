@@ -5,7 +5,14 @@ namespace CodeIndex.Indexer;
 
 internal static class TypeScriptReferenceExtractor
 {
-    internal sealed record NamespaceAliasBinding(string Alias, string ModuleSpecifier, int BindingLine, int? ShadowLine, int? EndLine);
+    internal readonly record struct LineRange(int StartLine, int EndLine);
+    internal sealed record NamespaceAliasBinding(
+        string Alias,
+        string ModuleSpecifier,
+        int BindingLine,
+        int? ShadowLine,
+        int? EndLine,
+        IReadOnlyList<LineRange> ScopedShadowRanges);
 
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
@@ -89,7 +96,8 @@ internal static class TypeScriptReferenceExtractor
             return;
 
         var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
-        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine));
+        var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, alias);
+        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
     private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
@@ -212,7 +220,8 @@ internal static class TypeScriptReferenceExtractor
         {
             if (lineNumber <= binding.BindingLine
                 || (binding.EndLine is int endLine && lineNumber > endLine)
-                || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine))
+                || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine)
+                || IsInsideScopedShadow(binding.ScopedShadowRanges, lineNumber))
             {
                 continue;
             }
@@ -286,6 +295,116 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return preparedLines.Count;
+    }
+
+    private static IReadOnlyList<LineRange> BuildParameterShadowRanges(IReadOnlyList<string> preparedLines, string alias)
+    {
+        var ranges = new List<LineRange>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            if (!TryGetSingleLineCallableParameters(preparedLines[index], out var parameters)
+                || !ParameterListDeclaresName(parameters, alias))
+            {
+                continue;
+            }
+
+            var endLine = FindBlockEndLine(preparedLines, braceDepths, index);
+            if (endLine >= index + 1)
+                ranges.Add(new LineRange(index + 1, endLine));
+        }
+
+        return ranges;
+    }
+
+    private static bool TryGetSingleLineCallableParameters(string line, out string parameters)
+    {
+        parameters = string.Empty;
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("if ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if(", StringComparison.Ordinal)
+            || trimmed.StartsWith("for ", StringComparison.Ordinal)
+            || trimmed.StartsWith("for(", StringComparison.Ordinal)
+            || trimmed.StartsWith("while ", StringComparison.Ordinal)
+            || trimmed.StartsWith("while(", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch(", StringComparison.Ordinal)
+            || trimmed.Contains("=>", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(line, '(');
+        if (openParen < 0)
+            return false;
+
+        var closeParen = ReferenceExtractor.FindMatchingChar(line, openParen, '(', ')');
+        if (closeParen <= openParen)
+            return false;
+
+        var afterParameters = line[(closeParen + 1)..];
+        if (!afterParameters.Contains('{', StringComparison.Ordinal))
+            return false;
+
+        parameters = line.Substring(openParen + 1, closeParen - openParen - 1);
+        return trimmed.StartsWith("function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("export function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("export async function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("async function ", StringComparison.Ordinal)
+               || IsLikelyMethodDeclarationPrefix(line[..openParen]);
+    }
+
+    private static bool IsLikelyMethodDeclarationPrefix(string prefix)
+    {
+        var trimmed = prefix.Trim();
+        if (trimmed.Length == 0 || trimmed.Contains('='))
+            return false;
+
+        var lastSpace = trimmed.LastIndexOf(' ');
+        var name = lastSpace >= 0 ? trimmed[(lastSpace + 1)..] : trimmed;
+        return IsTypeScriptIdentifier(name);
+    }
+
+    private static bool ParameterListDeclaresName(string parameters, string alias)
+    {
+        foreach (var part in parameters.Split(','))
+        {
+            var item = part.TrimStart();
+            if (item.StartsWith("...", StringComparison.Ordinal))
+                item = item[3..].TrimStart();
+
+            if (!item.StartsWith(alias, StringComparison.Ordinal))
+                continue;
+
+            var after = item.Length == alias.Length ? '\0' : item[alias.Length];
+            if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FindBlockEndLine(IReadOnlyList<string> preparedLines, IReadOnlyList<int> braceDepths, int startLineIndex)
+    {
+        var startDepth = braceDepths[startLineIndex];
+        for (var index = startLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] <= startDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
+    }
+
+    private static bool IsInsideScopedShadow(IReadOnlyList<LineRange> ranges, int lineNumber)
+    {
+        foreach (var range in ranges)
+        {
+            if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+                return true;
+        }
+
+        return false;
     }
 
     private static void EmitHeritageTypeReferences(
