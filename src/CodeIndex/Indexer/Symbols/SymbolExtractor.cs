@@ -1122,6 +1122,13 @@ public static partial class SymbolExtractor
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
             new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern|partial)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Partial method declaration with an omitted return type. Older partial-method
+            // syntax can omit the accessibility modifier and still mean `void`; keep this
+            // after the constructor row so `public partial Widget();` remains a constructor.
+            // 戻り値型を省略した partial method 宣言。旧来の partial method 構文では
+            // accessibility を省略し、戻り値型は `void` とみなされる。`public partial Widget();`
+            // は constructor のまま扱うため、この行は constructor 行の後ろに置く。
+            new("function",  new Regex($@"^\s*(?:(?:static|sealed|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?<returnType>partial)\s+(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Static constructor / 静的コンストラクタ
             // Keep this ahead of the property rows so same-line compact bodies such as
             // `class C { static C() { } public int P { get; set; } }` emit the static ctor
@@ -2587,7 +2594,11 @@ public static partial class SymbolExtractor
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
-                    var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
+                    var rawReturnType = NormalizeCSharpImplicitPartialMethodReturnType(
+                        lang,
+                        pattern,
+                        match,
+                        TryGetGroup(match, pattern.ReturnTypeGroup));
                       if (lang == "csharp"
                           && pattern.ReturnTypeGroup != null
                           && HasInvalidCSharpReturnTypeSuffix(rawReturnType))

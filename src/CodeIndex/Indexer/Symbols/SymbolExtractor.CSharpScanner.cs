@@ -1091,6 +1091,23 @@ public static partial class SymbolExtractor
             && pattern.BodyStyle == BodyStyle.None
             && pattern.ReturnTypeGroup != null;
 
+    private static string? NormalizeCSharpImplicitPartialMethodReturnType(
+        string? lang,
+        SymbolPattern pattern,
+        Match match,
+        string? returnType)
+    {
+        if (lang == "csharp"
+            && pattern.Kind == "function"
+            && pattern.ReturnTypeGroup != null
+            && returnType == "partial")
+        {
+            return "void";
+        }
+
+        return returnType;
+    }
+
     private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
     {
         if (string.IsNullOrWhiteSpace(returnType))
