@@ -10,6 +10,33 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTsDefaultExportAsyncArrow_AttachesCallsToDefaultFunction(string language)
+    {
+        const string content = """
+            import { db } from "./db";
+            export default async (req, res) => {
+                return db.users.findById(req.id);
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "default"
+            && symbol.BodyStartLine == 2
+            && symbol.BodyEndLine == 4);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "findById"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "default");
+    }
+
     [Fact]
     public void Extract_CsharpAsyncIterator_EmitsTypeAndImplicitImplementationReferences()
     {
