@@ -2082,7 +2082,8 @@ public partial class McpServer
                     record.Path,
                     record.Modified,
                     record.Checksum,
-                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                    allowReuse: record.Lang is not ("javascript" or "typescript")
+                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
@@ -2099,7 +2100,7 @@ public partial class McpServer
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
