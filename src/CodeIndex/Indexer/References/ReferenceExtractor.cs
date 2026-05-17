@@ -1037,6 +1037,9 @@ public static partial class ReferenceExtractor
                 .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
                 .ToList()
             : null;
+        var pythonDefinitionContainersByLineAndKind = language == "python"
+            ? BuildPythonDefinitionContainersByLineAndKind(symbols)
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -1096,6 +1099,8 @@ public static partial class ReferenceExtractor
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
+        var phpInDocblock = false;
+        SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
 
         for (int i = 0; i < lines.Length; i++)
@@ -1105,6 +1110,23 @@ public static partial class ReferenceExtractor
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
+            SymbolRecord? phpLineContainer = null;
+            var phpLineContainerResolved = false;
+
+            SymbolRecord? GetPhpLineContainer()
+            {
+                if (!phpLineContainerResolved)
+                {
+                    phpLineContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    phpLineContainerResolved = true;
+                }
+
+                return phpLineContainer;
+            }
+
+            SymbolRecord? GetPhpDocblockContainer()
+                => phpInDocblock ? phpDocblockContainer : GetPhpLineContainer();
+
             if (language == "csharp"
                 && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
                 && TryGetCSharpXmlDocCommentSpan(
@@ -1233,8 +1255,16 @@ public static partial class ReferenceExtractor
                         fileId,
                         attributeContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpLineContainer());
                 }
+            }
+
+            if (language == "php"
+                && originalLine.IndexOf("/**", StringComparison.Ordinal) >= 0)
+            {
+                phpInDocblock = true;
+                phpDocblockContainer = GetPhpLineContainer();
+                phpDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
             }
 
             if (language == "php" && originalLine.Contains("param", StringComparison.OrdinalIgnoreCase))
@@ -1249,7 +1279,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1265,7 +1295,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1281,7 +1311,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1297,7 +1327,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1313,7 +1343,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1329,7 +1359,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1345,14 +1375,8 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
-            }
-
-            if (language == "php"
-                && originalLine.IndexOf("/**", StringComparison.Ordinal) >= 0)
-            {
-                phpDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
             }
 
             if (language == "php" && originalLine.Contains("property", StringComparison.OrdinalIgnoreCase))
@@ -1367,16 +1391,9 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber),
+                        GetPhpDocblockContainer(),
                         phpDocblockPropertyNames);
                 }
-            }
-
-            if (language == "php"
-                && phpDocblockPropertyNames != null
-                && originalLine.IndexOf("*/", StringComparison.Ordinal) >= 0)
-            {
-                phpDocblockPropertyNames = null;
             }
 
             if (language == "php" && originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))
@@ -1391,7 +1408,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                     PhpReferenceExtractor.EmitDocblockMethodParameterTypeReferences(
                         originalLine,
                         references,
@@ -1399,7 +1416,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1415,7 +1432,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
             }
 
@@ -1431,7 +1448,7 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                     PhpReferenceExtractor.EmitDocblockImportTypeSourceReferences(
                         originalLine,
                         references,
@@ -1439,8 +1456,17 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        GetPhpDocblockContainer());
                 }
+            }
+
+            if (language == "php"
+                && phpInDocblock
+                && originalLine.IndexOf("*/", StringComparison.Ordinal) >= 0)
+            {
+                phpInDocblock = false;
+                phpDocblockContainer = null;
+                phpDocblockPropertyNames = null;
             }
 
             if (string.IsNullOrWhiteSpace(preparedLine))
@@ -1557,6 +1583,15 @@ public static partial class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
+            {
+                if (pythonDefinitionContainersByLineAndKind == null)
+                    return null;
+                return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
+                    ? symbol
+                    : null;
             }
 
             if (isJsxFile && (language is "javascript" or "typescript"))
@@ -2773,9 +2808,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "class", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "class"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionReturnReferences(
                     preparedLine,
@@ -2786,9 +2819,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionParameterReferences(
                     preparedLine,
@@ -2799,9 +2830,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     index => ResolveContainerForCall(index)
-                        ?? symbols.FirstOrDefault(symbol =>
-                            symbol.Line == lineNumber
-                            && string.Equals(symbol.Kind, "function", StringComparison.Ordinal)),
+                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitVariableAnnotationReferences(
                     preparedLine,
@@ -3131,6 +3160,20 @@ public static partial class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static Dictionary<(int Line, string Kind), SymbolRecord> BuildPythonDefinitionContainersByLineAndKind(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var containers = new Dictionary<(int Line, string Kind), SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "function"))
+                continue;
+
+            containers.TryAdd((symbol.Line, symbol.Kind), symbol);
+        }
+
+        return containers;
     }
 
     private static bool IsJsxFilePath(string? path)

@@ -1204,6 +1204,9 @@
       },
       "codeindex.changelog": {
         "type": "Project"
+      },
+      "codeindex.testtelemetry": {
+        "type": "Project"
       }
     }
   }
