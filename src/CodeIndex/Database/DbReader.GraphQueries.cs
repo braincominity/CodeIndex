@@ -877,7 +877,7 @@ public partial class DbReader
     /// <paramref name="withPaths"/> を true にすると、各 caller に対してルートからの推移経路
     /// （ダイヤモンド収束時は複数）を <paramref name="maxPathsPerResult"/> 件まで付与する（issue #1536）。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
+    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -894,6 +894,9 @@ public partial class DbReader
         queue.Enqueue((resolvedName, 0));
         visited.Add(resolvedName);
         var truncated = false;
+        var maxDepthReached = false;
+        var cycles = new List<ImpactCycleResult>();
+        var cycleKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // truncatedReason tracks the *strongest* signal observed: safety_cap wins over
         // user_limit because it tells callers that raising --limit alone will not help
         // (the input graph is likely pathological). See Issue #1533.
@@ -909,16 +912,15 @@ public partial class DbReader
         // ["foo", "B", "A"], not file-qualified entries.
         // path 追跡は opt-in 時のみ確保する。同名 caller が複数ファイルにあっても経路上は同名
         // ノードとして畳む（issue #1536 の例 ["foo", "B", "A"] と整合）。
-        Dictionary<string, HashSet<string>>? parentsByName = null;
-        Dictionary<string, int>? depthByName = null;
+        Dictionary<string, HashSet<string>> parentsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, HashSet<string>> cycleParentsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> depthByName = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [resolvedName] = 0,
+        };
         var resultIndicesByName = withPaths
             ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
             : null;
-        if (withPaths)
-        {
-            parentsByName = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            depthByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        }
 
         while (queue.Count > 0 && results.Count < limit)
         {
@@ -953,10 +955,18 @@ public partial class DbReader
                     }
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                    if (IsCycleEdge(callerName, currentSymbol, cycleParentsByName))
+                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, cycleParentsByName));
                     if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                         && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path)))
                         continue;
                     var key = $"{caller.Path}:{callerName}";
+                    if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                    {
+                        cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        cycleParentsByName[callerName] = cycleParentSet;
+                    }
+                    cycleParentSet.Add(currentSymbol);
 
                     if (!visited.Add(key))
                     {
@@ -966,10 +976,10 @@ public partial class DbReader
                         // 同 depth で再到達した場合のみ親辺を追加し、別 depth の到達は破棄。
                         // BFS により最短経路だけが残る。
                         if (withPaths
-                            && depthByName!.TryGetValue(callerName, out var existingDepth)
+                            && depthByName.TryGetValue(callerName, out var existingDepth)
                             && existingDepth == depth + 1)
                         {
-                            parentsByName![callerName].Add(currentSymbol);
+                            parentsByName[callerName].Add(currentSymbol);
                         }
                         continue;
                     }
@@ -988,14 +998,8 @@ public partial class DbReader
 
                     if (withPaths)
                     {
-                        if (!depthByName!.ContainsKey(callerName))
+                        if (!depthByName.ContainsKey(callerName))
                             depthByName[callerName] = depth + 1;
-                        if (!parentsByName!.TryGetValue(callerName, out var parentSet))
-                        {
-                            parentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            parentsByName[callerName] = parentSet;
-                        }
-                        parentSet.Add(currentSymbol);
                         if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
                         {
                             idxList = new List<int>();
@@ -1003,6 +1007,16 @@ public partial class DbReader
                         }
                         idxList.Add(results.Count - 1);
                     }
+                    else if (!depthByName.ContainsKey(callerName))
+                    {
+                        depthByName[callerName] = depth + 1;
+                    }
+                    if (!parentsByName.TryGetValue(callerName, out var parentSet))
+                    {
+                        parentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        parentsByName[callerName] = parentSet;
+                    }
+                    parentSet.Add(currentSymbol);
 
                     // Only recurse if the just-added caller (at depth + 1) is strictly below
                     // maxDepth, so that the next BFS step can reach depth + 2 ≤ maxDepth.
@@ -1013,7 +1027,26 @@ public partial class DbReader
                     if (caller.CallerName != null
                         && caller.CallerName != SyntheticTopLevelCallerName
                         && depth + 1 < maxDepth)
+                    {
                         queue.Enqueue((caller.CallerName, depth + 1));
+                    }
+                    else if (caller.CallerName != null
+                             && caller.CallerName != SyntheticTopLevelCallerName
+                             && depth + 1 == maxDepth)
+                    {
+                        maxDepthReached |= InspectBoundaryCallers(
+                            caller.CallerName,
+                            resolvedName,
+                            rootDefinitionPaths,
+                            visited,
+                            cycleParentsByName,
+                            cycles,
+                            cycleKeys,
+                            lang,
+                            pathPatterns,
+                            excludePathPatterns,
+                            excludeTests);
+                    }
                 }
 
                 offset += page.Count;
@@ -1043,7 +1076,7 @@ public partial class DbReader
             var effectiveCap = maxPathsPerResult > 0 ? maxPathsPerResult : DefaultImpactPathsPerResult;
             foreach (var (callerName, indices) in resultIndicesByName!)
             {
-                var (paths, more) = EnumerateImpactPaths(callerName, parentsByName!, resolvedName, effectiveCap);
+                var (paths, more) = EnumerateImpactPaths(callerName, parentsByName, resolvedName, effectiveCap);
                 foreach (var idx in indices)
                 {
                     results[idx].Paths = paths;
@@ -1052,7 +1085,162 @@ public partial class DbReader
             }
         }
 
-        return (results, truncated, truncatedReason);
+        var terminationReason = truncatedReason switch
+        {
+            ImpactTruncatedReasons.SafetyCap => ImpactTerminationReasons.SafetyCap,
+            ImpactTruncatedReasons.UserLimit => ImpactTerminationReasons.RowLimitTruncated,
+            _ when cycles.Count > 0 => ImpactTerminationReasons.CycleDetected,
+            _ when maxDepthReached => ImpactTerminationReasons.MaxDepthReached,
+            _ => ImpactTerminationReasons.Completed,
+        };
+
+        return (results, truncated, truncatedReason, terminationReason, cycles);
+    }
+
+    private bool InspectBoundaryCallers(
+        string symbolName,
+        string resolvedName,
+        HashSet<string> rootDefinitionPaths,
+        HashSet<string> visited,
+        Dictionary<string, HashSet<string>> cycleParentsByName,
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        const int pageSize = 200;
+        var offset = 0;
+        while (true)
+        {
+            var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+            if (page.Count == 0)
+                return false;
+
+            foreach (var caller in page)
+            {
+                var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                if (IsCycleEdge(callerName, symbolName, cycleParentsByName))
+                    AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, symbolName, cycleParentsByName));
+                var isRoot = string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
+                    && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path));
+                if (isRoot)
+                    continue;
+
+                if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                {
+                    cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    cycleParentsByName[callerName] = cycleParentSet;
+                }
+                cycleParentSet.Add(symbolName);
+
+                var key = $"{caller.Path}:{callerName}";
+                if (!visited.Contains(key))
+                    return true;
+            }
+
+            if (page.Count < pageSize)
+                return false;
+            offset += page.Count;
+        }
+    }
+
+    private static bool IsCycleEdge(
+        string callerName,
+        string currentSymbol,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        if (string.Equals(callerName, currentSymbol, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return HasAncestor(currentSymbol, callerName, parentsByName);
+    }
+
+    private static bool HasAncestor(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        var stack = new Stack<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        stack.Push(node);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!seen.Add(current))
+                continue;
+            if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!parentsByName.TryGetValue(current, out var parents))
+                continue;
+            foreach (var parent in parents)
+                stack.Push(parent);
+        }
+        return false;
+    }
+
+    private static List<string> BuildCycleMembers(
+        string callerName,
+        string currentSymbol,
+        Dictionary<string, HashSet<string>> parentsByName)
+    {
+        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!TryBuildAncestorPath(currentSymbol, callerName, parentsByName, members))
+        {
+            members.Add(callerName);
+            members.Add(currentSymbol);
+        }
+        var result = members.ToList();
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
+    }
+
+    private static bool TryBuildAncestorPath(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return TryBuildAncestorPathCore(node, target, parentsByName, members, seen);
+    }
+
+    private static bool TryBuildAncestorPathCore(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members,
+        HashSet<string> seen)
+    {
+        if (!seen.Add(node))
+            return false;
+        members.Add(node);
+        if (string.Equals(node, target, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (parentsByName.TryGetValue(node, out var parents))
+        {
+            foreach (var parent in parents)
+            {
+                if (TryBuildAncestorPathCore(parent, target, parentsByName, members, seen))
+                    return true;
+            }
+        }
+
+        members.Remove(node);
+        return false;
+    }
+
+    private static void AddImpactCycle(
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
+        List<string> members)
+    {
+        if (members.Count == 0)
+            return;
+        var key = string.Join("\u001F", members);
+        if (!cycleKeys.Add(key))
+            return;
+        cycles.Add(new ImpactCycleResult { Members = members });
     }
 
     private static (List<List<string>> Paths, bool Truncated) EnumerateImpactPaths(
@@ -1161,6 +1349,9 @@ public partial class DbReader
                 FileImpacts = [],
                 Truncated = false,
                 TruncatedReason = null,
+                TerminationReason = ImpactTerminationReasons.Completed,
+                CycleDetected = false,
+                Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,
                 ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
                 Suggestion = definitions.Count == 0
@@ -1169,7 +1360,7 @@ public partial class DbReader
             };
         }
 
-        var (callers, truncated, truncatedReason) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
+        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
@@ -1252,6 +1443,9 @@ public partial class DbReader
             FileImpacts = fileImpacts,
             Truncated = truncated,
             TruncatedReason = truncated ? truncatedReason : null,
+            TerminationReason = terminationReason,
+            CycleDetected = cycles.Count > 0,
+            Cycles = cycles.Count > 0 ? cycles : null,
             GraphTableAvailable = _hasReferencesTable,
             ZeroResultReason = zeroResultReason,
             Suggestion = suggestion,

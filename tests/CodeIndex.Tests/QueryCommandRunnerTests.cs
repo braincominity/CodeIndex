@@ -24747,6 +24747,45 @@ jobs:
     }
 
     [Fact]
+    public void RunImpact_CycleJsonEmitsTerminationFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_cycle_reason");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/impact_cycle.cs", "csharp",
+                """
+                public static class ImpactCycle
+                {
+                    public static void A() { B(); }
+                    public static void B() { C(); }
+                    public static void C() { A(); }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["C", "--db", dbPath, "--json", "--limit", "20"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal("cycle_detected", json.GetProperty("termination_reason").GetString());
+            Assert.True(json.GetProperty("cycle_detected").GetBoolean());
+            var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+            Assert.Equal(new[] { "A", "B", "C" }, cycle.GetProperty("members").EnumerateArray().Select(member => member.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_FoldEquivalentClassDefinitionsJsonReportAmbiguity()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_fold_siblings");
