@@ -1842,7 +1842,7 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Unsupported architecture: i686", stderr);
-        Assert.Contains("linux-x64, linux-arm64, osx-arm64, win-x64", stderr);
+        Assert.Contains("linux-x64, linux-arm64, osx-arm64, win-x64, win-arm64", stderr);
         Assert.Contains("linux-x86, osx-x64, and win-x86 are not currently shipped", stderr);
         Assert.Contains("dotnet tool install -g cdidx", stderr);
         Assert.Contains("dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r <rid> --self-contained true", stderr);

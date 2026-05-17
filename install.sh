@@ -99,7 +99,7 @@ error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 report_error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 
 published_release_rids() {
-    printf '%s' "linux-x64, linux-arm64, osx-arm64, win-x64"
+    printf '%s' "linux-x64, linux-arm64, osx-arm64, win-x64, win-arm64"
 }
 
 cleanup() {
