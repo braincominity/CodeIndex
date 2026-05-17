@@ -12010,6 +12010,7 @@ jobs:
             Assert.Contains("symbol kind", stderr);
             Assert.Contains("filters by reference kind", stderr);
             Assert.Contains("call", stderr);
+            Assert.Contains("friend", stderr);
             Assert.Contains("instantiate", stderr);
             Assert.Contains("subscribe", stderr);
         }

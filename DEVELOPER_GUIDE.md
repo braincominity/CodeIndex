@@ -132,7 +132,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- referenced symbol name
-    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation", "decorator", "type_reference"
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "friend", "attribute", "annotation", "decorator", "type_reference"
     line            INTEGER,                 -- 1-based line number
     column_number   INTEGER,                 -- 1-based column number
     context         TEXT,                    -- trimmed source line
@@ -208,6 +208,7 @@ files 1──N symbol_references
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
+| `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
 | `attribute`, `annotation`, `type_reference` | raw label | Dependency/reference-only metadata and type-position edges; excluded from default call-graph rows. |
 
 ## Why a database instead of grep?
@@ -1650,6 +1651,7 @@ files 1──N symbol_references
 |---|---|---|
 | `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
 | `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
+| `friend` | `friend` | C++ friend の access/coupling edge。依存関係寄りの graph query で可視化する。 |
 | `attribute`, `annotation`, `type_reference` | raw label | 依存関係 / reference 専用の metadata と型位置エッジ。既定の call-graph 行からは除外する。 |
 
 ## なぜgrepではなくデータベースなのか？
