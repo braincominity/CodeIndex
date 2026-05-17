@@ -250,6 +250,32 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(references);
     }
 
+    private void InsertManualReference(string path, string lang, string? containerKind, string? containerName, string target, string kind)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = lang,
+            Size = 100,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = target,
+                ReferenceKind = kind,
+                Line = 1,
+                Column = 1,
+                Context = $"{target}()",
+                ContainerKind = containerKind,
+                ContainerName = containerName,
+            }
+        ]);
+    }
+
     [Fact]
     public void Search_FindsMatchingChunks()
     {
@@ -281,6 +307,46 @@ public class DbReaderTests : IDisposable
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
         Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
+    }
+
+    [Theory]
+    [InlineData("src/top-level.js", "javascript")]
+    [InlineData("src/top-level.ts", "typescript")]
+    [InlineData("src/top_level.py", "python")]
+    public void GetTransitiveCallers_TreatsScriptNullContainerReferencesAsTopLevelCallers(string path, string lang)
+    {
+        const string target = "TargetService";
+        InsertManualReference(path, lang, containerKind: null, containerName: null, target, "call");
+
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
+
+        var result = Assert.Single(results);
+        Assert.Equal(path, result.Path);
+        Assert.Equal(lang, result.Lang);
+        Assert.Equal("<top-level>", result.CallerName);
+        Assert.Equal("function", result.CallerKind);
+        Assert.Equal(target, result.CalleeName);
+        Assert.Equal(1, result.Depth);
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_DoesNotTreatJavaNullContainerReferencesAsTopLevelCallers()
+    {
+        InsertManualReference(
+            "src/TopLevel.java",
+            "java",
+            containerKind: null,
+            containerName: null,
+            target: "TargetService",
+            kind: "call");
+
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
+
+        Assert.Empty(results);
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
     }
 
     [Fact]
