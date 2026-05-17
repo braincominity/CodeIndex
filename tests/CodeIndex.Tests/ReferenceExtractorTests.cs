@@ -2552,6 +2552,27 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "reference"));
     }
 
+    [Theory]
+    [InlineData(":-")]
+    [InlineData(":?")]
+    [InlineData(":+")]
+    [InlineData(":=")]
+    [InlineData("-")]
+    public void Extract_DockerfileReferences_IndexNestedBracedArgVariablesInsideConditionalExpansion(string modifier)
+    {
+        var content = "ARG PRIMARY\nARG FALLBACK\nRUN echo ${PRIMARY" + modifier + "${FALLBACK}}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "PRIMARY"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "FALLBACK"
+            && reference.ReferenceKind == "reference"));
+    }
+
     [Fact]
     public void Extract_DockerfileReferences_IndexUnbracedArgVariables()
     {
