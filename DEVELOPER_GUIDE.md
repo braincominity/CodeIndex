@@ -421,7 +421,7 @@ Most languages still use **compiled regex patterns**, matched one line at a time
 
 JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names. React hook detection is name-based: JavaScript/TypeScript function symbols whose names match `use[A-Z]...` are reclassified as `hook`, and JavaScript/TypeScript calls to `use[A-Z]...()` are emitted as `consumes_hook` references.
 
-SQL symbol extraction treats MySQL backtick-quoted identifiers as case-preserving symbol names while unquoted identifiers continue through the existing case-insensitive lookup paths. MySQL `DEFINER=user@host` clauses emit `definer` symbols.
+SQL symbol extraction treats MySQL backtick-quoted identifiers as case-preserving symbol names while unquoted identifiers continue through the existing case-insensitive lookup paths. MySQL `DEFINER=user@host` clauses emit `definer` symbols, and PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters emit function-scoped `field` symbols for the synthetic result columns.
 
 Supported symbol kinds by language:
 
