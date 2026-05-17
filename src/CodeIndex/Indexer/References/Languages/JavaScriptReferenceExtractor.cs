@@ -74,18 +74,20 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        var contextMatches = DiscriminantStringGuardRegex.Matches(contextLine);
+        var matchOrdinal = 0;
         foreach (Match match in DiscriminantStringGuardRegex.Matches(preparedLine))
         {
             var objectName = match.Groups["object"].Value;
             var propertyName = match.Groups["property"].Value;
             var propertyIndex = match.Groups["property"].Index;
             var literalGroup = match.Groups["literal"];
-            var contextMatch = DiscriminantStringGuardRegex.Match(contextLine);
-            var rawLiteral = contextMatch.Success
-                ? contextMatch.Groups["literal"].Value
+            var rawLiteral = matchOrdinal < contextMatches.Count
+                ? contextMatches[matchOrdinal].Groups["literal"].Value
                 : literalGroup.Index >= 0 && literalGroup.Index + literalGroup.Length <= contextLine.Length
                 ? contextLine.Substring(literalGroup.Index, literalGroup.Length)
                 : literalGroup.Value;
+            matchOrdinal++;
             var literalValue = UnescapeSimpleStringLiteral(rawLiteral);
             var chain = $"{objectName}.{propertyName}";
             var container = resolveContainerForCall(match.Groups["object"].Index);

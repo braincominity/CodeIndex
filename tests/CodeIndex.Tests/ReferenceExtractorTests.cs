@@ -30415,6 +30415,9 @@ public class ReferenceExtractorTests
                 if (shape.type === 'circle') {
                     return shape.radius;
                 }
+                if (shape.type === 'circle' || shape.type === 'square') {
+                    return 0;
+                }
             }
             """;
 
@@ -30431,6 +30434,10 @@ public class ReferenceExtractorTests
             && r.ContainerName == "area");
         Assert.Contains(references, r =>
             r.SymbolName == "shape.type=circle"
+            && r.ReferenceKind == "type_tag"
+            && r.ContainerName == "area");
+        Assert.Contains(references, r =>
+            r.SymbolName == "shape.type=square"
             && r.ReferenceKind == "type_tag"
             && r.ContainerName == "area");
     }
