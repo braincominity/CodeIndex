@@ -44,6 +44,7 @@ public class QueryCommandRunnerTests
             "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}",
             "--snippet-focus", "proximity",
             "--max-line-width", "77",
+            "--no-visibility-rank",
         ], jsonDefault: true);
 
         Assert.Equal("/tmp/query.db", options.DbPath);
@@ -67,6 +68,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
         Assert.Equal(SearchSnippetFocusMode.Proximity, options.SnippetFocus);
         Assert.Equal(77, options.MaxLineWidth);
+        Assert.True(options.NoVisibilityRank);
     }
 
     [Fact]
@@ -111,6 +113,46 @@ public class QueryCommandRunnerTests
 
         Assert.True(options.CheckWorkspace);
         Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/private-auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    private void Authenticate() { }
+                }
+                """);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--lang", "csharp", "--exact", "--json"],
+                _jsonOptions));
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal("private", document.RootElement.GetProperty("visibility").GetString());
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("src/private-auth.cs:1-4 [private]", humanStdout);
+            Assert.Contains("1 results in 1 files", humanStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

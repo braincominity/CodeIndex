@@ -16,6 +16,7 @@ public class SearchResult
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public double Score { get; set; }
+    public string? Visibility { get; set; }
 }
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
