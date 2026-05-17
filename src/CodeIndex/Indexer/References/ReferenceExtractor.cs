@@ -2315,6 +2315,21 @@ public static partial class ReferenceExtractor
                 if (metadataKind != null)
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    if (language == "csharp"
+                        && metadataKind == "attribute"
+                        && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            callerInfoAttributeTypeName,
+                            callIndex,
+                            "type_reference",
+                            context,
+                            lineNumber,
+                            callContainer);
+                    }
                     return true;
                 }
 
@@ -2703,6 +2718,19 @@ public static partial class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName, preparedLine, nameIndex) is { } callerInfoAttributeTypeName)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            callerInfoAttributeTypeName,
+                            nameIndex,
+                            "type_reference",
+                            context,
+                            lineNumber,
+                            container);
+                    }
                 }
             }
             else if (AnnotationLanguages.Contains(language))
