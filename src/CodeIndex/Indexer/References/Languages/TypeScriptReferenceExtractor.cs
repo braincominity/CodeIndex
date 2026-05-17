@@ -9,7 +9,9 @@ internal static class TypeScriptReferenceExtractor
     private static readonly HashSet<string> MappedTypeClauseIgnoredSegments = new(StringComparer.Ordinal)
     {
         "as",
+        "extends",
         "in",
+        "infer",
         "keyof",
         "readonly",
     };

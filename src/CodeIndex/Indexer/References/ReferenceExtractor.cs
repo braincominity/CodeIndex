@@ -176,7 +176,7 @@ public static partial class ReferenceExtractor
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "as", "extends", "import", "in", "infer", "keyof", "readonly", "super", "yield",
+            "import", "super", "yield",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
