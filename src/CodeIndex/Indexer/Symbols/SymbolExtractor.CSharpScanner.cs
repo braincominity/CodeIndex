@@ -2762,6 +2762,8 @@ public static partial class SymbolExtractor
                 var after = afterIndex < signature.Length ? signature[afterIndex] : '\0';
                 if (!IsCSharpWhereTokenBoundary(before) || !IsCSharpWhereTokenBoundary(after))
                     continue;
+                if (!LooksLikeCSharpConstraintClause(signature, absoluteIndex))
+                    continue;
 
                 return absoluteIndex;
             }
@@ -2777,6 +2779,37 @@ public static partial class SymbolExtractor
 
     private static bool IsCSharpWhereTokenBoundary(char ch)
         => ch == '\0' || !(char.IsLetterOrDigit(ch) || ch == '_' || ch == '@');
+
+    private static bool LooksLikeCSharpConstraintClause(string signature, int whereIndex)
+    {
+        var i = whereIndex + "where".Length;
+        while (i < signature.Length && char.IsWhiteSpace(signature[i]))
+            i++;
+
+        if (i >= signature.Length)
+            return false;
+
+        if (signature[i] == '@')
+            i++;
+
+        if (i >= signature.Length || !IsCSharpConstraintIdentifierStart(signature[i]))
+            return false;
+
+        i++;
+        while (i < signature.Length && IsCSharpConstraintIdentifierPart(signature[i]))
+            i++;
+
+        while (i < signature.Length && char.IsWhiteSpace(signature[i]))
+            i++;
+
+        return i < signature.Length && signature[i] == ':';
+    }
+
+    private static bool IsCSharpConstraintIdentifierStart(char ch)
+        => char.IsLetter(ch) || ch == '_';
+
+    private static bool IsCSharpConstraintIdentifierPart(char ch)
+        => char.IsLetterOrDigit(ch) || ch == '_';
 
     private enum CSharpHeaderFrameKind
     {
