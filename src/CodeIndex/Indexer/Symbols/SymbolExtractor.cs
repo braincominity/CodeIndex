@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.CompilerServices;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -2008,10 +2009,23 @@ public static partial class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => PatternCache.Keys.Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" }).ToArray();
+      => PatternCache.Keys
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" })
+          .Concat(ExtractorPluginRegistry.SymbolLanguages)
+          .Distinct(StringComparer.Ordinal)
+          .ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte" ? "typescript" : lang;
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return null;
+
+        lang = lang.Trim().ToLowerInvariant();
+        return lang is "vue" or "svelte" ? "typescript" : lang;
+    }
+
+    private static string? NormalizePluginLanguage(string? lang)
+        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
 
 
     private static readonly HashSet<string> ContainerKinds =
@@ -2032,7 +2046,8 @@ public static partial class SymbolExtractor
     {
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
-        if (lang == null)
+        var pluginLanguage = NormalizePluginLanguage(originalLang);
+        if (lang == null && pluginLanguage == null)
             return [];
 
         // Null / empty fast path — keep the direct-call null-safe contract that
@@ -2057,19 +2072,28 @@ public static partial class SymbolExtractor
         if (ChunkSplitter.HasOversizeLine(content))
             return [];
 
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        content = FileIndexer.StripLineLeadingBom(content);
+
+        if (pluginLanguage != null
+            && !PatternCache.ContainsKey(pluginLanguage)
+            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
+        {
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, filePath))
+                .ToList();
+        }
+
         if (lang == "xml")
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingBom(content);
             return ExtractXmlSymbols(fileId, content.Split('\n'));
         }
 
         if (lang == "markdown")
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingBom(content);
             var markdownLines = content.Split('\n');
             var markdownSymbols = ExtractMarkdownSymbols(fileId, markdownLines);
             AssignContainers(markdownSymbols, markdownLines, null);
@@ -2091,9 +2115,6 @@ public static partial class SymbolExtractor
         // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
         // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
         // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
-        if (content.Contains('\r'))
-            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var pythonModulePrefix = lang == "python"
             ? GetPythonModulePrefix(filePath)
@@ -2102,7 +2123,7 @@ public static partial class SymbolExtractor
         if (lang is "commonlisp" or "racket")
             return ExtractLispSymbols(fileId, lang, lines);
 
-        if (!PatternCache.TryGetValue(lang, out var patterns))
+        if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's

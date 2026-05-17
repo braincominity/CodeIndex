@@ -3,6 +3,8 @@ using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -12,6 +14,26 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Fact]
+    public void Extract_CustomSymbolPlugin_HandlesUnsupportedLanguage()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            ExtractorPluginRegistry.ResetForTests();
+            ExtractorPluginRegistry.Register(new ToyDslSymbolExtractor());
+
+            var symbols = SymbolExtractor.Extract(7, "toydsl", "entity Widget", "demo.toy");
+
+            var symbol = Assert.Single(symbols);
+            Assert.Equal(7, symbol.FileId);
+            Assert.Equal("class", symbol.Kind);
+            Assert.Equal("Widget", symbol.Name);
+            Assert.Equal("toydsl", FileIndexer.DetectLanguage("demo.toy"));
+            Assert.Contains("toydsl", SymbolExtractor.GetSupportedLanguages());
+            ExtractorPluginRegistry.ResetForTests();
+        }
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
@@ -113,6 +135,31 @@ public class SymbolExtractorTests
 
         var patternCache = Assert.IsAssignableFrom<IDictionary>(field.GetValue(null));
         return patternCache.Keys.Cast<string>().Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private sealed class ToyDslSymbolExtractor : ISymbolExtractor
+    {
+        public string Language => "toydsl";
+
+        public IReadOnlyCollection<string> FileExtensions => [".toy"];
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        {
+            var name = source.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last();
+            return
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = name,
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = source.Trim(),
+                },
+            ];
+        }
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -1023,6 +1024,8 @@ public class FileIndexer
         // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
         foreach (var (prefix, lang) in FileNamePrefixMap)
             merged.TryAdd($"{prefix}<suffix>", lang);
+        foreach (var (extension, lang) in ExtractorPluginRegistry.LanguageExtensions)
+            merged.TryAdd(extension, lang);
         return merged;
     }
 
@@ -1067,6 +1070,9 @@ public class FileIndexer
 
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
         }
+
+        if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out var pluginLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
@@ -1695,7 +1701,9 @@ public class FileIndexer
     private static bool HasUnknownExtension(string filePath)
     {
         var extension = Path.GetExtension(filePath);
-        return !string.IsNullOrEmpty(extension) && !LangMap.ContainsKey(extension);
+        return !string.IsNullOrEmpty(extension)
+            && !LangMap.ContainsKey(extension)
+            && !ExtractorPluginRegistry.LanguageExtensions.ContainsKey(extension);
     }
 
     private static bool IsInternalIndexArtifactPath(string relativePath)

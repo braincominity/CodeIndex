@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -766,17 +767,37 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => SupportedLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
+        => SupportedLanguages
+            .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
+            .Concat(ExtractorPluginRegistry.ReferenceLanguages)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte"
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return null;
+
+        lang = lang.Trim().ToLowerInvariant();
+        return lang is "vue" or "svelte"
             ? "typescript"
             : lang is "razor" or "blazor" or "cshtml"
                 ? "csharp"
                 : lang;
+    }
 
-    public static bool SupportsLanguage(string? lang) =>
-        NormalizeLanguage(lang) is string normalized && SupportedLanguages.Contains(normalized);
+    private static string? NormalizePluginLanguage(string? lang)
+        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+
+    public static bool SupportsLanguage(string? lang)
+    {
+        var normalized = NormalizeLanguage(lang);
+        if (normalized != null && SupportedLanguages.Contains(normalized))
+            return true;
+
+        return NormalizePluginLanguage(lang) is string pluginLanguage
+            && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+    }
 
     public static bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
     {
@@ -853,11 +874,16 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
     {
         var requestedLanguage = lang;
-        if (!SupportsLanguage(lang))
+        var pluginLanguage = NormalizePluginLanguage(lang);
+        var normalizedLanguage = NormalizeLanguage(lang);
+        var hasBuiltInLanguage = normalizedLanguage != null && SupportedLanguages.Contains(normalizedLanguage);
+        IReferenceExtractor? pluginExtractor = null;
+        var hasPluginLanguage = pluginLanguage != null && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out pluginExtractor);
+        if (!hasBuiltInLanguage && !hasPluginLanguage)
             return [];
 
-        lang = NormalizeLanguage(lang);
-        var language = lang!;
+        lang = normalizedLanguage;
+        var language = lang ?? pluginLanguage!;
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
@@ -900,6 +926,16 @@ public static partial class ReferenceExtractor
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
+
+        if (!hasBuiltInLanguage && pluginLanguage != null && pluginExtractor != null)
+        {
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
+                .ToList();
+        }
+
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)
             : content;
