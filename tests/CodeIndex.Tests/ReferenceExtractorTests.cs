@@ -30571,6 +30571,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptMappedAndConditionalTypes_EmitTypeParameterReferences()
+    {
+        const string content = """
+            type Getters<T> = {
+              [K in keyof T as `get${Capitalize<K>}`]: () => T[K];
+            };
+            type AwaitedValue<T> = T extends Promise<infer U> ? U : never;
+            function useApi(api: Api) {
+              api.in();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "K" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "Capitalize" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "Promise" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "U" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "in" && r.ReferenceKind == "call" && r.Line == 6);
+        var forbiddenTypeOperators = references
+            .Where(r =>
+                (r.SymbolName is "keyof" or "in" or "as" or "extends" or "infer" or "never")
+                && r.ReferenceKind == "type_reference")
+            .Select(r => $"{r.SymbolName}@{r.Line}:{r.Column}");
+        Assert.Empty(forbiddenTypeOperators);
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeExpressions_IgnoreTemplateRawTextAndStringKeys()
     {
         const string content = """
