@@ -1164,6 +1164,28 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_EveryDescriptionIncludesLanguageSupportClause()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var tool in tools)
+        {
+            var name = tool!["name"]!.GetValue<string>();
+            var description = tool["description"]!.GetValue<string>();
+            Assert.Contains("Language support:", description, StringComparison.Ordinal);
+
+            if (name is "references" or "callers" or "callees")
+            {
+                var expected = "Supports graph/reference extraction for: " +
+                    string.Join(", ", ReferenceExtractor.GetSupportedLanguages().OrderBy(lang => lang, StringComparer.Ordinal));
+                Assert.Contains(expected, description, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
     public void ToolsList_SearchHasRequiredQueryParam()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

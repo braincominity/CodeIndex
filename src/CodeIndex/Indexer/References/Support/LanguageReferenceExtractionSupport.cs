@@ -8,6 +8,21 @@ internal static class LanguageReferenceExtractionSupport
     // THREAD-SAFETY: This support surface only owns immutable post-construction Regex fields.
     // Any state accumulated while extracting references must stay in caller-provided collections
     // or local variables so concurrent ReferenceExtractor calls cannot share mutable state.
+    private static readonly string[] RazorControlDirectives =
+    {
+        "@if",
+        "@foreach",
+        "@for",
+        "@while",
+        "@switch",
+        "@using",
+        "@lock",
+        "@try",
+        "@catch",
+        "@finally",
+        "@do"
+    };
+
     private static readonly Regex CppIncludeRegex = new(
         @"^(?:\s*#\s*(?:include(?:_next)?|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>[^\s]+))|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1028,22 +1043,42 @@ internal static class LanguageReferenceExtractionSupport
 
     private static int IndexOfRazorControlDirective(char[] chars)
     {
-        var line = new string(chars);
-        foreach (var directive in new[] { "@if", "@foreach", "@for", "@while", "@switch", "@using", "@lock", "@try", "@catch", "@finally", "@do" })
+        for (var index = 0; index < chars.Length; index++)
         {
-            for (var index = line.IndexOf(directive, StringComparison.Ordinal);
-                 index >= 0;
-                 index = line.IndexOf(directive, index + directive.Length, StringComparison.Ordinal))
+            if (chars[index] != '@')
+                continue;
+
+            var beforeOk = index == 0 || char.IsWhiteSpace(chars[index - 1]) || chars[index - 1] == '}';
+            if (!beforeOk)
+                continue;
+
+            foreach (var directive in RazorControlDirectives)
             {
-                var beforeOk = index == 0 || char.IsWhiteSpace(line[index - 1]) || line[index - 1] == '}';
+                if (!CharsStartWith(chars, index, directive))
+                    continue;
+
                 var afterIndex = index + directive.Length;
-                var afterOk = afterIndex == line.Length || !IsSimpleIdentifierPart(line[afterIndex]);
+                var afterOk = afterIndex == chars.Length || !IsSimpleIdentifierPart(chars[afterIndex]);
                 if (beforeOk && afterOk)
                     return index;
             }
         }
 
         return -1;
+    }
+
+    private static bool CharsStartWith(char[] chars, int index, string value)
+    {
+        if (index + value.Length > chars.Length)
+            return false;
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (chars[index + i] != value[i])
+                return false;
+        }
+
+        return true;
     }
 
     private static bool IsRazorCodeLineInsideControl(char[] chars)
