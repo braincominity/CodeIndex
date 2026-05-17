@@ -1652,6 +1652,7 @@ public static partial class ReferenceExtractor
                     var nameIndex = match.Groups["name"].Index;
                     var jsxContainer = ResolveContainerForCall(nameIndex);
                     var firstDotIndex = fullName.IndexOf('.');
+                    var tagEndIndex = nameIndex + fullName.Length;
 
                     AddReference(
                         references,
@@ -1677,6 +1678,29 @@ public static partial class ReferenceExtractor
                             context,
                             lineNumber,
                             jsxContainer);
+                    }
+
+                    if (language == "typescript")
+                    {
+                        var genericStart = SkipWhitespace(preparedLine, tagEndIndex);
+                        if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
+                        {
+                            var genericEnd = genericStart;
+                            if (TrySkipBalancedGenericArgs(preparedLine, ref genericEnd, out _)
+                                && genericEnd > genericStart + 2)
+                            {
+                                AddTypeExpressionSegments(
+                                    references,
+                                    seen,
+                                    fileId,
+                                    preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
+                                    genericStart + 1,
+                                    context,
+                                    lineNumber,
+                                    jsxContainer,
+                                    "typescript");
+                            }
+                        }
                     }
                 }
             }
