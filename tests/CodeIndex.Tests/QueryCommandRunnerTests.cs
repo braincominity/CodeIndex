@@ -42,6 +42,7 @@ public class QueryCommandRunnerTests
             "--focus-column", "33",
             "--focus-length", "6",
             "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}",
+            "--snippet-focus", "proximity",
             "--max-line-width", "77",
         ], jsonDefault: true);
 
@@ -64,6 +65,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(33, options.FocusColumn);
         Assert.Equal(6, options.FocusLength);
         Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
+        Assert.Equal(SearchSnippetFocusMode.Proximity, options.SnippetFocus);
         Assert.Equal(77, options.MaxLineWidth);
     }
 
@@ -127,6 +129,28 @@ public class QueryCommandRunnerTests
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
         Assert.True(options.CountOnly);
         Assert.Equal("myquery", options.Query);
+    }
+
+    [Theory]
+    [InlineData("weighted", ReferenceRankMode.Weighted)]
+    [InlineData("count", ReferenceRankMode.Count)]
+    [InlineData("kind", ReferenceRankMode.Kind)]
+    public void ParseArgs_RankByFlagParsed(string value, ReferenceRankMode expected)
+    {
+        var options = QueryCommandRunner.ParseArgs(["Target", "--rank-by", value], jsonDefault: false);
+
+        Assert.Equal(expected, options.RankMode);
+        Assert.Equal("Target", options.Query);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidRankByReportsParseError()
+    {
+        var options = QueryCommandRunner.ParseArgs(["Target", "--rank-by", "frequency"], jsonDefault: false);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--rank-by", options.ParseError);
+        Assert.Contains("weighted", options.ParseError);
     }
 
     [Fact]
@@ -1994,6 +2018,7 @@ jobs:
     [InlineData(new[] { "QueryCommandRunner", "--path" }, "search", "--path", "pass a glob-style path pattern", "--path src/**")]
     [InlineData(new[] { "QueryCommandRunner", "--exclude-path" }, "search", "--exclude-path", "pass a glob-style path pattern to exclude", "--exclude-path tests/**")]
     [InlineData(new[] { "QueryCommandRunner", "--snippet-lines" }, "search", "--snippet-lines", "pass an integer between 1 and 20", "--snippet-lines 8")]
+    [InlineData(new[] { "QueryCommandRunner", "--snippet-focus" }, "search", "--snippet-focus", "pass one of `leftmost`, `quality`, or `proximity`", "--snippet-focus quality")]
     [InlineData(new[] { "QueryCommandRunner", "--max-line-width" }, "search", "--max-line-width", "pass a non-negative integer", "--max-line-width 512")]
     public void RunSearch_MissingOptionValueAppendsPerFlagHint_Issue1507(
         string[] args,
@@ -2819,6 +2844,7 @@ jobs:
     [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.")]
     [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.")]
     [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.")]
+    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.")]
     [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.")]
     [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.")]
     [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.")]
@@ -25653,6 +25679,121 @@ jobs:
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("--group-by-name is only supported by 'hotspots'", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupBy_IsRejectedOutsideHotspots()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_reject");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Run() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run", "--db", dbPath, "--group-by", "file"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--group-by is only supported by 'hotspots'", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByFileJson_RollsUpSymbolHotspotsByPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_file_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp",
+                """
+                public class One
+                {
+                    private void A() { A(); A(); }
+                    private void B() { B(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Two.cs", "csharp",
+                """
+                public class Two
+                {
+                    private void C() { C(); }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by=file", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file", json.GetProperty("grouped_by").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("src/One.cs", hotspot.GetProperty("path").GetString());
+            Assert.Equal(3, hotspot.GetProperty("reference_count").GetInt32());
+            Assert.Equal(2, hotspot.GetProperty("symbol_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_SqlJson_DefaultsGroupedByStatement()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_sql_group_default");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "sql", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("statement", json.GetProperty("grouped_by").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByNameAndGroupBy_IsRejected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_conflict");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--group-by-name", "--group-by", "symbol"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--group-by-name cannot be combined with --group-by", stderr);
         }
         finally
         {

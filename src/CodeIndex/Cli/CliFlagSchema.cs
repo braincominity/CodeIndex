@@ -102,6 +102,7 @@ internal static class CliFlagSchema
         "definition", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
     ];
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
+    private static readonly string[] RankByCommands = ["callers", "callees"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -164,6 +165,8 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
+            new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
+            new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
@@ -176,6 +179,7 @@ internal static class CliFlagSchema
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", Commands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", Commands = Set(MaxLineWidthCommands) },
             new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length", Commands = Set("search") },
+            new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", Commands = Set("search") },
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt") },
@@ -188,6 +192,7 @@ internal static class CliFlagSchema
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Impact: max BFS depth", Commands = Set("impact") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
+            new() { Name = "--group-by", ValuePlaceholder = "<symbol|file|statement>", Description = "Hotspots: choose grouping unit", Commands = Set("hotspots") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows across files", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },

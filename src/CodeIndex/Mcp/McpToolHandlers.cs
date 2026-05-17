@@ -317,6 +317,26 @@ public partial class McpServer
             GraphSupportReason: graphSupportReason);
     }
 
+    private static bool TryReadReferenceRankMode(JsonNode? args, out ReferenceRankMode rankMode, out string? error)
+    {
+        var value = args?["rankBy"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            rankMode = ReferenceRankMode.Weighted;
+            error = null;
+            return true;
+        }
+
+        if (QueryCommandRunner.TryParseReferenceRankMode(value, out rankMode))
+        {
+            error = null;
+            return true;
+        }
+
+        error = $"rankBy must be one of weighted, count, kind; got '{value}'.";
+        return false;
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -642,10 +662,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -657,7 +679,7 @@ public partial class McpServer
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
                 r => r.CalleeName);
             var payload = new JsonObject
             {
@@ -666,6 +688,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
@@ -706,10 +729,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -721,7 +746,7 @@ public partial class McpServer
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
                 r => r.CallerName);
             var payload = new JsonObject
             {
@@ -730,6 +755,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
@@ -1683,23 +1709,50 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
+            ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
+        if (groupBy is not ("symbol" or "file" or "statement"))
+            return CreateToolErrorResponse(id, $"Unsupported symbol_hotspots groupBy '{groupBy}'. Use symbol, file, or statement.");
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var results = reader.GetSymbolHotspots(groupBy == "file" ? int.MaxValue : limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
-            var sqlGraphSignal = results.Count == 0
+            var fileResults = groupBy == "file"
+                ? results
+                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
+                    .Select(group =>
+                    {
+                        var first = group.First();
+                        return new
+                        {
+                            path = first.Symbol.Path,
+                            lang = first.Symbol.Lang,
+                            reference_count = group.Sum(row => row.ReferenceCount),
+                            symbol_count = group.Count(),
+                        };
+                    })
+                    .OrderByDescending(row => row.reference_count)
+                    .ThenBy(row => row.path, StringComparer.Ordinal)
+                    .Take(limit)
+                    .ToList()
+                : null;
+            var resultLangs = fileResults != null
+                ? fileResults.Select(result => result.lang)
+                : results.Select(result => result.Symbol.Lang);
+            var visibleCount = fileResults?.Count ?? results.Count;
+            var sqlGraphSignal = visibleCount == 0
                 ? zeroResultSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                     baseSqlGraphSignal,
-                    results.Select(result => result.Symbol.Lang),
+                    resultLangs,
                     lang);
             var items = results.Select(r => new
             {
@@ -1711,22 +1764,46 @@ public partial class McpServer
                 visibility = r.Symbol.Visibility,
                 container = r.Symbol.ContainerName,
             });
+            JsonNode? hotspotsNode;
+            if (fileResults != null)
+            {
+                var hotspots = new JsonArray();
+                foreach (var result in fileResults)
+                {
+                    hotspots.Add(new JsonObject
+                    {
+                        ["path"] = result.path,
+                        ["lang"] = result.lang,
+                        ["reference_count"] = result.reference_count,
+                        ["symbol_count"] = result.symbol_count,
+                    });
+                }
+                hotspotsNode = hotspots;
+            }
+            else
+            {
+                hotspotsNode = JsonSerializer.SerializeToNode(items, _jsonOptions);
+            }
+
             var payload = new JsonObject
             {
-                ["count"] = results.Count,
-                ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
+                ["count"] = visibleCount,
+                ["grouped_by"] = groupBy,
+                ["hotspots"] = hotspotsNode
             };
+            if (fileResults != null)
+                payload["files"] = fileResults.Count;
             AddHotspotFamilySignal(payload, hotspotSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            var summary = results.Count > 0
-                ? $"Found {ConsoleUi.Counted(results.Count, "symbol hotspot")}."
+            var summary = visibleCount > 0
+                ? $"Found {ConsoleUi.Counted(visibleCount, $"{groupBy} hotspot")}."
                 : "No symbol hotspots found.";
             if (!hotspotSignal.Ready)
             {
                 payload["note"] = "cross-file hotspot family grouping is degraded; conservative same-file fallback may hide or undercount hotspot families until the next successful reindex.";
                 summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
             }
-            if (results.Count == 0)
+            if (visibleCount == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
@@ -2274,9 +2351,12 @@ public partial class McpServer
         // 2. Validate optional parameters / 任意パラメータのバリデーション
         var language = args?["language"]?.GetValue<string>();
         var context = args?["context"]?.GetValue<string>();
+        var toolInvocationContext = args?["toolInvocationContext"]?.GetValue<string>();
 
         if (context != null && context.Length > MaxContextLength)
             return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
+        if (toolInvocationContext != null && toolInvocationContext.Length > MaxContextLength)
+            return CreateToolErrorResponse(id, $"Tool invocation context too long ({toolInvocationContext.Length} chars, max {MaxContextLength})");
 
         // 3. Source code leak detection — reject if code is detected
         //    ソースコード漏洩検出 — コードが検出されたら拒否
@@ -2285,6 +2365,8 @@ public partial class McpServer
 
         if (context != null && SourceCodeDetector.ContainsSourceCode(context))
             return CreateToolErrorResponse(id, "Context appears to contain source code. Please describe what you were trying to do without including code.");
+        if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
+            return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -2316,6 +2398,12 @@ public partial class McpServer
             Context = context,
             Hash = hash,
             CreatedAt = DateTime.UtcNow,
+            CreatedByAgent = ResolveSuggestionAgent(),
+            SessionId = _sessionId,
+            ClientVersion = _version,
+            McpClientName = _clientName,
+            McpClientVersion = _clientVersion,
+            ToolInvocationContext = toolInvocationContext,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -2360,6 +2448,11 @@ public partial class McpServer
         if (result.GitHubIssueUrl != null)
             payload["github_issue_url"] = result.GitHubIssueUrl;
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private string ResolveSuggestionAgent()
+    {
+        return string.IsNullOrWhiteSpace(_caller) ? "unknown" : _caller;
     }
 
 }
