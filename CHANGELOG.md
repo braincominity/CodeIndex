@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.22.2] - 2026-05-17
+
+#### Fixed
+
+- **Release workflow now waits for `sha256sums.txt` to propagate before verifying the install** — the install-verification step polled only the platform tarball, so a release could fail when the CDN had not yet served `sha256sums.txt` (the v1.22.1 release failed with `Failed to download sha256sums.txt ... HTTP 404`). The wait step now polls every asset `install.sh` downloads, so an asset that propagates slowly is waited out instead of failing the release.
+
 ### [1.22.1] - 2026-05-17
 
 #### Fixed
@@ -2377,6 +2383,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.22.2] - 2026-05-17
+
+#### 修正
+
+- **リリースワークフローがインストール検証前に `sha256sums.txt` の伝播を待つようになりました** — インストール検証ステップはプラットフォーム tarball のみをポーリングしていたため、CDN がまだ `sha256sums.txt` を配信していない場合にリリースが失敗していました（v1.22.1 のリリースが `Failed to download sha256sums.txt ... HTTP 404` で失敗）。待機ステップは `install.sh` がダウンロードする全 asset をポーリングするようになり、伝播の遅い asset があってもリリースを失敗させず待ち切ります。
+
 ### [1.22.1] - 2026-05-17
 
 #### 修正
@@ -4732,7 +4744,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...HEAD
+[1.22.2]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...v1.22.2
 [1.22.1]: https://github.com/Widthdom/CodeIndex/compare/v1.22.0...v1.22.1
 [1.22.0]: https://github.com/Widthdom/CodeIndex/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/Widthdom/CodeIndex/compare/v1.20.1...v1.21.0
