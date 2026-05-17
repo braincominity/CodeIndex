@@ -13,6 +13,9 @@ internal static class CSharpReferenceExtractor
     // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
     // C# コンストラクタ連鎖イニシャライザ
     private static readonly Regex CtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex StaticMemberQualifierRegex = new(
+        @"(?<![\p{L}\p{Nd}_@])(?<qualifier>(?:global::)?@?[A-Z_][\p{L}\p{Nd}_]*(?:\.@?[A-Z_][\p{L}\p{Nd}_]*)*)\s*\.\s*@?[\p{L}_][\p{L}\p{Nd}_]*",
+        RegexOptions.Compiled);
 
     public static void EmitCtorChainReferences(
         string preparedLine,
@@ -225,6 +228,96 @@ internal static class CSharpReferenceExtractor
 
     public static bool IsPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
         => ReferenceExtractor.IsCSharpPatternHeadCallSite(preparedLines, lineIndex, preparedLine, nameIndex);
+
+    public static void EmitStaticMemberQualifierReferences(
+        string preparedLine,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("using ", StringComparison.Ordinal)
+            || trimmed.StartsWith("global using ", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (Match match in StaticMemberQualifierRegex.Matches(preparedLine))
+        {
+            var qualifierGroup = match.Groups["qualifier"];
+            var qualifier = qualifierGroup.Value;
+            var qualifierStart = qualifierGroup.Index;
+            if (IsInsideRange(csharpAttrRangesOnLine, qualifierStart))
+                continue;
+            if (IsLikelyPatternConstantAccess(preparedLine, qualifierStart))
+                continue;
+            if (IsLikelyTypeQualifiedAccess(preparedLine, qualifierStart))
+                continue;
+
+            var dotIndex = qualifier.LastIndexOf('.');
+            var simpleNameStart = dotIndex >= 0 ? dotIndex + 1 : 0;
+            var simpleName = NormalizeCSharpIdentifier(qualifier[simpleNameStart..]);
+            if (string.IsNullOrWhiteSpace(simpleName))
+                continue;
+
+            var simpleNameIndex = qualifierStart + simpleNameStart;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                simpleName,
+                simpleNameIndex,
+                "call",
+                context,
+                lineNumber,
+                resolveContainerForCall(simpleNameIndex));
+        }
+    }
+
+    private static bool IsInsideRange(IReadOnlyList<(int start, int end)>? ranges, int index)
+    {
+        if (ranges == null)
+            return false;
+
+        foreach (var (start, end) in ranges)
+        {
+            if (index >= start && index < end)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLikelyPatternConstantAccess(string preparedLine, int qualifierStart)
+    {
+        var before = preparedLine[..qualifierStart];
+        var trimmedBefore = before.TrimStart();
+        return trimmedBefore.StartsWith("case ", StringComparison.Ordinal)
+            || trimmedBefore.EndsWith(" is ", StringComparison.Ordinal)
+            || trimmedBefore.EndsWith(" is not ", StringComparison.Ordinal)
+            || trimmedBefore.EndsWith(" and ", StringComparison.Ordinal)
+            || trimmedBefore.EndsWith(" or ", StringComparison.Ordinal);
+    }
+
+    private static bool IsLikelyTypeQualifiedAccess(string preparedLine, int qualifierStart)
+    {
+        var before = preparedLine[..qualifierStart].TrimEnd();
+        return before.EndsWith("new", StringComparison.Ordinal)
+            || before.EndsWith("typeof(", StringComparison.Ordinal)
+            || before.EndsWith("nameof(", StringComparison.Ordinal)
+            || before.EndsWith("sizeof(", StringComparison.Ordinal)
+            || before.EndsWith("default(", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeCSharpIdentifier(string identifier) =>
+        !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
+            ? identifier[1..]
+            : identifier;
 
     public static void EmitQualifiedEnumMemberReferences(
         string preparedLine,
