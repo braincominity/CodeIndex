@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -116,6 +117,24 @@ public class IndexWatchRunnerTests
         // Now > 500ms after the second event.
         Assert.True(batcher.TryDrain(out var batch, out _, out _));
         Assert.Equal(2, batch.Count);
+    }
+
+    [Fact]
+    public void BuildSubRunArgs_JsonSubRun_IsQuiet()
+    {
+        var options = new IndexCommandOptions
+        {
+            ProjectPath = "/repo",
+            Json = true,
+            Watch = true,
+        };
+        var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+
+        Assert.Contains("--json", args);
+        Assert.Contains("--quiet", args);
     }
 
     [Fact]
