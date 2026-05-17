@@ -6,6 +6,15 @@ internal static class TypeScriptReferenceExtractor
 {
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
+    private static readonly HashSet<string> MappedTypeClauseIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "as",
+        "extends",
+        "in",
+        "infer",
+        "keyof",
+        "readonly",
+    };
 
     public static void EmitTypePositionReferences(
         IReadOnlyList<string> preparedLines,
@@ -31,6 +40,7 @@ internal static class TypeScriptReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
+        EmitMappedTypeMemberReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericConstraintTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypeAliasTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -81,6 +91,68 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
     }
 
+    private static void EmitMappedTypeMemberReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var bracketStart = preparedLine.IndexOf('[');
+        if (bracketStart < 0)
+            return;
+
+        var bracketEnd = ReferenceExtractor.FindMatchingChar(preparedLine, bracketStart, '[', ']');
+        if (bracketEnd <= bracketStart)
+            return;
+
+        var clause = preparedLine.Substring(bracketStart + 1, bracketEnd - bracketStart - 1);
+        if (!clause.Contains("keyof", StringComparison.Ordinal)
+            && !clause.Contains(" in ", StringComparison.Ordinal)
+            && !clause.Contains(" as ", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var clauseStart = bracketStart + 1;
+        ReferenceExtractor.AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            clause,
+            clauseStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(clauseStart),
+            "typescript",
+            MappedTypeClauseIgnoredSegments);
+
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', bracketEnd + 1);
+        if (colonIndex < 0)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+        if (typeStart >= preparedLine.Length)
+            return;
+
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart, stopAtArrow: false);
+        if (typeEnd <= typeStart)
+            return;
+
+        ReferenceExtractor.AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart),
+            "typescript");
+    }
+  
     public static bool IsSatisfiesTypeOperand(string preparedLine, int tokenIndex)
     {
         foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "satisfies"))
