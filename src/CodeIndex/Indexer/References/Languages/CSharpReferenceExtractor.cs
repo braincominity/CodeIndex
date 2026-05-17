@@ -10,6 +10,15 @@ namespace CodeIndex.Indexer;
 
 internal static class CSharpReferenceExtractor
 {
+    private const string CallerInfoAttributeNamespace = "System.Runtime.CompilerServices.";
+    private static readonly Dictionary<string, string> CallerInfoAttributeTypeNames = new(StringComparer.Ordinal)
+    {
+        ["CallerMemberName"] = CallerInfoAttributeNamespace + "CallerMemberNameAttribute",
+        ["CallerFilePath"] = CallerInfoAttributeNamespace + "CallerFilePathAttribute",
+        ["CallerLineNumber"] = CallerInfoAttributeNamespace + "CallerLineNumberAttribute",
+        ["CallerArgumentExpression"] = CallerInfoAttributeNamespace + "CallerArgumentExpressionAttribute",
+    };
+
     // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
     // C# コンストラクタ連鎖イニシャライザ
     private static readonly Regex CtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
@@ -285,6 +294,24 @@ internal static class CSharpReferenceExtractor
                 lineNumber,
                 resolveContainerForCall(simpleNameIndex));
         }
+    }
+
+    public static string? TryGetCallerInfoAttributeTypeName(string attributeName)
+    {
+        var simpleName = NormalizeCSharpIdentifier(attributeName);
+        var qualifierIndex = Math.Max(simpleName.LastIndexOf('.'), simpleName.LastIndexOf(':'));
+        if (qualifierIndex >= 0 && qualifierIndex + 1 < simpleName.Length)
+            simpleName = simpleName[(qualifierIndex + 1)..];
+
+        if (simpleName.EndsWith("Attribute", StringComparison.Ordinal)
+            && simpleName.Length > "Attribute".Length)
+        {
+            simpleName = simpleName[..^"Attribute".Length];
+        }
+
+        return CallerInfoAttributeTypeNames.TryGetValue(simpleName, out var typeName)
+            ? typeName
+            : null;
     }
 
     private static bool IsCSharpUsingDirectiveLine(string trimmedLine)

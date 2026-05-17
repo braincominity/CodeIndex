@@ -25567,6 +25567,76 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCallerInfoAttributes_EmitCompilerServicesTypeReferences()
+    {
+        // Regression (issue #2086): caller-info attributes are compile-time metadata.
+        // Keep the ordinary `attribute` row, and add a `type_reference` to the framework
+        // attribute type so impact/reference queries can see the dependency without treating
+        // the attribute as a runtime call.
+        // リグレッション (issue #2086): caller-info 属性はコンパイル時 metadata なので、
+        // 通常の `attribute` 行を維持しつつ framework attribute 型への `type_reference` も出す。
+        const string content = """
+            using System.Runtime.CompilerServices;
+
+            public static class Log
+            {
+                public static void Warning(
+                    string message,
+                    [CallerMemberName] string member = "",
+                    [CallerFilePath] string file = "",
+                    [CallerLineNumber] int line = 0,
+                    [CallerArgumentExpression("message")] string expression = "")
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "CallerMemberName" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerFilePath" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerLineNumber" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerArgumentExpression" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerMemberNameAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerFilePathAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerLineNumberAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("Caller", StringComparison.Ordinal) && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpCallerInfoNoArgAttributes_EmitTypeReferencesForAttributeSuffixAndQualifiedNames()
+    {
+        // Regression (issue #2086): no-arg caller-info attributes bypass CallRegex, and callers
+        // may spell them with the `Attribute` suffix or a namespace qualifier.
+        // リグレッション (issue #2086): 引数なし caller-info 属性は CallRegex を通らず、
+        // `Attribute` suffix や namespace 修飾付きでも書けるため同じ型参照を出す。
+        const string content = """
+            public static class Log
+            {
+                public static void Warning(
+                    [System.Runtime.CompilerServices.CallerMemberNameAttribute] string member = "",
+                    [global::System.Runtime.CompilerServices.CallerFilePath] string file = "",
+                    [CallerLineNumberAttribute] int line = 0)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "CallerMemberNameAttribute" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerFilePath" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerLineNumberAttribute" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerMemberNameAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerFilePathAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.Single(references.Where(r => r.SymbolName == "System.Runtime.CompilerServices.CallerLineNumberAttribute" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("Caller", StringComparison.Ordinal) && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpTypeParameterAttribute_ClassifiedAsAttribute()
     {
         // Regression: `class C<[Attr("x")] T>` — the `[` is preceded by `<`, which is a valid
