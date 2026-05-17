@@ -1649,6 +1649,36 @@ cdidx search "handleRequest"
 のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
 `--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
 
+## インデックスを最新に保つ
+
+コミット時にローカルインデックスを自動で更新したい場合は、任意の git
+pre-commit hook をインストールします:
+
+```bash
+cdidx hooks install
+cdidx hooks status
+cdidx hooks uninstall
+```
+
+インストールされた hook はコミット完了前に `cdidx index . --quiet` を実行します。
+`--quiet` は hook 環境向けに通常の進捗・成功出力を抑制しつつ、indexing エラーは
+引き続き stderr に出力し、非ゼロの終了コードを返します。リポジトリに既存の
+`.git/hooks/pre-commit` がある場合、`cdidx hooks install` はそれを
+`.git/hooks/pre-commit.cdidx-chain` に移動し、cdidx の更新後に呼び出すため、
+Husky、pre-commit、lefthook などのツールも維持されます。すべての pre-commit
+hook を意図的にスキップする必要があるときは `git commit --no-verify` を使って
+ください。
+
+マネージドな hook システムでは、同じコマンドをステップとして追加します:
+
+```yaml
+# pre-commit / lefthook 形式のコマンド
+cdidx index . --quiet
+```
+
+コピーして使えるスタンドアロンスクリプトも `samples/git-hooks/pre-commit` に
+用意しています。
+
 ## CI 連携
 
 スクリプトから workspace の鮮度と query subsystem の readiness を一度に確認したい場合は
