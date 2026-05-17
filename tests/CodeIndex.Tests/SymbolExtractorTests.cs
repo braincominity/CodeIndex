@@ -10597,12 +10597,13 @@ public class SymbolExtractorTests
     public void Extract_CSharp_DetectsPartialMethods()
     {
         // C# 9 extended partial methods / C# 9 拡張 partial メソッド
-        var content = "public partial class App\n{\n    partial void OnInit();\n    public partial string GetName();\n}";
+        var content = "public partial class App\n{\n    partial void OnInit();\n    partial OnImplicit();\n    public partial string GetName();\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "App");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetName");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnImplicit" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetName" && s.ReturnType == "string");
     }
 
     [Fact]
@@ -10612,6 +10613,7 @@ public class SymbolExtractorTests
             public partial class Widget
             {
                 public partial Widget();
+                partial Widget();
                 public partial Widget() { }
                 unsafe public partial Widget(int* ptr) { }
             }
@@ -10623,18 +10625,24 @@ public class SymbolExtractorTests
             s.Kind == "function"
             && s.Name == "Widget"
             && s.Line == 3
-            && s.Visibility == "public");
+            && s.Visibility == "public"
+            && s.ReturnType == null);
         Assert.Contains(symbols, s =>
             s.Kind == "function"
             && s.Name == "Widget"
             && s.Line == 4
+            && s.ReturnType == null);
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "Widget"
+            && s.Line == 5
             && s.Visibility == "public"
             && s.BodyStartLine is not null
             && s.BodyEndLine is not null);
         Assert.Contains(symbols, s =>
             s.Kind == "function"
             && s.Name == "Widget"
-            && s.Line == 5
+            && s.Line == 6
             && s.Visibility == "public");
     }
 
