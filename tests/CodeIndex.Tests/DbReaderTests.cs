@@ -2775,6 +2775,11 @@ public class DbReaderTests : IDisposable
             """
             public class Reader
             {
+                public T Identity<T>(T value)
+                {
+                    return value;
+                }
+
                 public void Load(Microsoft.Data.Sqlite.SqliteDataReader reader)
                 {
                     var first = reader.GetInt32(0);
@@ -2782,6 +2787,7 @@ public class DbReaderTests : IDisposable
                     var max = Math.Max(
                         first,
                         second);
+                    _ = Identity(max);
                 }
             }
 
@@ -2807,6 +2813,8 @@ public class DbReaderTests : IDisposable
         Assert.DoesNotContain(results, result => result.Symbol.Name == "Max");
         var load = Assert.Single(results.Where(result => result.Symbol.Name == "Load"));
         Assert.Equal(2, load.ReferenceCount);
+        var identity = Assert.Single(results.Where(result => result.Symbol.Name == "Identity"));
+        Assert.Equal(1, identity.ReferenceCount);
 
         var groupedResults = _reader.GetGroupedSymbolHotspots(
             limit: 10,
@@ -2820,6 +2828,8 @@ public class DbReaderTests : IDisposable
         Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "Max");
         var groupedLoad = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Load"));
         Assert.Equal(2, groupedLoad.ReferenceCount);
+        var groupedIdentity = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Identity"));
+        Assert.Equal(1, groupedIdentity.ReferenceCount);
     }
 
     [Fact]

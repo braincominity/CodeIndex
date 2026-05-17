@@ -1642,13 +1642,14 @@ public partial class DbReader
         var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
             && _symbolColumns.Contains("body_end_line")
             && _symbolColumns.Contains("signature")
+            && _symbolColumns.Contains("container_kind")
             ? @"
                   AND NOT (
                       f.lang = 'csharp'
                       AND s.kind = 'function'
                       AND (
                           (s.body_start_line IS NULL AND s.body_end_line IS NULL)
-                          OR COALESCE(s.signature, '') NOT LIKE '% ' || s.name || '(%'
+                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
                       )
                   )"
             : string.Empty;
@@ -2014,13 +2015,14 @@ public partial class DbReader
         var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
             && _symbolColumns.Contains("body_end_line")
             && _symbolColumns.Contains("signature")
+            && _symbolColumns.Contains("container_kind")
             ? @"
                   AND NOT (
                       f.lang = 'csharp'
                       AND s.kind = 'function'
                       AND (
                           (s.body_start_line IS NULL AND s.body_end_line IS NULL)
-                          OR COALESCE(s.signature, '') NOT LIKE '% ' || s.name || '(%'
+                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
                       )
                   )"
             : string.Empty;
