@@ -185,6 +185,135 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void LoadByStatus_ReturnsOnlyMatchingLifecycleState()
+    {
+        var submitted = MakeRecord("other", null, "Submitted suggestion");
+        submitted.Status = SuggestionStatus.SubmittedPendingTriage;
+        submitted.UpstreamIssueNumber = 1;
+        submitted.UpstreamUrl = "https://github.com/widthdom/CodeIndex/issues/1";
+        var draft = MakeRecord("other", null, "Draft suggestion");
+
+        _store.TryAdd(submitted);
+        _store.TryAdd(draft);
+
+        var loaded = _store.LoadByStatus(SuggestionStatus.Draft);
+
+        Assert.Single(loaded);
+        Assert.Equal(draft.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void LoadSince_ReturnsSuggestionsAtOrAfterThreshold()
+    {
+        var older = MakeRecord("other", null, "Older suggestion");
+        older.CreatedAt = new DateTime(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
+        var boundary = MakeRecord("other", null, "Boundary suggestion");
+        boundary.CreatedAt = new DateTime(2026, 5, 2, 9, 0, 0, DateTimeKind.Utc);
+        var newer = MakeRecord("other", null, "Newer suggestion");
+        newer.CreatedAt = new DateTime(2026, 5, 3, 9, 0, 0, DateTimeKind.Utc);
+
+        _store.TryAdd(older);
+        _store.TryAdd(boundary);
+        _store.TryAdd(newer);
+
+        var loaded = _store.LoadSince(new DateTimeOffset(2026, 5, 2, 9, 0, 0, TimeSpan.Zero));
+
+        Assert.Equal(new[] { boundary.Hash, newer.Hash }, loaded.Select(s => s.Hash));
+    }
+
+    [Fact]
+    public void LoadByCategory_IsCaseInsensitive()
+    {
+        var crash = MakeRecord("crash_report", "csharp", "Crash suggestion");
+        var other = MakeRecord("other", "csharp", "Other suggestion");
+
+        _store.TryAdd(crash);
+        _store.TryAdd(other);
+
+        var loaded = _store.LoadByCategory("CRASH_REPORT");
+
+        Assert.Single(loaded);
+        Assert.Equal(crash.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void LoadByLanguage_IsCaseInsensitive()
+    {
+        var csharp = MakeRecord("other", "csharp", "CSharp suggestion");
+        var python = MakeRecord("other", "python", "Python suggestion");
+
+        _store.TryAdd(csharp);
+        _store.TryAdd(python);
+
+        var loaded = _store.LoadByLanguage("CSHARP");
+
+        Assert.Single(loaded);
+        Assert.Equal(csharp.Hash, loaded[0].Hash);
+    }
+
+    [Fact]
+    public void Load_ReturnsRequestedPageInStoredOrder()
+    {
+        var first = MakeRecord("other", null, "First suggestion");
+        var second = MakeRecord("other", null, "Second suggestion");
+        var third = MakeRecord("other", null, "Third suggestion");
+        var fourth = MakeRecord("other", null, "Fourth suggestion");
+
+        _store.TryAdd(first);
+        _store.TryAdd(second);
+        _store.TryAdd(third);
+        _store.TryAdd(fourth);
+
+        var loaded = _store.Load(skip: 1, take: 2);
+
+        Assert.Equal(new[] { second.Hash, third.Hash }, loaded.Select(s => s.Hash));
+    }
+
+    [Fact]
+    public void Load_FilteredCorruptJson_ReturnsEmptyListAndPreservesBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{not valid json[[[");
+
+        var loaded = _store.LoadByCategory("other");
+
+        Assert.Empty(loaded);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        Assert.False(File.Exists(filePath), "Original corrupt file should be removed");
+    }
+
+    [Fact]
+    public void Load_FilteredWhitespaceOnlyFile_ReturnsEmptyListWithoutBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, " \r\n\t ");
+
+        var loaded = _store.LoadByLanguage("csharp");
+
+        Assert.Empty(loaded);
+        Assert.True(File.Exists(filePath), "Whitespace-only file should remain the live store.");
+        Assert.False(File.Exists(backupPath), "Whitespace-only file should not be treated as corrupt.");
+    }
+
+    [Fact]
+    public void Load_FilteredReadDoesNotBlockSubsequentReplacementWrite()
+    {
+        _store.TryAdd(MakeRecord("other", null, "Existing suggestion"));
+
+        var loaded = _store.LoadByStatus(SuggestionStatus.Draft);
+
+        var record = MakeRecord("other", null, "Concurrent write suggestion");
+
+        var ex = Record.Exception(() => _store.TryAdd(record));
+
+        Assert.Single(loaded);
+        Assert.Null(ex);
+        Assert.Contains(_store.LoadAll(), s => s.Hash == record.Hash);
+    }
+
+    [Fact]
     public void LoadAll_LegacyRecordsDefaultMissingAttribution()
     {
         File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"),
