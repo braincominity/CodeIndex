@@ -22,6 +22,9 @@ internal static class KotlinReferenceExtractor
     private static readonly Regex InfixFunctionDeclarationRegex = new(
         @"(?<![\w$])infix\s+fun\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InfixFunctionNameRegex = new(
+        @"(?<![\w$])infix\s+fun\s+(?:<[^()\r\n]+>\s*)?(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)(?:\s*<[^>\r\n]+>)?\s*\.\s*)*(?<name>[_\p{L}][\w$]*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex IdentifierRegex = new(
         @"(?<![\w$])(?<name>[_\p{L}][\w$]*)(?![\w$])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -76,10 +79,28 @@ internal static class KotlinReferenceExtractor
                 continue;
 
             if (InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
+            {
                 names.Add(symbol.Name);
+                var dotIndex = symbol.Name.LastIndexOf('.');
+                if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
+                    names.Add(symbol.Name[(dotIndex + 1)..]);
+            }
         }
 
         return names;
+    }
+
+    public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
+    {
+        if (language != "kotlin")
+            return;
+
+        foreach (var line in lines)
+        {
+            var match = InfixFunctionNameRegex.Match(line);
+            if (match.Success)
+                names.Add(match.Groups["name"].Value);
+        }
     }
 
     private static bool IsConstructableClassSymbol(SymbolRecord symbol)
@@ -159,6 +180,12 @@ internal static class KotlinReferenceExtractor
         }
     }
 
+    public static bool IsInfixFunctionDeclarationSite(string preparedLine, int nameIndex)
+    {
+        var prefix = preparedLine[..Math.Max(0, nameIndex)];
+        return InfixFunctionDeclarationRegex.IsMatch(prefix);
+    }
+
     private static bool IsUnmaskedSpan(string preparedLine, int start, int length)
     {
         if (start < 0 || length <= 0 || start + length > preparedLine.Length)
@@ -176,6 +203,9 @@ internal static class KotlinReferenceExtractor
     private static bool IsLikelyDeclarationOrImport(string preparedLine, int expressionIndex)
     {
         var prefix = preparedLine[..Math.Max(0, expressionIndex)].TrimStart();
+        if (InfixFunctionDeclarationRegex.IsMatch(prefix))
+            return true;
+
         return prefix.StartsWith("import ", StringComparison.Ordinal)
                || prefix.StartsWith("package ", StringComparison.Ordinal)
                || prefix.StartsWith("class ", StringComparison.Ordinal)

@@ -2494,6 +2494,7 @@ public class ReferenceExtractorTests
                 infix fun merge(other: Bag): Bag = this
                 infix fun List<String>.combine(other: List<String>): List<String> = this
                 infix fun demo.Box.link(other: demo.Box): demo.Box = this
+                private infix fun demo.Box.hidden(other: demo.Box): demo.Box = this
 
                 fun build(other: Bag, value: Int) {
                     val xs = listOf("a")
@@ -2522,7 +2523,9 @@ public class ReferenceExtractorTests
 
         foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "or", "xor", "shr", "add", "merge", "combine", "link" })
         {
-            Assert.Contains(references, r => r.SymbolName == name && r.ReferenceKind == "call");
+            Assert.True(
+                references.Any(r => r.SymbolName == name && r.ReferenceKind == "call"),
+                $"Expected Kotlin infix call reference for {name}.");
         }
 
         Assert.True(references.Count(r => r.SymbolName == "to" && r.ReferenceKind == "call") >= 3);
@@ -2530,6 +2533,10 @@ public class ReferenceExtractorTests
             r.SymbolName == "to"
             && r.ReferenceKind == "call"
             && r.Context.Contains("plain text", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "hidden"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("private infix fun", StringComparison.Ordinal));
     }
 
     [Fact]
