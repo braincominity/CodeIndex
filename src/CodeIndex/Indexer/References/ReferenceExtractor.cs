@@ -1021,6 +1021,7 @@ public static partial class ReferenceExtractor
                                || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        var containerResolver = new InnermostContainerResolver(containerCandidates);
         var csharpXmlDocAttachmentScopeCandidates = language == "csharp"
             ? symbols
                 .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
@@ -1127,7 +1128,7 @@ public static partial class ReferenceExtractor
             {
                 if (!phpLineContainerResolved)
                 {
-                    phpLineContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    phpLineContainer = containerResolver.Find(lineNumber);
                     phpLineContainerResolved = true;
                 }
 
@@ -1150,7 +1151,7 @@ public static partial class ReferenceExtractor
                 var csharpDocCommentText = originalLine[csharpDocCommentStartIndex..csharpDocCommentEndExclusive];
                 if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    var innermostContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    var innermostContainer = containerResolver.Find(lineNumber);
                     var sameLineDeclarationStartColumn = GetCSharpSameLineDocumentedDeclarationStartColumn(
                         originalLine,
                         csharpDocCommentEndExclusive,
@@ -1522,7 +1523,7 @@ public static partial class ReferenceExtractor
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
-            var container = FindInnermostContainer(containerCandidates, lineNumber);
+            var container = containerResolver.Find(lineNumber);
 
             // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
             // is entirely on one line, SymbolExtractor does not emit a function symbol for the
