@@ -116,6 +116,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_ClassifiesTestBenchmarkExampleInitFunctions()
+    {
+        const string content = """
+            package demo
+
+            import "testing"
+
+            func init() {}
+            func TestMain(m *testing.M) {}
+            func TestWidget(t *testing.T) {}
+            func BenchmarkWidget(b *testing.B) {}
+            func FuzzWidget(f *testing.F) {}
+            func ExampleWidget() {}
+            func helper() {}
+            func TestExporter() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content, filePath: "widget_test.go");
+
+        Assert.Contains(symbols, symbol => symbol.Name == "init" && symbol.SubKind == "init");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestMain" && symbol.SubKind == "test_main");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestWidget" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkWidget" && symbol.SubKind == "benchmark");
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzWidget" && symbol.SubKind == "fuzz");
+        Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == "example");
+        Assert.Contains(symbols, symbol => symbol.Name == "helper" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestExporter" && symbol.SubKind == "test_helper");
+    }
+
+    [Fact]
+    public void Extract_Go_QualifiedPointerReceiverUsesBareTypeContainer()
+    {
+        const string content = """
+            package demo
+
+            type Widget struct {}
+
+            func (w *pkg.Widget) Run() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Run"
+            && symbol.ContainerName == "Widget"
+            && symbol.ContainerKind == "struct");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsFunctions()
     {
         // Should detect both sync and async functions

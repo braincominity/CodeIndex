@@ -610,6 +610,105 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void ClassifyGoFunctionRoles(List<SymbolRecord> symbols, string? filePath)
+    {
+        var isTestFile = filePath != null
+            && filePath.EndsWith("_test.go", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function")
+                continue;
+
+            symbol.SubKind = GetGoFunctionSubKind(symbol, isTestFile);
+        }
+    }
+
+    private static string? GetGoFunctionSubKind(SymbolRecord symbol, bool isTestFile)
+    {
+        var signature = symbol.Signature ?? string.Empty;
+        if (string.Equals(symbol.Name, "init", StringComparison.Ordinal)
+            && symbol.ContainerName == null
+            && GoSignatureHasNoParameters(signature))
+        {
+            return "init";
+        }
+
+        if (string.Equals(symbol.Name, "TestMain", StringComparison.Ordinal)
+            && GoSignatureHasParameterType(signature, "testing.M"))
+        {
+            return "test_main";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Test")
+            && GoSignatureHasParameterType(signature, "testing.T"))
+        {
+            return "test";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Benchmark")
+            && GoSignatureHasParameterType(signature, "testing.B"))
+        {
+            return "benchmark";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Fuzz")
+            && GoSignatureHasParameterType(signature, "testing.F"))
+        {
+            return "fuzz";
+        }
+
+        if (symbol.Name.StartsWith("Example", StringComparison.Ordinal)
+            && GoSignatureHasNoParameters(signature)
+            && GoSignatureHasNoReturnValue(signature))
+        {
+            return "example";
+        }
+
+        return isTestFile ? "test_helper" : null;
+    }
+
+    private static bool IsGoExportedPrefixedName(string name, string prefix)
+        => name.Length > prefix.Length
+           && name.StartsWith(prefix, StringComparison.Ordinal)
+           && char.IsUpper(name[prefix.Length]);
+
+    private static bool GoSignatureHasParameterType(string signature, string typeName)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close <= open)
+            return false;
+
+        var parameters = signature[(open + 1)..close].Replace("*", string.Empty, StringComparison.Ordinal);
+        return parameters.Contains(typeName, StringComparison.Ordinal)
+            || parameters.Contains(GetGoReceiverTypeLookupName(typeName), StringComparison.Ordinal);
+    }
+
+    private static bool GoSignatureHasNoParameters(string signature)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        return close > open && string.IsNullOrWhiteSpace(signature[(open + 1)..close]);
+    }
+
+    private static bool GoSignatureHasNoReturnValue(string signature)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close < 0 || close + 1 >= signature.Length)
+            return true;
+
+        var trailing = signature[(close + 1)..].TrimStart();
+        return trailing.Length == 0 || trailing[0] == '{';
+    }
+
     private static bool TryGetGoMethodReceiverTypeName(string signature, out string receiverTypeName)
     {
         receiverTypeName = string.Empty;
