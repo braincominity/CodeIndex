@@ -541,7 +541,7 @@ internal static class LanguageReferenceExtractionSupport
         @"^\s*@inject\s+(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+[A-Za-z_]\w*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RazorEventHandlerRegex = new(
-        @"@on[A-Za-z_]\w*\s*=\s*""(?<name>[A-Za-z_]\w*)""",
+        @"@on[A-Za-z_]\w*\s*=\s*""@?(?<name>[A-Za-z_]\w*)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitTypePositionReferences(

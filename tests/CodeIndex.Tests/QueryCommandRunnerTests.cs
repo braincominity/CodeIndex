@@ -12150,6 +12150,7 @@ jobs:
                 Path.Combine(projectRoot, "Pages", "User.razor"),
                 """
                 <button @onclick="HandleClick">Save</button>
+                <button @onclick="@HandleClick">Save explicit</button>
 
                 @code {
                     void HandleClick() { }

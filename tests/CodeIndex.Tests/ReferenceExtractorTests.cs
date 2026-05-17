@@ -12333,6 +12333,7 @@ public class ReferenceExtractorTests
             <UserCard User="CurrentUser" />
             <Shared.DetailPanel />
             <button @onclick="HandleClick">Save</button>
+            <button @onclick="@HandleClick">Save explicit</button>
             <button @onclick="InheritedClick">Inherited</button>
             <input @ref="inputRef" @key="person" @bind="Value" />
             @* <AdminPanel /> *@
