@@ -104,7 +104,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal("Auth", options.Query);
             Assert.Equal(["App"], options.ProjectFilters);
-            Assert.Equal(["src/App/**/*"], options.PathPatterns);
+            Assert.Equal(["src/App/*"], options.PathPatterns);
             Assert.Null(options.ParseError);
         }
         finally

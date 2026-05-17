@@ -4358,6 +4358,7 @@ public class McpServerTests : IDisposable
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
             }
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
@@ -5724,6 +5725,96 @@ public class McpServerTests : IDisposable
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectScopeFiltersHotspotsAndUnusedSymbols_Issue1707()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "AppA"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "AppB"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppA", "src\AppA\AppA.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppB", "src\AppB\AppB.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "AppA", "AppA.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "AppB", "AppB.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AppA/ServiceA.cs", "csharp",
+                """
+                public class ServiceA
+                {
+                    public void UsedA() { UsedA(); }
+                    public void UnusedA() { }
+                }
+
+                public class CallerA
+                {
+                    public void Call(ServiceA service) { service.UsedA(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AppB/ServiceB.cs", "csharp",
+                """
+                public class ServiceB
+                {
+                    public void UsedB() { UsedB(); UsedB(); }
+                    public void UnusedB() { }
+                }
+
+                public class CallerB
+                {
+                    public void Call(ServiceB service)
+                    {
+                        service.UsedB();
+                        service.UsedB();
+                    }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function","project":"AppA"}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var hotspotNames = hotspotsResponse["result"]!["structuredContent"]!["hotspots"]!
+                .AsArray()
+                .Select(symbol => symbol?["name"]?.GetValue<string>())
+                .Where(name => name != null)
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            var unusedRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","project":"AppA"}}}""")!;
+            var unusedResponse = server.HandleMessage(unusedRequest)!;
+            var unusedNames = unusedResponse["result"]!["structuredContent"]!["symbols"]!
+                .AsArray()
+                .Select(symbol => symbol?["name"]?.GetValue<string>())
+                .Where(name => name != null)
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.False(hotspotsResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Contains("UsedA", hotspotNames);
+            Assert.DoesNotContain("UsedB", hotspotNames);
+            Assert.False(unusedResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Contains("UnusedA", unusedNames);
+            Assert.DoesNotContain("UnusedB", unusedNames);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

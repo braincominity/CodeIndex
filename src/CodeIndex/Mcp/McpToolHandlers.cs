@@ -1733,7 +1733,7 @@ public partial class McpServer
             ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
         if (groupBy is not ("symbol" or "file" or "statement"))
             return CreateToolErrorResponse(id, $"Unsupported symbol_hotspots groupBy '{groupBy}'. Use symbol, file, or statement.");
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
@@ -1834,7 +1834,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var pathPatterns = ReadPathList(args, "path");
+        var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 

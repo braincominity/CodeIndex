@@ -39,7 +39,7 @@ internal static partial class SolutionProjectResolver
             var relativeDir = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), match.DirectoryPath)
                 .Replace(Path.DirectorySeparatorChar, '/')
                 .Replace(Path.AltDirectorySeparatorChar, '/');
-            globs.Add(relativeDir == "." ? "**/*" : $"{relativeDir.TrimEnd('/')}/**/*");
+            globs.Add(relativeDir == "." ? "*" : $"{relativeDir.TrimEnd('/')}/*");
         }
 
         return globs;
