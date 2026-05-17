@@ -7,28 +7,31 @@ public sealed class ChangelogToolTests
     [Fact]
     public void ProgramMainCheckUsesAssemblyFallbackFromUnrelatedDirectory()
     {
-        var unrelatedDirectory = Path.Combine(Path.GetTempPath(), "codeindex-changelog-main-test", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(unrelatedDirectory);
-        var previousDirectory = Directory.GetCurrentDirectory();
-        var previousOut = Console.Out;
-        var previousError = Console.Error;
-        using var outWriter = new StringWriter();
-        using var errorWriter = new StringWriter();
-        Directory.SetCurrentDirectory(unrelatedDirectory);
-        Console.SetOut(outWriter);
-        Console.SetError(errorWriter);
-        try
+        lock (TestConsoleLock.Gate)
         {
-            var exitCode = CodeIndex.Changelog.Program.Main(["check"]);
+            var unrelatedDirectory = Path.Combine(Path.GetTempPath(), "codeindex-changelog-main-test", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(unrelatedDirectory);
+            var previousDirectory = Directory.GetCurrentDirectory();
+            var previousOut = Console.Out;
+            var previousError = Console.Error;
+            using var outWriter = new StringWriter();
+            using var errorWriter = new StringWriter();
+            Directory.SetCurrentDirectory(unrelatedDirectory);
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            try
+            {
+                var exitCode = CodeIndex.Changelog.Program.Main(["check"]);
 
-            Assert.True(exitCode == 0, $"exitCode={exitCode}\nstdout: {outWriter}\nstderr: {errorWriter}");
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-            Console.SetError(previousError);
-            Directory.SetCurrentDirectory(previousDirectory);
-            Directory.Delete(unrelatedDirectory, recursive: true);
+                Assert.True(exitCode == 0, $"exitCode={exitCode}\nstdout: {outWriter}\nstderr: {errorWriter}");
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousError);
+                Directory.SetCurrentDirectory(previousDirectory);
+                Directory.Delete(unrelatedDirectory, recursive: true);
+            }
         }
     }
 

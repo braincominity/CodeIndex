@@ -98,8 +98,15 @@ internal static class SuggestionsCommandRunner
         Console.WriteLine($"status: {GetStatus(record)}");
         Console.WriteLine($"category: {record.Category}");
         Console.WriteLine($"language: {record.Language ?? "-"}");
-        if (!string.IsNullOrWhiteSpace(record.Agent))
-            Console.WriteLine($"agent: {record.Agent}");
+        var agent = GetAgent(record);
+        if (!string.IsNullOrWhiteSpace(agent))
+            Console.WriteLine($"agent: {agent}");
+        if (!string.IsNullOrWhiteSpace(record.McpClientName))
+            Console.WriteLine($"mcp_client: {record.McpClientName}{(string.IsNullOrWhiteSpace(record.McpClientVersion) ? string.Empty : " " + record.McpClientVersion)}");
+        if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
+            Console.WriteLine($"cdidx_version: {record.ClientVersion}");
+        if (!string.IsNullOrWhiteSpace(record.SessionId) && record.SessionId != "unknown")
+            Console.WriteLine($"session_id: {record.SessionId}");
         Console.WriteLine($"submitted_to_github: {record.SubmittedToGitHub.ToString().ToLowerInvariant()}");
         if (!string.IsNullOrWhiteSpace(record.GitHubIssueUrl))
             Console.WriteLine($"github_issue_url: {record.GitHubIssueUrl}");
@@ -154,7 +161,7 @@ internal static class SuggestionsCommandRunner
                 continue;
             if (options.Category != null && !string.Equals(record.Category, options.Category, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (options.Agent != null && !string.Equals(record.Agent, options.Agent, StringComparison.OrdinalIgnoreCase))
+            if (options.Agent != null && !MatchesAgent(record, options.Agent))
                 continue;
             if (options.Since != null && new DateTimeOffset(DateTime.SpecifyKind(record.CreatedAt, DateTimeKind.Utc)) < options.Since.Value)
                 continue;
@@ -173,6 +180,22 @@ internal static class SuggestionsCommandRunner
 
     private static string GetStatus(SuggestionRecord record) => record.SubmittedToGitHub ? "submitted" : "unsubmitted";
 
+    private static string? GetAgent(SuggestionRecord record)
+    {
+        if (!string.IsNullOrWhiteSpace(record.Agent))
+            return record.Agent;
+        if (!string.IsNullOrWhiteSpace(record.CreatedByAgent) && record.CreatedByAgent != "unknown")
+            return record.CreatedByAgent;
+        return record.McpClientName;
+    }
+
+    private static bool MatchesAgent(SuggestionRecord record, string agent)
+    {
+        return string.Equals(record.Agent, agent, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(record.CreatedByAgent, agent, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(record.McpClientName, agent, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ShortId(string hash) => hash.Length <= 12 ? hash : hash[..12];
 
     private static string FormatTitle(string description, int maxLength)
@@ -189,7 +212,11 @@ internal static class SuggestionsCommandRunner
         GetStatus(record),
         record.Category,
         record.Language,
-        record.Agent,
+        GetAgent(record),
+        record.CreatedByAgent,
+        record.ClientVersion,
+        record.McpClientName,
+        record.McpClientVersion,
         FormatTitle(record.Description, 120),
         record.SubmittedToGitHub,
         record.GitHubIssueUrl);
@@ -201,7 +228,13 @@ internal static class SuggestionsCommandRunner
         GetStatus(record),
         record.Category,
         record.Language,
-        record.Agent,
+        GetAgent(record),
+        record.CreatedByAgent,
+        record.SessionId,
+        record.ClientVersion,
+        record.McpClientName,
+        record.McpClientVersion,
+        record.ToolInvocationContext,
         record.Description,
         record.Context,
         record.SubmittedToGitHub,
@@ -223,8 +256,15 @@ internal static class SuggestionsCommandRunner
             sb.AppendLine($"- status: `{GetStatus(record)}`");
             sb.AppendLine($"- category: `{record.Category}`");
             sb.AppendLine($"- language: `{record.Language ?? "-"}`");
-            if (!string.IsNullOrWhiteSpace(record.Agent))
-                sb.AppendLine($"- agent: `{record.Agent}`");
+            var agent = GetAgent(record);
+            if (!string.IsNullOrWhiteSpace(agent))
+                sb.AppendLine($"- agent: `{agent}`");
+            if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
+                sb.AppendLine($"- cdidx_version: `{record.ClientVersion}`");
+            if (!string.IsNullOrWhiteSpace(record.McpClientName))
+                sb.AppendLine($"- mcp_client: `{record.McpClientName}{(string.IsNullOrWhiteSpace(record.McpClientVersion) ? string.Empty : " " + record.McpClientVersion)}`");
+            if (!string.IsNullOrWhiteSpace(record.SessionId) && record.SessionId != "unknown")
+                sb.AppendLine($"- session_id: `{record.SessionId}`");
             if (!string.IsNullOrWhiteSpace(record.GitHubIssueUrl))
                 sb.AppendLine($"- github_issue_url: {record.GitHubIssueUrl}");
             sb.AppendLine();
@@ -235,6 +275,13 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine("Context:");
                 sb.AppendLine();
                 sb.AppendLine(record.Context);
+            }
+            if (!string.IsNullOrWhiteSpace(record.ToolInvocationContext))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Tool invocation context:");
+                sb.AppendLine();
+                sb.AppendLine(record.ToolInvocationContext);
             }
         }
         return sb.ToString().TrimEnd();
@@ -405,6 +452,10 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("language")] string? Language,
     [property: JsonPropertyName("agent")] string? Agent,
+    [property: JsonPropertyName("created_by_agent")] string CreatedByAgent,
+    [property: JsonPropertyName("client_version")] string ClientVersion,
+    [property: JsonPropertyName("mcp_client_name")] string? McpClientName,
+    [property: JsonPropertyName("mcp_client_version")] string? McpClientVersion,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
     [property: JsonPropertyName("github_issue_url")] string? GitHubIssueUrl);
@@ -417,6 +468,12 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("language")] string? Language,
     [property: JsonPropertyName("agent")] string? Agent,
+    [property: JsonPropertyName("created_by_agent")] string CreatedByAgent,
+    [property: JsonPropertyName("session_id")] string SessionId,
+    [property: JsonPropertyName("client_version")] string ClientVersion,
+    [property: JsonPropertyName("mcp_client_name")] string? McpClientName,
+    [property: JsonPropertyName("mcp_client_version")] string? McpClientVersion,
+    [property: JsonPropertyName("tool_invocation_context")] string? ToolInvocationContext,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("context")] string? Context,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
