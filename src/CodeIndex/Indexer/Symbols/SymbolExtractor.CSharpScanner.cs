@@ -2720,8 +2720,96 @@ public static partial class SymbolExtractor
                 rawSlice.Append(line, from, to - from);
         }
 
-        return SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+        var sanitized = SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
     }
+
+    private static string NormalizeCSharpConstraintGenericWhitespace(string signature)
+    {
+        var whereIndex = FindCSharpWhereConstraintToken(signature);
+        if (whereIndex < 0)
+            return signature;
+
+        var prefix = signature[..whereIndex];
+        var constraints = CollapseCSharpGenericTypeWhitespace(signature[whereIndex..]);
+        return prefix + constraints;
+    }
+
+    private static int FindCSharpWhereConstraintToken(string signature)
+    {
+        var lexState = new CSharpLexState();
+        var lineStart = 0;
+
+        while (lineStart <= signature.Length)
+        {
+            var lineEnd = signature.IndexOf('\n', lineStart);
+            if (lineEnd < 0)
+                lineEnd = signature.Length;
+
+            var line = signature[lineStart..lineEnd];
+            var lexedLine = LexCSharpLine(line, lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            for (int i = 0; i < sanitizedLine.Length; i++)
+            {
+                if (!sanitizedLine.AsSpan(i).StartsWith("where".AsSpan(), StringComparison.Ordinal))
+                    continue;
+
+                var absoluteIndex = lineStart + i;
+                var before = absoluteIndex == 0 ? '\0' : signature[absoluteIndex - 1];
+                var afterIndex = absoluteIndex + "where".Length;
+                var after = afterIndex < signature.Length ? signature[afterIndex] : '\0';
+                if (!IsCSharpWhereTokenBoundary(before) || !IsCSharpWhereTokenBoundary(after))
+                    continue;
+                if (!LooksLikeCSharpConstraintClause(signature, absoluteIndex))
+                    continue;
+
+                return absoluteIndex;
+            }
+
+            if (lineEnd == signature.Length)
+                break;
+
+            lineStart = lineEnd + 1;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCSharpWhereTokenBoundary(char ch)
+        => ch == '\0' || !(char.IsLetterOrDigit(ch) || ch == '_' || ch == '@');
+
+    private static bool LooksLikeCSharpConstraintClause(string signature, int whereIndex)
+    {
+        var i = whereIndex + "where".Length;
+        while (i < signature.Length && char.IsWhiteSpace(signature[i]))
+            i++;
+
+        if (i >= signature.Length)
+            return false;
+
+        if (signature[i] == '@')
+            i++;
+
+        if (i >= signature.Length || !IsCSharpConstraintIdentifierStart(signature[i]))
+            return false;
+
+        i++;
+        while (i < signature.Length && IsCSharpConstraintIdentifierPart(signature[i]))
+            i++;
+
+        while (i < signature.Length && char.IsWhiteSpace(signature[i]))
+            i++;
+
+        return i < signature.Length && signature[i] == ':';
+    }
+
+    private static bool IsCSharpConstraintIdentifierStart(char ch)
+        => char.IsLetter(ch) || ch == '_';
+
+    private static bool IsCSharpConstraintIdentifierPart(char ch)
+        => char.IsLetterOrDigit(ch) || ch == '_';
 
     private enum CSharpHeaderFrameKind
     {
