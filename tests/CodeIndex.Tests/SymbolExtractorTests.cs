@@ -22199,7 +22199,7 @@ public class SymbolExtractorTests
         // multi-line template literal must not shift columns for later real symbols.
         // issue #1465 の回帰: JS/TS lexing 前に CRLF 入力を正規化するため、複数行
         // template literal が後続の本物のシンボル列をずらしてはならない。
-        const string lfContent = """
+        const string content = """
             const src = `
             class FakeClassInTemplate {}
             function fakeFromTemplate() {}
@@ -22209,6 +22209,7 @@ public class SymbolExtractorTests
               return src;
             }
             """;
+        var lfContent = content.Replace("\r\n", "\n", StringComparison.Ordinal);
         var crlfContent = lfContent.Replace("\n", "\r\n", StringComparison.Ordinal);
 
         var lfSymbols = SymbolExtractor.Extract(1, language, lfContent);
