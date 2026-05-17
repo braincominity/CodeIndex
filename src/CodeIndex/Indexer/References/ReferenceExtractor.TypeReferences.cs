@@ -7,6 +7,7 @@ namespace CodeIndex.Indexer;
 public static partial class ReferenceExtractor
 {
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
+    private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape);
 
     private static void EmitCSharpAsyncIteratorReferences(
         long fileId,
@@ -95,17 +96,22 @@ public static partial class ReferenceExtractor
         HashSet<string> seen)
     {
         var interfaceMembersByType = symbols
-            .Where(IsCSharpStaticInterfaceFunctionContract)
+            .Where(IsCSharpStaticInterfaceMemberContract)
             .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
-                group => group.ToList(),
+                group => group
+                    .Select(symbol => new CSharpStaticInterfaceMemberContract(
+                        symbol.Name,
+                        symbol.Kind,
+                        GetCSharpCallableParameterShape(symbol.Signature)))
+                    .ToList(),
                 StringComparer.Ordinal);
         if (interfaceMembersByType.Count == 0)
             return;
 
         var staticMembersByContainer = symbols
-            .Where(symbol => symbol.Kind == "function"
+            .Where(symbol => symbol.Kind is "function" or "property"
                              && !string.IsNullOrWhiteSpace(symbol.ContainerName)
                              && !string.IsNullOrWhiteSpace(symbol.Signature)
                              && ContainsCSharpWord(symbol.Signature!, "static"))
@@ -142,7 +148,7 @@ public static partial class ReferenceExtractor
                     if (!IsCSharpStaticMemberImplementationCandidate(typeSymbol, implementation))
                         continue;
 
-                    if (!interfaceMembers.Any(contract => string.Equals(contract.Name, implementation.Name, StringComparison.Ordinal)))
+                    if (!interfaceMembers.Any(contract => MatchesCSharpStaticInterfaceMemberContract(contract, implementation)))
                         continue;
 
                     var lineIndex = implementation.StartLine - 1;
@@ -165,9 +171,9 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static bool IsCSharpStaticInterfaceFunctionContract(SymbolRecord symbol)
+    private static bool IsCSharpStaticInterfaceMemberContract(SymbolRecord symbol)
     {
-        if (symbol.Kind != "function"
+        if (symbol.Kind is not ("function" or "property")
             || symbol.ContainerKind != "interface"
             || string.IsNullOrWhiteSpace(symbol.ContainerName)
             || string.IsNullOrWhiteSpace(symbol.Name)
@@ -183,7 +189,7 @@ public static partial class ReferenceExtractor
 
     private static bool IsCSharpStaticMemberImplementationCandidate(SymbolRecord typeSymbol, SymbolRecord member)
     {
-        if (member.Kind != "function"
+        if (member.Kind is not ("function" or "property")
             || string.IsNullOrWhiteSpace(member.Name)
             || string.IsNullOrWhiteSpace(member.Signature)
             || member.StartLine < typeSymbol.BodyStartLine
@@ -196,6 +202,116 @@ public static partial class ReferenceExtractor
             return false;
 
         return ContainsCSharpWord(member.Signature!, "static");
+    }
+
+    private static bool MatchesCSharpStaticInterfaceMemberContract(
+        CSharpStaticInterfaceMemberContract contract,
+        SymbolRecord implementation)
+    {
+        if (!string.Equals(contract.Name, implementation.Name, StringComparison.Ordinal)
+            || !string.Equals(contract.Kind, implementation.Kind, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var implementationParameterShape = GetCSharpCallableParameterShape(implementation.Signature);
+        return string.Equals(contract.ParameterShape, implementationParameterShape, StringComparison.Ordinal);
+    }
+
+    private static string? GetCSharpCallableParameterShape(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+        if (!TryFindCallableParameterList(signature!, "csharp", out _, out var paramStart, out var paramEnd))
+            return null;
+
+        var parameterList = signature!.Substring(paramStart, paramEnd - paramStart).Trim();
+        if (parameterList.Length == 0)
+            return string.Empty;
+
+        return string.Join(
+            ",",
+            SplitTopLevelCommaSpans(parameterList)
+                .Select(span => NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length))));
+    }
+
+    private static string NormalizeCSharpParameterTypeShape(string parameter)
+    {
+        var text = TrimCSharpParameterDefaultValue(parameter).Trim();
+        while (true)
+        {
+            var before = text;
+            text = StripLeadingCSharpParameterModifier(text);
+            if (string.Equals(before, text, StringComparison.Ordinal))
+                break;
+        }
+
+        var nameStart = FindTrailingCSharpParameterNameStart(text);
+        if (nameStart > 0)
+            text = text.Substring(0, nameStart).TrimEnd();
+
+        return new string(text.Where(static ch => !char.IsWhiteSpace(ch)).ToArray());
+    }
+
+    private static string StripLeadingCSharpParameterModifier(string text)
+    {
+        foreach (var modifier in new[] { "this", "ref", "out", "in", "scoped", "params", "readonly" })
+        {
+            if (StartsWithCSharpWord(text, modifier))
+                return text.Substring(modifier.Length).TrimStart();
+        }
+
+        return text;
+    }
+
+    private static string TrimCSharpParameterDefaultValue(string parameter)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        for (var i = 0; i < parameter.Length; i++)
+        {
+            var ch = parameter[i];
+            if (ch == '<')
+                angleDepth++;
+            else if (ch == '>' && angleDepth > 0)
+                angleDepth--;
+            else if (ch == '(')
+                parenDepth++;
+            else if (ch == ')' && parenDepth > 0)
+                parenDepth--;
+            else if (ch == '[')
+                bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0)
+                bracketDepth--;
+            else if (ch == '=' && angleDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                return parameter.Substring(0, i);
+        }
+
+        return parameter;
+    }
+
+    private static int FindTrailingCSharpParameterNameStart(string text)
+    {
+        var end = text.Length - 1;
+        while (end >= 0 && char.IsWhiteSpace(text[end]))
+            end--;
+        if (end < 0 || !IsCSharpIdentifierPart(text[end]))
+            return -1;
+
+        var start = end;
+        while (start >= 0 && IsCSharpIdentifierPart(text[start]))
+            start--;
+
+        return start + 1;
+    }
+
+    private static bool StartsWithCSharpWord(string text, string word)
+    {
+        if (!text.StartsWith(word, StringComparison.Ordinal))
+            return false;
+
+        return text.Length == word.Length || !IsCSharpIdentifierPart(text[word.Length]);
     }
 
     private static HashSet<string> ExtractCSharpImplementedInterfaceNames(string headerText)

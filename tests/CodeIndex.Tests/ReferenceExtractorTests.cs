@@ -78,12 +78,24 @@ public class ReferenceExtractorTests
             {
                 static abstract T Parse(string s);
                 static virtual T Create() => default!;
+                static abstract int Scale { get; }
+            }
+
+            public interface ICodeParseable<T>
+            {
+                static abstract T Parse(int code);
             }
 
             public readonly struct Money : IParseable<Money>
             {
                 public static Money Parse(string s) => new();
                 public static Money Create() => new();
+                public static int Scale => 1;
+            }
+
+            public readonly struct TextOnly : ICodeParseable<TextOnly>
+            {
+                public static TextOnly Parse(string s) => new();
             }
             """;
 
@@ -102,6 +114,12 @@ public class ReferenceExtractorTests
             && symbol.ContainerKind == "interface"
             && symbol.ContainerName == "IParseable"
             && symbol.Signature?.Contains("static virtual", StringComparison.Ordinal) == true);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.Name == "Scale"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static abstract", StringComparison.Ordinal) == true);
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "Parse"
@@ -113,6 +131,15 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "implicit_implementation"
             && reference.ContainerName == "Create"
             && reference.Context == "public static Money Create() => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Scale"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Scale"
+            && reference.Context == "public static int Scale => 1;");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static TextOnly Parse(string s) => new();");
     }
 
     [Fact]
