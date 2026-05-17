@@ -99,8 +99,8 @@ public static partial class ReferenceExtractor
 
     private static bool ContainsCSharpAsyncIteratorReturnType(string? returnType)
         => !string.IsNullOrWhiteSpace(returnType)
-            && (returnType.Contains("IAsyncEnumerable", StringComparison.Ordinal)
-                || returnType.Contains("IAsyncEnumerator", StringComparison.Ordinal));
+            && (ContainsCSharpWord(returnType, "IAsyncEnumerable")
+                || ContainsCSharpWord(returnType, "IAsyncEnumerator"));
 
     private static (int Line, int Column)? FindFirstCSharpYieldReturnPosition(string[] structuralLines, SymbolRecord symbol)
     {
