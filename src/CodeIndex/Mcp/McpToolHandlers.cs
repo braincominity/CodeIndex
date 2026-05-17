@@ -317,6 +317,26 @@ public partial class McpServer
             GraphSupportReason: graphSupportReason);
     }
 
+    private static bool TryReadReferenceRankMode(JsonNode? args, out ReferenceRankMode rankMode, out string? error)
+    {
+        var value = args?["rankBy"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            rankMode = ReferenceRankMode.Weighted;
+            error = null;
+            return true;
+        }
+
+        if (QueryCommandRunner.TryParseReferenceRankMode(value, out rankMode))
+        {
+            error = null;
+            return true;
+        }
+
+        error = $"rankBy must be one of weighted, count, kind; got '{value}'.";
+        return false;
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -642,10 +662,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -666,6 +688,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
@@ -706,10 +729,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -730,6 +755,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
