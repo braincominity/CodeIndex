@@ -76,6 +76,9 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Human `status` output translates readiness flags and `status --explain <field>`
   describes one readiness field/remediation; `status --json` keeps raw fields for
   automation, including the last full-scan unknown-extension count.
+- Read commands accept `--profile` to append SQL timing, row-count, and
+  `EXPLAIN QUERY PLAN` JSON after the normal result; `--slow-query-ms <n>` logs
+  profiled SQL statements that meet the threshold.
 - The documented `status --json` trust contract covers `fold_ready`,
   `fold_ready_reason`, `graph_table_available`, `issues_table_available`,
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
@@ -85,8 +88,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `stale_after_seconds`, `index_age_seconds`,
-  `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
+  `path_case_sensitive`, `db_pragma_settings`, `stale_after_seconds`,
+  `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
@@ -217,6 +220,9 @@ cdidx mcp
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
   個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
   と直近 full scan の未知拡張子数を維持します。
+- read 系コマンドは `--profile` で通常結果の後に SQL の時間、行数、
+  `EXPLAIN QUERY PLAN` の JSON を追加できます。`--slow-query-ms <n>` は
+  閾値以上の profiled SQL をログに記録します。
 - 文書化された `status --json` trust contract は `fold_ready`、
   `fold_ready_reason`、`graph_table_available`、`issues_table_available`、
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
@@ -226,8 +232,8 @@ cdidx mcp
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`stale_after_seconds`、`index_age_seconds`、
-  `degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
+  `path_case_sensitive`、`db_pragma_settings`、`stale_after_seconds`、
+  `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。

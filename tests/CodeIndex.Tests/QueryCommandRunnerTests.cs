@@ -44,6 +44,8 @@ public class QueryCommandRunnerTests
             "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}",
             "--snippet-focus", "proximity",
             "--max-line-width", "77",
+            "--profile",
+            "--slow-query-ms", "500",
             "--no-visibility-rank",
         ], jsonDefault: true);
 
@@ -68,6 +70,8 @@ public class QueryCommandRunnerTests
         Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
         Assert.Equal(SearchSnippetFocusMode.Proximity, options.SnippetFocus);
         Assert.Equal(77, options.MaxLineWidth);
+        Assert.True(options.Profile);
+        Assert.Equal(500, options.SlowQueryMs);
         Assert.True(options.NoVisibilityRank);
     }
 
@@ -148,6 +152,58 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("src/private-auth.cs:1-4 [private]", humanStdout);
             Assert.Contains("1 results in 1 files", humanStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--json", "--profile", "--slow-query-ms", "0"],
+                _jsonOptions));
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, lines.Length);
+
+            using var resultDocument = JsonDocument.Parse(lines[0]);
+            Assert.Equal("src/auth.cs", resultDocument.RootElement.GetProperty("path").GetString());
+
+            using var profileDocument = JsonDocument.Parse(lines[1]);
+            var profile = profileDocument.RootElement.GetProperty("profile");
+            var phases = profile.GetProperty("phases");
+            var queryPlan = profile.GetProperty("query_plan");
+            var queries = profile.GetProperty("queries");
+
+            Assert.True(phases.GetArrayLength() > 0);
+            Assert.True(queryPlan.GetArrayLength() > 0);
+            Assert.True(queries.GetArrayLength() > 0);
+            Assert.Equal("sql_1", phases[0].GetProperty("name").GetString());
+            Assert.True(phases[0].GetProperty("elapsed_ms").GetDouble() >= 0);
+            Assert.True(phases[0].GetProperty("rows_scanned").GetInt32() >= 0);
+            Assert.False(string.IsNullOrWhiteSpace(queryPlan[0].GetProperty("detail").GetString()));
+            Assert.Contains(queries.EnumerateArray(), query =>
+                query.GetProperty("sql").GetString()?.Contains("SELECT", StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {
@@ -28771,6 +28827,10 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("index fresh", json.GetProperty("summary").GetString());
             Assert.DoesNotContain("index stale", json.GetProperty("summary").GetString());
+            var pragmas = json.GetProperty("db_pragma_settings");
+            Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
+            Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
+            Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
         }
         finally
         {

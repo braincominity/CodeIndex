@@ -69,6 +69,7 @@ public partial class DbReader
     private const int UnusedPublicOverfetchMinimum = 64;
     private const int UnusedPublicOverfetchMaximum = 1024;
     private const int UnusedPublicCandidateBudget = 2048;
+    private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
     private static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
         CASE {referenceKindSql}
@@ -180,7 +181,7 @@ public partial class DbReader
         if (kind != null)
             innerSql += " AND s.kind = @kind";
         if (lang != null)
-            innerSql += " AND f.lang = @lang";
+            innerSql += SymbolLanguageFileIdFilter;
         if (since != null && _fileColumns.Contains("modified"))
             innerSql += " AND f.modified >= @since";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -275,7 +276,7 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -424,7 +425,7 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -603,7 +604,7 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1152,7 +1153,7 @@ public partial class DbReader
             WHERE " + nameCondition + @"
               AND " + supportedLangFilter;
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         if (preferNonEnumMember)
             sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND "
                 + GetSymbolColumnSql("container_kind", "''")
@@ -1669,7 +1670,7 @@ public partial class DbReader
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         else
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
         if (kind != null)
@@ -2015,7 +2016,7 @@ public partial class DbReader
                 WHERE s.kind NOT IN ('import', 'namespace')";
 
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         else
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
         if (kind != null)
@@ -2443,7 +2444,7 @@ public partial class DbReader
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         else
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
 
@@ -2588,7 +2589,7 @@ public partial class DbReader
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
-            sql += " AND f.lang = @lang";
+            sql += SymbolLanguageFileIdFilter;
         else
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
 

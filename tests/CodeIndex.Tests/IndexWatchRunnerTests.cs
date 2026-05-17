@@ -138,6 +138,26 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void BuildSubRunArgs_MaxFileBytes_PreservesWatchOverride()
+    {
+        var options = new IndexCommandOptions
+        {
+            ProjectPath = "/repo",
+            Json = true,
+            Watch = true,
+            MaxFileSizeBytes = 50L * 1024L * 1024L,
+        };
+        var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+
+        var flagIndex = args.IndexOf("--max-file-bytes");
+        Assert.True(flagIndex >= 0);
+        Assert.Equal((50L * 1024L * 1024L).ToString(System.Globalization.CultureInfo.InvariantCulture), args[flagIndex + 1]);
+    }
+
+    [Fact]
     public void RunCore_CancellationToken_StopsImmediately()
     {
         var projectRoot = CreateTempProject();

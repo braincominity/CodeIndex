@@ -426,6 +426,7 @@ public partial class DbReader
         // consistency with the other freshness signals; missing on legacy DBs.
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
+        var dbPragmaSettings = GetDbPragmaSettings();
 
         var result = new StatusResult
         {
@@ -454,6 +455,7 @@ public partial class DbReader
             IndexNewerThanReader = _indexNewerThanReader,
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
+            DbPragmaSettings = dbPragmaSettings,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
@@ -477,6 +479,38 @@ public partial class DbReader
         cmd.CommandText = sql;
         return (long)cmd.ExecuteScalar()!;
     }
+
+    private StatusDbPragmaSettings GetDbPragmaSettings() => new()
+    {
+        JournalMode = ExecuteScalarString("PRAGMA journal_mode"),
+        Synchronous = NormalizeSynchronousMode(ExecuteScalarString("PRAGMA synchronous")),
+        WalAutocheckpoint = ExecuteNullableLong("PRAGMA wal_autocheckpoint"),
+    };
+
+    private string? ExecuteScalarString(string sql)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString();
+    }
+
+    private long? ExecuteNullableLong(string sql)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        var raw = cmd.ExecuteScalar();
+        return raw is null or DBNull ? null : Convert.ToInt64(raw);
+    }
+
+    private static string? NormalizeSynchronousMode(string? value) => value switch
+    {
+        "0" => "OFF",
+        "1" => "NORMAL",
+        "2" => "FULL",
+        "3" => "EXTRA",
+        null or "" => value,
+        _ => value.ToUpperInvariant(),
+    };
 
     /// <summary>
     /// Return a lightweight freshness hint for zero-result MCP responses.
