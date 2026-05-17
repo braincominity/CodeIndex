@@ -155,10 +155,21 @@ idx_files_modified  ON files(modified)
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
+idx_symbols_file_kind ON symbols(file_id, kind)
+idx_files_lang_modified ON files(lang, modified)
 idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
 idx_symbol_refs_container ON symbol_references(container_name)
 ```
+
+Language + symbol-kind definition queries intentionally keep `lang` on
+`files` instead of denormalizing it into `symbols`. Query builders express that
+filter as `s.file_id IN (SELECT id FROM files WHERE lang = @lang)` so SQLite can
+use `files(lang)` to resolve candidate files and then probe
+`idx_symbols_file_kind (file_id, kind)`. Avoid changing those queries back to
+`JOIN files f ... WHERE f.lang = @lang AND s.kind = @kind`; on large indexes
+that shape can start from `idx_symbols_kind` and scan every symbol of the
+requested kind before checking file language (#1933).
 
 ### FTS5 sync triggers
 
@@ -1580,10 +1591,22 @@ idx_files_modified  ON files(modified)
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
+idx_symbols_file_kind ON symbols(file_id, kind)
+idx_files_lang_modified ON files(lang, modified)
 idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
 idx_symbol_refs_container ON symbol_references(container_name)
 ```
+
+言語 + シンボル種別の定義検索では、`lang` を `symbols` に非正規化せず
+`files` に保持する方針です。クエリビルダーはこの条件を
+`s.file_id IN (SELECT id FROM files WHERE lang = @lang)` と表現し、
+SQLite が `files(lang)` で候補ファイルを絞ってから
+`idx_symbols_file_kind (file_id, kind)` を probe できるようにしています。
+この種のクエリを `JOIN files f ... WHERE f.lang = @lang AND s.kind = @kind`
+へ戻さないでください。大きいインデックスでは `idx_symbols_kind` から始まり、
+要求された kind の全シンボルを走査してから言語を確認する計画に戻る可能性があります
+(#1933)。
 
 ### FTS5同期トリガー
 
