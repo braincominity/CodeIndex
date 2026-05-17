@@ -150,14 +150,15 @@ public class SuggestionStoreTests : IDisposable
             Context = "Searching for arrow functions",
             Hash = SuggestionStore.ComputeHash("crash_report", "typescript", "NullReferenceException during search"),
             CreatedAt = new DateTime(2026, 4, 12, 10, 0, 0, DateTimeKind.Utc),
+            Status = SuggestionStatus.Draft,
+            UpstreamIssueNumber = null,
+            UpstreamUrl = null,
             CreatedByAgent = "codex/5",
             SessionId = "session-123",
             ClientVersion = "1.2.3",
             McpClientName = "codex",
             McpClientVersion = "5",
             ToolInvocationContext = "MCP regression triage",
-            SubmittedToGitHub = false,
-            GitHubIssueUrl = null,
         };
 
         _store.TryAdd(record);
@@ -170,13 +171,16 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal("NullReferenceException during search", r.Description);
         Assert.Equal("Searching for arrow functions", r.Context);
         Assert.Equal(record.Hash, r.Hash);
+        Assert.Equal(SuggestionStatus.Draft, r.Status);
+        Assert.Null(r.UpstreamIssueNumber);
+        Assert.Null(r.UpstreamUrl);
         Assert.Equal("codex/5", r.CreatedByAgent);
         Assert.Equal("session-123", r.SessionId);
         Assert.Equal("1.2.3", r.ClientVersion);
         Assert.Equal("codex", r.McpClientName);
         Assert.Equal("5", r.McpClientVersion);
         Assert.Equal("MCP regression triage", r.ToolInvocationContext);
-        Assert.False(r.SubmittedToGitHub);
+        Assert.Null(r.SubmittedToGitHub);
         Assert.Null(r.GitHubIssueUrl);
     }
 
@@ -217,8 +221,10 @@ public class SuggestionStoreTests : IDisposable
 
         var all = _store.LoadAll();
         Assert.Single(all);
-        Assert.True(all[0].SubmittedToGitHub);
-        Assert.Equal("https://github.com/widthdom/CodeIndex/issues/99", all[0].GitHubIssueUrl);
+        Assert.Equal(SuggestionStatus.SubmittedPendingTriage, all[0].Status);
+        Assert.Equal(99, all[0].UpstreamIssueNumber);
+        Assert.Equal("https://github.com/widthdom/CodeIndex/issues/99", all[0].UpstreamUrl);
+        Assert.NotNull(all[0].LastSyncedAt);
     }
 
     [Fact]
@@ -231,7 +237,52 @@ public class SuggestionStoreTests : IDisposable
 
         var all = _store.LoadAll();
         Assert.Single(all);
-        Assert.False(all[0].SubmittedToGitHub);
+        Assert.Equal(SuggestionStatus.Draft, all[0].Status);
+        Assert.Null(all[0].UpstreamUrl);
+    }
+
+    [Fact]
+    public void LoadAll_LegacySubmittedFlag_MigratesToLifecycleFields()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllText(filePath, """
+[
+  {
+    "category": "other",
+    "description": "Legacy suggestion",
+    "hash": "abc123",
+    "created_at": "2026-04-12T10:00:00Z",
+    "submitted_to_github": true,
+    "github_issue_url": "https://github.com/widthdom/CodeIndex/issues/123"
+  }
+]
+""");
+
+        var all = _store.LoadAll();
+
+        Assert.Single(all);
+        Assert.Equal(SuggestionStatus.SubmittedPendingTriage, all[0].Status);
+        Assert.Equal(123, all[0].UpstreamIssueNumber);
+        Assert.Equal("https://github.com/widthdom/CodeIndex/issues/123", all[0].UpstreamUrl);
+        Assert.Null(all[0].SubmittedToGitHub);
+        Assert.Null(all[0].GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void MarkSubmitted_WritesLifecycleFieldsWithoutLegacyFields()
+    {
+        var record = MakeRecord("symbol_extraction", "csharp", "Missing record support");
+        _store.TryAdd(record);
+
+        _store.MarkSubmitted(record.Hash, "https://github.com/widthdom/CodeIndex/issues/99");
+
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var json = File.ReadAllText(filePath);
+        Assert.Contains("\"status\": \"submitted_pending_triage\"", json);
+        Assert.Contains("\"upstream_issue_number\": 99", json);
+        Assert.Contains("\"upstream_url\": \"https://github.com/widthdom/CodeIndex/issues/99\"", json);
+        Assert.DoesNotContain("submitted_to_github", json);
+        Assert.DoesNotContain("github_issue_url", json);
     }
 
     // --- Atomic write and corruption recovery tests / アトミック書き込みと破損復旧テスト ---
