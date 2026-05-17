@@ -1624,13 +1624,51 @@ public partial class McpServer : IDisposable
         var def = new JsonObject
         {
             ["name"] = name,
-            ["description"] = description,
+            ["description"] = AppendLanguageSupportClause(name, description),
             ["inputSchema"] = inputSchema
         };
         if (annotations != null)
             def["annotations"] = annotations;
         return def;
     }
+
+    private static string AppendLanguageSupportClause(string name, string description)
+    {
+        var clause = name switch
+        {
+            "references" or "callers" or "callees" or "deps" or "impact_analysis" or "unused_symbols" or "symbol_hotspots"
+                => $"Language support: Supports graph/reference extraction for: {GraphLanguageList()}. Unsupported `lang` values are reported with graph-support metadata when the tool returns graph-support fields; use `search`, `definition`, `excerpt`, or `files` for non-graph languages.",
+            "definition" or "symbols" or "outline" or "analyze_symbol"
+                => $"Language support: Supports symbol extraction for: {SymbolLanguageList()}. Search-only languages can still be indexed and filtered by file tools but may have no symbol rows.",
+            "search" or "find_in_file" or "files" or "map" or "excerpt" or "status" or "validate"
+                => $"Language support: Supports indexed file/content filters for every detected language listed by `languages`: {DetectedLanguageList()}. Symbol and graph fields are available only for the languages whose capabilities are advertised by `languages`.",
+            "languages"
+                => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction and graph_queries capability flags.",
+            "index"
+                => $"Language support: Indexes every detected language listed by `languages`: {DetectedLanguageList()}, then extracts symbols and graph references only where the catalog advertises those capabilities.",
+            "batch_query"
+                => "Language support: Language behavior is inherited from each nested read-only tool; consult each returned payload and the `languages` tool for capabilities.",
+            "backfill_fold" or "ping" or "suggest_improvement"
+                => "Language support: Language-independent tool; it does not interpret `lang` filters.",
+            _ => "Language support: See the `languages` tool for detected languages and per-language symbol_extraction / graph_queries capabilities.",
+        };
+
+        return $"{description} {clause}";
+    }
+
+    private static string DetectedLanguageList()
+        => string.Join(", ", FileIndexer.GetLanguageExtensions()
+            .Values
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(lang => lang, StringComparer.Ordinal));
+
+    private static string SymbolLanguageList()
+        => string.Join(", ", SymbolExtractor.GetSupportedLanguages()
+            .OrderBy(lang => lang, StringComparer.Ordinal));
+
+    private static string GraphLanguageList()
+        => string.Join(", ", ReferenceExtractor.GetSupportedLanguages()
+            .OrderBy(lang => lang, StringComparer.Ordinal));
 
     /// <summary>
     /// Build MCP tool annotations for a read-only query tool.
