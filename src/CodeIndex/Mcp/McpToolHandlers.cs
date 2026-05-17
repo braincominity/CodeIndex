@@ -667,7 +667,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
+            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -679,7 +679,7 @@ public partial class McpServer
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
                 r => r.CalleeName);
             var payload = new JsonObject
             {
@@ -734,7 +734,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
+            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -746,7 +746,7 @@ public partial class McpServer
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
                 r => r.CallerName);
             var payload = new JsonObject
             {
@@ -1621,6 +1621,8 @@ public partial class McpServer
                 ["max_depth_requested"] = maxDepthRequested,
                 ["actual_depth"] = maxActualDepth,
                 ["truncated"] = analysis.Truncated,
+                ["termination_reason"] = analysis.TerminationReason,
+                ["cycle_detected"] = analysis.CycleDetected,
                 ["impact_mode"] = analysis.ImpactMode,
                 ["heuristic"] = analysis.Heuristic,
                 ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
@@ -1635,6 +1637,8 @@ public partial class McpServer
             };
             if (analysis.TruncatedReason != null)
                 payload["truncated_reason"] = analysis.TruncatedReason;
+            if (analysis.Cycles is { Count: > 0 })
+                payload["cycles"] = JsonSerializer.SerializeToNode(analysis.Cycles, _jsonOptions);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             string? maxDepthClampWarning = null;
             if (maxDepthRequested != maxDepth)
@@ -1657,14 +1661,17 @@ public partial class McpServer
                 truncatedTail = " Results truncated by internal safety cap (graph likely pathological); raising limit will not help.";
             else
                 truncatedTail = " Results truncated — increase limit for more.";
+            var cycleTail = analysis.CycleDetected
+                ? $" Cycle detected ({ConsoleUi.Counted(analysis.Cycles?.Count ?? 0, "cycle")})."
+                : "";
 
             var summary = analysis.ImpactMode switch
             {
                 "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {ConsoleUi.Counted(hintCount, "possible file-level dependent")} across {ConsoleUi.Counted(hintFileCount, "file")}. These hints are heuristic only."
-                    + truncatedTail,
+                    + truncatedTail + cycleTail,
                 _ when count > 0 => $"Found {ConsoleUi.Counted(count, "transitive caller")} across {ConsoleUi.Counted(fileCount, "file")} (depth {maxActualDepth})."
-                    + truncatedTail,
-                _ => "No impact found.",
+                    + truncatedTail + cycleTail,
+                _ => "No impact found." + cycleTail,
             };
             if (maxDepthClampWarning != null)
                 summary += $" Warning: {maxDepthClampWarning}";
@@ -2334,10 +2341,10 @@ public partial class McpServer
 
     /// <summary>
     /// Handle the suggest_improvement tool call.
-    /// Records a structured suggestion to .cdidx/suggestions.json.
+    /// Records a structured suggestion to .cdidx/suggestions-*.json.
     /// Validates that no source code is included in the description or context.
     /// suggest_improvementツール呼び出しを処理する。
-    /// 構造化された提案を .cdidx/suggestions.json に記録する。
+    /// 構造化された提案を .cdidx/suggestions-*.json に記録する。
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
     private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)

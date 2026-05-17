@@ -68,12 +68,26 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
+- Local suggestion history can be listed, inspected, and exported with
+  `cdidx suggestions`.
 - Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
 - Exact DB/worktree freshness checks with `status --check`, including an
   overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
 - Human `status` output translates readiness flags and `status --explain <field>`
   describes one readiness field/remediation; `status --json` keeps raw fields for
   automation, including the last full-scan unknown-extension count.
+- The documented `status --json` trust contract covers `fold_ready`,
+  `fold_ready_reason`, `graph_table_available`, `issues_table_available`,
+  `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
+  `hotspot_family_ready`, `hotspot_family_degraded_reason`,
+  `csharp_symbol_name_ready`, `csharp_metadata_target_ready`,
+  `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`,
+  `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
+  `index_writer_version`, `index_newer_than_reader`,
+  `index_newer_than_reader_reason`, `unknown_extension_file_count`,
+  `path_case_sensitive`, `stale_after_seconds`, `index_age_seconds`,
+  `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
+  list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
 
@@ -196,12 +210,25 @@ cdidx mcp
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
+- `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
   `CDIDX_STALE_AFTER` で age threshold を上書き可能。
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
   個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
   と直近 full scan の未知拡張子数を維持します。
+- 文書化された `status --json` trust contract は `fold_ready`、
+  `fold_ready_reason`、`graph_table_available`、`issues_table_available`、
+  `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
+  `hotspot_family_ready`、`hotspot_family_degraded_reason`、
+  `csharp_symbol_name_ready`、`csharp_metadata_target_ready`、
+  `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、
+  `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
+  `index_writer_version`、`index_newer_than_reader`、
+  `index_newer_than_reader_reason`、`unknown_extension_file_count`、
+  `path_case_sensitive`、`stale_after_seconds`、`index_age_seconds`、
+  `degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
+  この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
 

@@ -86,6 +86,9 @@ internal sealed class IndexLock : IDisposable
         catch (UnauthorizedAccessException ex)
         {
             var holder = TryReadHolderInfo(lockPath);
+            if (holder == null)
+                throw;
+
             throw new IndexLockConflictException(lockPath, holder, ex);
         }
 

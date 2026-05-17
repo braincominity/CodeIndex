@@ -250,6 +250,32 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(references);
     }
 
+    private void InsertManualReference(string path, string lang, string? containerKind, string? containerName, string target, string kind)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = lang,
+            Size = 100,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = target,
+                ReferenceKind = kind,
+                Line = 1,
+                Column = 1,
+                Context = $"{target}()",
+                ContainerKind = containerKind,
+                ContainerName = containerName,
+            }
+        ]);
+    }
+
     private void InsertSearchVisibilityFixture(string path, string visibility, DateTime modified)
     {
         const string content = "public class AuthFixture { void Marker() { Authenticate(); } }";
@@ -387,6 +413,46 @@ public class DbReaderTests : IDisposable
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
         Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
+    }
+
+    [Theory]
+    [InlineData("src/top-level.js", "javascript")]
+    [InlineData("src/top-level.ts", "typescript")]
+    [InlineData("src/top_level.py", "python")]
+    public void GetTransitiveCallers_TreatsScriptNullContainerReferencesAsTopLevelCallers(string path, string lang)
+    {
+        const string target = "TargetService";
+        InsertManualReference(path, lang, containerKind: null, containerName: null, target, "call");
+
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers(target, maxDepth: 1, limit: 10, lang: lang);
+
+        var result = Assert.Single(results);
+        Assert.Equal(path, result.Path);
+        Assert.Equal(lang, result.Lang);
+        Assert.Equal("<top-level>", result.CallerName);
+        Assert.Equal("function", result.CallerKind);
+        Assert.Equal(target, result.CalleeName);
+        Assert.Equal(1, result.Depth);
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_DoesNotTreatJavaNullContainerReferencesAsTopLevelCallers()
+    {
+        InsertManualReference(
+            "src/TopLevel.java",
+            "java",
+            containerKind: null,
+            containerName: null,
+            target: "TargetService",
+            kind: "call");
+
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("TargetService", maxDepth: 1, limit: 10, lang: "java");
+
+        Assert.Empty(results);
+        Assert.False(truncated);
+        Assert.Null(truncatedReason);
     }
 
     [Fact]
@@ -2487,7 +2553,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", callee.Path);
         Assert.Equal("login", callee.CallerName);
         Assert.Equal("authenticate", callee.CalleeName);
-        Assert.Equal("call", callee.ReferenceKind);
+        Assert.Equal("invoke", callee.ReferenceKind);
     }
 
     [Fact]
@@ -3592,7 +3658,7 @@ public class DbReaderTests : IDisposable
             },
         ]);
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -3620,7 +3686,7 @@ public class DbReaderTests : IDisposable
             Run();
             """);
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -3860,10 +3926,10 @@ public class DbReaderTests : IDisposable
 
         var callee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]));
         Assert.Equal("Target", callee.CalleeName);
-        Assert.Equal("instantiate", callee.ReferenceKind);
+        Assert.Equal("invoke", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
         Assert.False(truncated);
         Assert.Null(truncatedReason);
         var impactCaller = Assert.Single(impact);
@@ -3918,8 +3984,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
         Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
 
-        var (bareImpact, bareTruncated, bareTruncatedReason) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
-        var (qualifiedImpact, qualifiedTruncated, qualifiedTruncatedReason) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (bareImpact, bareTruncated, bareTruncatedReason, _, _) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated, qualifiedTruncatedReason, _, _) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
         Assert.False(bareTruncated);
         Assert.False(qualifiedTruncated);
         Assert.Null(bareTruncatedReason);
@@ -9460,7 +9526,7 @@ public class DbReaderTests : IDisposable
         var callee = Assert.Single(_reader.GetCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
         Assert.Equal("Hook", callee.CallerName);
         Assert.Equal("Changed", callee.CalleeName);
-        Assert.Equal("subscribe", callee.ReferenceKind);
+        Assert.Equal("event", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
         Assert.Equal(1, _reader.CountCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
 
@@ -9476,7 +9542,7 @@ public class DbReaderTests : IDisposable
         var bundledCallee = Assert.Single(callerAnalysis.Callees);
         Assert.Equal("Hook", bundledCallee.CallerName);
         Assert.Equal("Changed", bundledCallee.CalleeName);
-        Assert.Equal("subscribe", bundledCallee.ReferenceKind);
+        Assert.Equal("event", bundledCallee.ReferenceKind);
     }
 
     [Fact]
@@ -9614,11 +9680,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Changed", caller.CalleeName);
         Assert.Equal(2, caller.ReferenceCount);
         Assert.True(caller.HasMixedReferenceKinds);
-        Assert.Equal(new[] { "call", "subscribe" }, caller.ReferenceKinds);
-        // `subscribe` takes priority over `call` in the preferred-kind summary, matching
-        // GetGroupedCallerReferenceKindSql's ordering.
-        // 要約 kind は GetGroupedCallerReferenceKindSql の優先順位に従い `subscribe`。
-        Assert.Equal("subscribe", caller.ReferenceKind);
+        Assert.Equal(new[] { "event", "invoke" }, caller.ReferenceKinds);
+        Assert.Equal("event", caller.ReferenceKind);
 
         // `callees` rows are already split per kind, so each grouped row stays
         // single-kind with `has_mixed_reference_kinds = false`.
@@ -9627,12 +9690,61 @@ public class DbReaderTests : IDisposable
             .OrderBy(c => c.ReferenceKind, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(2, callees.Count);
-        Assert.Equal("call", callees[0].ReferenceKind);
+        Assert.Equal("event", callees[0].ReferenceKind);
         Assert.False(callees[0].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "call" }, callees[0].ReferenceKinds);
-        Assert.Equal("subscribe", callees[1].ReferenceKind);
+        Assert.Equal(new[] { "event" }, callees[0].ReferenceKinds);
+        Assert.Equal("invoke", callees[1].ReferenceKind);
         Assert.False(callees[1].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "subscribe" }, callees[1].ReferenceKinds);
+        Assert.Equal(new[] { "invoke" }, callees[1].ReferenceKinds);
+
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"], rawKinds: true));
+        Assert.Equal(new[] { "call", "subscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal("subscribe", rawCaller.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetCallers_RawKindsKeepsUnsubscribeVisible()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unsubscribe_kind_caller.cs",
+            Lang = "csharp",
+            Size = 256,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "unsubscribe",
+                Line = 1,
+                Column = 41,
+                Context = "Changed -= Handler;",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 62,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+        ]);
+
+        var logicalCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["unsubscribe_kind_caller"]));
+        Assert.Equal(new[] { "event", "invoke" }, logicalCaller.ReferenceKinds);
+        Assert.Equal("event", logicalCaller.ReferenceKind);
+
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["unsubscribe_kind_caller"], rawKinds: true));
+        Assert.Equal(new[] { "call", "unsubscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal("unsubscribe", rawCaller.ReferenceKind);
     }
 
     [Fact]
@@ -9667,7 +9779,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "Changed", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_subscribe_"]);
 
         Assert.False(truncated);
@@ -9694,7 +9806,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "ImpactCycleA", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_call_cycle"]);
 
         Assert.False(truncated);
@@ -9756,7 +9868,7 @@ public class DbReaderTests : IDisposable
             },
         ]);
 
-        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
             "ImpactMetadataTarget", maxDepth: 5, limit: 10, lang: "csharp", pathPatterns: ["impact_metadata_cycle"]);
 
         Assert.False(truncated);
@@ -9801,7 +9913,7 @@ public class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
 
         Assert.False(truncated);
         Assert.Null(truncatedReason);
@@ -9832,11 +9944,11 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (depth1, truncated1, truncatedReason1) = _reader.GetTransitiveCallers(
+        var (depth1, truncated1, truncatedReason1, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth2, truncated2, truncatedReason2) = _reader.GetTransitiveCallers(
+        var (depth2, truncated2, truncatedReason2, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth3, truncated3, truncatedReason3) = _reader.GetTransitiveCallers(
+        var (depth3, truncated3, truncatedReason3, _, _) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 3, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
 
         Assert.False(truncated1);
@@ -9865,6 +9977,142 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CycleReportsTerminationReasonAndMembers()
+    {
+        // Issue #1883: a caller cycle must be explicit in the impact metadata so consumers
+        // can distinguish a natural end from a traversal stopped by the visited guard.
+        // #1883: caller cycle は impact metadata に明示し、自然終了と visited guard による停止を区別する。
+        InsertIndexedFile("src/impact_cycle.cs", "csharp",
+            """
+            public static class ImpactCycle
+            {
+                public static void A() { B(); }
+                public static void B() { C(); }
+                public static void C() { A(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("C", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_cycle"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.True(analysis.CycleDetected);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(new[] { "A", "B", "C" }, cycle.Members);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CycleBetweenAlreadyVisitedDirectCallersIsReported()
+    {
+        InsertIndexedFile("src/impact_direct_cycle.cs", "csharp",
+            """
+            public static class ImpactDirectCycle
+            {
+                public static void Leaf() { }
+                public static void A() { Leaf(); B(); }
+                public static void B() { Leaf(); A(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_direct_cycle"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.True(analysis.CycleDetected);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(new[] { "A", "B" }, cycle.Members);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_BoundaryRootCycleReportsCycleNotMaxDepth()
+    {
+        InsertIndexedFile("src/impact_boundary_root_cycle.cs", "csharp",
+            """
+            public static class ImpactBoundaryRootCycle
+            {
+                public static void Leaf() { A(); }
+                public static void A() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_boundary_root_cycle"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.True(analysis.CycleDetected);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(new[] { "A", "Leaf" }, cycle.Members);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_MaxDepthReportsTerminationReason()
+    {
+        InsertIndexedFile("src/impact_depth_reason.cs", "csharp",
+            """
+            public static class ImpactDepthReason
+            {
+                public static void Leaf() { }
+                public static void Mid() { Leaf(); }
+                public static void Top() { Mid(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_reason"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.MaxDepthReached, analysis.TerminationReason);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_MaxDepthBoundaryWithoutSkippedCallerReportsCompleted()
+    {
+        InsertIndexedFile("src/impact_depth_completed.cs", "csharp",
+            """
+            public static class ImpactDepthCompleted
+            {
+                public static void Leaf() { }
+                public static void OnlyCaller() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_completed"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_DepthZeroReportsCompletedForResolvedSymbol()
+    {
+        InsertIndexedFile("src/impact_depth_zero.cs", "csharp",
+            """
+            public static class ImpactDepthZero
+            {
+                public static void Leaf() { }
+                public static void Caller() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 0, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_zero"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_WithPathsDefaultIsOff()
     {
         // Default (no opt-in) keeps the legacy contract: Paths is null and PathsTruncated is false.
@@ -9878,7 +10126,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (results, _, _) = _reader.GetTransitiveCallers(
+        var (results, _, _, _, _) = _reader.GetTransitiveCallers(
             "Leaf", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_paths_off"]);
 
         var caller = Assert.Single(results);
@@ -9908,7 +10156,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (resultsDefault, _, _) = _reader.GetTransitiveCallers(
+        var (resultsDefault, _, _, _, _) = _reader.GetTransitiveCallers(
             "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"]);
 
         var defaultByName = resultsDefault
@@ -9920,7 +10168,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, defaultByName["A"].Depth);
         Assert.Null(defaultByName["A"].Paths);
 
-        var (resultsWithPaths, _, _) = _reader.GetTransitiveCallers(
+        var (resultsWithPaths, _, _, _, _) = _reader.GetTransitiveCallers(
             "Foo", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_diamond"],
             withPaths: true);
 
@@ -9961,7 +10209,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (results, _, _) = _reader.GetTransitiveCallers(
+        var (results, _, _, _, _) = _reader.GetTransitiveCallers(
             "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
             withPaths: true, maxPathsPerResult: 2);
 
@@ -9973,7 +10221,7 @@ public class DbReaderTests : IDisposable
         // Exact-fit: cap equals the natural number of paths. Truncated must stay false because
         // no unexplored parent was skipped — the DFS just drained naturally as it hit the cap.
         // ちょうど cap と等しい経路数の場合、未探索 parent はないので truncated は false のまま。
-        var (exactResults, _, _) = _reader.GetTransitiveCallers(
+        var (exactResults, _, _, _, _) = _reader.GetTransitiveCallers(
             "Sink", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_paths_cap"],
             withPaths: true, maxPathsPerResult: 3);
         var exactTop = exactResults.Single(r => r.CallerName == "Top");
@@ -10023,7 +10271,7 @@ public class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
 
         Assert.True(truncated);
         Assert.Equal(ImpactTruncatedReasons.UserLimit, truncatedReason);

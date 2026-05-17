@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Collections;
+using System.Reflection;
+using System.Text.Json;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
@@ -9,6 +12,81 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Fact]
+    public void Extract_AllPatternLanguages_IsDeterministicUnderParallelCalls()
+    {
+        var samples = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["assembly"] = "Start:\n    call Target\nTarget:\n    ret\n",
+            ["batch"] = ":run\necho ok\n",
+            ["c"] = "int answer(void) { return 42; }\n",
+            ["cobol"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
+            ["cpp"] = "namespace demo { int answer() { return 42; } }\n",
+            ["csharp"] = "namespace Demo; public class Service { public int Run() => 1; }\n",
+            ["css"] = ".card { color: red; }\n@keyframes fade { from { opacity: 0; } }\n",
+            ["dart"] = "class Service { int run() => 1; }\n",
+            ["dockerfile"] = "FROM alpine AS build\nARG VERSION=1\n",
+            ["elixir"] = "defmodule Demo do\n  def run do\n    :ok\n  end\nend\n",
+            ["fortran"] = "module demo\ncontains\nsubroutine run()\nend subroutine\nend module\n",
+            ["fsharp"] = "module Demo\nlet run x = x + 1\n",
+            ["go"] = "package demo\nfunc Run() int { return 1 }\n",
+            ["gradle"] = "task buildDocs {\n}\n",
+            ["graphql"] = "type Query { answer: Int }\nquery GetAnswer { answer }\n",
+            ["haskell"] = "module Demo where\nrun :: Int -> Int\nrun x = x + 1\n",
+            ["html"] = "<div id=\"app\"></div>\n<script>function run() { return 1; }</script>\n",
+            ["java"] = "package demo; public class Service { int run() { return 1; } }\n",
+            ["javascript"] = "export function run() { return 1; }\n",
+            ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
+            ["lua"] = "local function run()\n  return 1\nend\n",
+            ["makefile"] = "build:\n\t@echo build\n",
+            ["objc"] = "@interface Service\n- (void)run;\n@end\n",
+            ["pascal"] = "unit Demo;\ninterface\nprocedure Run;\nimplementation\nprocedure Run; begin end;\nend.\n",
+            ["perl"] = "package Demo;\nsub run { return 1; }\n",
+            ["php"] = "<?php\nclass Service { function run() { return 1; } }\n",
+            ["powershell"] = "function Invoke-Demo { return 1 }\n",
+            ["protobuf"] = "message User { string name = 1; }\nservice Users { rpc Get(User) returns (User); }\n",
+            ["python"] = "class Service:\n    def run(self):\n        return 1\n",
+            ["r"] = "run <- function(x) {\n  x + 1\n}\n",
+            ["racket"] = "(define (run x) x)\n",
+            ["ruby"] = "class Service\n  def run\n    1\n  end\nend\n",
+            ["rust"] = "pub struct Service;\npub fn run() -> i32 { 1 }\n",
+            ["scala"] = "class Service {\n  def run(): Int = 1\n}\n",
+            ["shell"] = "run() {\n  echo ok\n}\n",
+            ["smalltalk"] = "Object subclass: #Service\nService >> run\n  ^1\n",
+            ["sql"] = "CREATE TABLE users (id int);\nCREATE PROCEDURE run AS SELECT 1;\n",
+            ["svelte"] = "<script>\n  export let name;\n  function run() { return name; }\n</script>\n",
+            ["swift"] = "class Service { func run() -> Int { 1 } }\n",
+            ["terraform"] = "resource \"local_file\" \"demo\" {\n  filename = \"demo.txt\"\n}\n",
+            ["typescript"] = "export class Service { run(): number { return 1; } }\n",
+            ["vb"] = "Public Class Service\n  Public Sub Run()\n  End Sub\nEnd Class\n",
+            ["vue"] = "<script setup lang=\"ts\">\nfunction run() { return 1 }\n</script>\n",
+            ["zig"] = "pub fn run() i32 { return 1; }\n",
+        };
+
+        var patternLanguages = GetSymbolExtractorPatternLanguages();
+        Assert.Empty(patternLanguages.Except(samples.Keys, StringComparer.Ordinal));
+
+        foreach (var (language, content) in samples)
+        {
+            var expectedJson = JsonSerializer.Serialize(SymbolExtractor.Extract(1, language, content));
+
+            Parallel.For(0, 100, _ =>
+            {
+                var actualJson = JsonSerializer.Serialize(SymbolExtractor.Extract(1, language, content));
+                Assert.Equal(expectedJson, actualJson);
+            });
+        }
+    }
+
+    private static IReadOnlyCollection<string> GetSymbolExtractorPatternLanguages()
+    {
+        var field = typeof(SymbolExtractor).GetField("PatternCache", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(field);
+
+        var patternCache = Assert.IsAssignableFrom<IDictionary>(field.GetValue(null));
+        return patternCache.Keys.Cast<string>().Order(StringComparer.Ordinal).ToArray();
+    }
+
     [Fact]
     public void Extract_Python_DetectsFunctions()
     {

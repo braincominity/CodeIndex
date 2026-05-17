@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -280,47 +281,49 @@ public static class IndexCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var dbDir = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(dbDir))
-            Directory.CreateDirectory(dbDir);
-
-        // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
-        // same DB cannot interleave schema/data writes and corrupt the database.
-        // `--force` bypasses the check for users who knowingly accept the risk.
-        // 同一 DB に対する `cdidx index` の同時実行が schema / data 書き込みを交錯させ
-        // DB を壊さないよう排他ロックを取る。`--force` はリスクを承知の場合に bypass。
-        var lockPath = IndexLock.GetLockPath(resolvedDbPath);
-        IndexLock? indexLock = null;
-        if (!options.Force)
-        {
-            try
-            {
-                indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
-            }
-            catch (IndexLockConflictException ex)
-            {
-                var holderDescription = DescribeLockHolder(ex.Holder);
-                var message = string.IsNullOrEmpty(holderDescription)
-                    ? "another cdidx index is already running on this database"
-                    : $"another cdidx index is already running on this database ({holderDescription})";
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    message,
-                    CommandExitCodes.DatabaseError,
-                    "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.",
-                    CommandErrorCodes.DbLocked);
-            }
-        }
-        else if (!options.Json)
-        {
-            ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
-        }
-
         int initialExitCode;
-        using (indexLock)
+        try
         {
-            using var db = new DbContext(dbPath);
+            var dbDir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrEmpty(dbDir))
+                Directory.CreateDirectory(dbDir);
+
+            // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
+            // same DB cannot interleave schema/data writes and corrupt the database.
+            // `--force` bypasses the check for users who knowingly accept the risk.
+            // 同一 DB に対する `cdidx index` の同時実行が schema / data 書き込みを交錯させ
+            // DB を壊さないよう排他ロックを取る。`--force` はリスクを承知の場合に bypass。
+            var lockPath = IndexLock.GetLockPath(resolvedDbPath);
+            IndexLock? indexLock = null;
+            if (!options.Force)
+            {
+                try
+                {
+                    indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
+                }
+                catch (IndexLockConflictException ex)
+                {
+                    var holderDescription = DescribeLockHolder(ex.Holder);
+                    var message = string.IsNullOrEmpty(holderDescription)
+                        ? "another cdidx index is already running on this database"
+                        : $"another cdidx index is already running on this database ({holderDescription})";
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        message,
+                        CommandExitCodes.DatabaseError,
+                        "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.",
+                        CommandErrorCodes.DbLocked);
+                }
+            }
+            else if (!options.Json)
+            {
+                ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
+            }
+
+            using (indexLock)
+            {
+                using var db = new DbContext(dbPath);
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
         // touches a subset of files, so trust bits the DB did NOT previously carry must not
@@ -386,6 +389,11 @@ public static class IndexCommandRunner
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
+            }
+        }
+        catch (Exception ex) when (IsDatabaseFilesystemError(ex))
+        {
+            return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, ex);
         }
 
         if (!options.Watch || initialExitCode != CommandExitCodes.Success)
@@ -1864,6 +1872,20 @@ public static class IndexCommandRunner
         return exitCode;
     }
 
+    private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex) =>
+        WriteCommandError(
+            json,
+            jsonOptions,
+            $"database write failed for {dbPath}: {CollapseLineBreaks(ex.Message)}",
+            CommandExitCodes.DatabaseError,
+            "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.",
+            CommandErrorCodes.DbNotWritable);
+
+    private static bool IsDatabaseFilesystemError(Exception ex) =>
+        ex is UnauthorizedAccessException
+        || ex is IOException
+        || ex is SqliteException { SqliteErrorCode: 8 or 10 or 14 };
+
     private static int RunFullScan(
         DbWriter writer,
         FileIndexer indexer,
@@ -1932,12 +1954,78 @@ public static class IndexCommandRunner
             }
         }
 
+        void WriteJsonLiveness(string message)
+        {
+            if (!options.Json || options.Quiet)
+                return;
+
+            Console.Error.WriteLine($"cdidx: {message}");
+        }
+
+        (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
+        {
+            if (!options.Json || options.Quiet)
+                return null;
+
+            var cts = new CancellationTokenSource();
+            var token = cts.Token;
+            var task = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    var detail = detailProvider?.Invoke();
+                    var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
+                    Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
+                }
+            }, token);
+            return (cts, task);
+        }
+
+        void StopJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
+        {
+            if (heartbeat == null)
+                return;
+
+            heartbeat.Value.Cts.Cancel();
+            try
+            {
+                heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+            {
+            }
+            heartbeat.Value.Cts.Dispose();
+        }
+
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
-        var scanResult = indexer.ScanFilesDetailed();
+        WriteJsonLiveness("scanning files...");
+        var scanHeartbeat = StartJsonPhaseHeartbeat("scanning files");
+        FileIndexer.ScanFilesResult scanResult;
+        try
+        {
+            scanResult = indexer.ScanFilesDetailed();
+        }
+        finally
+        {
+            StopJsonPhaseHeartbeat(scanHeartbeat);
+        }
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
+        WriteJsonLiveness($"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
         var fatalScanErrors = scanResult.Errors
             .Where(error => error.IsFatal)
             .ToList();
@@ -2001,6 +2089,9 @@ public static class IndexCommandRunner
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
+        WriteJsonLiveness(purged > 0
+            ? $"purged {purged:N0} stale file(s); indexing..."
+            : "indexing...");
         if (!options.Json && !options.Quiet)
         {
             if (purged > 0)
@@ -2026,6 +2117,10 @@ public static class IndexCommandRunner
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var lastJsonProgressAt = Stopwatch.GetTimestamp();
+        string? currentJsonIndexFile = null;
+        CancellationTokenSource? jsonHeartbeatCts = null;
+        Task? jsonHeartbeatTask = null;
 
         void StartIndexSpinnerIfNeeded()
         {
@@ -2073,110 +2168,198 @@ public static class IndexCommandRunner
             redirectedIndexingMessagePrinted = true;
         }
 
-        EnsureIndexingActivityVisible();
-
-        if (!options.Json && !options.Quiet)
+        void ReportJsonIndexProgressIfNeeded()
         {
-            PauseIndexSpinnerForConsoleWrite();
-            indexProgressVisible = true;
-            ConsoleUi.PrintProgress(0, files.Count);
+            if (!options.Json || options.Quiet || files.Count == 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            if (processed == 0
+                || processed == files.Count
+                || processed % 100 == 0
+                || Stopwatch.GetElapsedTime(lastJsonProgressAt, now) >= TimeSpan.FromSeconds(5))
+            {
+                Console.Error.WriteLine($"cdidx: indexed {processed:N0}/{files.Count:N0} file(s)...");
+                lastJsonProgressAt = now;
+            }
         }
 
-        foreach (var filePath in files)
+        void StartJsonHeartbeatIfNeeded()
         {
-            EnsureIndexingActivityVisible();
+            if (!options.Json || options.Quiet || files.Count == 0 || jsonHeartbeatCts != null)
+                return;
+
+            jsonHeartbeatCts = new CancellationTokenSource();
+            var token = jsonHeartbeatCts.Token;
+            jsonHeartbeatTask = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    var file = currentJsonIndexFile;
+                    var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
+                    Console.Error.WriteLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
+                }
+            }, token);
+        }
+
+        void StopJsonHeartbeat()
+        {
+            if (jsonHeartbeatCts == null)
+                return;
+
+            jsonHeartbeatCts.Cancel();
             try
             {
-                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+                jsonHeartbeatTask?.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+            {
+            }
+            jsonHeartbeatCts.Dispose();
+            jsonHeartbeatCts = null;
+            jsonHeartbeatTask = null;
+        }
 
-                if (warning != null && !options.Json && !options.Quiet)
-                {
-                    PauseIndexSpinnerForConsoleWrite();
-                    ConsoleUi.PrintWarning(warning);
-                    ResumeIndexSpinnerAfterConsoleWrite();
-                }
+        EnsureIndexingActivityVisible();
+        ReportJsonIndexProgressIfNeeded();
+        StartJsonHeartbeatIfNeeded();
 
-                long? existingId = null;
-                if (!options.Rebuild)
+        try
+        {
+            if (!options.Json && !options.Quiet)
+            {
+                PauseIndexSpinnerForConsoleWrite();
+                indexProgressVisible = true;
+                ConsoleUi.PrintProgress(0, files.Count);
+            }
+
+            foreach (var filePath in files)
+            {
+                currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                EnsureIndexingActivityVisible();
+                try
                 {
-                    existingId = writer.GetUnchangedFileId(
-                        record.Path,
-                        record.Modified,
-                        record.Checksum,
-                        allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                            && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
-                            && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                }
-                if (existingId != null)
-                {
-                    skipped++;
-                    processed++;
-                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
-                        reusedHotspotFamilyLanguages.Add(record.Lang);
+                    var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+                    if (warning != null && !options.Json && !options.Quiet)
+                    {
+                        PauseIndexSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(warning);
+                        ResumeIndexSpinnerAfterConsoleWrite();
+                    }
+
+                    long? existingId = null;
+                    if (!options.Rebuild)
+                    {
+                        existingId = writer.GetUnchangedFileId(
+                            record.Path,
+                            record.Modified,
+                            record.Checksum,
+                            allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                                && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                                && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                    }
+                    if (existingId != null)
+                    {
+                        skipped++;
+                        processed++;
+                        if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                            reusedHotspotFamilyLanguages.Add(record.Lang);
+                        if (options.Verbose && !options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.ClearProgressLine();
+                            Console.WriteLine($"  [SKIP] {record.Path}");
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        ReportJsonIndexProgressIfNeeded();
+                        currentJsonIndexFile = null;
+                        continue;
+                    }
+
+                    using var txn = writer.BeginTransaction();
+                    var fileId = writer.UpsertFile(record);
+                    var chunks = ChunkSplitter.Split(fileId, content);
+                    writer.InsertChunks(chunks);
+                    var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                    SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                    writer.InsertSymbols(symbols);
+                    var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
+                    writer.InsertReferences(references);
+                    // Validate content for encoding issues / エンコーディング問題を検証
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    writer.InsertIssues(fileId, issues);
+                    WriteProjectRootOnce();
+                    txn.Commit();
+
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
-                        Console.WriteLine($"  [SKIP] {record.Path}");
+                        Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
-                    if (!options.Json && !options.Quiet)
+                }
+                catch (Exception ex)
+                {
+                    errors++;
+                    errorList.Add(new CliJsonMessage(filePath, ex.Message));
+                    if (!options.Json)
                     {
                         PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.PrintProgress(processed, files.Count);
+                        ConsoleUi.ClearProgressLine();
+                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", filePath, ex));
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
-                    continue;
                 }
 
-                using var txn = writer.BeginTransaction();
-                var fileId = writer.UpsertFile(record);
-                var chunks = ChunkSplitter.Split(fileId, content);
-                writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
-                writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
-                writer.InsertReferences(references);
-                // Validate content for encoding issues / エンコーディング問題を検証
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
-                writer.InsertIssues(fileId, issues);
-                WriteProjectRootOnce();
-                txn.Commit();
-
-                if (options.Verbose && !options.Json && !options.Quiet)
+                processed++;
+                currentJsonIndexFile = null;
+                ReportJsonIndexProgressIfNeeded();
+                if (!options.Json && !options.Quiet)
                 {
                     PauseIndexSpinnerForConsoleWrite();
-                    ConsoleUi.ClearProgressLine();
-                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    ConsoleUi.PrintProgress(processed, files.Count);
                     ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }
-            catch (Exception ex)
-            {
-                errors++;
-                errorList.Add(new CliJsonMessage(filePath, ex.Message));
-                if (!options.Json)
-                {
-                    PauseIndexSpinnerForConsoleWrite();
-                    ConsoleUi.ClearProgressLine();
-                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", filePath, ex));
-                    ResumeIndexSpinnerAfterConsoleWrite();
-                }
-            }
-
-            processed++;
-            if (!options.Json && !options.Quiet)
-            {
-                PauseIndexSpinnerForConsoleWrite();
-                ConsoleUi.PrintProgress(processed, files.Count);
-                ResumeIndexSpinnerAfterConsoleWrite();
-            }
+        }
+        finally
+        {
+            currentJsonIndexFile = null;
+            StopJsonHeartbeat();
         }
 
         PauseIndexSpinnerForConsoleWrite();
 
-        writer.OptimizeFts();
+        WriteJsonLiveness("optimizing index...");
+        var optimizeHeartbeat = StartJsonPhaseHeartbeat("optimizing index");
+        try
+        {
+            writer.OptimizeFts();
+        }
+        finally
+        {
+            StopJsonPhaseHeartbeat(optimizeHeartbeat);
+        }
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because

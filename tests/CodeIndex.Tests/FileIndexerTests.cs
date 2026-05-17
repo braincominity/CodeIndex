@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
+using CodeIndex.Database;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -2163,6 +2165,54 @@ public class FileIndexerTests
     }
 
     [Fact]
+    [Trait("Platform", "Windows")]
+    public void ScanFiles_WindowsLongPath_IndexesAndSurvivesStalePurge()
+    {
+        // Windows-only syscall coverage: POSIX cannot exercise Win32 MAX_PATH behavior.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var tempRoot = TestProjectHelper.CreateTempProject("cdidx_long_path");
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
+        DbContext? db = null;
+        try
+        {
+            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(projectRoot));
+            var leafPath = CreateWindowsLongPathFixture(projectRoot);
+            Assert.True(leafPath.Length >= 260, $"Fixture path length was {leafPath.Length}, expected >= 260.");
+
+            var indexer = new FileIndexer(projectRoot);
+            var scannedFiles = indexer.ScanFiles();
+
+            Assert.Contains(scannedFiles, path => PathsEqual(path, leafPath));
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            IndexScannedFiles(projectRoot, writer);
+            var relativeLeafPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, leafPath));
+
+            Assert.True(IndexedFileExists(db, relativeLeafPath));
+            Assert.Equal(0, writer.PurgeStaleFiles(projectRoot));
+
+            IndexScannedFiles(projectRoot, writer);
+            Assert.True(IndexedFileExists(db, relativeLeafPath));
+        }
+        finally
+        {
+            if (db is not null)
+            {
+                SqliteConnection.ClearPool(db.Connection);
+                db.Dispose();
+            }
+
+            DeleteLongPathDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -3045,6 +3095,96 @@ public class FileIndexerTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    private static string CreateWindowsLongPathFixture(string projectRoot)
+    {
+        var current = Path.Combine(
+            projectRoot,
+            ".pnpm",
+            "fixture-pkg@1.0.0",
+            "fixture-pkg");
+        var segment = 0;
+
+        while (Path.Combine(current, "long-file.js").Length < 260)
+            current = Path.Combine(current, $"segment{segment++:D2}");
+
+        Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(current));
+        var leafPath = Path.Combine(current, "long-file.js");
+        File.WriteAllText(LongPath.EnsureWindowsPrefix(leafPath), "export function longPathFixture() { return 42; }\n");
+        return leafPath;
+    }
+
+    private static void DeleteLongPathDirectory(string path)
+    {
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(path)))
+            return;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                DeleteLongPathDirectoryRecursive(path);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static void DeleteLongPathDirectoryRecursive(string path)
+    {
+        var prefixedPath = LongPath.EnsureWindowsPrefix(path);
+        File.SetAttributes(prefixedPath, FileAttributes.Normal);
+
+        foreach (var file in Directory.EnumerateFiles(prefixedPath))
+        {
+            var filePath = LongPath.RemoveWindowsPrefix(file);
+            var prefixedFilePath = LongPath.EnsureWindowsPrefix(filePath);
+            File.SetAttributes(prefixedFilePath, FileAttributes.Normal);
+            File.Delete(prefixedFilePath);
+        }
+
+        foreach (var dir in Directory.EnumerateDirectories(prefixedPath))
+            DeleteLongPathDirectoryRecursive(LongPath.RemoveWindowsPrefix(dir));
+
+        Directory.Delete(prefixedPath);
+    }
+
+    private static void IndexScannedFiles(string projectRoot, DbWriter writer)
+    {
+        var indexer = new FileIndexer(projectRoot);
+        foreach (var filePath in indexer.ScanFiles())
+        {
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var fileId = writer.UpsertFile(record);
+            writer.DeleteFileData(fileId);
+            writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
+            writer.InsertSymbols(symbols);
+            writer.InsertReferences(ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path));
+            writer.InsertIssues(fileId, FileIndexer.ValidateContent(record.Path, rawBytes, content));
+        }
+    }
+
+    private static bool IndexedFileExists(DbContext db, string relativePath)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static void CreateUnixFifo(string path)
     {
