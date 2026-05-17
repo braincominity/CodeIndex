@@ -175,6 +175,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpStaticInterfaceMembers_UsesWorkspaceContractsAcrossFiles()
+    {
+        const string interfaceContent = """
+            public interface IParseable<T>
+            {
+                static abstract T Parse(string s);
+            }
+            """;
+        const string implementationContent = """
+            public readonly struct Money : IParseable<Money>
+            {
+                public static Money Parse(string s) => new();
+            }
+            """;
+
+        var interfaceSymbols = SymbolExtractor.Extract(1, "csharp", interfaceContent, "IParseable.cs");
+        var implementationSymbols = SymbolExtractor.Extract(2, "csharp", implementationContent, "Money.cs");
+        var sameFileOnlyReferences = ReferenceExtractor.Extract(2, "csharp", implementationContent, implementationSymbols, "Money.cs");
+        var workspaceReferences = ReferenceExtractor.Extract(
+            2,
+            "csharp",
+            implementationContent,
+            implementationSymbols,
+            "Money.cs",
+            interfaceSymbols.Concat(implementationSymbols).ToList());
+
+        Assert.DoesNotContain(sameFileOnlyReferences, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static Money Parse(string s) => new();");
+        Assert.Contains(workspaceReferences, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Parse"
+            && reference.Context == "public static Money Parse(string s) => new();");
+    }
+
+    [Fact]
     public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
     {
         var outer = Container("outer", "class", 1, 100);

@@ -93,10 +93,11 @@ public static partial class ReferenceExtractor
         string[] lines,
         string[] structuralLines,
         IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<SymbolRecord> workspaceSymbols,
         List<ReferenceRecord> references,
         HashSet<string> seen)
     {
-        var interfaceMembersByType = symbols
+        var interfaceMembersByType = workspaceSymbols
             .Where(IsCSharpStaticInterfaceMemberContract)
             .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
             .ToDictionary(
@@ -111,7 +112,7 @@ public static partial class ReferenceExtractor
         if (interfaceMembersByType.Count == 0)
             return;
 
-        var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(symbols);
+        var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
         var staticMembersByContainer = symbols
             .Where(symbol => symbol.Kind is "function" or "property"
                              && !string.IsNullOrWhiteSpace(symbol.ContainerName)

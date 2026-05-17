@@ -2042,6 +2042,54 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_CsharpStaticInterfaceMembersAcrossFiles_IndexesImplicitImplementationReference()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COUNT(*)
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                JOIN reference_lines rl ON rl.id = r.reference_line_id
+                WHERE f.path = 'Money.cs'
+                  AND r.symbol_name = 'Parse'
+                  AND r.reference_kind = 'implicit_implementation'
+                  AND rl.context = 'public static Money Parse(string s) => new();'";
+            var count = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Equal(1, count);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
     {
         var projectRoot = CreateTempProject();

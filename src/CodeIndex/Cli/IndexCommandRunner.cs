@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -1116,6 +1117,7 @@ public static class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
+        var csharpWorkspaceSymbols = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, targetPaths);
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
         {
             DemoteReadinessOnce();
@@ -1331,7 +1333,13 @@ public static class IndexCommandRunner
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
+                var references = ReferenceExtractor.Extract(
+                    fileId,
+                    record.Lang,
+                    content,
+                    symbols,
+                    record.Path,
+                    record.Lang == "csharp" ? csharpWorkspaceSymbols : null);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2321,6 +2329,7 @@ public static class IndexCommandRunner
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
+        var csharpWorkspaceSymbols = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, files);
 
         try
         {
@@ -2389,7 +2398,13 @@ public static class IndexCommandRunner
                     var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                     writer.InsertSymbols(symbols);
-                    var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
+                    var references = ReferenceExtractor.Extract(
+                        fileId,
+                        record.Lang,
+                        content,
+                        symbols,
+                        record.Path,
+                        record.Lang == "csharp" ? csharpWorkspaceSymbols : null);
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2870,6 +2885,43 @@ public static class IndexCommandRunner
         catch
         {
         }
+    }
+
+    private static List<SymbolRecord> BuildCSharpStaticInterfaceWorkspaceSymbols(
+        DbWriter writer,
+        FileIndexer indexer,
+        IEnumerable<string> filePaths)
+    {
+        var pendingSymbols = new List<SymbolRecord>();
+        var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var filePath in filePaths)
+        {
+            var detection = FileIndexer.TryDetectLanguage(filePath);
+            if (detection.Status != FileIndexer.FileProbeStatus.Supported
+                || detection.Language != "csharp")
+            {
+                continue;
+            }
+
+            try
+            {
+                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+                if (record.Lang != "csharp")
+                    continue;
+
+                pendingPaths.Add(record.Path);
+                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
+            }
+            catch
+            {
+                // The real indexing pass reports file failures; this pre-pass only supplies
+                // workspace symbols for cross-file static interface member matching.
+            }
+        }
+
+        var symbols = writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths);
+        symbols.AddRange(pendingSymbols);
+        return symbols;
     }
 
     private sealed record FoldOnlyRemediation(
