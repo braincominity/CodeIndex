@@ -7,11 +7,11 @@ using CodeIndex.Models;
 namespace CodeIndex.Cli;
 
 /// <summary>
-/// Reads and writes improvement suggestions to .cdidx/suggestions.json.
+/// Reads and writes improvement suggestions to .cdidx/suggestions-*.json.
 /// Provides deduplication via SHA256 hash of (category + language + normalized description).
 /// All read-modify-write operations are serialized with a file lock to prevent
 /// concurrent writers from silently overwriting each other's changes.
-/// 改善提案を .cdidx/suggestions.json に読み書きする。
+/// 改善提案を .cdidx/suggestions-*.json に読み書きする。
 /// (category + language + 正規化済み description) のSHA256ハッシュで重複排除する。
 /// 全ての read-modify-write 操作はファイルロックでシリアライズされ、
 /// 並行書き込み者が互いの変更をサイレントに上書きすることを防ぐ。
@@ -20,6 +20,7 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -180,6 +181,65 @@ public class SuggestionStore
     }
 
     /// <summary>
+    /// Load suggestions matching the lifecycle status without materializing
+    /// the whole store before filtering.
+    /// ライフサイクル状態に一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByStatus(SuggestionStatus status)
+    {
+        return ReadFilteredUnlocked(s => s.Status == status);
+    }
+
+    /// <summary>
+    /// Load suggestions created at or after the given timestamp without materializing
+    /// the whole store before filtering.
+    /// 指定時刻以降に作成された提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadSince(DateTimeOffset since)
+    {
+        var threshold = since.ToUniversalTime();
+        return ReadFilteredUnlocked(s => ToUtcOffset(s.CreatedAt) >= threshold);
+    }
+
+    /// <summary>
+    /// Load suggestions for a category without materializing the whole store before filtering.
+    /// カテゴリに一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByCategory(string category)
+    {
+        ArgumentNullException.ThrowIfNull(category);
+        var normalized = category.Trim();
+        return ReadFilteredUnlocked(s => string.Equals(s.Category, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Load suggestions for a language without materializing the whole store before filtering.
+    /// 言語に一致する提案を、フィルタ前にストア全体を実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> LoadByLanguage(string language)
+    {
+        ArgumentNullException.ThrowIfNull(language);
+        var normalized = language.Trim();
+        return ReadFilteredUnlocked(s => string.Equals(s.Language, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Load a page of suggestions in stored order without materializing entries outside the page.
+    /// 保存順の提案ページを、ページ外のエントリを実体化せず読み込む。
+    /// </summary>
+    public List<SuggestionRecord> Load(int skip, int take)
+    {
+        if (skip < 0)
+            throw new ArgumentOutOfRangeException(nameof(skip), "skip must be non-negative.");
+        if (take < 0)
+            throw new ArgumentOutOfRangeException(nameof(take), "take must be non-negative.");
+        if (take == 0)
+            return new List<SuggestionRecord>();
+
+        return ReadFilteredUnlocked(_ => true, skip, take);
+    }
+
+    /// <summary>
     /// Mark a suggestion as submitted to GitHub by updating its URL and flag.
     /// The entire read-modify-write is protected by a file lock.
     /// NOTE: Prefer TryAddAndSubmit for new submissions — this method exists
@@ -247,6 +307,106 @@ public class SuggestionStore
             if (string.IsNullOrWhiteSpace(record.ClientVersion))
                 record.ClientVersion = "unknown";
         }
+    }
+
+    /// <summary>
+    /// Stream suggestions without acquiring the lock (caller must hold it for write-side read-modify-write).
+    /// Query readers call this directly because they do not mutate the store.
+    /// ロックを取得せずに提案をストリーミング読み込みする（書き込み側の read-modify-write では呼び出し元がロックを保持すること）。
+    /// クエリ読み取りはストアを変更しないため直接呼び出す。
+    /// </summary>
+    private List<SuggestionRecord> ReadFilteredUnlocked(
+        Func<SuggestionRecord, bool> predicate,
+        int skip = 0,
+        int? take = null)
+    {
+        if (!File.Exists(_filePath))
+            return new List<SuggestionRecord>();
+
+        var snapshot = File.ReadAllBytes(_filePath);
+        if (snapshot.Length == 0)
+            return new List<SuggestionRecord>();
+
+        if (IsEmptyOrJsonWhitespace(snapshot))
+            return new List<SuggestionRecord>();
+
+        try
+        {
+            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take).GetAwaiter().GetResult();
+        }
+        catch (JsonException)
+        {
+            PreserveCorruptFile();
+            return new List<SuggestionRecord>();
+        }
+        // IOException is NOT caught here — it propagates to the caller (fail-closed).
+        // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
+    }
+
+    private static bool IsEmptyOrJsonWhitespace(byte[] bytes)
+    {
+        var offset = bytes.Length >= 3
+            && bytes[0] == 0xEF
+            && bytes[1] == 0xBB
+            && bytes[2] == 0xBF
+            ? 3
+            : 0;
+
+        for (var i = offset; i < bytes.Length; i++)
+        {
+            switch (bytes[i])
+            {
+                case (byte)' ':
+                case (byte)'\t':
+                case (byte)'\r':
+                case (byte)'\n':
+                    continue;
+                default:
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static async Task<List<SuggestionRecord>> ReadFilteredSnapshotAsync(
+        byte[] snapshot,
+        Func<SuggestionRecord, bool> predicate,
+        int skip,
+        int? take)
+    {
+        var results = new List<SuggestionRecord>();
+        var skipped = 0;
+
+        await using var stream = new MemoryStream(snapshot, writable: false);
+
+        await foreach (var record in JsonSerializer.DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions))
+        {
+            if (record == null || !predicate(record))
+                continue;
+
+            if (skipped < skip)
+            {
+                skipped++;
+                continue;
+            }
+
+            results.Add(record);
+            if (take.HasValue && results.Count >= take.Value)
+                break;
+        }
+
+        return results;
+    }
+
+    private static DateTimeOffset ToUtcOffset(DateTime value)
+    {
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => new DateTimeOffset(value),
+            DateTimeKind.Local => new DateTimeOffset(value.ToUniversalTime()),
+            _ => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)),
+        };
     }
 
     /// <summary>

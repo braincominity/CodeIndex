@@ -68,6 +68,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
+- Local suggestion history can be listed, inspected, and exported with
+  `cdidx suggestions`.
 - Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
 - Exact DB/worktree freshness checks with `status --check`, including an
   overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
@@ -196,6 +198,7 @@ cdidx mcp
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
+- `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
   `CDIDX_STALE_AFTER` で age threshold を上書き可能。
