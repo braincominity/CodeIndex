@@ -840,6 +840,7 @@ public partial class DbReader
         // path 追跡は opt-in 時のみ確保する。同名 caller が複数ファイルにあっても経路上は同名
         // ノードとして畳む（issue #1536 の例 ["foo", "B", "A"] と整合）。
         Dictionary<string, HashSet<string>> parentsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, HashSet<string>> cycleParentsByName = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, int> depthByName = new(StringComparer.OrdinalIgnoreCase)
         {
             [resolvedName] = 0,
@@ -882,8 +883,14 @@ public partial class DbReader
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
                     var key = $"{caller.Path}:{callerName}";
-                    if (IsCycleEdge(callerName, currentSymbol, parentsByName))
-                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, parentsByName));
+                    if (IsCycleEdge(callerName, currentSymbol, cycleParentsByName))
+                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, currentSymbol, cycleParentsByName));
+                    if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                    {
+                        cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        cycleParentsByName[callerName] = cycleParentSet;
+                    }
+                    cycleParentSet.Add(currentSymbol);
 
                     if (!visited.Add(key))
                     {
@@ -1061,26 +1068,50 @@ public partial class DbReader
         string currentSymbol,
         Dictionary<string, HashSet<string>> parentsByName)
     {
-        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { callerName, currentSymbol };
-        var stack = new Stack<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        stack.Push(currentSymbol);
-        while (stack.Count > 0)
+        var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!TryBuildAncestorPath(currentSymbol, callerName, parentsByName, members))
         {
-            var current = stack.Pop();
-            if (!seen.Add(current))
-                continue;
-            members.Add(current);
-            if (string.Equals(current, callerName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!parentsByName.TryGetValue(current, out var parents))
-                continue;
-            foreach (var parent in parents)
-                stack.Push(parent);
+            members.Add(callerName);
+            members.Add(currentSymbol);
         }
         var result = members.ToList();
         result.Sort(StringComparer.OrdinalIgnoreCase);
         return result;
+    }
+
+    private static bool TryBuildAncestorPath(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return TryBuildAncestorPathCore(node, target, parentsByName, members, seen);
+    }
+
+    private static bool TryBuildAncestorPathCore(
+        string node,
+        string target,
+        Dictionary<string, HashSet<string>> parentsByName,
+        HashSet<string> members,
+        HashSet<string> seen)
+    {
+        if (!seen.Add(node))
+            return false;
+        members.Add(node);
+        if (string.Equals(node, target, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (parentsByName.TryGetValue(node, out var parents))
+        {
+            foreach (var parent in parents)
+            {
+                if (TryBuildAncestorPathCore(parent, target, parentsByName, members, seen))
+                    return true;
+            }
+        }
+
+        members.Remove(node);
+        return false;
     }
 
     private static void AddImpactCycle(
