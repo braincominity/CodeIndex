@@ -329,7 +329,7 @@ Use the smallest change that reduces the expensive part of your run.
 | `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
 | `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
-| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `10MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
+| `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
 | `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
@@ -1921,7 +1921,7 @@ release changelog を source of truth とします。完全な syntax line は `
 | Query result limit | `20`（`--limit`、alias `--top`） | CLI help と query runners |
 | Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
-| Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `10MiB` | index runner help |
+| Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
 | Watch debounce | `500` ms（`--debounce`） | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
