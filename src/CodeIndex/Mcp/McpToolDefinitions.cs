@@ -381,7 +381,7 @@ public partial class McpServer
                     {
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Project directory path to index" },
                         ["rebuild"] = new JsonObject { ["type"] = "boolean", ["description"] = "Delete existing index and rebuild from scratch (default: false)", ["default"] = false },
-                        ["maxFileBytes"] = new JsonObject { ["type"] = "integer", ["description"] = "Override the per-file indexing size limit for this run. Defaults to CDIDX_MAX_FILE_BYTES or 10MiB.", ["minimum"] = 1, ["maximum"] = int.MaxValue }
+                        ["maxFileBytes"] = new JsonObject { ["type"] = "integer", ["description"] = "Override the per-file indexing size limit for this run. Defaults to CDIDX_MAX_FILE_BYTES or 4MiB.", ["minimum"] = 1, ["maximum"] = int.MaxValue }
                     },
                     ["required"] = new JsonArray { "path" }
                 },
