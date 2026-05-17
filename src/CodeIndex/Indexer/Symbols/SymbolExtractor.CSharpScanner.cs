@@ -2737,18 +2737,39 @@ public static partial class SymbolExtractor
 
     private static int FindCSharpWhereConstraintToken(string signature)
     {
-        for (int i = 0; i < signature.Length; i++)
+        var lexState = new CSharpLexState();
+        var lineStart = 0;
+
+        while (lineStart <= signature.Length)
         {
-            if (!signature.AsSpan(i).StartsWith("where".AsSpan(), StringComparison.Ordinal))
-                continue;
+            var lineEnd = signature.IndexOf('\n', lineStart);
+            if (lineEnd < 0)
+                lineEnd = signature.Length;
 
-            var before = i == 0 ? '\0' : signature[i - 1];
-            var afterIndex = i + "where".Length;
-            var after = afterIndex < signature.Length ? signature[afterIndex] : '\0';
-            if (!IsCSharpWhereTokenBoundary(before) || !IsCSharpWhereTokenBoundary(after))
-                continue;
+            var line = signature[lineStart..lineEnd];
+            var lexedLine = LexCSharpLine(line, lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
 
-            return i;
+            for (int i = 0; i < sanitizedLine.Length; i++)
+            {
+                if (!sanitizedLine.AsSpan(i).StartsWith("where".AsSpan(), StringComparison.Ordinal))
+                    continue;
+
+                var absoluteIndex = lineStart + i;
+                var before = absoluteIndex == 0 ? '\0' : signature[absoluteIndex - 1];
+                var afterIndex = absoluteIndex + "where".Length;
+                var after = afterIndex < signature.Length ? signature[afterIndex] : '\0';
+                if (!IsCSharpWhereTokenBoundary(before) || !IsCSharpWhereTokenBoundary(after))
+                    continue;
+
+                return absoluteIndex;
+            }
+
+            if (lineEnd == signature.Length)
+                break;
+
+            lineStart = lineEnd + 1;
         }
 
         return -1;
