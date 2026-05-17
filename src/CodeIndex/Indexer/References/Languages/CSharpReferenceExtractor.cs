@@ -241,8 +241,8 @@ internal static class CSharpReferenceExtractor
     {
         var trimmed = preparedLine.TrimStart();
         if (trimmed.StartsWith("namespace ", StringComparison.Ordinal)
-            || trimmed.StartsWith("using ", StringComparison.Ordinal)
-            || trimmed.StartsWith("global using ", StringComparison.Ordinal))
+            || trimmed.StartsWith("global using ", StringComparison.Ordinal)
+            || IsCSharpUsingDirectiveLine(trimmed))
         {
             return;
         }
@@ -260,7 +260,11 @@ internal static class CSharpReferenceExtractor
                 continue;
 
             var dotIndex = qualifier.LastIndexOf('.');
-            var simpleNameStart = dotIndex >= 0 ? dotIndex + 1 : 0;
+            var simpleNameStart = dotIndex >= 0
+                ? dotIndex + 1
+                : qualifier.StartsWith("global::", StringComparison.Ordinal)
+                    ? "global::".Length
+                    : 0;
             var simpleName = NormalizeCSharpIdentifier(qualifier[simpleNameStart..]);
             if (string.IsNullOrWhiteSpace(simpleName))
                 continue;
@@ -277,6 +281,27 @@ internal static class CSharpReferenceExtractor
                 lineNumber,
                 resolveContainerForCall(simpleNameIndex));
         }
+    }
+
+    private static bool IsCSharpUsingDirectiveLine(string trimmedLine)
+    {
+        if (!trimmedLine.StartsWith("using ", StringComparison.Ordinal))
+            return false;
+
+        var afterUsing = trimmedLine["using ".Length..].TrimStart();
+        if (afterUsing.StartsWith("(", StringComparison.Ordinal)
+            || afterUsing.StartsWith("var ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var equalsIndex = afterUsing.IndexOf('=');
+        if (equalsIndex < 0)
+            return true;
+
+        var beforeEquals = afterUsing[..equalsIndex].Trim();
+        return beforeEquals.Length > 0
+            && beforeEquals.IndexOfAny([' ', '\t']) < 0;
     }
 
     private static bool IsInsideRange(IReadOnlyList<(int start, int end)>? ranges, int index)

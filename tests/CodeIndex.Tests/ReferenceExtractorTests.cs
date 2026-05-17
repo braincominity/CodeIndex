@@ -27189,6 +27189,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGlobalQualifiedStaticMemberAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public static class Program
+            {
+                public static int Main(string[] args)
+                {
+                    return global::ProgramRunner.Run(args);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ProgramRunner"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Main");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "global::ProgramRunner"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStatementStaticMemberAccess_CapturesClassQualifierReference()
+    {
+        const string content = """
+            public class Consumer
+            {
+                public void Run()
+                {
+                    using var stream = FileFactory.OpenRead();
+                    using (ResourceFactory.Acquire())
+                    {
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "FileFactory"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ResourceFactory"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpStaticFieldAccess_CapturesClassQualifierReference()
     {
         const string content = """
