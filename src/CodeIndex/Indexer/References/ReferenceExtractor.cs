@@ -2547,6 +2547,19 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
             }
 
+            if (language == "csharp")
+            {
+                CSharpReferenceExtractor.EmitStaticMemberQualifierReferences(
+                    preparedLine,
+                    csharpAttrRangesOnLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+
             // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
             // a method call, but downstream symbol workflows (`references`, `callers`,
             // `callees`, `inspect`, `impact`) still need an edge anchored to the narrowest
