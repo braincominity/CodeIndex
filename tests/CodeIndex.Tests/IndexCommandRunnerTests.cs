@@ -2042,6 +2042,191 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_CsharpStaticInterfaceMembersAcrossFiles_IndexesImplicitImplementationReference()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COUNT(*)
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                JOIN reference_lines rl ON rl.id = r.reference_line_id
+                WHERE f.path = 'Money.cs'
+                  AND r.symbol_name = 'Parse'
+                  AND r.reference_kind = 'implicit_implementation'
+                  AND rl.context = 'public static Money Parse(string s) => new();'";
+            var count = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Equal(1, count);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpStaticInterfaceContractChange_ReindexesImplementers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "IParseable.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpStaticInterfaceContractRemoval_ReindexesImplementers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                }
+                """);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "IParseable.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpStaticInterfaceContractDeletion_ReindexesImplementers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.Delete(interfacePath);
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "IParseable.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
@@ -6142,6 +6327,23 @@ public class IndexCommandRunnerTests
         db.TryMigrateForRead();
         var reader = new DbReader(db.Connection, db.IsReadOnly);
         return reader.GetFileByPath(relativePath)?.Checksum;
+    }
+
+    private static int CountMoneyParseImplicitImplementationReferences(string projectRoot)
+    {
+        using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT COUNT(*)
+            FROM symbol_references r
+            JOIN files f ON f.id = r.file_id
+            JOIN reference_lines rl ON rl.id = r.reference_line_id
+            WHERE f.path = 'Money.cs'
+              AND r.symbol_name = 'Parse'
+              AND r.reference_kind = 'implicit_implementation'
+              AND rl.context = 'public static Money Parse(string s) => new();'";
+        return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
     private static void DeleteIndexedProjectRootMetadata(string dbPath)
