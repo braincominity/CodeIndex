@@ -29251,6 +29251,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptSatisfies_CapturesTypeReferencesWithoutCalls()
+    {
+        const string content = """
+            const config = { port: 8080 } satisfies ServerConfig;
+            const wrapped = (x: number) => x satisfies Brand;
+            const chained = config satisfies ServerConfig satisfies RuntimeConfig;
+            const nested = wrap<ServerConfig satisfies RuntimeConfig>(config);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_TypeScriptImportExportAliases_DoNotEmitTypeReferences()
     {
         const string content = """
