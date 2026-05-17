@@ -19,9 +19,19 @@ internal static class KotlinReferenceExtractor
     private static readonly Regex BacktickConstructorCallRegex = new(
         @"(?<![\w$])(?<name>`[^`\r\n]+`)(?:\s*<[^()\r\n]+>)?\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex InfixFunctionDeclarationRegex = new(
+        @"(?<![\w$])infix\s+fun\s+(?:<[^()\r\n]+>\s*)?(?:(?:[_\p{L}][\w$]*|`[^`\r\n]+`)\s*\.\s*)?(?<name>[_\p{L}][\w$]*)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InfixCallRegex = new(
+        @"(?<![\w$])(?<left>(?:[_\p{L}][\w$]*|\d+))\s+(?<name>[_\p{L}][\w$]*)\s+(?<right>\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
+    private static readonly HashSet<string> BuiltInInfixFunctionNames = new(StringComparer.Ordinal)
+    {
+        "and", "downTo", "or", "shl", "shr", "to", "until", "ushr", "xor",
+    };
 
     public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
@@ -53,6 +63,25 @@ internal static class KotlinReferenceExtractor
 
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
+
+    public static HashSet<string> BuildInfixFunctionNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
+        if (language != "kotlin")
+            return names;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = InfixFunctionDeclarationRegex.Match(symbol.Signature);
+            if (match.Success)
+                names.Add(match.Groups["name"].Value);
+        }
+
+        return names;
+    }
 
     private static bool IsConstructableClassSymbol(SymbolRecord symbol)
     {
@@ -104,6 +133,55 @@ internal static class KotlinReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
         => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference);
+
+    public static void EmitInfixCallReferences(
+        string preparedLine,
+        string originalLine,
+        IReadOnlySet<string> infixFunctionNames,
+        Action<string, int> addCallLikeReference)
+    {
+        foreach (Match match in InfixCallRegex.Matches(originalLine))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = nameGroup.Value;
+            if (!infixFunctionNames.Contains(name))
+                continue;
+            if (!IsUnmaskedSpan(preparedLine, nameGroup.Index, nameGroup.Length))
+                continue;
+            if (IsLikelyDeclarationOrImport(preparedLine, match.Index))
+                continue;
+
+            addCallLikeReference(name, nameGroup.Index);
+        }
+    }
+
+    private static bool IsUnmaskedSpan(string preparedLine, int start, int length)
+    {
+        if (start < 0 || length <= 0 || start + length > preparedLine.Length)
+            return false;
+
+        for (var i = 0; i < length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[start + i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsLikelyDeclarationOrImport(string preparedLine, int expressionIndex)
+    {
+        var prefix = preparedLine[..Math.Max(0, expressionIndex)].TrimStart();
+        return prefix.StartsWith("import ", StringComparison.Ordinal)
+               || prefix.StartsWith("package ", StringComparison.Ordinal)
+               || prefix.StartsWith("class ", StringComparison.Ordinal)
+               || prefix.StartsWith("interface ", StringComparison.Ordinal)
+               || prefix.StartsWith("object ", StringComparison.Ordinal)
+               || prefix.StartsWith("fun ", StringComparison.Ordinal)
+               || prefix.StartsWith("infix fun ", StringComparison.Ordinal)
+               || (prefix.StartsWith("val ", StringComparison.Ordinal) && !prefix.Contains('='))
+               || (prefix.StartsWith("var ", StringComparison.Ordinal) && !prefix.Contains('='));
+    }
 
     public static void EmitMethodReferenceReferences(
         string preparedLine,

@@ -1070,6 +1070,7 @@ public static partial class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
+        var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
@@ -2514,7 +2515,14 @@ public static partial class ReferenceExtractor
                 if (language == "swift")
                     SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
                 else if (language == "kotlin")
+                {
+                    KotlinReferenceExtractor.EmitInfixCallReferences(
+                        preparedLine,
+                        originalLine,
+                        kotlinInfixFunctionNames,
+                        AddCallLikeReference);
                     KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
+                }
 
                 if (language == "fsharp")
                 {

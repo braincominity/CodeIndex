@@ -2486,6 +2486,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinInfixCalls_TrackBuiltInAndUserDefinedFunctions()
+    {
+        const string content = """
+            class Bag {
+                infix fun add(item: String): Bag = this
+                infix fun merge(other: Bag): Bag = this
+
+                fun build(other: Bag, value: Int) {
+                    val pair = 1 to "one"
+                    val shifted = value shl 4
+                    val masked = value and 15
+                    val ranged = 1 until 10
+                    val countdown = 10 downTo 1
+                    val combined = value or 2
+                    val toggled = value xor 3
+                    val shrunk = value shr 1
+                    this add "item"
+                    this merge other
+                    val words = "plain text to ignore"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "or", "xor", "shr", "add", "merge" })
+        {
+            Assert.Contains(references, r => r.SymbolName == name && r.ReferenceKind == "call");
+        }
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "to"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("plain text", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
     {
         const string content = """
