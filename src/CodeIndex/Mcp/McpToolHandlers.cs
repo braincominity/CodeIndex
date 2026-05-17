@@ -317,6 +317,26 @@ public partial class McpServer
             GraphSupportReason: graphSupportReason);
     }
 
+    private static bool TryReadReferenceRankMode(JsonNode? args, out ReferenceRankMode rankMode, out string? error)
+    {
+        var value = args?["rankBy"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            rankMode = ReferenceRankMode.Weighted;
+            error = null;
+            return true;
+        }
+
+        if (QueryCommandRunner.TryParseReferenceRankMode(value, out rankMode))
+        {
+            error = null;
+            return true;
+        }
+
+        error = $"rankBy must be one of weighted, count, kind; got '{value}'.";
+        return false;
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -642,10 +662,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -666,6 +688,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
@@ -706,10 +729,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
+            return CreateToolErrorResponse(id, rankModeError!);
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -730,6 +755,7 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
@@ -2325,9 +2351,12 @@ public partial class McpServer
         // 2. Validate optional parameters / 任意パラメータのバリデーション
         var language = args?["language"]?.GetValue<string>();
         var context = args?["context"]?.GetValue<string>();
+        var toolInvocationContext = args?["toolInvocationContext"]?.GetValue<string>();
 
         if (context != null && context.Length > MaxContextLength)
             return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
+        if (toolInvocationContext != null && toolInvocationContext.Length > MaxContextLength)
+            return CreateToolErrorResponse(id, $"Tool invocation context too long ({toolInvocationContext.Length} chars, max {MaxContextLength})");
 
         // 3. Source code leak detection — reject if code is detected
         //    ソースコード漏洩検出 — コードが検出されたら拒否
@@ -2336,6 +2365,8 @@ public partial class McpServer
 
         if (context != null && SourceCodeDetector.ContainsSourceCode(context))
             return CreateToolErrorResponse(id, "Context appears to contain source code. Please describe what you were trying to do without including code.");
+        if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
+            return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -2349,11 +2380,11 @@ public partial class McpServer
 
         // 6. Store locally and attempt GitHub submission atomically.
         //    TryAddAndSubmit runs the entire sequence under a single file lock:
-        //    read → dedup check → write → GitHub submit → mark submitted.
+        //    read → dedup check → write → GitHub submit → record lifecycle state.
         //    This prevents concurrent callers from both creating duplicate GitHub issues.
         //    ローカル保存と GitHub 送信をアトミックに実行する。
         //    TryAddAndSubmit は全シーケンスを1つのファイルロック内で実行:
-        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → 送信済みマーク。
+        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → lifecycle 状態を記録。
         //    並行呼び出しで重複 GitHub Issue が作られることを防ぐ。
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
@@ -2367,6 +2398,12 @@ public partial class McpServer
             Context = context,
             Hash = hash,
             CreatedAt = DateTime.UtcNow,
+            CreatedByAgent = ResolveSuggestionAgent(),
+            SessionId = _sessionId,
+            ClientVersion = _version,
+            McpClientName = _clientName,
+            McpClientVersion = _clientVersion,
+            ToolInvocationContext = toolInvocationContext,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -2388,13 +2425,17 @@ public partial class McpServer
                 ["hash"] = hash,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
-                    : result.GitHubIssueUrl != null
+                    : result.UpstreamUrl != null
                         ? "This suggestion was already recorded. GitHub submission retried successfully."
                         : "This suggestion has already been recorded.",
-                ["submitted_to_github"] = result.AlreadySubmitted || result.GitHubIssueUrl != null,
+                ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
+                ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             };
-            if (result.GitHubIssueUrl != null)
-                dupPayload["github_issue_url"] = result.GitHubIssueUrl;
+            if (result.UpstreamUrl != null)
+            {
+                dupPayload["upstream_url"] = result.UpstreamUrl;
+                dupPayload["github_issue_url"] = result.UpstreamUrl;
+            }
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -2406,11 +2447,20 @@ public partial class McpServer
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
-            ["submitted_to_github"] = result.GitHubIssueUrl != null,
+            ["submitted_to_github"] = result.UpstreamUrl != null,
+            ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
         };
-        if (result.GitHubIssueUrl != null)
-            payload["github_issue_url"] = result.GitHubIssueUrl;
+        if (result.UpstreamUrl != null)
+        {
+            payload["upstream_url"] = result.UpstreamUrl;
+            payload["github_issue_url"] = result.UpstreamUrl;
+        }
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private string ResolveSuggestionAgent()
+    {
+        return string.IsNullOrWhiteSpace(_caller) ? "unknown" : _caller;
     }
 
 }

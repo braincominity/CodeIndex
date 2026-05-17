@@ -63,11 +63,11 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
-        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
         ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
@@ -846,7 +846,7 @@ public static class ConsoleUi
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "search",
     ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
@@ -877,7 +877,7 @@ public static class ConsoleUi
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
-        sb.Append("        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append("        --db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append("        --kind) COMPREPLY=($(compgen -W \"function class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
@@ -905,7 +905,11 @@ public static class ConsoleUi
         // schema のフラグに `--help` を加え、`find` のみ `--` end-of-options マーカーも露出させる。
         var tokens = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+        {
             tokens.Add(flag.Name);
+            if (flag.ShortName is not null)
+                tokens.Add(flag.ShortName);
+        }
         tokens.Add("--help");
         if (command == "find")
             tokens.Add("--");
@@ -925,7 +929,11 @@ public static class ConsoleUi
                 if (IsEnumeratedBranchScopedFlag(flag.Name))
                     continue;
                 if (seen.Add(flag.Name))
+                {
                     tokens.Add(flag.Name);
+                    if (flag.ShortName is not null)
+                        tokens.Add(flag.ShortName);
+                }
             }
         }
         tokens.Add("--help");
@@ -933,7 +941,7 @@ public static class ConsoleUi
     }
 
     private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
-        flagName is "--max-line-width" or "--snippet-lines" or "--snippet-focus" or "--fts" or "--no-dedup"
+        flagName is "--max-line-width" or "--snippet-lines" or "--snippet-focus" or "--fts" or "--no-dedup" or "--no-visibility-rank"
             or "--prefix" or "--exact-substring" or "--integrity-check" or "--check" or "--stale-after"
             or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
             or "--before" or "--after" or "--group-by-name";
@@ -980,7 +988,7 @@ public static class ConsoleUi
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
-            args.Add(FormatZshArgument(flag, langs));
+            args.AddRange(FormatZshArguments(flag, langs));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags — but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -1008,18 +1016,25 @@ public static class ConsoleUi
                 if (IsEnumeratedBranchScopedFlag(flag.Name))
                     continue;
                 if (seen.Add(flag.Name))
-                    args.Add(FormatZshArgument(flag, langs));
+                    args.AddRange(FormatZshArguments(flag, langs));
             }
         }
         args.Add("'*:query'");
         return args;
     }
 
-    private static string FormatZshArgument(CliFlag flag, string langs)
+    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs)
+    {
+        yield return FormatZshArgument(flag.Name, flag, langs);
+        if (flag.ShortName is not null)
+            yield return FormatZshArgument(flag.ShortName, flag, langs);
+    }
+
+    private static string FormatZshArgument(string name, CliFlag flag, string langs)
     {
         var desc = flag.Description.Replace("'", "''");
         if (!flag.IsValueBearing)
-            return $"'{flag.Name}[{desc}]'";
+            return $"'{name}[{desc}]'";
 
         var valueSpec = flag.ValuePlaceholder switch
         {
@@ -1037,7 +1052,7 @@ public static class ConsoleUi
             "<stdio|http>" => "transport:(stdio http)",
             _ => "value",
         };
-        return $"'{flag.Name}[{desc}]:{valueSpec}'";
+        return $"'{name}[{desc}]:{valueSpec}'";
     }
 
     private static void AppendZshArguments(StringBuilder sb, IReadOnlyList<string> args)
@@ -1080,6 +1095,7 @@ public static class ConsoleUi
             // トークン順は旧スクリプトと同じ `-l name (-r)? (-a) -d` を維持する。
             // ConsoleUiTests の fish 抽出正規表現が -l の直前に値マーカーを期待していないため。
             var requiresArg = flag.IsValueBearing ? " -r" : "";
+            var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
             var description = name switch
             {
                 "group-by-name" => "Collapse same-name rows across files",
@@ -1093,7 +1109,7 @@ public static class ConsoleUi
                 _ => "",
             };
             description = description.Replace("'", "\\'");
-            lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {commands}' -l {name}{requiresArg}{argSpec} -d '{description}'");
+            lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {commands}' -l {name}{shortName}{requiresArg}{argSpec} -d '{description}'");
         }
         return string.Join(Environment.NewLine, lines);
     }

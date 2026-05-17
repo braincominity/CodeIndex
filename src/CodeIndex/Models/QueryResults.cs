@@ -16,9 +16,17 @@ public class SearchResult
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public double Score { get; set; }
+    public string? Visibility { get; set; }
 }
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
+
+public enum ReferenceRankMode
+{
+    Weighted,
+    Count,
+    Kind,
+}
 
 public class SymbolResult
 {
@@ -51,8 +59,16 @@ public class GroupedHotspotResult
 {
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
+}
+
+public class SymbolHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
 }
 
 public class FileResult
@@ -205,6 +221,8 @@ public class CallerResult
     public string ReferenceKind { get; set; } = string.Empty;
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
+    public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -221,6 +239,8 @@ public class CalleeResult
     public string ReferenceKind { get; set; } = string.Empty;
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
+    public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }

@@ -71,6 +71,7 @@ public static class QueryCommandRunner
         "--max-line-width",
         "--stale-after",
         "--explain",
+        "--rank-by",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -138,6 +139,7 @@ public static class QueryCommandRunner
         "--body",
         "--count",
         "--no-dedup",
+        "--no-visibility-rank",
         "--exact",
         "--exact-name",
         "--exact-substring",
@@ -194,7 +196,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
@@ -209,7 +211,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
             if (results.Count == 0)
             {
                 if (options.Json)
@@ -234,7 +236,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
+                    Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
                     var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
@@ -391,6 +393,17 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string FormatSearchVisibilitySuffix(string? visibility)
+    {
+        if (string.IsNullOrWhiteSpace(visibility)
+            || string.Equals(visibility, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return $" [{visibility}]";
     }
 
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -574,7 +587,7 @@ public static class QueryCommandRunner
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                     r => r.CalleeName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -588,14 +601,14 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RankMode);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                 r => r.CalleeName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -698,7 +711,7 @@ public static class QueryCommandRunner
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                     r => r.CallerName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -712,14 +725,14 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RankMode);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
-                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rankMode: options.RankMode),
                 r => r.CallerName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -2431,6 +2444,7 @@ public static class QueryCommandRunner
                             g.Symbol.Path,
                             g.Symbol.Line,
                             g.ReferenceCount,
+                            g.ReferenceScore,
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
@@ -2453,7 +2467,7 @@ public static class QueryCommandRunner
                         var s = g.Symbol;
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
-                        Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
+                        Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
                     Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
@@ -2700,6 +2714,7 @@ public static class QueryCommandRunner
                         r.Symbol.Path,
                         r.Symbol.Line,
                         r.ReferenceCount,
+                        r.ReferenceScore,
                         r.Symbol.Visibility,
                         r.Symbol.ContainerName))
                     .ToList();
@@ -2715,10 +2730,11 @@ public static class QueryCommandRunner
             }
             else
             {
-                foreach (var (s, refCount) in results)
+                foreach (var r in results)
                 {
+                    var s = r.Symbol;
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                    Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 Console.Error.WriteLine($"({results.Count} symbol hotspots; grouped_by={groupBy})");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
@@ -3084,6 +3100,7 @@ public static class QueryCommandRunner
         bool excludeTests = false;
         DateTime? since = null;
         bool noDedup = false;
+        bool noVisibilityRank = false;
         bool exact = false;
         bool prefix = false;
         List<string>? parseErrors = null;
@@ -3097,6 +3114,7 @@ public static class QueryCommandRunner
         string? groupBy = null;
         bool rawBytes = false;
         string? statusExplainField = null;
+        var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -3254,6 +3272,18 @@ public static class QueryCommandRunner
                     else
                         AddParseError(kindError!);
                     break;
+                case "--rank-by":
+                    if (TryReadStringOptionValue(args, ref i, "--rank-by", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var rankByValue, out var rankByError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--rank-by", rankByValue!);
+                        if (TryParseReferenceRankMode(rankByValue!, out var parsedRankMode))
+                            rankMode = parsedRankMode;
+                        else
+                            AddParseError($"Error: --rank-by must be one of weighted, count, kind; got '{rankByValue}'.");
+                    }
+                    else
+                        AddParseError(rankByError!);
+                    break;
                 case "--fts":
                     rawFts = true;
                     break;
@@ -3265,6 +3295,9 @@ public static class QueryCommandRunner
                     break;
                 case "--no-dedup":
                     noDedup = true;
+                    break;
+                case "--no-visibility-rank":
+                    noVisibilityRank = true;
                     break;
                 case "--exact":
                     exact = true;
@@ -3558,6 +3591,7 @@ public static class QueryCommandRunner
             CountOnly = countOnly,
             Since = since,
             NoDedup = noDedup,
+            NoVisibilityRank = noVisibilityRank,
             Exact = exact,
             Prefix = prefix,
             ExactName = exactName,
@@ -3569,9 +3603,29 @@ public static class QueryCommandRunner
             GroupBy = groupBy,
             RawBytes = rawBytes,
             StatusExplainField = statusExplainField,
+            RankMode = rankMode,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    internal static bool TryParseReferenceRankMode(string value, out ReferenceRankMode rankMode)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "weighted":
+                rankMode = ReferenceRankMode.Weighted;
+                return true;
+            case "count":
+                rankMode = ReferenceRankMode.Count;
+                return true;
+            case "kind":
+                rankMode = ReferenceRankMode.Kind;
+                return true;
+            default:
+                rankMode = ReferenceRankMode.Weighted;
+                return false;
+        }
     }
 
     private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
@@ -4120,6 +4174,8 @@ public static class QueryCommandRunner
             yield return $"lang: {options.Lang}";
         if (options.Kind != null)
             yield return $"kind: {options.Kind}";
+        if (options.RankMode != ReferenceRankMode.Weighted)
+            yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
         if (options.Since.HasValue)
@@ -4158,6 +4214,8 @@ public static class QueryCommandRunner
             query["lang"] = options.Lang;
         if (options.Kind != null)
             query["kind"] = options.Kind;
+        if (options.RankMode != ReferenceRankMode.Weighted)
+            query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
         if (options.Since.HasValue)
@@ -4570,6 +4628,8 @@ public static class QueryCommandRunner
             return seconds > 0 ? $"{(int)duration.TotalMinutes}m{seconds}s" : $"{(int)duration.TotalMinutes}m";
         return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
+
+    private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
@@ -5164,6 +5224,7 @@ public static class QueryCommandRunner
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--rank-by"] = "pass `weighted`, `count`, or `kind` (callers/callees only).",
         ["--depth"] = "pass a non-negative integer, e.g. `--depth 5` (default 5).",
         ["--path"] = "pass a glob-style path pattern, e.g. `--path src/**`. Repeat `--path` to add more patterns.",
         ["--exclude-path"] = "pass a glob-style path pattern to exclude, e.g. `--exclude-path tests/**`. Repeat `--exclude-path` to add more.",
@@ -5425,6 +5486,13 @@ public static class QueryCommandRunner
         result = default;
         return false;
     }
+
+    public static string FormatReferenceRankMode(ReferenceRankMode mode) => mode switch
+    {
+        ReferenceRankMode.Count => "count",
+        ReferenceRankMode.Kind => "kind",
+        _ => "weighted",
+    };
 }
 
 public sealed class QueryCommandOptions
@@ -5455,6 +5523,7 @@ public sealed class QueryCommandOptions
     public bool CountOnly { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
+    public bool NoVisibilityRank { get; init; }
     public bool Exact { get; init; }
     public bool Prefix { get; init; }
     public bool ExactName { get; init; }
@@ -5466,6 +5535,7 @@ public sealed class QueryCommandOptions
     public string? GroupBy { get; init; }
     public bool RawBytes { get; init; }
     public string? StatusExplainField { get; init; }
+    public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

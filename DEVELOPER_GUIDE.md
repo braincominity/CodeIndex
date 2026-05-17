@@ -561,7 +561,12 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Description text (natural language, validated by SourceCodeDetector)
 - Context text (natural language, validated by SourceCodeDetector)
 - cdidx version string
+- Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
+
+### Local lifecycle fields
+
+Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
 
 ### What is NOT included in the payload by design
 
@@ -572,7 +577,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 ### Heuristic source code guard (not a security boundary)
 
-The description and context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
+The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
 
 ### SourceCodeDetector design
 

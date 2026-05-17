@@ -19,6 +19,7 @@ namespace CodeIndex.Cli;
 internal sealed record CliFlag
 {
     public required string Name { get; init; }
+    public string? ShortName { get; init; }
     public string? ValuePlaceholder { get; init; }
     public required string Description { get; init; }
 
@@ -101,6 +102,7 @@ internal static class CliFlagSchema
     [
         "definition", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
     ];
+    private static readonly string[] RankByCommands = ["callers", "callees"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -162,6 +164,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-path", ValuePlaceholder = "<glob>", Description = "Exclude path", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
+            new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
@@ -177,6 +180,7 @@ internal static class CliFlagSchema
             new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", Commands = Set("search") },
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
+            new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },
@@ -203,7 +207,7 @@ internal static class CliFlagSchema
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", Commands = Set("index") },
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", Commands = Set("index") },
-            new() { Name = "--output", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
+            new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", Commands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", Commands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle", Commands = Set("report") },
