@@ -86,6 +86,145 @@ public static partial class ReferenceExtractor
         }
     }
 
+    private static void EmitCSharpStaticInterfaceMemberImplementationReferences(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        IReadOnlyList<SymbolRecord> symbols,
+        List<ReferenceRecord> references,
+        HashSet<string> seen)
+    {
+        var interfaceMembersByType = symbols
+            .Where(IsCSharpStaticInterfaceFunctionContract)
+            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.ToList(),
+                StringComparer.Ordinal);
+        if (interfaceMembersByType.Count == 0)
+            return;
+
+        var staticMembersByContainer = symbols
+            .Where(symbol => symbol.Kind == "function"
+                             && !string.IsNullOrWhiteSpace(symbol.ContainerName)
+                             && !string.IsNullOrWhiteSpace(symbol.Signature)
+                             && ContainsCSharpWord(symbol.Signature!, "static"))
+            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.ToList(),
+                StringComparer.Ordinal);
+
+        foreach (var typeSymbol in symbols)
+        {
+            if (typeSymbol.Kind is not ("class" or "struct")
+                || typeSymbol.BodyStartLine == null
+                || typeSymbol.BodyEndLine == null)
+            {
+                continue;
+            }
+
+            var implementedInterfaces = ExtractCSharpImplementedInterfaceNames(
+                CollectCSharpRecordHeader(structuralLines, typeSymbol.StartLine).Text);
+            if (implementedInterfaces.Count == 0)
+                continue;
+
+            foreach (var interfaceName in implementedInterfaces)
+            {
+                if (!interfaceMembersByType.TryGetValue(interfaceName, out var interfaceMembers))
+                    continue;
+
+                if (!staticMembersByContainer.TryGetValue(typeSymbol.Name, out var implementationMembers))
+                    continue;
+
+                foreach (var implementation in implementationMembers)
+                {
+                    if (!IsCSharpStaticMemberImplementationCandidate(typeSymbol, implementation))
+                        continue;
+
+                    if (!interfaceMembers.Any(contract => string.Equals(contract.Name, implementation.Name, StringComparison.Ordinal)))
+                        continue;
+
+                    var lineIndex = implementation.StartLine - 1;
+                    if (lineIndex < 0 || lineIndex >= lines.Length)
+                        continue;
+
+                    var context = lines[lineIndex].Trim();
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        implementation.Name,
+                        GetCSharpSymbolNameIndex(lines[lineIndex], implementation),
+                        CSharpImplicitImplementationReferenceKind,
+                        context,
+                        implementation.StartLine,
+                        implementation);
+                }
+            }
+        }
+    }
+
+    private static bool IsCSharpStaticInterfaceFunctionContract(SymbolRecord symbol)
+    {
+        if (symbol.Kind != "function"
+            || symbol.ContainerKind != "interface"
+            || string.IsNullOrWhiteSpace(symbol.ContainerName)
+            || string.IsNullOrWhiteSpace(symbol.Name)
+            || string.IsNullOrWhiteSpace(symbol.Signature))
+        {
+            return false;
+        }
+
+        return ContainsCSharpWord(symbol.Signature!, "static")
+               && (ContainsCSharpWord(symbol.Signature!, "abstract")
+                   || ContainsCSharpWord(symbol.Signature!, "virtual"));
+    }
+
+    private static bool IsCSharpStaticMemberImplementationCandidate(SymbolRecord typeSymbol, SymbolRecord member)
+    {
+        if (member.Kind != "function"
+            || string.IsNullOrWhiteSpace(member.Name)
+            || string.IsNullOrWhiteSpace(member.Signature)
+            || member.StartLine < typeSymbol.BodyStartLine
+            || member.EndLine > typeSymbol.BodyEndLine)
+        {
+            return false;
+        }
+
+        if (!string.Equals(member.ContainerName, typeSymbol.Name, StringComparison.Ordinal))
+            return false;
+
+        return ContainsCSharpWord(member.Signature!, "static");
+    }
+
+    private static HashSet<string> ExtractCSharpImplementedInterfaceNames(string headerText)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(headerText))
+            return names;
+
+        var colonIndex = FindSignatureColonIndex(headerText);
+        if (colonIndex < 0)
+            return names;
+
+        var baseList = headerText.Substring(colonIndex + 1);
+        var whereMatch = CSharpWhereClauseRegex.Match(baseList);
+        if (whereMatch.Success)
+            baseList = baseList.Substring(0, whereMatch.Index);
+        baseList = TrimTrailingTypeListTerminator(baseList);
+
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
+        {
+            var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
+            var name = ExtractBareTypeName(rawSegment);
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name!);
+        }
+
+        return names;
+    }
+
     private static bool IsCSharpAsyncIteratorFunction(SymbolRecord symbol, string[] structuralLines)
     {
         if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Signature))

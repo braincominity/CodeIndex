@@ -71,6 +71,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpStaticInterfaceMembers_EmitImplicitImplementationReferences()
+    {
+        const string content = """
+            public interface IParseable<T>
+            {
+                static abstract T Parse(string s);
+                static virtual T Create() => default!;
+            }
+
+            public readonly struct Money : IParseable<Money>
+            {
+                public static Money Parse(string s) => new();
+                public static Money Create() => new();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Parse"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static abstract", StringComparison.Ordinal) == true);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Create"
+            && symbol.ContainerKind == "interface"
+            && symbol.ContainerName == "IParseable"
+            && symbol.Signature?.Contains("static virtual", StringComparison.Ordinal) == true);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Parse"
+            && reference.Context == "public static Money Parse(string s) => new();");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Create"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.ContainerName == "Create"
+            && reference.Context == "public static Money Create() => new();");
+    }
+
+    [Fact]
     public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
     {
         var outer = Container("outer", "class", 1, 100);
