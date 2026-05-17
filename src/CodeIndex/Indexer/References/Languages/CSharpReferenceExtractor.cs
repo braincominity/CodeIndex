@@ -296,9 +296,14 @@ internal static class CSharpReferenceExtractor
         }
     }
 
-    public static string? TryGetCallerInfoAttributeTypeName(string attributeName)
+    public static string? TryGetCallerInfoAttributeTypeName(string attributeName, string? preparedLine = null, int nameIndex = -1)
     {
-        var simpleName = NormalizeCSharpIdentifier(attributeName);
+        var normalizedName = NormalizeCSharpIdentifier(attributeName);
+        var qualifier = GetCSharpAttributeQualifier(preparedLine, nameIndex) ?? GetQualifierFromAttributeName(normalizedName);
+        if (qualifier != null && !IsCompilerServicesQualifier(qualifier))
+            return null;
+
+        var simpleName = normalizedName;
         var qualifierIndex = Math.Max(simpleName.LastIndexOf('.'), simpleName.LastIndexOf(':'));
         if (qualifierIndex >= 0 && qualifierIndex + 1 < simpleName.Length)
             simpleName = simpleName[(qualifierIndex + 1)..];
@@ -313,6 +318,61 @@ internal static class CSharpReferenceExtractor
             ? typeName
             : null;
     }
+
+    private static string? GetQualifierFromAttributeName(string attributeName)
+    {
+        var qualifierIndex = Math.Max(attributeName.LastIndexOf('.'), attributeName.LastIndexOf(':'));
+        return qualifierIndex > 0
+            ? NormalizeCSharpAttributeQualifier(attributeName[..qualifierIndex])
+            : null;
+    }
+
+    private static string? GetCSharpAttributeQualifier(string? preparedLine, int nameIndex)
+    {
+        if (string.IsNullOrEmpty(preparedLine) || nameIndex <= 0 || nameIndex > preparedLine.Length)
+            return null;
+
+        var cursor = nameIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor--;
+
+        if (cursor < 0)
+            return null;
+        if (preparedLine[cursor] != '.'
+            && !(preparedLine[cursor] == ':' && cursor > 0 && preparedLine[cursor - 1] == ':'))
+        {
+            return null;
+        }
+
+        var end = cursor + 1;
+        while (cursor >= 0)
+        {
+            var ch = preparedLine[cursor];
+            if (char.IsWhiteSpace(ch) || ch == '.' || ch == ':' || ch == '@' || ch == '_' || char.IsLetterOrDigit(ch))
+            {
+                cursor--;
+                continue;
+            }
+
+            break;
+        }
+
+        return NormalizeCSharpAttributeQualifier(preparedLine[(cursor + 1)..end]);
+    }
+
+    private static string? NormalizeCSharpAttributeQualifier(string qualifier)
+    {
+        var compact = new string(qualifier.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+        while (compact.EndsWith(".", StringComparison.Ordinal))
+            compact = compact[..^1];
+        while (compact.EndsWith("::", StringComparison.Ordinal))
+            compact = compact[..^2];
+        return compact.Length > 0 ? compact : null;
+    }
+
+    private static bool IsCompilerServicesQualifier(string qualifier)
+        => string.Equals(qualifier, "System.Runtime.CompilerServices", StringComparison.Ordinal)
+           || string.Equals(qualifier, "global::System.Runtime.CompilerServices", StringComparison.Ordinal);
 
     private static bool IsCSharpUsingDirectiveLine(string trimmedLine)
     {

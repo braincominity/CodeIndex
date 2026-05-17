@@ -2305,7 +2305,7 @@ public static partial class ReferenceExtractor
                     AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
                     if (language == "csharp"
                         && metadataKind == "attribute"
-                        && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name) is { } callerInfoAttributeTypeName)
+                        && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
                     {
                         AddReference(
                             references,
@@ -2706,7 +2706,7 @@ public static partial class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
-                    if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName) is { } callerInfoAttributeTypeName)
+                    if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName, preparedLine, nameIndex) is { } callerInfoAttributeTypeName)
                     {
                         AddReference(
                             references,

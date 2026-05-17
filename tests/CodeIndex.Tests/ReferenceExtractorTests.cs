@@ -25668,6 +25668,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCallerInfoLookalikeAttributes_DoNotEmitCompilerServicesTypeReferences()
+    {
+        // Regression (issue #2086 review): explicit non-System qualifiers can legally end in
+        // caller-info-like names, but they are not the BCL caller-info attributes.
+        // リグレッション (issue #2086 review): 明示的な非 System 修飾子で caller-info 風の名前を
+        // 使う属性は BCL caller-info 属性ではないため、compiler-services 型参照を出さない。
+        const string content = """
+            public static class Log
+            {
+                public static void Warning(
+                    [MyCompany.CallerMemberName] string member = "",
+                    [MyCompany.CallerArgumentExpression("message")] string expression = "")
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "CallerMemberName" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "CallerArgumentExpression" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("System.Runtime.CompilerServices.Caller", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("Caller", StringComparison.Ordinal) && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpTypeParameterAttribute_ClassifiedAsAttribute()
     {
         // Regression: `class C<[Attr("x")] T>` — the `[` is preceded by `<`, which is a valid
