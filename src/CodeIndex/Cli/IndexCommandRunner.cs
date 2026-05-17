@@ -1909,11 +1909,67 @@ public static class IndexCommandRunner
             Console.Error.WriteLine($"cdidx: {message}");
         }
 
+        (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
+        {
+            if (!options.Json || options.Quiet)
+                return null;
+
+            var cts = new CancellationTokenSource();
+            var token = cts.Token;
+            var task = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    var detail = detailProvider?.Invoke();
+                    var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
+                    Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
+                }
+            }, token);
+            return (cts, task);
+        }
+
+        void StopJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
+        {
+            if (heartbeat == null)
+                return;
+
+            heartbeat.Value.Cts.Cancel();
+            try
+            {
+                heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+            {
+            }
+            heartbeat.Value.Cts.Dispose();
+        }
+
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
         WriteJsonLiveness("scanning files...");
-        var scanResult = indexer.ScanFilesDetailed();
+        var scanHeartbeat = StartJsonPhaseHeartbeat("scanning files");
+        FileIndexer.ScanFilesResult scanResult;
+        try
+        {
+            scanResult = indexer.ScanFilesDetailed();
+        }
+        finally
+        {
+            StopJsonPhaseHeartbeat(scanHeartbeat);
+        }
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
         WriteJsonLiveness($"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
@@ -2242,7 +2298,15 @@ public static class IndexCommandRunner
         PauseIndexSpinnerForConsoleWrite();
 
         WriteJsonLiveness("optimizing index...");
-        writer.OptimizeFts();
+        var optimizeHeartbeat = StartJsonPhaseHeartbeat("optimizing index");
+        try
+        {
+            writer.OptimizeFts();
+        }
+        finally
+        {
+            StopJsonPhaseHeartbeat(optimizeHeartbeat);
+        }
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
