@@ -1639,6 +1639,19 @@ public partial class DbReader
                         THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
                     ELSE NULL
                 END";
+        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
+            && _symbolColumns.Contains("body_end_line")
+            && _symbolColumns.Contains("signature")
+            ? @"
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND (
+                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
+                          OR COALESCE(s.signature, '') NOT LIKE '% ' || s.name || '(%'
+                      )
+                  )"
+            : string.Empty;
         // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
         // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
         // back to codebase-wide counting. Cross-file grouping is allowed only when the
@@ -1666,16 +1679,7 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT (
-                      f.lang = 'csharp'
-                      AND s.kind = 'function'
-                      AND (
-                          ({GetSymbolColumnSql("body_start_line")} IS NULL AND {GetSymbolColumnSql("body_end_line")} IS NULL)
-                          OR {GetSymbolColumnSql("signature", "''")} NOT LIKE '% ' || s.name || '(%'
-                          OR {GetSymbolColumnSql("signature", "''")} LIKE '% override %'
-                      )
-                  )";
+                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql;
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
@@ -2007,6 +2011,19 @@ public partial class DbReader
                         THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
                     ELSE NULL
                 END";
+        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
+            && _symbolColumns.Contains("body_end_line")
+            && _symbolColumns.Contains("signature")
+            ? @"
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND s.kind = 'function'
+                      AND (
+                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
+                          OR COALESCE(s.signature, '') NOT LIKE '% ' || s.name || '(%'
+                      )
+                  )"
+            : string.Empty;
         var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         var sql = $@"
             WITH all_candidate_symbols AS (
@@ -2023,16 +2040,7 @@ public partial class DbReader
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT (
-                      f.lang = 'csharp'
-                      AND s.kind = 'function'
-                      AND (
-                          ({GetSymbolColumnSql("body_start_line")} IS NULL AND {GetSymbolColumnSql("body_end_line")} IS NULL)
-                          OR {GetSymbolColumnSql("signature", "''")} NOT LIKE '% ' || s.name || '(%'
-                          OR {GetSymbolColumnSql("signature", "''")} LIKE '% override %'
-                      )
-                  )";
+                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql;
 
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;

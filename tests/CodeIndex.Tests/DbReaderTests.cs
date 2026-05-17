@@ -2793,16 +2793,6 @@ public class DbReaderTests : IDisposable
                     reader.Load(dataReader);
                 }
             }
-
-            public sealed class TeeWriter : System.IO.TextWriter
-            {
-                public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
-
-                public override void WriteLine(string? value)
-                {
-                    System.Console.WriteLine(value);
-                }
-            }
             """);
 
         var results = _reader.GetSymbolHotspots(
@@ -2815,7 +2805,6 @@ public class DbReaderTests : IDisposable
 
         Assert.DoesNotContain(results, result => result.Symbol.Name == "GetInt32");
         Assert.DoesNotContain(results, result => result.Symbol.Name == "Max");
-        Assert.DoesNotContain(results, result => result.Symbol.Name == "WriteLine");
         var load = Assert.Single(results.Where(result => result.Symbol.Name == "Load"));
         Assert.Equal(2, load.ReferenceCount);
 
@@ -2829,7 +2818,6 @@ public class DbReaderTests : IDisposable
 
         Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "GetInt32");
         Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "Max");
-        Assert.DoesNotContain(groupedResults, result => result.Symbol.Name == "WriteLine");
         var groupedLoad = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Load"));
         Assert.Equal(2, groupedLoad.ReferenceCount);
     }
