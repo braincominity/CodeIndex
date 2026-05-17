@@ -10,6 +10,50 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Fact]
+    public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
+    {
+        const string content = """
+            function demo() {
+                runTask();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.True(ReferenceExtractor.TryGetExtractor("javascript", out var extractor));
+        Assert.Equal("javascript", extractor.Language);
+
+        var references = extractor.Extract(new ReferenceExtractionContext(
+            1,
+            extractor.Language,
+            content,
+            symbols));
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "runTask"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void RegisteredLanguages_MatchSupportedReferenceLanguages()
+    {
+        foreach (var language in ReferenceExtractor.RegisteredLanguages)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            Assert.True(ReferenceExtractor.TryGetExtractor(language, out var extractor));
+            Assert.Equal(language, extractor.Language);
+        }
+
+        Assert.True(ReferenceExtractor.SupportsLanguage("vue"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("vue", out var vueExtractor));
+        Assert.Equal("typescript", vueExtractor.Language);
+        Assert.True(ReferenceExtractor.SupportsLanguage("razor"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("razor", out var razorExtractor));
+        Assert.Equal("csharp", razorExtractor.Language);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]

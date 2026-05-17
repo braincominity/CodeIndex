@@ -221,6 +221,12 @@ files 1──N symbol_references
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
 
+### Extending reference extraction
+
+Reference extraction is routed through `IReferenceExtractor` instances keyed by normalized language strings. Use `ReferenceExtractor.TryGetExtractor(language, out var extractor)` when a caller needs to invoke a language extractor directly; aliases such as `vue` / `svelte` normalize to `typescript`, and `razor` / `blazor` / `cshtml` normalize to `csharp`. The public `ReferenceExtractor.Extract(...)` method remains the compatibility entry point and delegates through the same registry.
+
+Extractor inputs are passed as a `ReferenceExtractionContext`. Implementations must be stateless per call: keep mutable parse state in local variables or request-scoped helper objects, and treat shared regexes or lookup tables as immutable after initialization. New language extractors should register exactly one normalized language key and preserve existing reference-kind taxonomy (`call`, `instantiate`, `type_reference`, metadata kinds, and language-specific raw labels) so database readers and MCP output keep their contracts.
+
 ## Why a database instead of grep?
 
 On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. cdidx solves this by **reading every file once at index time** and building a search structure so that queries never need to touch the original files again.
