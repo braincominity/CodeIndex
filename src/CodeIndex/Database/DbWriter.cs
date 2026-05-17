@@ -660,6 +660,32 @@ public class DbWriter
         return symbols;
     }
 
+    public bool HasCSharpStaticInterfaceContractSymbolsInPaths(IReadOnlySet<string> paths)
+    {
+        if (paths.Count == 0)
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.container_kind = 'interface'
+              AND s.kind IN ('function', 'property')
+              AND s.signature LIKE '%static%'
+              AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (paths.Contains(reader.GetString(0)))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。

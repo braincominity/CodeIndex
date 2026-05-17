@@ -2917,6 +2917,10 @@ public static class IndexCommandRunner
             var absolutePath = Path.IsPathRooted(filePath)
                 ? filePath
                 : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
+            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            if (!IsOutsideProjectRoot(relativePath))
+                pendingPaths.Add(relativePath);
+
             var detection = FileIndexer.TryDetectLanguage(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
@@ -2930,7 +2934,6 @@ public static class IndexCommandRunner
                 if (record.Lang != "csharp")
                     continue;
 
-                pendingPaths.Add(record.Path);
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
             }
             catch
@@ -2942,9 +2945,10 @@ public static class IndexCommandRunner
 
         var symbols = writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths);
         symbols.AddRange(pendingSymbols);
+        var hadPendingContracts = writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
-            symbols.Any(IsCSharpStaticInterfaceContractSymbol));
+            symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)

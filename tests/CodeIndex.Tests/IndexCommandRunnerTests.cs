@@ -2138,6 +2138,95 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_CsharpStaticInterfaceContractRemoval_ReindexesImplementers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                }
+                """);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "IParseable.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpStaticInterfaceContractDeletion_ReindexesImplementers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.Delete(interfacePath);
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "IParseable.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
     {
         var projectRoot = CreateTempProject();

@@ -92,6 +92,16 @@ public class ReferenceExtractorTests
                 static abstract bool TryParse(string s, out TSelf value);
             }
 
+            public interface IWrongReturn<T>
+            {
+                static abstract int Parse(string s);
+            }
+
+            public interface IWrongProperty
+            {
+                static abstract string Scale { get; }
+            }
+
             public readonly struct Money : IParseable<Money>, IAdditive<Money>
             {
                 public static Money Parse(string s) => new();
@@ -114,6 +124,16 @@ public class ReferenceExtractorTests
             {
                 public static WrongRef Add(WrongRef left, WrongRef right) => new();
                 public static bool TryParse(string s, ref WrongRef value) => true;
+            }
+
+            public readonly struct WrongReturn : IWrongReturn<WrongReturn>
+            {
+                public static WrongReturn Parse(string s) => new();
+            }
+
+            public readonly struct WrongProperty : IWrongProperty
+            {
+                public static int Scale => 2;
             }
             """;
 
@@ -172,6 +192,14 @@ public class ReferenceExtractorTests
             reference.SymbolName == "TryParse"
             && reference.ReferenceKind == "implicit_implementation"
             && reference.Context == "public static bool TryParse(string s, ref WrongRef value) => true;");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Parse"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static WrongReturn Parse(string s) => new();");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Scale"
+            && reference.ReferenceKind == "implicit_implementation"
+            && reference.Context == "public static int Scale => 2;");
     }
 
     [Fact]

@@ -7,7 +7,7 @@ namespace CodeIndex.Indexer;
 public static partial class ReferenceExtractor
 {
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
-    private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape);
+    private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
     private sealed record CSharpImplementedInterface(string Name, IReadOnlyDictionary<string, string> TypeArguments);
 
     private static void EmitCSharpAsyncIteratorReferences(
@@ -106,7 +106,8 @@ public static partial class ReferenceExtractor
                     .Select(symbol => new CSharpStaticInterfaceMemberContract(
                         symbol.Name,
                         symbol.Kind,
-                        GetCSharpCallableParameterShape(symbol.Signature)))
+                        GetCSharpCallableParameterShape(symbol.Signature),
+                        NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)))
                     .ToList(),
                 StringComparer.Ordinal);
         if (interfaceMembersByType.Count == 0)
@@ -221,7 +222,12 @@ public static partial class ReferenceExtractor
 
         var implementationParameterShape = GetCSharpCallableParameterShape(implementation.Signature);
         var contractParameterShape = SubstituteCSharpGenericTypeParameters(contract.ParameterShape, typeArguments);
-        return string.Equals(contractParameterShape, implementationParameterShape, StringComparison.Ordinal);
+        if (!string.Equals(contractParameterShape, implementationParameterShape, StringComparison.Ordinal))
+            return false;
+
+        var contractReturnTypeShape = SubstituteCSharpGenericTypeParameters(contract.ReturnTypeShape, typeArguments);
+        var implementationReturnTypeShape = NormalizeCSharpTypeArgumentShape(implementation.ReturnType ?? string.Empty);
+        return string.Equals(contractReturnTypeShape, implementationReturnTypeShape, StringComparison.Ordinal);
     }
 
     private static string? GetCSharpCallableParameterShape(string? signature)
