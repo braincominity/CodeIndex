@@ -2167,6 +2167,9 @@ public static partial class SymbolExtractor
                 continue;
 
             var line = lines[i];
+            if (lang == "csharp" && line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                continue;
+
             if (lang == "go"
                 && TryHandleGoBlockLine(fileId, line, i, symbols, ref goImportBlock))
             {
@@ -7232,7 +7235,11 @@ public static partial class SymbolExtractor
             {
                 parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
                 if (parameterOpenIndex < 0)
+                {
+                    if (FindRecordDeclarationTerminatorIndex(declaration, 0) >= 0)
+                        return declaration;
                     continue;
+                }
             }
 
             if (parameterCloseIndex < 0)

@@ -2386,7 +2386,12 @@ public static class IndexCommandRunner
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
-        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, files);
+        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+            writer,
+            indexer,
+            projectRoot,
+            files,
+            file => currentJsonIndexFile = file);
 
         try
         {
@@ -2949,7 +2954,8 @@ public static class IndexCommandRunner
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
-        IEnumerable<string> filePaths)
+        IEnumerable<string> filePaths,
+        Action<string?>? reportCurrentFile = null)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -2971,6 +2977,7 @@ public static class IndexCommandRunner
 
             try
             {
+                reportCurrentFile?.Invoke(relativePath);
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
                 if (record.Lang != "csharp")
                     continue;
@@ -2981,6 +2988,10 @@ public static class IndexCommandRunner
             {
                 // The real indexing pass reports file failures; this pre-pass only supplies
                 // workspace symbols for cross-file static interface member matching.
+            }
+            finally
+            {
+                reportCurrentFile?.Invoke(null);
             }
         }
 
