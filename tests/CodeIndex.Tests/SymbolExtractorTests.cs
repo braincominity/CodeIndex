@@ -10613,6 +10613,7 @@ public class SymbolExtractorTests
             public partial class Widget
             {
                 public partial Widget();
+                partial Widget();
                 public partial Widget() { }
                 unsafe public partial Widget(int* ptr) { }
             }
@@ -10630,13 +10631,18 @@ public class SymbolExtractorTests
             s.Kind == "function"
             && s.Name == "Widget"
             && s.Line == 4
+            && s.ReturnType == null);
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "Widget"
+            && s.Line == 5
             && s.Visibility == "public"
             && s.BodyStartLine is not null
             && s.BodyEndLine is not null);
         Assert.Contains(symbols, s =>
             s.Kind == "function"
             && s.Name == "Widget"
-            && s.Line == 5
+            && s.Line == 6
             && s.Visibility == "public");
     }
 

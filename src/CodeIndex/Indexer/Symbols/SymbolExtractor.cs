@@ -3791,6 +3791,8 @@ public static partial class SymbolExtractor
         if (lang == "php")
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
+        if (lang == "csharp")
+            NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
