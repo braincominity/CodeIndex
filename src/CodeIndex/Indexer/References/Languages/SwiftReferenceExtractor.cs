@@ -1,4 +1,5 @@
 using CodeIndex.Models;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Indexer;
 
@@ -6,6 +7,12 @@ internal static class SwiftReferenceExtractor
 {
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
+    private static readonly Regex PropertyWrapperDeclarationRegex = new(
+        @"^\s*(?<attributes>(?:@[A-Z]\w*(?:\.[A-Z]\w*)?(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PropertyWrapperAttributeRegex = new(
+        @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitTrailingClosureReferences(
         string preparedLine,
@@ -19,7 +26,8 @@ internal static class SwiftReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        Func<int, SymbolRecord?>? resolvePropertyWrapperContainerForColumn = null)
     {
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitClosureSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -35,6 +43,7 @@ internal static class SwiftReferenceExtractor
         EmitCatchPatternTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCollectionShorthandConstructorTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitSelfMetatypeExpressionReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitPropertyWrapperTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolvePropertyWrapperContainerForColumn ?? resolveContainerForColumn);
         EmitCompilerDirectiveRootTypeReferences("selector", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCompilerDirectiveRootTypeReferences("keyPath", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitAttributeGenericArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -58,6 +67,46 @@ internal static class SwiftReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitPropertyWrapperTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var declarationMatch = PropertyWrapperDeclarationRegex.Match(preparedLine);
+        if (!declarationMatch.Success)
+            return;
+
+        var attributes = declarationMatch.Groups["attributes"];
+        if (!attributes.Success || attributes.Length == 0)
+            return;
+
+        foreach (Match attributeMatch in PropertyWrapperAttributeRegex.Matches(attributes.Value))
+        {
+            var nameGroup = attributeMatch.Groups["name"];
+            if (!nameGroup.Success)
+                continue;
+
+            var name = nameGroup.Value;
+            var shortNameStart = name.LastIndexOf('.') + 1;
+            var emittedName = shortNameStart > 0 ? name[shortNameStart..] : name;
+            var column = attributes.Index + nameGroup.Index + shortNameStart;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                emittedName,
+                column,
+                "type_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(column));
+        }
     }
 
     private static void EmitKeyPathRootTypeReferences(

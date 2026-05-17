@@ -1057,6 +1057,12 @@ public static partial class ReferenceExtractor
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
             : null;
+        var swiftPropertyDefinitionsByLine = language == "swift"
+            ? symbols
+                .Where(symbol => symbol.Kind == "property")
+                .GroupBy(symbol => symbol.Line)
+                .ToDictionary(group => group.Key, group => group.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray())
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -1646,6 +1652,21 @@ public static partial class ReferenceExtractor
                     : null;
             }
 
+            SymbolRecord? ResolveSwiftPropertyContainerForCall(int column)
+            {
+                if (swiftPropertyDefinitionsByLine != null
+                    && swiftPropertyDefinitionsByLine.TryGetValue(lineNumber, out var sameLineProperties))
+                {
+                    foreach (var property in sameLineProperties)
+                    {
+                        if ((property.StartColumn ?? 0) <= column)
+                            return property;
+                    }
+                }
+
+                return ResolveContainerForCall(column);
+            }
+
             if (isJsxFile && (language is "javascript" or "typescript"))
             {
                 var jsxTypeArgumentSkipUntil = -1;
@@ -1942,7 +1963,8 @@ public static partial class ReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    ResolveContainerForCall);
+                    ResolveContainerForCall,
+                    ResolveSwiftPropertyContainerForCall);
             }
             else if (language == "rust")
             {

@@ -168,6 +168,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftPropertyWrappers_EmitTypeReferences()
+    {
+        const string content = """
+            import SwiftUI
+
+            struct Screen {
+                @State private var count = 0
+                @Environment(\.colorScheme) var scheme
+                @MyWrapper var value: Int
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "count");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Environment"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "scheme");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyWrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "value");
+    }
+
+    [Fact]
     public void Extract_TypeScriptGenericConditionalConstraint_EmitsBranchTypeReferences()
     {
         const string content = """
