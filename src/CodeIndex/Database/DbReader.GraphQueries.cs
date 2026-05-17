@@ -1329,9 +1329,7 @@ public partial class DbReader
                 FileImpacts = [],
                 Truncated = false,
                 TruncatedReason = null,
-                TerminationReason = definitions.Count == 0
-                    ? ImpactTerminationReasons.Completed
-                    : ImpactTerminationReasons.MaxDepthReached,
+                TerminationReason = ImpactTerminationReasons.Completed,
                 CycleDetected = false,
                 Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,

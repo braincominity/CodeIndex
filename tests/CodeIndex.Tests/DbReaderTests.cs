@@ -9837,6 +9837,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_DepthZeroReportsCompletedForResolvedSymbol()
+    {
+        InsertIndexedFile("src/impact_depth_zero.cs", "csharp",
+            """
+            public static class ImpactDepthZero
+            {
+                public static void Leaf() { }
+                public static void Caller() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 0, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_zero"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_WithPathsDefaultIsOff()
     {
         // Default (no opt-in) keeps the legacy contract: Paths is null and PathsTruncated is false.
