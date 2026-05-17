@@ -181,6 +181,15 @@ idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded,
 idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
 ```
 
+### Query planner expectations
+
+Hot graph aggregations that constrain `symbol_references.symbol_name` and a
+small `reference_kind IN (...)` set must stay indexable through
+`idx_symbol_refs_name_kind`. Regression coverage uses `EXPLAIN QUERY PLAN`
+before and after `ANALYZE` so this compound index remains the expected plan for
+`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of falling back to a
+single-column symbol-name probe plus row-by-row kind filtering (#1922).
+
 Language + symbol-kind definition queries intentionally keep `lang` on
 `files` instead of denormalizing it into `symbols`. Query builders express that
 filter as `s.file_id IN (SELECT id FROM files WHERE lang = @lang)` so SQLite can
@@ -1638,6 +1647,15 @@ idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
 idx_symbol_refs_container ON symbol_references(container_name)
 ```
+
+### クエリプランナー期待値
+
+`symbol_references.symbol_name` と小さな `reference_kind IN (...)` 集合で絞る
+hot graph aggregation は、`idx_symbol_refs_name_kind` で indexable な状態を
+保つ必要があります。回帰テストは `ANALYZE` 前後の `EXPLAIN QUERY PLAN` を使い、
+`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約が単一カラムの symbol-name
+probe と行ごとの kind filtering に戻らず、この compound index を期待計画として
+維持することを確認します (#1922)。
 
 言語 + シンボル種別の定義検索では、`lang` を `symbols` に非正規化せず
 `files` に保持する方針です。クエリビルダーはこの条件を
