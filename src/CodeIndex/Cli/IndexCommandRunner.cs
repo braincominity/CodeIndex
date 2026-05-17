@@ -12,10 +12,18 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
-    public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions)
+    public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
+        Run(indexArgs, jsonOptions, cancellationForTesting: null);
+
+    internal static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions, CancellationTokenSource? cancellationForTesting)
     {
         var options = ParseArgs(indexArgs);
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+        using var ownedCancellation = cancellationForTesting == null ? new CancellationTokenSource() : null;
+        var indexCancellation = cancellationForTesting ?? ownedCancellation!;
+        using var cancelKeyPressRegistration = cancellationForTesting == null
+            ? RegisterIndexCancelKeyPress(indexCancellation)
+            : NullDisposable.Instance;
 
         if (options.ShowHelp)
         {
@@ -387,9 +395,13 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
             }
+        }
+        catch (IndexInterruptedException ex)
+        {
+            return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal);
         }
         catch (Exception ex) when (IsDatabaseFilesystemError(ex))
         {
@@ -870,7 +882,8 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
-        string? initialCwd)
+        string? initialCwd,
+        CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -984,7 +997,8 @@ public static class IndexCommandRunner
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
                 currentHeadCommit,
-                initialCwd);
+                initialCwd,
+                cancellationToken);
         }
 
         if (!options.Json && !options.Quiet)
@@ -1092,6 +1106,16 @@ public static class IndexCommandRunner
             StartUpdateSpinnerIfNeeded();
         }
 
+        void ThrowIfUpdateCancelled()
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                return;
+
+            PauseUpdateSpinnerForConsoleWrite();
+            throw new IndexInterruptedException(updated + removed, targetPaths.Count);
+        }
+
+        ThrowIfUpdateCancelled();
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
         {
             DemoteReadinessOnce();
@@ -1106,6 +1130,7 @@ public static class IndexCommandRunner
 
         foreach (var relPath in targetPaths)
         {
+            ThrowIfUpdateCancelled();
             StartUpdateSpinnerIfNeeded();
             var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
             try
@@ -1315,6 +1340,7 @@ public static class IndexCommandRunner
 
                 updated++;
                 ftsMutated = true;
+                ThrowIfUpdateCancelled();
                 if (options.Verbose && !options.Json && !options.Quiet)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
@@ -1337,6 +1363,7 @@ public static class IndexCommandRunner
             }
         }
 
+        ThrowIfUpdateCancelled();
         PauseUpdateSpinnerForConsoleWrite();
 
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
@@ -1344,6 +1371,7 @@ public static class IndexCommandRunner
 
         if (ftsMutated)
             writer.OptimizeFts();
+        ThrowIfUpdateCancelled();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
@@ -1872,6 +1900,49 @@ public static class IndexCommandRunner
         return exitCode;
     }
 
+    private static int WriteInterruptedResult(bool json, JsonSerializerOptions jsonOptions, int filesProcessed, int? filesTotal)
+    {
+        var totalSuffix = filesTotal is > 0 ? $" of {filesTotal.Value:N0}" : string.Empty;
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"Interrupted; partial progress saved ({filesProcessed:N0}{totalSuffix} files processed).",
+            CommandExitCodes.Interrupted,
+            "Rerun `cdidx index` to finish refreshing the index. Press Ctrl-C again during a future run to force-exit.",
+            CommandErrorCodes.Interrupted);
+    }
+
+    internal static bool HandleIndexCancelKeyPress(CancellationTokenSource cancellation, ref bool firstCancelHandled)
+    {
+        if (!firstCancelHandled && !cancellation.IsCancellationRequested)
+        {
+            firstCancelHandled = true;
+            cancellation.Cancel();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IDisposable RegisterIndexCancelKeyPress(CancellationTokenSource cancellation)
+    {
+        var firstCancelHandled = false;
+        ConsoleCancelEventHandler handler = (_, e) =>
+        {
+            e.Cancel = HandleIndexCancelKeyPress(cancellation, ref firstCancelHandled);
+        };
+
+        try
+        {
+            Console.CancelKeyPress += handler;
+            return new CancelKeyPressRegistration(handler);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return NullDisposable.Instance;
+        }
+    }
+
     private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex) =>
         WriteCommandError(
             json,
@@ -1906,7 +1977,8 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
-        string? initialCwd)
+        string? initialCwd,
+        CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -2012,12 +2084,24 @@ public static class IndexCommandRunner
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
+
+        void ThrowIfFullScanCancelled(int filesProcessed, int? filesTotal)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                return;
+
+            ConsoleUi.StopSpinner(spinnerCts);
+            throw new IndexInterruptedException(filesProcessed, filesTotal);
+        }
+
         WriteJsonLiveness("scanning files...");
         var scanHeartbeat = StartJsonPhaseHeartbeat("scanning files");
         FileIndexer.ScanFilesResult scanResult;
         try
         {
+            ThrowIfFullScanCancelled(0, null);
             scanResult = indexer.ScanFilesDetailed();
+            ThrowIfFullScanCancelled(0, null);
         }
         finally
         {
@@ -2052,6 +2136,7 @@ public static class IndexCommandRunner
         // DropAll in RunIndex), but avoids downgrading a healthy DB if full-scan itself
         // never reaches this point for any reason.
         // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
+        ThrowIfFullScanCancelled(0, files.Count);
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
@@ -2106,6 +2191,7 @@ public static class IndexCommandRunner
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        ThrowIfFullScanCancelled(0, files.Count);
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
@@ -2247,6 +2333,7 @@ public static class IndexCommandRunner
 
             foreach (var filePath in files)
             {
+                ThrowIfFullScanCancelled(processed, files.Count);
                 currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                 EnsureIndexingActivityVisible();
                 try
@@ -2333,6 +2420,7 @@ public static class IndexCommandRunner
 
                 processed++;
                 currentJsonIndexFile = null;
+                ThrowIfFullScanCancelled(processed, files.Count);
                 ReportJsonIndexProgressIfNeeded();
                 if (!options.Json && !options.Quiet)
                 {
@@ -2350,6 +2438,7 @@ public static class IndexCommandRunner
 
         PauseIndexSpinnerForConsoleWrite();
 
+        ThrowIfFullScanCancelled(processed, files.Count);
         WriteJsonLiveness("optimizing index...");
         var optimizeHeartbeat = StartJsonPhaseHeartbeat("optimizing index");
         try
@@ -2360,6 +2449,7 @@ public static class IndexCommandRunner
         {
             StopJsonPhaseHeartbeat(optimizeHeartbeat);
         }
+        ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
@@ -2786,6 +2876,36 @@ public static class IndexCommandRunner
         string DegradedReason,
         string RecommendedAction,
         string AlternativeAction);
+
+    private sealed class IndexInterruptedException : OperationCanceledException
+    {
+        public IndexInterruptedException(int filesProcessed, int? filesTotal)
+            : base("Indexing was interrupted.")
+        {
+            FilesProcessed = filesProcessed;
+            FilesTotal = filesTotal;
+        }
+
+        public int FilesProcessed { get; }
+        public int? FilesTotal { get; }
+    }
+
+    private sealed class CancelKeyPressRegistration(ConsoleCancelEventHandler handler) : IDisposable
+    {
+        public void Dispose()
+        {
+            Console.CancelKeyPress -= handler;
+        }
+    }
+
+    private sealed class NullDisposable : IDisposable
+    {
+        public static readonly NullDisposable Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
 }
 
 public sealed class IndexCommandOptions
