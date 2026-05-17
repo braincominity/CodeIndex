@@ -1646,12 +1646,17 @@ public static partial class ReferenceExtractor
 
             if (isJsxFile && (language is "javascript" or "typescript"))
             {
+                var jsxTypeArgumentSkipUntil = -1;
                 foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
                 {
+                    if (match.Index < jsxTypeArgumentSkipUntil)
+                        continue;
+
                     var fullName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
                     var jsxContainer = ResolveContainerForCall(nameIndex);
                     var firstDotIndex = fullName.IndexOf('.');
+                    var tagEndIndex = nameIndex + fullName.Length;
 
                     AddReference(
                         references,
@@ -1677,6 +1682,30 @@ public static partial class ReferenceExtractor
                             context,
                             lineNumber,
                             jsxContainer);
+                    }
+
+                    if (language == "typescript")
+                    {
+                        var genericStart = SkipWhitespace(preparedLine, tagEndIndex);
+                        if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
+                        {
+                            var genericEnd = genericStart;
+                            if (TrySkipTypeScriptJsxTypeArguments(preparedLine, ref genericEnd)
+                                && genericEnd > genericStart + 2)
+                            {
+                                jsxTypeArgumentSkipUntil = Math.Max(jsxTypeArgumentSkipUntil, genericEnd);
+                                AddTypeExpressionSegments(
+                                    references,
+                                    seen,
+                                    fileId,
+                                    preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
+                                    genericStart + 1,
+                                    context,
+                                    lineNumber,
+                                    jsxContainer,
+                                    "typescript");
+                            }
+                        }
                     }
                 }
             }
@@ -3286,6 +3315,56 @@ public static partial class ReferenceExtractor
         var extension = Path.GetExtension(path);
         return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TrySkipTypeScriptJsxTypeArguments(string preparedLine, ref int scan)
+    {
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var depth = 0;
+        while (scan < preparedLine.Length)
+        {
+            var ch = preparedLine[scan++];
+            if (ch == '\'' || ch == '"')
+            {
+                while (scan < preparedLine.Length)
+                {
+                    var quoted = preparedLine[scan++];
+                    if (quoted == '\\')
+                    {
+                        scan = Math.Min(scan + 1, preparedLine.Length);
+                        continue;
+                    }
+
+                    if (quoted == ch)
+                        break;
+                }
+
+                continue;
+            }
+
+            if (ch == '=' && scan < preparedLine.Length && preparedLine[scan] == '>')
+            {
+                scan++;
+                continue;
+            }
+
+            if (ch == '<')
+            {
+                depth++;
+            }
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return true;
+                if (depth < 0)
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsRazorFilePath(string? path)

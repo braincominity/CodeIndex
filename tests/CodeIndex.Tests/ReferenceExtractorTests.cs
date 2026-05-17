@@ -38,6 +38,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TsxGenericComponentInvocations_EmitsComponentCallsAndTypeArguments()
+    {
+        const string content = """
+            type Item = { id: string };
+            type State = { count: number };
+            type Action = { type: string };
+
+            export function Screen({ items, ctx, rest }: Props) {
+                return (
+                    <>
+                        <List<Item> items={items} />
+                        <Provider<State, Action> value={ctx} />
+                        <Foo<{ a: number }> {...rest} />
+                        <Mapper<(item: Item) => Result> />
+                    </>
+                );
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols, path: "Screen.tsx");
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "List"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Provider"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Foo"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Mapper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Item"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Action"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Screen");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "a" or "item"
+            && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "Item" or "State" or "Action" or "Result"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringLongerQuoteRun_DoesNotLeakCallReferences()
     {
         // Regression for #1453: a raw string opened with four quotes must only
