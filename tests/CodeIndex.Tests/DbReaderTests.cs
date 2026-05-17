@@ -250,6 +250,42 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(references);
     }
 
+    private void InsertSearchVisibilityFixture(string path, string visibility, DateTime modified)
+    {
+        const string content = "public class AuthFixture { void Marker() { Authenticate(); } }";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = content.Length,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 1,
+            Content = content,
+        }]);
+
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Authenticate",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = $"{visibility} void Authenticate()",
+                Visibility = visibility,
+            }
+        ]);
+    }
+
     [Fact]
     public void Search_FindsMatchingChunks()
     {
@@ -351,6 +387,42 @@ public class DbReaderTests : IDisposable
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["call"]);
         Assert.Equal(0, countRanked[0].ReferenceKindCounts["instantiate"]);
         Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
+    }
+
+    [Fact]
+    public void Search_RanksMatchingPublicSymbolsBeforePrivateSymbols_Issue1868()
+    {
+        InsertSearchVisibilityFixture(
+            "src/private-auth.cs",
+            "private",
+            new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc));
+        InsertSearchVisibilityFixture(
+            "src/public-auth.cs",
+            "public",
+            new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var ranked = _reader.Search("Authenticate", lang: "csharp", exact: true, deduplicate: false);
+
+        Assert.Equal(["src/public-auth.cs", "src/private-auth.cs"], ranked.Select(result => result.Path).ToArray());
+        Assert.Equal(["public", "private"], ranked.Select(result => result.Visibility).ToArray());
+    }
+
+    [Fact]
+    public void Search_CanDisableVisibilityRanking_Issue1868()
+    {
+        InsertSearchVisibilityFixture(
+            "src/private-auth-legacy.cs",
+            "private",
+            new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc));
+        InsertSearchVisibilityFixture(
+            "src/public-auth-legacy.cs",
+            "public",
+            new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var legacyRanked = _reader.Search("Authenticate", lang: "csharp", exact: true, deduplicate: false, visibilityRank: false);
+
+        Assert.Equal(["src/private-auth-legacy.cs", "src/public-auth-legacy.cs"], legacyRanked.Select(result => result.Path).ToArray());
+        Assert.Equal(["private", "public"], legacyRanked.Select(result => result.Visibility).ToArray());
     }
 
     [Fact]
@@ -15169,10 +15241,10 @@ public class DbReaderTests : IDisposable
         Assert.DoesNotContain("FROM symbols", DbReader.PrefixSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("exact_symbol_match", DbReader.ExactSymbolMatchOrder, StringComparison.Ordinal);
         Assert.Contains("prefix_symbol_match", DbReader.PrefixSymbolMatchOrder, StringComparison.Ordinal);
-        Assert.Contains("LEFT JOIN", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
-        Assert.Contains("SELECT DISTINCT file_id FROM symbols", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        Assert.Contains("LEFT JOIN", _reader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        Assert.Contains("GROUP BY file_id", _reader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
         // The materialized lookup must stay SARGable (no `lower(name)` wrapping).
-        Assert.DoesNotContain("lower(", DbReader.SearchSymbolMatchJoinsSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("lower(name", _reader.SearchSymbolMatchJoinsSql, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

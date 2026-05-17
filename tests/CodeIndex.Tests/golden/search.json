@@ -3,6 +3,7 @@
   "query": "Add",
   "path": "src/Lib.cs",
   "lang": "csharp",
+  "visibility": "public",
   "chunk_start_line": 1,
   "chunk_end_line": 7,
   "snippet_start_line": 1,
