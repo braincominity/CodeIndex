@@ -592,7 +592,7 @@ public static partial class SymbolExtractor
     {
         var typeKinds = symbols
             .Where(symbol => symbol.Kind is "struct" or "interface" or "class")
-            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .GroupBy(symbol => GetGoReceiverTypeLookupName(symbol.Name), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Kind, StringComparer.Ordinal);
 
         foreach (var symbol in symbols)
@@ -604,8 +604,9 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            symbol.ContainerName = receiverTypeName;
-            symbol.ContainerKind = typeKinds.TryGetValue(receiverTypeName, out var kind) ? kind : "class";
+            var receiverLookupName = GetGoReceiverTypeLookupName(receiverTypeName);
+            symbol.ContainerName = receiverLookupName;
+            symbol.ContainerKind = typeKinds.TryGetValue(receiverLookupName, out var kind) ? kind : "class";
         }
     }
 
@@ -656,6 +657,22 @@ public static partial class SymbolExtractor
 
         receiverTypeName = typeText.Trim();
         return receiverTypeName.Length > 0;
+    }
+
+    private static string GetGoReceiverTypeLookupName(string typeName)
+    {
+        var lookupName = typeName.Trim();
+        while (lookupName.StartsWith("*", StringComparison.Ordinal))
+            lookupName = lookupName[1..].TrimStart();
+
+        var genericStart = lookupName.IndexOf('[');
+        if (genericStart >= 0)
+            lookupName = lookupName[..genericStart];
+
+        var dot = lookupName.LastIndexOf('.');
+        return dot >= 0 && dot + 1 < lookupName.Length
+            ? lookupName[(dot + 1)..].Trim()
+            : lookupName;
     }
 
     private static int SkipGoSymbolWhitespace(string text, int start)
