@@ -2799,6 +2799,19 @@ public class DbReaderTests : IDisposable
                     reader.Load(dataReader);
                 }
             }
+
+            public interface IService
+            {
+                void Execute();
+            }
+
+            public class ServiceConsumer
+            {
+                public void Run(IService service)
+                {
+                    service.Execute();
+                }
+            }
             """);
 
         var results = _reader.GetSymbolHotspots(
@@ -2815,6 +2828,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, load.ReferenceCount);
         var identity = Assert.Single(results.Where(result => result.Symbol.Name == "Identity"));
         Assert.Equal(1, identity.ReferenceCount);
+        var execute = Assert.Single(results.Where(result => result.Symbol.Name == "Execute"));
+        Assert.Equal(1, execute.ReferenceCount);
 
         var groupedResults = _reader.GetGroupedSymbolHotspots(
             limit: 10,
@@ -2830,6 +2845,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, groupedLoad.ReferenceCount);
         var groupedIdentity = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Identity"));
         Assert.Equal(1, groupedIdentity.ReferenceCount);
+        var groupedExecute = Assert.Single(groupedResults.Where(result => result.Symbol.Name == "Execute"));
+        Assert.Equal(1, groupedExecute.ReferenceCount);
     }
 
     [Fact]

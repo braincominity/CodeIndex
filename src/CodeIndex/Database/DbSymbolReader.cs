@@ -1647,6 +1647,7 @@ public partial class DbReader
                   AND NOT (
                       f.lang = 'csharp'
                       AND s.kind = 'function'
+                      AND s.container_kind = 'function'
                       AND (
                           (s.body_start_line IS NULL AND s.body_end_line IS NULL)
                           OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
@@ -2020,6 +2021,7 @@ public partial class DbReader
                   AND NOT (
                       f.lang = 'csharp'
                       AND s.kind = 'function'
+                      AND s.container_kind = 'function'
                       AND (
                           (s.body_start_line IS NULL AND s.body_end_line IS NULL)
                           OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
