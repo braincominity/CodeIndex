@@ -16,6 +16,7 @@ public class SearchResult
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public double Score { get; set; }
+    public string? Visibility { get; set; }
 }
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
@@ -58,8 +59,16 @@ public class GroupedHotspotResult
 {
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
+}
+
+public class SymbolHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
 }
 
 public class FileResult

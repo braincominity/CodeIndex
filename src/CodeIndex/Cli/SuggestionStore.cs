@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -32,6 +33,13 @@ public class SuggestionStore
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true,
     };
+
+    static SuggestionStore()
+    {
+        var enumConverter = new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower);
+        s_jsonOptions.Converters.Add(enumConverter);
+        s_readOptions.Converters.Add(enumConverter);
+    }
 
     /// <summary>
     /// Create a new SuggestionStore for the given directory and database name.
@@ -96,10 +104,10 @@ public class SuggestionStore
 
     /// <summary>
     /// Result of TryAddAndSubmit: whether the record was new or duplicate,
-    /// whether it was already submitted, and the GitHub issue URL if submitted.
-    /// TryAddAndSubmit の結果: 新規か重複か、既に送信済みか、送信された場合のGitHub Issue URL。
+    /// whether it was already submitted, its lifecycle status, and the upstream URL if known.
+    /// TryAddAndSubmit の結果: 新規か重複か、既に送信済みか、lifecycle 状態、判明している upstream URL。
     /// </summary>
-    public record AddAndSubmitResult(bool IsNew, bool AlreadySubmitted, string? GitHubIssueUrl);
+    public record AddAndSubmitResult(bool IsNew, bool AlreadySubmitted, SuggestionStatus Status, string? UpstreamUrl);
 
     /// <summary>
     /// Atomically add a suggestion and attempt GitHub submission, all under one lock.
@@ -124,7 +132,7 @@ public class SuggestionStore
             var found = existing.FirstOrDefault(s => s.Hash == record.Hash);
 
             bool isNew = found == null;
-            bool alreadySubmitted = found?.SubmittedToGitHub ?? false;
+            bool alreadySubmitted = found != null && HasUpstreamSubmission(found);
 
             if (isNew)
             {
@@ -143,8 +151,7 @@ public class SuggestionStore
                     issueUrl = submitToGitHub(found!);
                     if (issueUrl != null)
                     {
-                        found!.SubmittedToGitHub = true;
-                        found.GitHubIssueUrl = issueUrl;
+                        MarkSubmitted(found!, issueUrl, DateTime.UtcNow);
                         SaveUnlocked(existing);
                     }
                 }
@@ -155,7 +162,7 @@ public class SuggestionStore
                 }
             }
 
-            return new AddAndSubmitResult(isNew, alreadySubmitted, issueUrl);
+            return new AddAndSubmitResult(isNew, alreadySubmitted, found!.Status, issueUrl ?? found.UpstreamUrl);
         });
     }
 
@@ -190,8 +197,7 @@ public class SuggestionStore
             if (record == null)
                 return;
 
-            record.SubmittedToGitHub = true;
-            record.GitHubIssueUrl = issueUrl;
+            MarkSubmitted(record, issueUrl, DateTime.UtcNow);
             SaveUnlocked(all);
         });
     }
@@ -215,7 +221,7 @@ public class SuggestionStore
         {
             var records = JsonSerializer.Deserialize<List<SuggestionRecord>>(json, s_readOptions)
                           ?? new List<SuggestionRecord>();
-            NormalizeAttributionDefaults(records);
+            NormalizeRecordDefaults(records);
             return records;
         }
         catch (JsonException)
@@ -229,10 +235,11 @@ public class SuggestionStore
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
     }
 
-    private static void NormalizeAttributionDefaults(List<SuggestionRecord> records)
+    private static void NormalizeRecordDefaults(List<SuggestionRecord> records)
     {
         foreach (var record in records)
         {
+            NormalizeLegacyFields(record);
             if (string.IsNullOrWhiteSpace(record.CreatedByAgent))
                 record.CreatedByAgent = "unknown";
             if (string.IsNullOrWhiteSpace(record.SessionId))
@@ -258,6 +265,8 @@ public class SuggestionStore
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
+        NormalizeRecordDefaults(records);
+
         var tempPath = _filePath + ".tmp";
         var json = JsonSerializer.Serialize(records, s_jsonOptions);
         try
@@ -270,6 +279,50 @@ public class SuggestionStore
             try { File.Delete(tempPath); } catch { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
             throw;
         }
+    }
+
+    private static bool HasUpstreamSubmission(SuggestionRecord record) =>
+        record.Status != SuggestionStatus.Draft
+        || record.SubmittedToGitHub == true
+        || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
+        || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
+
+    private static void MarkSubmitted(SuggestionRecord record, string issueUrl, DateTime timestamp)
+    {
+        record.Status = SuggestionStatus.SubmittedPendingTriage;
+        record.UpstreamUrl = issueUrl;
+        record.UpstreamIssueNumber = TryParseIssueNumber(issueUrl);
+        record.LastSyncedAt = timestamp;
+        record.SubmittedToGitHub = null;
+        record.GitHubIssueUrl = null;
+    }
+
+    private static void NormalizeLegacyFields(SuggestionRecord record)
+    {
+        if (record.SubmittedToGitHub == true && record.Status == SuggestionStatus.Draft)
+            record.Status = SuggestionStatus.SubmittedPendingTriage;
+
+        if (string.IsNullOrWhiteSpace(record.UpstreamUrl) && !string.IsNullOrWhiteSpace(record.GitHubIssueUrl))
+            record.UpstreamUrl = record.GitHubIssueUrl;
+
+        if (record.UpstreamIssueNumber == null && !string.IsNullOrWhiteSpace(record.UpstreamUrl))
+            record.UpstreamIssueNumber = TryParseIssueNumber(record.UpstreamUrl);
+
+        record.SubmittedToGitHub = null;
+        record.GitHubIssueUrl = null;
+    }
+
+    private static int? TryParseIssueNumber(string issueUrl)
+    {
+        if (!Uri.TryCreate(issueUrl, UriKind.Absolute, out var uri))
+            return null;
+
+        var segments = uri.Segments;
+        if (segments.Length == 0)
+            return null;
+
+        var last = segments[^1].Trim('/');
+        return int.TryParse(last, out var number) ? number : null;
     }
 
     /// <summary>

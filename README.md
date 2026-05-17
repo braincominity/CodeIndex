@@ -63,6 +63,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 ## Highlights
 
 - CLI-first search with human-readable and machine-oriented output.
+- Search ranking prefers public/exported symbol matches ahead of protected,
+  internal, and private matches; `--no-visibility-rank` keeps the legacy order.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
@@ -189,6 +191,8 @@ cdidx mcp
 ## 特長
 
 - CLI-first の検索。人間向け出力と機械処理向け出力に対応。
+- 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
+  従来順が必要な場合は `--no-visibility-rank` を使えます。
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。

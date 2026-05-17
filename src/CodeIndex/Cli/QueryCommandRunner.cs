@@ -139,6 +139,7 @@ public static class QueryCommandRunner
         "--body",
         "--count",
         "--no-dedup",
+        "--no-visibility-rank",
         "--exact",
         "--exact-name",
         "--exact-substring",
@@ -195,7 +196,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
@@ -210,7 +211,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
             if (results.Count == 0)
             {
                 if (options.Json)
@@ -235,7 +236,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
+                    Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
                     var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
@@ -392,6 +393,17 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string FormatSearchVisibilitySuffix(string? visibility)
+    {
+        if (string.IsNullOrWhiteSpace(visibility)
+            || string.Equals(visibility, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return $" [{visibility}]";
     }
 
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -2445,6 +2457,7 @@ public static class QueryCommandRunner
                             g.Symbol.Path,
                             g.Symbol.Line,
                             g.ReferenceCount,
+                            g.ReferenceScore,
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
@@ -2467,7 +2480,7 @@ public static class QueryCommandRunner
                         var s = g.Symbol;
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
-                        Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
+                        Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
                     Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
@@ -2714,6 +2727,7 @@ public static class QueryCommandRunner
                         r.Symbol.Path,
                         r.Symbol.Line,
                         r.ReferenceCount,
+                        r.ReferenceScore,
                         r.Symbol.Visibility,
                         r.Symbol.ContainerName))
                     .ToList();
@@ -2729,10 +2743,11 @@ public static class QueryCommandRunner
             }
             else
             {
-                foreach (var (s, refCount) in results)
+                foreach (var r in results)
                 {
+                    var s = r.Symbol;
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                    Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 Console.Error.WriteLine($"({results.Count} symbol hotspots; grouped_by={groupBy})");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
@@ -3098,6 +3113,7 @@ public static class QueryCommandRunner
         bool excludeTests = false;
         DateTime? since = null;
         bool noDedup = false;
+        bool noVisibilityRank = false;
         bool exact = false;
         bool prefix = false;
         List<string>? parseErrors = null;
@@ -3292,6 +3308,9 @@ public static class QueryCommandRunner
                     break;
                 case "--no-dedup":
                     noDedup = true;
+                    break;
+                case "--no-visibility-rank":
+                    noVisibilityRank = true;
                     break;
                 case "--exact":
                     exact = true;
@@ -3585,6 +3604,7 @@ public static class QueryCommandRunner
             CountOnly = countOnly,
             Since = since,
             NoDedup = noDedup,
+            NoVisibilityRank = noVisibilityRank,
             Exact = exact,
             Prefix = prefix,
             ExactName = exactName,
@@ -4622,6 +4642,8 @@ public static class QueryCommandRunner
         return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
 
+    private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
+
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
 
@@ -5514,6 +5536,7 @@ public sealed class QueryCommandOptions
     public bool CountOnly { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
+    public bool NoVisibilityRank { get; init; }
     public bool Exact { get; init; }
     public bool Prefix { get; init; }
     public bool ExactName { get; init; }

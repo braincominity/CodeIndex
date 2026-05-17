@@ -38,6 +38,7 @@ public static class SearchSnippetFormatter
             Query = query,
             Path = result.Path,
             Lang = result.Lang,
+            Visibility = result.Visibility,
             ChunkStartLine = result.StartLine,
             ChunkEndLine = result.EndLine,
             SnippetStartLine = excerpt.StartLine,
@@ -398,6 +399,7 @@ public sealed class CompactSearchResult
     public string Query { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
+    public string? Visibility { get; set; }
     public int ChunkStartLine { get; set; }
     public int ChunkEndLine { get; set; }
     public int SnippetStartLine { get; set; }
