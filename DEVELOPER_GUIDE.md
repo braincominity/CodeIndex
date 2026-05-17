@@ -54,12 +54,9 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ### Indexing pipeline
 
 ```
-Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning) → Language detection → File read (UTF-8)
-  → UPSERT file record
-  → Split into chunks (80 lines, 10-line overlap)
-  → Extract symbols via regex
-  → Extract lightweight references via regex
-  → Batch insert chunks + symbols + references (500 per transaction)
+Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning)
+  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
+  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
 

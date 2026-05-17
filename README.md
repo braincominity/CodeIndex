@@ -74,7 +74,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
 - Local suggestion history can be listed, inspected, and exported with
   `cdidx suggestions`.
-- Incremental refreshes with `--files` and `--commits`, plus continuous `--watch` mode.
+- Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
+  with `--files` and `--commits`, plus continuous `--watch` mode.
 - Exact DB/worktree freshness checks with `status --check`, including an
   overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
 - Human `status` output translates readiness flags and `status --explain <field>`

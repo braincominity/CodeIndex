@@ -256,6 +256,40 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void ParseArgs_ParallelismFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "3"]);
+
+        Assert.Equal(3, options.Parallelism);
+    }
+
+    [Fact]
+    public void ParseArgs_ParallelismInlineFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--parallelism=4"]);
+
+        Assert.Equal(4, options.Parallelism);
+    }
+
+    [Fact]
+    public void ParseArgs_IndexParallelismEnvironment_ProvidesDefault()
+    {
+        var original = Environment.GetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, "2");
+
+            var options = IndexCommandRunner.ParseArgs(["."]);
+
+            Assert.Equal(2, options.Parallelism);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, original);
+        }
+    }
+
     [Theory]
     [InlineData("--duration-format", "auto", DurationOutputFormat.Auto)]
     [InlineData("--duration-format", "seconds", DurationOutputFormat.Seconds)]
