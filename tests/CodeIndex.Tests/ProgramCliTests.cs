@@ -1,3 +1,7 @@
+using CodeIndex.Cli;
+using CodeIndex.Models;
+using System.Text.Json;
+
 namespace CodeIndex.Tests;
 
 /// <summary>
@@ -149,6 +153,55 @@ public class ProgramCliTests
         Assert.Contains("INTEGRATION_POLICY.md", stdout);
     }
 
+    [Fact]
+    public void Suggestions_ListFiltersAndPrintsStoredSuggestions()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var csharp = fixture.Add("symbol_extraction", "csharp", "Missing record extraction", submitted: false);
+        fixture.Add("language_support", "rust", "Improve macro handling", submitted: true);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "list", "--db", fixture.DbPath, "--category", "symbol_extraction"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains(csharp.Hash[..12], stdout);
+        Assert.Contains("draft", stdout);
+        Assert.Contains("Missing record extraction", stdout);
+        Assert.DoesNotContain("Improve macro handling", stdout);
+    }
+
+    [Fact]
+    public void Suggestions_ShowJsonResolvesShortId()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("output_format", "python", "JSON export needed", submitted: true);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
+        Assert.Equal("submitted_pending_triage", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("JSON export needed", doc.RootElement.GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportMarkdownIncludesFilteredSuggestions()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "csharp", "Share triage notes", submitted: false);
+        fixture.Add("language_support", "ruby", "Add parser support", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "export", "--db", fixture.DbPath, "--language", "csharp", "--format", "markdown"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("# cdidx Suggestions", stdout);
+        Assert.Contains("Share triage notes", stdout);
+        Assert.DoesNotContain("Add parser support", stdout);
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
@@ -208,5 +261,68 @@ public class ProgramCliTests
         }
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
+    }
+
+    private sealed class SuggestionFixture : IDisposable
+    {
+        private readonly string _root;
+        private readonly List<SuggestionRecord> _records = new();
+
+        private SuggestionFixture(string root)
+        {
+            _root = root;
+            DbPath = Path.Combine(root, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(DbPath)!);
+        }
+
+        public string DbPath { get; }
+
+        public static SuggestionFixture Create()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_suggestions_cli_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            return new SuggestionFixture(root);
+        }
+
+        public SuggestionRecord Add(string category, string? language, string description, bool submitted)
+        {
+            var record = new SuggestionRecord
+            {
+                Category = category,
+                Language = language,
+                Description = description,
+                Context = "Agent noticed this during repository triage.",
+                Hash = SuggestionStore.ComputeHash(category, language, description),
+                CreatedAt = new DateTime(2026, 5, 16, 12, _records.Count, 0, DateTimeKind.Utc),
+                SubmittedToGitHub = submitted,
+                GitHubIssueUrl = submitted ? "https://github.com/Widthdom/CodeIndex/issues/99" : null,
+            };
+            _records.Add(record);
+            Write();
+            return record;
+        }
+
+        private void Write()
+        {
+            var path = Path.Combine(_root, ".cdidx", "suggestions-codeindex.json");
+            var json = JsonSerializer.Serialize(_records, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                WriteIndented = true,
+            });
+            File.WriteAllText(path, json);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                    Directory.Delete(_root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 }

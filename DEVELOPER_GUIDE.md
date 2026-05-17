@@ -465,7 +465,7 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 
 ### Output format
 
-Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
+Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `suggestions`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
 
 Adding `--json-envelope` to a query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`) wraps the per-line `--json` stream into a single `{"metadata": {...}, "results": [...]}` document. `metadata` carries `api_version`, `command`, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, and (when applicable) `query_normalized` and `indexed_at_head_sha`. The flag implies `--json`, so callers do not need to pass both. The default output remains the legacy NDJSON / array form for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
 

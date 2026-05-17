@@ -2319,10 +2319,10 @@ public partial class McpServer
 
     /// <summary>
     /// Handle the suggest_improvement tool call.
-    /// Records a structured suggestion to .cdidx/suggestions.json.
+    /// Records a structured suggestion to .cdidx/suggestions-*.json.
     /// Validates that no source code is included in the description or context.
     /// suggest_improvementツール呼び出しを処理する。
-    /// 構造化された提案を .cdidx/suggestions.json に記録する。
+    /// 構造化された提案を .cdidx/suggestions-*.json に記録する。
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
     private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
