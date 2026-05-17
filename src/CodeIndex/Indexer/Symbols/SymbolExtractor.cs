@@ -320,6 +320,9 @@ public static partial class SymbolExtractor
     private static readonly Regex SqlDefinerRegex = new(
         @"\bDEFINER\s*=\s*(?:'(?<user1>[^'\r\n]+)'|`(?<user2>[^`\r\n]+)`|(?<user3>[^\s@'`]+))\s*@\s*(?:'(?<host1>[^'\r\n]+)'|`(?<host2>[^`\r\n]+)`|(?<host3>[^\s'`]+))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlDefinerMarkerRegex = new(
+        @"\bDEFINER\s*=",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex SqlReturnsTableRegex = new(
         @"\bRETURNS\s+TABLE\s*\((?<columns>(?:[^()]|\([^()]*\))*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
@@ -3818,8 +3821,9 @@ public static partial class SymbolExtractor
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
         if (lang == "sql")
         {
-            ExtractSqlDefinerSymbols(fileId, lines, symbols);
-            ExtractSqlRoutineResultColumnSymbols(fileId, lines, symbols);
+            var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
+            ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
+            ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
         }
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "csharp")
@@ -3845,10 +3849,13 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
         for (var i = 0; i < lines.Length; i++)
         {
+            if (!SqlDefinerMarkerRegex.IsMatch(structuralLines[i]))
+                continue;
+
             var match = SqlDefinerRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
@@ -3879,15 +3886,88 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void ExtractSqlRoutineResultColumnSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static string[] MaskSqlSyntheticSymbolLines(string[] lines)
+    {
+        var masked = new string[lines.Length];
+        var inBlockComment = false;
+        for (var i = 0; i < lines.Length; i++)
+            masked[i] = MaskSqlSyntheticSymbolLine(lines[i], ref inBlockComment);
+        return masked;
+    }
+
+    private static string MaskSqlSyntheticSymbolLine(string line, ref bool inBlockComment)
+    {
+        var chars = line.ToCharArray();
+        var inSingleQuote = false;
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (inBlockComment)
+            {
+                if (chars[i] == '*' && i + 1 < chars.Length && chars[i + 1] == '/')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    inBlockComment = false;
+                }
+                else
+                {
+                    chars[i] = ' ';
+                }
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (chars[i] == '\'' && i + 1 < chars.Length && chars[i + 1] == '\'')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (chars[i] == '\'')
+                    inSingleQuote = false;
+                chars[i] = ' ';
+                continue;
+            }
+
+            if (chars[i] == '-' && i + 1 < chars.Length && chars[i + 1] == '-')
+            {
+                for (; i < chars.Length; i++)
+                    chars[i] = ' ';
+                break;
+            }
+
+            if (chars[i] == '/' && i + 1 < chars.Length && chars[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                inBlockComment = true;
+                continue;
+            }
+
+            if (chars[i] == '\'')
+            {
+                chars[i] = ' ';
+                inSingleQuote = true;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static void ExtractSqlRoutineResultColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
         for (var i = 0; i < lines.Length; i++)
         {
-            if (!SqlCreateRoutineHeaderRegex.IsMatch(lines[i]))
+            if (!SqlCreateRoutineHeaderRegex.IsMatch(structuralLines[i]))
                 continue;
 
-            var headerEnd = FindSqlRoutineHeaderEndLine(lines, i);
-            var header = string.Join('\n', lines.Skip(i).Take(headerEnd - i + 1));
+            var headerEnd = FindSqlRoutineHeaderEndLine(structuralLines, i);
+            var header = string.Join('\n', structuralLines.Skip(i).Take(headerEnd - i + 1));
             var owner = symbols
                 .Where(symbol => symbol.Kind == "function" && symbol.Line >= i + 1 && symbol.Line <= headerEnd + 1)
                 .OrderBy(symbol => symbol.Line)

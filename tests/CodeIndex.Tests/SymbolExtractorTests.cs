@@ -12153,6 +12153,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DoesNotEmitDefinerOrReturnFieldsFromCommentsAndStrings()
+    {
+        const string content = """
+            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
+            SELECT 'RETURNS TABLE(fake int)';
+            CREATE FUNCTION public.real()
+            RETURNS TABLE(real_id int)
+            AS $$ SELECT 1 $$ LANGUAGE sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "definer" && s.Name == "ghost@%");
+        Assert.DoesNotContain(symbols, s => s.Kind == "field" && s.Name == "fake");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
+    }
+
+    [Fact]
     public void Extract_SQL_DetectsTSqlDdlKinds()
     {
         var content =
