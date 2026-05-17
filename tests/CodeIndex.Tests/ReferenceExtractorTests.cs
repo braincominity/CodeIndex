@@ -10,6 +10,33 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTsDefaultExportAsyncArrow_AttachesCallsToDefaultFunction(string language)
+    {
+        const string content = """
+            import { db } from "./db";
+            export default async (req, res) => {
+                return db.users.findById(req.id);
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "default"
+            && symbol.BodyStartLine == 2
+            && symbol.BodyEndLine == 4);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "findById"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "default");
+    }
+
     [Fact]
     public void Extract_CsharpAsyncIterator_EmitsTypeAndImplicitImplementationReferences()
     {
@@ -12326,11 +12353,15 @@ public class ReferenceExtractorTests
     {
         const string content = """
             @inherits App.Pages.BasePage
+            @implements App.Pages.IUserActions
+            @attribute [Authorize]
             @inject Services.UserService UserService
 
             <UserCard User="CurrentUser" />
             <Shared.DetailPanel />
             <button @onclick="HandleClick">Save</button>
+            <button @onclick="@HandleClick">Save explicit</button>
+            <button @onclick="InheritedClick">Inherited</button>
             <input @ref="inputRef" @key="person" @bind="Value" />
             @* <AdminPanel /> *@
             <!-- <AuditPanel /> -->
@@ -12361,10 +12392,23 @@ public class ReferenceExtractorTests
             .IndexOf("DetailPanel", StringComparison.Ordinal) + 1;
 
         Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IUserActions" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Authorize" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
-        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "razor_event_binding");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "HandleClick"
+            && r.ReferenceKind == "implicit_implementation");
+        Assert.Contains(references, r =>
+            r.SymbolName == "InheritedClick"
+            && r.ReferenceKind == "razor_event_binding");
+        Assert.Contains(references, r =>
+            r.SymbolName == "InheritedClick"
+            && r.ReferenceKind == "implicit_implementation"
+            && r.ContainerKind == "interface"
+            && r.ContainerName == "IUserActions");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");
