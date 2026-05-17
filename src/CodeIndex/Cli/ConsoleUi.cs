@@ -2,6 +2,7 @@ using CodeIndex.Database;
 using CodeIndex.Indexer;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CodeIndex.Cli;
@@ -1124,6 +1125,10 @@ public static class ConsoleUi
 
     private static ColorMode _colorMode = ColorMode.Auto;
     private static ColorPalette? _explicitPalette;
+    private static bool? _windowsVirtualTerminalProcessingEnabled;
+    private static Func<bool>? _windowsVirtualTerminalProcessingDetectorForTests;
+    private const int StdOutputHandle = -11;
+    private const uint EnableVirtualTerminalProcessing = 0x0004;
 
     /// <summary>
     /// Set the active color-output mode. <see cref="ColorMode.Always"/> and
@@ -1320,14 +1325,58 @@ public static class ConsoleUi
     };
 
     internal static bool ShouldUseInteractiveConsole()
+        => ShouldUseInteractiveConsole(
+            Console.IsOutputRedirected,
+            Console.Out.Encoding,
+            Console.Out is StringWriter,
+            HasTerminalEnvironmentHint(),
+            OperatingSystem.IsWindows());
+
+    internal static bool ShouldUseInteractiveConsole(
+        bool isOutputRedirected,
+        Encoding outputEncoding,
+        bool isTextWriterCapture,
+        bool hasTerminalEnvironmentHint,
+        bool isWindows)
     {
-        if (Console.IsOutputRedirected)
+        if (isOutputRedirected)
             return false;
 
         // StringWriter-based test capture leaves the process console attached, so
         // Console.IsOutputRedirected stays false even though interactive terminal
-        // behavior would be unsafe. Treat UTF-16 Console.Out as redirected capture.
-        return !Console.Out.Encoding.Equals(Encoding.Unicode);
+        // behavior would be unsafe. Detect it directly instead of inferring from
+        // encoding, because real terminals may expose UTF-8 or UTF-16 independently
+        // of ConPTY/ANSI support.
+        if (isTextWriterCapture)
+            return false;
+
+        return true;
+    }
+
+    internal static bool ShouldUseAnsiOutput()
+        => ShouldUseAnsiOutput(
+            Console.IsOutputRedirected,
+            Console.Out.Encoding,
+            Console.Out is StringWriter,
+            HasTerminalEnvironmentHint(),
+            OperatingSystem.IsWindows(),
+            GetWindowsVirtualTerminalProcessingEnabled());
+
+    internal static bool ShouldUseAnsiOutput(
+        bool isOutputRedirected,
+        Encoding outputEncoding,
+        bool isTextWriterCapture,
+        bool hasTerminalEnvironmentHint,
+        bool isWindows,
+        bool windowsVirtualTerminalProcessingEnabled)
+    {
+        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isWindows))
+            return false;
+
+        if (!isWindows)
+            return true;
+
+        return windowsVirtualTerminalProcessingEnabled || hasTerminalEnvironmentHint;
     }
 
     /// <summary>
@@ -1349,8 +1398,63 @@ public static class ConsoleUi
             return true;
         if (IsNoColorRequested())
             return false;
-        return ShouldUseInteractiveConsole();
+        return ShouldUseAnsiOutput();
     }
+
+    private static bool HasTerminalEnvironmentHint()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_SESSION")))
+            return true;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_PROFILE_ID")))
+            return true;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TERM_PROGRAM")))
+            return true;
+
+        var term = Environment.GetEnvironmentVariable("TERM");
+        return !string.IsNullOrWhiteSpace(term)
+            && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool GetWindowsVirtualTerminalProcessingEnabled()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+
+        if (_windowsVirtualTerminalProcessingEnabled is { } cached)
+            return cached;
+
+        var detected = (_windowsVirtualTerminalProcessingDetectorForTests ?? DetectWindowsVirtualTerminalProcessing)();
+        _windowsVirtualTerminalProcessingEnabled = detected;
+        return detected;
+    }
+
+    private static bool DetectWindowsVirtualTerminalProcessing()
+    {
+        var handle = GetStdHandle(StdOutputHandle);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+            return false;
+
+        return GetConsoleMode(handle, out var mode)
+            && (mode & EnableVirtualTerminalProcessing) != 0;
+    }
+
+    internal static void SetWindowsVirtualTerminalProcessingDetectorForTests(Func<bool>? detector)
+    {
+        _windowsVirtualTerminalProcessingDetectorForTests = detector;
+        _windowsVirtualTerminalProcessingEnabled = null;
+    }
+
+    internal static void ResetTerminalCapabilityCacheForTests()
+    {
+        _windowsVirtualTerminalProcessingEnabled = null;
+        _windowsVirtualTerminalProcessingDetectorForTests = null;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
 
     private static bool IsForceColorRequested()
     {

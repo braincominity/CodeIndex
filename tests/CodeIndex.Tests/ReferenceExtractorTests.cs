@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -66,6 +67,25 @@ public class ReferenceExtractorTests
             reference.SymbolName == "MoveNextAsync"
             && reference.ReferenceKind == "implicit_implementation"
             && reference.ContainerName == "LocalStream");
+    }
+
+    [Fact]
+    public void InnermostContainerResolver_ForwardScan_UpdatesAtNestedContainerBoundaries()
+    {
+        var outer = Container("outer", "class", 1, 100);
+        var method = Container("method", "function", 10, 90);
+        var local = Container("local", "function", 20, 25);
+        var later = Container("later", "function", 60, 70);
+        var candidates = new[] { local, later, method, outer };
+        var resolver = new ReferenceExtractor.InnermostContainerResolver(candidates);
+
+        Assert.Same(method, resolver.Find(12));
+        Assert.Same(local, resolver.Find(20));
+        Assert.Same(local, resolver.Find(20));
+        Assert.Same(method, resolver.Find(26));
+        Assert.Same(later, resolver.Find(65));
+        Assert.Same(method, resolver.Find(80));
+        Assert.Same(local, resolver.Find(22));
     }
 
     [Fact]
@@ -10303,6 +10323,34 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "UserInput" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference => reference.SymbolName == "HydratedUser" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "null" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockTagsInsideClass_ShareEnclosingContainer()
+    {
+        const string content = """
+            <?php
+            final class Controller {
+                /**
+                 * @param Request $request
+                 * @return Response
+                 */
+                public function handle($request) {}
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Controller");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Response"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Controller");
     }
 
     [Fact]
@@ -29871,4 +29919,15 @@ public class ReferenceExtractorTests
             && r.ContainerKind == "function"
             && r.ContainerName == "render");
     }
+
+    private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
+        new()
+        {
+            Name = name,
+            Kind = kind,
+            StartLine = startLine,
+            EndLine = endLine,
+            BodyStartLine = startLine,
+            BodyEndLine = endLine,
+        };
 }
