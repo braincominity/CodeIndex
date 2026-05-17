@@ -22,8 +22,8 @@ internal static class KotlinReferenceExtractor
     private static readonly Regex InfixFunctionDeclarationRegex = new(
         @"(?<![\w$])infix\s+fun\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex InfixCallRegex = new(
-        @"(?<![\w$])(?<left>(?:[_\p{L}][\w$]*|\d+))\s+(?<name>[_\p{L}][\w$]*)\s+(?<right>\S+)",
+    private static readonly Regex IdentifierRegex = new(
+        @"(?<![\w$])(?<name>[_\p{L}][\w$]*)(?![\w$])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
@@ -139,7 +139,7 @@ internal static class KotlinReferenceExtractor
         IReadOnlySet<string> infixFunctionNames,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in InfixCallRegex.Matches(originalLine))
+        foreach (Match match in IdentifierRegex.Matches(originalLine))
         {
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
@@ -149,6 +149,11 @@ internal static class KotlinReferenceExtractor
                 continue;
             if (IsLikelyDeclarationOrImport(preparedLine, match.Index))
                 continue;
+            if (!HasLikelyInfixOperandBefore(originalLine, nameGroup.Index)
+                || !HasLikelyInfixOperandAfter(originalLine, nameGroup.Index + nameGroup.Length))
+            {
+                continue;
+            }
 
             addCallLikeReference(name, nameGroup.Index);
         }
@@ -180,6 +185,35 @@ internal static class KotlinReferenceExtractor
                || prefix.StartsWith("infix fun ", StringComparison.Ordinal)
                || (prefix.StartsWith("val ", StringComparison.Ordinal) && !prefix.Contains('='))
                || (prefix.StartsWith("var ", StringComparison.Ordinal) && !prefix.Contains('='));
+    }
+
+    private static bool HasLikelyInfixOperandBefore(string preparedLine, int nameIndex)
+    {
+        var cursor = nameIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor--;
+        if (cursor < 0 || preparedLine[cursor] is '=' or ',' or '(' or '[' or '{' or ':' or ';')
+            return false;
+
+        if (ReferenceExtractor.IsJavaIdentifierPart(preparedLine[cursor]))
+        {
+            var end = cursor + 1;
+            while (cursor >= 0 && ReferenceExtractor.IsJavaIdentifierPart(preparedLine[cursor]))
+                cursor--;
+            var previousWord = preparedLine.Substring(cursor + 1, end - cursor - 1);
+            if (previousWord is "return" or "throw" or "if" or "while" or "when" or "for" or "val" or "var" or "fun" or "class")
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasLikelyInfixOperandAfter(string preparedLine, int afterNameIndex)
+    {
+        var cursor = afterNameIndex;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+        return cursor < preparedLine.Length && preparedLine[cursor] is not (',' or ')' or ']' or '}' or ':' or ';');
     }
 
     public static void EmitMethodReferenceReferences(

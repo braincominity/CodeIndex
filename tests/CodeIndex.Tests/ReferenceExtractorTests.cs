@@ -2499,6 +2499,8 @@ public class ReferenceExtractorTests
                     val xs = listOf("a")
                     val box = demo.Box()
                     val pair = 1 to "one"
+                    val named = "name" to value
+                    val summed = (1 + 2) to "sum"
                     val shifted = value shl 4
                     val masked = value and 15
                     val ranged = 1 until 10
@@ -2523,6 +2525,7 @@ public class ReferenceExtractorTests
             Assert.Contains(references, r => r.SymbolName == name && r.ReferenceKind == "call");
         }
 
+        Assert.True(references.Count(r => r.SymbolName == "to" && r.ReferenceKind == "call") >= 3);
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "to"
             && r.ReferenceKind == "call"
