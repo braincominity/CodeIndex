@@ -47,4 +47,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Project / target directory does not exist on disk.</summary>
     public const string DirectoryNotFound = "E011_DIRECTORY_NOT_FOUND";
+
+    /// <summary>The user interrupted the command with Ctrl-C / SIGINT.</summary>
+    public const string Interrupted = "E012_INTERRUPTED";
 }

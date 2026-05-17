@@ -6,6 +6,169 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
+
+    private static void EmitCSharpAsyncIteratorReferences(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        IReadOnlyList<SymbolRecord> symbols,
+        List<ReferenceRecord> references,
+        HashSet<string> seen)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (!IsCSharpAsyncIteratorFunction(symbol, structuralLines))
+                continue;
+
+            var lineIndex = Math.Clamp(symbol.StartLine - 1, 0, Math.Max(0, lines.Length - 1));
+            if (lineIndex < 0 || lineIndex >= lines.Length)
+                continue;
+
+            var context = lines[lineIndex].Trim();
+            var nameIndex = GetCSharpSymbolNameIndex(lines[lineIndex], symbol);
+
+            if (!string.IsNullOrWhiteSpace(symbol.ReturnType))
+            {
+                var returnTypeStart = lines[lineIndex].IndexOf(symbol.ReturnType, StringComparison.Ordinal);
+                if (returnTypeStart < 0)
+                    returnTypeStart = Math.Max(0, symbol.StartColumn ?? 0);
+
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    symbol.ReturnType!,
+                    returnTypeStart,
+                    context,
+                    symbol.StartLine,
+                    symbol,
+                    "csharp");
+
+                AddTypeReferenceSegment(
+                    references,
+                    seen,
+                    fileId,
+                    "IAsyncEnumerator",
+                    nameIndex,
+                    context,
+                    symbol.StartLine,
+                    symbol,
+                    "csharp");
+            }
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                "GetAsyncEnumerator",
+                nameIndex,
+                CSharpImplicitImplementationReferenceKind,
+                context,
+                symbol.StartLine,
+                symbol);
+
+            var moveNextPosition = FindFirstCSharpYieldReturnPosition(structuralLines, symbol);
+            var moveNextLine = moveNextPosition?.Line ?? symbol.StartLine;
+            var moveNextContext = moveNextLine > 0 && moveNextLine <= lines.Length
+                ? lines[moveNextLine - 1].Trim()
+                : context;
+            AddReference(
+                references,
+                seen,
+                fileId,
+                "MoveNextAsync",
+                moveNextPosition?.Column ?? nameIndex,
+                CSharpImplicitImplementationReferenceKind,
+                moveNextContext,
+                moveNextLine,
+                symbol);
+        }
+    }
+
+    private static bool IsCSharpAsyncIteratorFunction(SymbolRecord symbol, string[] structuralLines)
+    {
+        if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Signature))
+            return false;
+        if (!ContainsCSharpWord(symbol.Signature!, "async"))
+            return false;
+
+        return ContainsCSharpAsyncIteratorReturnType(symbol.ReturnType)
+            || FindFirstCSharpYieldReturnPosition(structuralLines, symbol).HasValue;
+    }
+
+    private static bool ContainsCSharpAsyncIteratorReturnType(string? returnType)
+        => !string.IsNullOrWhiteSpace(returnType)
+            && (ContainsCSharpWord(returnType, "IAsyncEnumerable")
+                || ContainsCSharpWord(returnType, "IAsyncEnumerator"));
+
+    private static (int Line, int Column)? FindFirstCSharpYieldReturnPosition(string[] structuralLines, SymbolRecord symbol)
+    {
+        var start = Math.Max(0, (symbol.BodyStartLine ?? symbol.StartLine) - 1);
+        var end = Math.Min(structuralLines.Length - 1, (symbol.BodyEndLine ?? symbol.EndLine) - 1);
+        if (end < start)
+            return null;
+
+        for (var i = start; i <= end; i++)
+        {
+            var yieldIndex = IndexOfCSharpWordPair(structuralLines[i], "yield", "return");
+            if (yieldIndex >= 0)
+                return (i + 1, yieldIndex);
+        }
+
+        return null;
+    }
+
+    private static int GetCSharpSymbolNameIndex(string line, SymbolRecord symbol)
+    {
+        if (!string.IsNullOrWhiteSpace(symbol.Name))
+        {
+            var index = line.IndexOf(symbol.Name, StringComparison.Ordinal);
+            if (index >= 0)
+                return index;
+        }
+
+        return Math.Max(0, symbol.StartColumn ?? 0);
+    }
+
+    private static bool ContainsCSharpWordPair(string text, string first, string second)
+        => IndexOfCSharpWordPair(text, first, second) >= 0;
+
+    private static int IndexOfCSharpWordPair(string text, string first, string second)
+    {
+        var firstIndex = IndexOfCSharpWord(text, first, 0);
+        if (firstIndex < 0)
+            return -1;
+
+        return IndexOfCSharpWord(text, second, firstIndex + first.Length) >= 0
+            ? firstIndex
+            : -1;
+    }
+
+    private static bool ContainsCSharpWord(string text, string word)
+        => IndexOfCSharpWord(text, word, 0) >= 0;
+
+    private static int IndexOfCSharpWord(string text, string word, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < text.Length)
+        {
+            index = text.IndexOf(word, index, StringComparison.Ordinal);
+            if (index < 0)
+                return -1;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + word.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+                return index;
+
+            index += word.Length;
+        }
+
+        return -1;
+    }
+
     internal static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -797,6 +960,13 @@ public static partial class ReferenceExtractor
             if (column < startColumn || column >= endColumn)
                 continue;
 
+            if (candidate.Kind == "function"
+                && (!TryFindCSharpFunctionNameColumn(structuralLine, candidate.Name, out var nameColumn)
+                    || column < nameColumn))
+            {
+                continue;
+            }
+
             var spanLength = endColumn - startColumn;
             var kindRank = GetSameLineContainerKindRank(candidate.Kind);
             if (best == null
@@ -812,6 +982,92 @@ public static partial class ReferenceExtractor
         }
 
         return best;
+    }
+
+    private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int column)
+    {
+        SymbolRecord? best = null;
+        var bestRange = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind != "function"
+                || candidate.BodyStartLine == null
+                || candidate.BodyEndLine == null
+                || candidate.StartLine > lineNumber
+                || candidate.BodyStartLine.Value < lineNumber
+                || candidate.BodyEndLine.Value < lineNumber)
+            {
+                continue;
+            }
+
+            if (candidate.StartLine == lineNumber
+                && (!TryFindCSharpFunctionNameColumn(structuralLine, candidate.Name, out var nameColumn)
+                    || column < nameColumn))
+            {
+                continue;
+            }
+
+            var range = candidate.BodyEndLine.Value - candidate.StartLine;
+            if (best == null || range < bestRange)
+            {
+                best = candidate;
+                bestRange = range;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool TryFindCSharpFunctionNameColumn(string structuralLine, string? name, out int column)
+    {
+        column = -1;
+        if (string.IsNullOrWhiteSpace(structuralLine) || string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var searchStart = 0;
+        while (searchStart < structuralLine.Length)
+        {
+            var index = structuralLine.IndexOf(name, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var before = index - 1;
+            if (before >= 0 && IsTypeExpressionIdentifierPart("csharp", structuralLine[before]))
+            {
+                searchStart = index + name.Length;
+                continue;
+            }
+
+            var afterName = index + name.Length;
+            if (afterName < structuralLine.Length && IsTypeExpressionIdentifierPart("csharp", structuralLine[afterName]))
+            {
+                searchStart = afterName;
+                continue;
+            }
+
+            var after = SkipWhitespace(structuralLine, afterName);
+            if (after < structuralLine.Length && structuralLine[after] == '<')
+            {
+                var genericClose = FindMatchingChar(structuralLine, after, '<', '>');
+                if (genericClose > after)
+                    after = SkipWhitespace(structuralLine, genericClose + 1);
+            }
+
+            if (after < structuralLine.Length && structuralLine[after] == '(')
+            {
+                column = index;
+                return true;
+            }
+
+            searchStart = afterName;
+        }
+
+        return false;
     }
 
     private static bool TryGetSameLineSignatureSpan(

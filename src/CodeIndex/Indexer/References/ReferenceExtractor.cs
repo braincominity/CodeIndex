@@ -21,6 +21,15 @@ public static partial class ReferenceExtractor
         int PendingTypeLineNumber,
         string? PendingContext,
         SymbolRecord? PendingContainer);
+    internal sealed class CSharpWhereConstraintState
+    {
+        public bool Active { get; set; }
+        public HashSet<string> HeaderGenericParameterNames { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> IgnoredSegments { get; } = new(StringComparer.Ordinal);
+        public bool CollectingHeaderGenericParameters { get; set; }
+        public int HeaderGenericParameterDepth { get; set; }
+        public string HeaderGenericParameterText { get; set; } = string.Empty;
+    }
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
@@ -611,7 +620,7 @@ public static partial class ReferenceExtractor
     };
     private static readonly HashSet<string> CSharpWhereConstraintIgnoredSegments = new(StringComparer.Ordinal)
     {
-        "allows", "notnull", "ref", "unmanaged",
+        "allows", "default", "notnull", "ref", "unmanaged",
     };
     private static readonly Dictionary<string, HashSet<string>> LanguageBuiltInTypeNames = new(StringComparer.Ordinal)
     {
@@ -1096,7 +1105,10 @@ public static partial class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (language == "csharp")
+            EmitCSharpAsyncIteratorReferences(fileId, lines, structuralLines, symbols, references, seen);
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
+        var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
@@ -1574,6 +1586,17 @@ public static partial class ReferenceExtractor
 
                 if (language == "csharp")
                 {
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine))
+                    {
+                        var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
+                            containerCandidates,
+                            structuralLines[i],
+                            lineNumber,
+                            column);
+                        if (declarationRangeContainer != null)
+                            return declarationRangeContainer;
+                    }
+
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
                         containerCandidates,
                         structuralLines[i],
@@ -1581,6 +1604,15 @@ public static partial class ReferenceExtractor
                         column);
                     if (sameLineContainer != null)
                         return sameLineContainer;
+
+                    if (CSharpWhereClauseRegex.IsMatch(preparedLine)
+                        && container?.Kind == "function"
+                        && container.StartLine == lineNumber
+                        && (!TryFindCSharpFunctionNameColumn(structuralLines[i], container.Name, out var containerNameColumn)
+                            || column < containerNameColumn))
+                    {
+                        return null;
+                    }
                 }
 
                 return container;
@@ -1785,6 +1817,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall,
                     container,
+                    pendingCSharpWhereConstraint!,
                     ref pendingCSharpMultiLineTypePattern);
 
                 if (CSharpReferenceExtractor.HasTrailingIsAsTypePatternIntro(preparedLine, originalLine))
@@ -2304,6 +2337,21 @@ public static partial class ReferenceExtractor
                 if (metadataKind != null)
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    if (language == "csharp"
+                        && metadataKind == "attribute"
+                        && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            callerInfoAttributeTypeName,
+                            callIndex,
+                            "type_reference",
+                            context,
+                            lineNumber,
+                            callContainer);
+                    }
                     return true;
                 }
 
@@ -2692,6 +2740,19 @@ public static partial class ReferenceExtractor
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    if (CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(rawName, preparedLine, nameIndex) is { } callerInfoAttributeTypeName)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            callerInfoAttributeTypeName,
+                            nameIndex,
+                            "type_reference",
+                            context,
+                            lineNumber,
+                            container);
+                    }
                 }
             }
             else if (AnnotationLanguages.Contains(language))
@@ -3686,11 +3747,21 @@ public static partial class ReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container,
+        CSharpWhereConstraintState pendingWhereConstraint,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(preparedLine);
         TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
-        EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCSharpWhereConstraintReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            csharpGenericParameterNames,
+            pendingWhereConstraint);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))

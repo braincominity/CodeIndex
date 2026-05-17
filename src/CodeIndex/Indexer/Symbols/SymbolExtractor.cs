@@ -1068,6 +1068,7 @@ public static partial class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility, and C# 14 partial
@@ -1452,6 +1453,8 @@ public static partial class SymbolExtractor
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
+            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<[^>]*>\s*(?:class|struct|union)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*<[^;{}]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<>\s*" + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))\s*<[^>\r\n]+>\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
@@ -2006,7 +2009,7 @@ public static partial class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum", "heading"
+        "class", "struct", "interface", "namespace", "enum", "heading", "specialization"
     ];
 
     /// <summary>
@@ -3023,6 +3026,12 @@ public static partial class SymbolExtractor
                             fortranProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
                     }
 
+                    if (lang == "cpp"
+                        && IsCppTemplateSpecializationSymbol(kind, name, signature, lines, i))
+                    {
+                        kind = "specialization";
+                    }
+
                     var suppressJavaStatementSymbol = false;
                     if (lang == "java" && pattern.Kind == "function")
                     {
@@ -3278,6 +3287,7 @@ public static partial class SymbolExtractor
                                         BodyStartLine = bodyStartLine,
                                         BodyEndLine = bodyEndLine,
                                     Signature = signature,
+                                    FamilyKey = lang == "cpp" && kind == "specialization" ? name : null,
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
@@ -8943,6 +8953,39 @@ public static partial class SymbolExtractor
             return true;
 
         return segment.All(static ch => ch == '_' || char.IsLetterOrDigit(ch));
+    }
+
+    private static bool IsCppTemplateSpecializationSymbol(
+        string kind,
+        string name,
+        string signature,
+        IReadOnlyList<string> lines,
+        int lineIndex)
+    {
+        if (kind is not ("class" or "struct" or "union" or "function"))
+            return false;
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(signature))
+            return false;
+        if (!signature.Contains(name + "<", StringComparison.Ordinal))
+            return false;
+
+        var trimmedSignature = signature.TrimStart();
+        if (trimmedSignature.StartsWith("template", StringComparison.Ordinal)
+            || trimmedSignature.StartsWith("export template", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        for (var previousLineIndex = lineIndex - 1; previousLineIndex >= 0; previousLineIndex--)
+        {
+            var previous = lines[previousLineIndex].Trim();
+            if (previous.Length == 0)
+                continue;
+            return previous.StartsWith("template", StringComparison.Ordinal)
+                || previous.StartsWith("export template", StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     private static string StripVisualBasicIdentifierEscapes(string segment) =>

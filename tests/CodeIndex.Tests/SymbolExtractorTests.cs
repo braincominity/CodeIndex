@@ -8522,6 +8522,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilineGenericMethodOverloadsKeepDistinctSignatures()
+    {
+        var content = """
+            public class Service
+            {
+                public void M<T>(
+                    T value)
+                {
+                }
+
+                public void M<T,
+                    U>(
+                    T first,
+                    U second)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var overloads = symbols
+            .Where(s => s.Kind == "function" && s.Name == "M")
+            .OrderBy(s => s.StartLine)
+            .ToArray();
+
+        Assert.Equal(2, overloads.Length);
+        Assert.Equal("public void M<T>( T value) {", overloads[0].Signature);
+        Assert.Equal("public void M<T, U>( T first, U second) {", overloads[1].Signature);
+        Assert.NotEqual(overloads[0].Signature, overloads[1].Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_CtorRegex_StillCapturesAllValidCtorForms()
     {
         // The #349 fix tightens the ctor regex with a negative lookahead that rejects lines where
@@ -15475,6 +15507,33 @@ public class SymbolExtractorTests
         var value = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "value");
         Assert.Equal("MyApp", value.ContainerName);
         Assert.Contains("decltype(foo(42))", value.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CppTemplateSpecializations_DistinguishesDeclarationSites()
+    {
+        var content = """
+            template <typename T>
+            class Box {};
+
+            template<>
+            class Box<int> {};
+
+            template <typename U>
+            class Box<U*> {};
+
+            template<>
+            void Save<int>(int value) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        var specializations = symbols.Where(s => s.Kind == "specialization" && s.Name == "Box").ToList();
+        Assert.Equal(2, specializations.Count);
+        Assert.All(specializations, s => Assert.Equal("Box", s.FamilyKey));
+        Assert.Contains(symbols, s => s.Kind == "specialization" && s.Name == "Save" && s.ReturnType == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Signature?.Contains("Box<int>", StringComparison.Ordinal) == true);
     }
 
     [Fact]
@@ -22826,10 +22885,12 @@ public class SymbolExtractorTests
         // issue #447 regression: the real InstallScriptTests fixture previously drove C#
         // symbol extraction into super-linear CPU time. Use the repository's current copy so
         // the regression test keeps exercising the same realistic raw-string + heredoc shape
-        // that broke self-indexing, but keep the budget generous enough for slower CI hosts.
+        // that broke self-indexing. This is a coarse runaway guard, not a tight benchmark, so
+        // keep the budget generous enough for slower or noisy CI hosts.
         // issue #447 回帰: 実ファイル InstallScriptTests.cs が C# シンボル抽出を super-linear に
         // 悪化させていた。自己ホストを壊した raw-string + heredoc の実形を継続的に踏むため、
-        // リポジトリ内の現行ファイルをそのまま使う。時間予算は遅い CI でも耐えるよう広めに取る。
+        // リポジトリ内の現行ファイルをそのまま使う。これは厳密な benchmark ではなく runaway
+        // guard なので、時間予算は遅い / 混雑した CI でも耐えるよう広めに取る。
         var path = Path.Combine(GetRepositoryRoot(), "tests", "CodeIndex.Tests", "InstallScriptTests.cs");
         var content = File.ReadAllText(path);
 
@@ -22840,8 +22901,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
         Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
-            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+            stopwatch.Elapsed < TimeSpan.FromSeconds(20),
+            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 20s.");
     }
 
     [Fact]

@@ -550,19 +550,74 @@ public static partial class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string> declarationGenericParameterNames,
+        CSharpWhereConstraintState pendingWhereConstraint)
     {
-        var genericParameterNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        UpdateCSharpWhereHeaderGenericParameterNames(line, declarationGenericParameterNames, pendingWhereConstraint);
+
+        var searchStart = 0;
+        if (pendingWhereConstraint.Active)
         {
+            var nextWhereMatch = CSharpWhereClauseRegex.Match(line);
+            var nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index : -1;
+            var pendingEnd = FindTypeListTerminator(line, allowArrow: true);
+            if (nextWhere >= 0 && (pendingEnd < 0 || nextWhere < pendingEnd))
+                pendingEnd = nextWhere;
+            if (pendingEnd < 0)
+                pendingEnd = line.Length;
+
+            EmitCSharpWhereConstraintSegments(
+                line,
+                0,
+                pendingEnd,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                pendingWhereConstraint.IgnoredSegments);
+
+            if (pendingEnd < line.Length && nextWhere >= 0 && nextWhere == pendingEnd)
+            {
+                searchStart = nextWhere;
+            }
+            else if (pendingEnd < line.Length)
+            {
+                pendingWhereConstraint.Active = false;
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+                pendingWhereConstraint.IgnoredSegments.Clear();
+                return;
+            }
+            else
+            {
+                return;
+            }
+
+            pendingWhereConstraint.Active = false;
+            pendingWhereConstraint.IgnoredSegments.Clear();
+        }
+
+        var lineWhereMatches = CSharpWhereClauseRegex.Matches(line);
+        var sawWhereMatch = false;
+        var lineWhereNames = new HashSet<string>(pendingWhereConstraint.HeaderGenericParameterNames, StringComparer.Ordinal);
+        lineWhereNames.UnionWith(declarationGenericParameterNames);
+        foreach (Match match in lineWhereMatches)
+        {
+            if (match.Index < searchStart)
+                continue;
+            sawWhereMatch = true;
             var nameGroup = match.Groups["name"];
             if (nameGroup.Success && nameGroup.Value.Length > 0)
-                genericParameterNames.Add(nameGroup.Value);
+                lineWhereNames.Add(nameGroup.Value);
         }
-        genericParameterNames.UnionWith(CSharpWhereConstraintIgnoredSegments);
+        lineWhereNames.UnionWith(CSharpWhereConstraintIgnoredSegments);
 
-        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        foreach (Match match in lineWhereMatches)
         {
+            if (match.Index < searchStart)
+                continue;
             int listStart = match.Index + match.Length;
             var remaining = line.Substring(listStart);
             var nextWhereMatch = CSharpWhereClauseRegex.Match(remaining);
@@ -572,25 +627,158 @@ public static partial class ReferenceExtractor
                 end = nextWhere;
             if (end < 0)
                 end = remaining.Length;
-            var constraintList = remaining.Substring(0, end);
-            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+            EmitCSharpWhereConstraintSegments(
+                line,
+                listStart,
+                end,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                lineWhereNames);
+
+            if (listStart + end >= line.Length && nextWhere < 0 && FindTypeListTerminator(remaining, allowArrow: true) < 0)
             {
-                var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0 || rawSegment.Contains('('))
-                    continue;
-                var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    rawSegment,
-                    absoluteStart,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(absoluteStart),
-                    "csharp",
-                    genericParameterNames);
+                pendingWhereConstraint.Active = true;
+                pendingWhereConstraint.IgnoredSegments.Clear();
+                pendingWhereConstraint.IgnoredSegments.UnionWith(lineWhereNames);
             }
+            else
+            {
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            }
+        }
+
+        if (!sawWhereMatch && FindTypeListTerminator(line, allowArrow: true) >= 0)
+        {
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+        }
+    }
+
+    private static void UpdateCSharpWhereHeaderGenericParameterNames(
+        string line,
+        IReadOnlySet<string> declarationGenericParameterNames,
+        CSharpWhereConstraintState pendingWhereConstraint)
+    {
+        if (declarationGenericParameterNames.Count > 0)
+        {
+            pendingWhereConstraint.CollectingHeaderGenericParameters = false;
+            pendingWhereConstraint.HeaderGenericParameterDepth = 0;
+            pendingWhereConstraint.HeaderGenericParameterText = string.Empty;
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(declarationGenericParameterNames);
+            return;
+        }
+
+        if (pendingWhereConstraint.Active)
+            return;
+
+        if (pendingWhereConstraint.CollectingHeaderGenericParameters)
+        {
+            pendingWhereConstraint.HeaderGenericParameterText += " " + line.Trim();
+            pendingWhereConstraint.HeaderGenericParameterDepth += CountCSharpGenericParameterAngleDelta(line);
+            if (pendingWhereConstraint.HeaderGenericParameterDepth <= 0)
+            {
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+                pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(
+                    CollectCSharpGenericParameterNamesFromClause(pendingWhereConstraint.HeaderGenericParameterText, 0));
+                pendingWhereConstraint.CollectingHeaderGenericParameters = false;
+                pendingWhereConstraint.HeaderGenericParameterDepth = 0;
+                pendingWhereConstraint.HeaderGenericParameterText = string.Empty;
+            }
+
+            return;
+        }
+
+        var genericOpen = FindPotentialCSharpGenericDeclarationOpen(line);
+        if (genericOpen < 0)
+            return;
+
+        var genericClose = FindMatchingChar(line, genericOpen, '<', '>');
+        if (genericClose > genericOpen)
+        {
+            pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            pendingWhereConstraint.HeaderGenericParameterNames.UnionWith(
+                CollectCSharpGenericParameterNamesFromClause(line, genericOpen));
+            return;
+        }
+
+        pendingWhereConstraint.CollectingHeaderGenericParameters = true;
+        pendingWhereConstraint.HeaderGenericParameterDepth = CountCSharpGenericParameterAngleDelta(line[genericOpen..]);
+        pendingWhereConstraint.HeaderGenericParameterText = line[genericOpen..].Trim();
+    }
+
+    private static int FindPotentialCSharpGenericDeclarationOpen(string line)
+    {
+        var whereIndex = line.IndexOf(" where ", StringComparison.Ordinal);
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (line[index] != '<')
+                continue;
+            if (whereIndex >= 0 && index > whereIndex)
+                return -1;
+
+            var before = line[..index].TrimEnd();
+            if (before.Length == 0)
+                continue;
+            if (!IsTypeExpressionIdentifierPart("csharp", before[^1]))
+                continue;
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int CountCSharpGenericParameterAngleDelta(string text)
+    {
+        var depth = 0;
+        foreach (var c in text)
+        {
+            if (c == '<')
+                depth++;
+            else if (c == '>')
+                depth--;
+        }
+
+        return depth;
+    }
+
+    private static void EmitCSharpWhereConstraintSegments(
+        string line,
+        int listStart,
+        int listLength,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string> ignoredSegments)
+    {
+        if (listLength <= 0)
+            return;
+
+        var constraintList = line.Substring(listStart, listLength);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+        {
+            var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "csharp",
+                ignoredSegments);
         }
     }
 

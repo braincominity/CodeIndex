@@ -5,11 +5,21 @@ using CSharpFunctionValueReceiverNameRecord = CodeIndex.Indexer.ReferenceExtract
 using CSharpMultiLineTypePatternState = CodeIndex.Indexer.ReferenceExtractor.CSharpMultiLineTypePatternState;
 using CSharpUsingAliasRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingAliasRecord;
 using CSharpUsingStaticRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpUsingStaticRecord;
+using CSharpWhereConstraintState = CodeIndex.Indexer.ReferenceExtractor.CSharpWhereConstraintState;
 
 namespace CodeIndex.Indexer;
 
 internal static class CSharpReferenceExtractor
 {
+    private const string CallerInfoAttributeNamespace = "System.Runtime.CompilerServices.";
+    private static readonly Dictionary<string, string> CallerInfoAttributeTypeNames = new(StringComparer.Ordinal)
+    {
+        ["CallerMemberName"] = CallerInfoAttributeNamespace + "CallerMemberNameAttribute",
+        ["CallerFilePath"] = CallerInfoAttributeNamespace + "CallerFilePathAttribute",
+        ["CallerLineNumber"] = CallerInfoAttributeNamespace + "CallerLineNumberAttribute",
+        ["CallerArgumentExpression"] = CallerInfoAttributeNamespace + "CallerArgumentExpressionAttribute",
+    };
+
     // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
     // C# コンストラクタ連鎖イニシャライザ
     private static readonly Regex CtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
@@ -134,6 +144,7 @@ internal static class CSharpReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container,
+        CSharpWhereConstraintState pendingWhereConstraint,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
         => ReferenceExtractor.EmitCSharpTypePositionReferences(
             preparedLine,
@@ -150,6 +161,7 @@ internal static class CSharpReferenceExtractor
             lineNumber,
             resolveContainerForColumn,
             container,
+            pendingWhereConstraint,
             ref pendingCSharpMultiLineTypePattern);
 
     public static bool HasTrailingIsAsTypePatternIntro(string preparedLine, string originalLine)
@@ -286,6 +298,84 @@ internal static class CSharpReferenceExtractor
                 resolveContainerForCall(simpleNameIndex));
         }
     }
+
+    public static string? TryGetCallerInfoAttributeTypeName(string attributeName, string? preparedLine = null, int nameIndex = -1)
+    {
+        var normalizedName = NormalizeCSharpIdentifier(attributeName);
+        var qualifier = GetCSharpAttributeQualifier(preparedLine, nameIndex) ?? GetQualifierFromAttributeName(normalizedName);
+        if (qualifier != null && !IsCompilerServicesQualifier(qualifier))
+            return null;
+
+        var simpleName = normalizedName;
+        var qualifierIndex = Math.Max(simpleName.LastIndexOf('.'), simpleName.LastIndexOf(':'));
+        if (qualifierIndex >= 0 && qualifierIndex + 1 < simpleName.Length)
+            simpleName = simpleName[(qualifierIndex + 1)..];
+
+        if (simpleName.EndsWith("Attribute", StringComparison.Ordinal)
+            && simpleName.Length > "Attribute".Length)
+        {
+            simpleName = simpleName[..^"Attribute".Length];
+        }
+
+        return CallerInfoAttributeTypeNames.TryGetValue(simpleName, out var typeName)
+            ? typeName
+            : null;
+    }
+
+    private static string? GetQualifierFromAttributeName(string attributeName)
+    {
+        var qualifierIndex = Math.Max(attributeName.LastIndexOf('.'), attributeName.LastIndexOf(':'));
+        return qualifierIndex > 0
+            ? NormalizeCSharpAttributeQualifier(attributeName[..qualifierIndex])
+            : null;
+    }
+
+    private static string? GetCSharpAttributeQualifier(string? preparedLine, int nameIndex)
+    {
+        if (string.IsNullOrEmpty(preparedLine) || nameIndex <= 0 || nameIndex > preparedLine.Length)
+            return null;
+
+        var cursor = nameIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor--;
+
+        if (cursor < 0)
+            return null;
+        if (preparedLine[cursor] != '.'
+            && !(preparedLine[cursor] == ':' && cursor > 0 && preparedLine[cursor - 1] == ':'))
+        {
+            return null;
+        }
+
+        var end = cursor + 1;
+        while (cursor >= 0)
+        {
+            var ch = preparedLine[cursor];
+            if (char.IsWhiteSpace(ch) || ch == '.' || ch == ':' || ch == '@' || ch == '_' || char.IsLetterOrDigit(ch))
+            {
+                cursor--;
+                continue;
+            }
+
+            break;
+        }
+
+        return NormalizeCSharpAttributeQualifier(preparedLine[(cursor + 1)..end]);
+    }
+
+    private static string? NormalizeCSharpAttributeQualifier(string qualifier)
+    {
+        var compact = new string(qualifier.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+        while (compact.EndsWith(".", StringComparison.Ordinal))
+            compact = compact[..^1];
+        while (compact.EndsWith("::", StringComparison.Ordinal))
+            compact = compact[..^2];
+        return compact.Length > 0 ? compact : null;
+    }
+
+    private static bool IsCompilerServicesQualifier(string qualifier)
+        => string.Equals(qualifier, "System.Runtime.CompilerServices", StringComparison.Ordinal)
+           || string.Equals(qualifier, "global::System.Runtime.CompilerServices", StringComparison.Ordinal);
 
     private static bool IsCSharpUsingDirectiveLine(string trimmedLine)
     {

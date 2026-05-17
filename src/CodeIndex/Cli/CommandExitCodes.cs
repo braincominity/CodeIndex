@@ -12,4 +12,5 @@ public static class CommandExitCodes
     public const int DatabaseError = 3;
     public const int FeatureUnavailable = 4;
     public const int StaleIndex = 5;
+    public const int Interrupted = 130;
 }
