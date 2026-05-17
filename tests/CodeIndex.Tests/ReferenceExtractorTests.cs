@@ -2626,6 +2626,61 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinInfixCalls_TrackBuiltInAndUserDefinedFunctions()
+    {
+        const string content = """
+            class Bag {
+                infix fun add(item: String): Bag = this
+                infix fun merge(other: Bag): Bag = this
+                infix fun List<String>.combine(other: List<String>): List<String> = this
+                infix fun demo.Box.link(other: demo.Box): demo.Box = this
+                private infix fun demo.Box.hidden(other: demo.Box): demo.Box = this
+
+                fun build(other: Bag, value: Int) {
+                    val xs = listOf("a")
+                    val box = demo.Box()
+                    val pair = 1 to "one"
+                    val named = "name" to value
+                    val summed = (1 + 2) to "sum"
+                    val shifted = value shl 4
+                    val masked = value and 15
+                    val ranged = 1 until 10
+                    val countdown = 10 downTo 1
+                    val evens = 0..10 step 2
+                    val combined = value or 2
+                    val toggled = value xor 3
+                    val shrunk = value shr 1
+                    this add "item"
+                    this merge other
+                    xs combine xs
+                    box link box
+                    val words = "plain text to ignore"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        foreach (var name in new[] { "to", "shl", "and", "until", "downTo", "step", "or", "xor", "shr", "add", "merge", "combine", "link" })
+        {
+            Assert.True(
+                references.Any(r => r.SymbolName == name && r.ReferenceKind == "call"),
+                $"Expected Kotlin infix call reference for {name}.");
+        }
+
+        Assert.True(references.Count(r => r.SymbolName == "to" && r.ReferenceKind == "call") >= 3);
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "to"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("plain text", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "hidden"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("private infix fun", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
     {
         const string content = """

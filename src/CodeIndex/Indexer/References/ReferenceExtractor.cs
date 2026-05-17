@@ -1070,6 +1070,8 @@ public static partial class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
+        var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
+        KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
@@ -2347,6 +2349,8 @@ public static partial class ReferenceExtractor
                     return false;
                 if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
                     return false;
+                if (language == "kotlin" && KotlinReferenceExtractor.IsInfixFunctionDeclarationSite(preparedLine, callIndex))
+                    return false;
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -2569,7 +2573,14 @@ public static partial class ReferenceExtractor
                 if (language == "swift")
                     SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
                 else if (language == "kotlin")
+                {
+                    KotlinReferenceExtractor.EmitInfixCallReferences(
+                        preparedLine,
+                        originalLine,
+                        kotlinInfixFunctionNames,
+                        AddCallLikeReference);
                     KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
+                }
 
                 if (language == "fsharp")
                 {
