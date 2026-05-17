@@ -95,6 +95,9 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "a" or "item"
             && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "Item" or "State" or "Action" or "Result"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]

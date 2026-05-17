@@ -1646,8 +1646,12 @@ public static partial class ReferenceExtractor
 
             if (isJsxFile && (language is "javascript" or "typescript"))
             {
+                var jsxTypeArgumentSkipUntil = -1;
                 foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
                 {
+                    if (match.Index < jsxTypeArgumentSkipUntil)
+                        continue;
+
                     var fullName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
                     var jsxContainer = ResolveContainerForCall(nameIndex);
@@ -1689,6 +1693,7 @@ public static partial class ReferenceExtractor
                             if (TrySkipTypeScriptJsxTypeArguments(preparedLine, ref genericEnd)
                                 && genericEnd > genericStart + 2)
                             {
+                                jsxTypeArgumentSkipUntil = Math.Max(jsxTypeArgumentSkipUntil, genericEnd);
                                 AddTypeExpressionSegments(
                                     references,
                                     seen,
