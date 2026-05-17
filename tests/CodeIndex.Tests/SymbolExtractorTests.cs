@@ -112,6 +112,69 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsRepresentativeDeclarationKinds()
+    {
+        const string content = """
+            import Foundation
+
+            public protocol StoreProtocol {
+                associatedtype Element
+            }
+
+            @MainActor
+            public final class UserStore {
+                public var currentUser: User?
+
+                public init() {}
+
+                public func loadUser() -> User {
+                    fetchUser()
+                }
+
+                deinit {}
+
+                subscript(index: Int) -> User {
+                    currentUser!
+                }
+            }
+
+            struct User {}
+
+            enum Status {
+                case active, disabled = "disabled"
+            }
+
+            typealias UserIdentifier = String
+            macro stringify<T>(_ value: T) = #externalMacro(module: "Macros", type: "StringifyMacro")
+            precedencegroup PipelinePrecedence {}
+            infix operator |>: PipelinePrecedence
+            extension Array where Element == User {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "StoreProtocol");
+        Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Element");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "currentUser" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadUser" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "active" && s.ContainerName == "Status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "disabled" && s.ContainerName == "Status");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserIdentifier");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringify");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "PipelinePrecedence");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "|>");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.StartsWith("Array", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Name == "fetchUser" && s.Kind == "function");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsGenericFunctionsAndTypeAliases()
     {
         var content = """
@@ -6491,6 +6554,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsScopedMethodParametersAsProperties()
+    {
+        var content = """
+            public class RefService
+            {
+                public void Update<T>(scoped ref T value, scoped Span<int> data)
+                {
+                }
+
+                public Buffer[] Buffer(scoped ref int value)
+                {
+                    return [];
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "value"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Update"
+            && s.ReturnType == "T"
+            && s.Signature == "scoped ref T value");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "data"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Update"
+            && s.ReturnType == "Span<int>"
+            && s.Signature == "scoped Span<int> data");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "value"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Buffer"
+            && s.ReturnType == "int"
+            && s.Signature == "scoped ref int value");
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesVerbatimIdentifiers()
     {
         var content = """
@@ -7482,6 +7586,68 @@ public class SymbolExtractorTests
         Assert.Equal(
             "public readonly struct Value<T> : IEquatable<Value<T>> where T : IComparable<T>",
             value.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedTypeHeaderWithSplitGenericConstraints_PreservesNestedConstraintTypes()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T, U>
+                where T : IEnumerable<
+                    U>,
+                    IComparable<
+                    string>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo<T, U> where T : IEnumerable<U>, IComparable<string>",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithWhereInStringDefault_PreservesLiteralWhitespace()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string label = "where X< T >")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string label = \"where X< T >\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithWhereParameterName_PreservesLiteralWhitespace()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string where = "X< T >")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string where = \"X< T >\") : BaseFoo",
+            foo.Signature);
     }
 
     [Fact]
