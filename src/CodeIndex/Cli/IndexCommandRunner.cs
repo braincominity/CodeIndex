@@ -1371,6 +1371,7 @@ public static class IndexCommandRunner
 
         if (ftsMutated)
             writer.OptimizeFts();
+        ThrowIfUpdateCancelled();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
@@ -2448,6 +2449,7 @@ public static class IndexCommandRunner
         {
             StopJsonPhaseHeartbeat(optimizeHeartbeat);
         }
+        ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
