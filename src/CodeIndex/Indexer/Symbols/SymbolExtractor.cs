@@ -3389,6 +3389,17 @@ public static partial class SymbolExtractor
                         pendingRecordPrimaryComponents,
                         symbols);
 
+                    if (lang == "csharp" && pattern.Kind == "function")
+                    {
+                        CollectCSharpCallableParameterSymbols(
+                            fileId,
+                            signature,
+                            startLine,
+                            kind,
+                            name,
+                            symbols);
+                    }
+
                     // C# plain-field (kind `property`, BodyStyle.None) matches need their own
                     // advance path. The generic `sameLineEndColumn`-based advance below resolves
                     // to -1 for BodyStyle.None and would set `stopAfterFirstPatternMatch`, which
@@ -6953,6 +6964,154 @@ public static partial class SymbolExtractor
                 });
             }
         }
+    }
+
+    private static void CollectCSharpCallableParameterSymbols(
+        long fileId,
+        string signature,
+        int callableStartLine,
+        string callableKind,
+        string callableName,
+        List<SymbolRecord> symbols)
+    {
+        if (!TryGetCSharpCallableParameterList(signature, callableName, out var parameterList, out var parameterListStartLine))
+            return;
+
+        foreach (var rawParameter in SplitTopLevelRecordPrimaryComponents(parameterList, callableStartLine + parameterListStartLine))
+        {
+            if (!TryParseCSharpCallableParameter(rawParameter, out var parameter))
+                continue;
+
+            if (symbols.Any(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "property"
+                && symbol.Name == parameter.Name
+                && symbol.ContainerKind == callableKind
+                && symbol.ContainerName == callableName
+                && symbol.StartLine == parameter.Line))
+            {
+                continue;
+            }
+
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = parameter.Name,
+                Line = parameter.Line,
+                StartLine = parameter.Line,
+                EndLine = parameter.Line,
+                Signature = parameter.Signature,
+                ContainerKind = callableKind,
+                ContainerName = callableName,
+                ReturnType = parameter.Type,
+            });
+        }
+    }
+
+    private static bool TryGetCSharpCallableParameterList(
+        string signature,
+        string callableName,
+        out string parameterList,
+        out int parameterListStartLine)
+    {
+        parameterList = string.Empty;
+        parameterListStartLine = 0;
+
+        var parameterOpenIndex = FindCSharpCallableParameterListStart(signature, callableName);
+        if (parameterOpenIndex < 0)
+            return false;
+
+        var closeBracket = signature[parameterOpenIndex] == '[' ? ']' : ')';
+        var parameterCloseIndex = FindMatchingBracket(signature, parameterOpenIndex, signature[parameterOpenIndex], closeBracket);
+        if (parameterCloseIndex <= parameterOpenIndex)
+            return false;
+
+        parameterList = StripRecordComponentComments(signature[(parameterOpenIndex + 1)..parameterCloseIndex]);
+        parameterListStartLine = signature[..(parameterOpenIndex + 1)].Count(ch => ch == '\n');
+        return true;
+    }
+
+    private static int FindCSharpCallableParameterListStart(string signature, string callableName)
+    {
+        var searchIndex = 0;
+        while (searchIndex < signature.Length)
+        {
+            var nameIndex = signature.IndexOf(callableName, searchIndex, StringComparison.Ordinal);
+            if (nameIndex < 0)
+                return -1;
+
+            searchIndex = nameIndex + Math.Max(callableName.Length, 1);
+            if (!IsCSharpIdentifierBoundary(signature, nameIndex - 1)
+                || !IsCSharpIdentifierBoundary(signature, nameIndex + callableName.Length))
+            {
+                continue;
+            }
+
+            var index = nameIndex + callableName.Length;
+            while (index < signature.Length && char.IsWhiteSpace(signature[index]))
+                index++;
+
+            if (index < signature.Length && signature[index] == '<')
+            {
+                var genericCloseIndex = FindMatchingBracket(signature, index, '<', '>');
+                if (genericCloseIndex < 0)
+                    continue;
+
+                index = genericCloseIndex + 1;
+                while (index < signature.Length && char.IsWhiteSpace(signature[index]))
+                    index++;
+            }
+
+            if (index < signature.Length && signature[index] is '(' or '[')
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCSharpIdentifierBoundary(string text, int index) =>
+        index < 0
+        || index >= text.Length
+        || !(char.IsLetterOrDigit(text[index]) || text[index] is '_' or '@');
+
+    private static bool TryParseCSharpCallableParameter(RecordPrimaryComponentSlice rawParameter, out RecordPrimaryComponent parameter)
+    {
+        parameter = default;
+        if (string.IsNullOrWhiteSpace(rawParameter.Text))
+            return false;
+
+        var normalized = TrimAfterTopLevelEquals(rawParameter.Text).Trim();
+        if (normalized.Length == 0)
+            return false;
+
+        var parameterLine = rawParameter.Line;
+        var stripped = StripLeadingCSharpRecordComponentAttributes(normalized);
+        normalized = stripped.Text;
+        parameterLine += stripped.ConsumedNewlines;
+
+        var signature = normalized;
+        stripped = StripLeadingRecordComponentModifiers("csharp", normalized);
+        if (stripped.Text == normalized)
+            return false;
+
+        normalized = stripped.Text;
+        parameterLine += stripped.ConsumedNewlines;
+
+        if (normalized.Length == 0)
+            return false;
+
+        var nameMatch = Regex.Match(normalized, @"(?<name>@?[\p{L}_$][\p{L}\p{Nd}_$]*)\s*$", RegexOptions.CultureInvariant);
+        if (!nameMatch.Success)
+            return false;
+
+        var parameterName = nameMatch.Groups["name"].Value.TrimStart('@');
+        var parameterType = normalized[..nameMatch.Index].Trim();
+        if (parameterName.Length == 0 || parameterType.Length == 0)
+            return false;
+
+        parameter = new RecordPrimaryComponent(parameterName, parameterType, signature, parameterLine);
+        return true;
     }
 
     private static bool TryGetRecordPrimaryComponents(
