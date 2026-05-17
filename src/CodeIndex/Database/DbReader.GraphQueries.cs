@@ -1014,8 +1014,14 @@ public partial class DbReader
                              && caller.CallerName != SyntheticTopLevelCallerName
                              && depth + 1 == maxDepth)
                     {
-                        maxDepthReached |= HasCallersBeyondDepth(
+                        maxDepthReached |= InspectBoundaryCallers(
                             caller.CallerName,
+                            resolvedName,
+                            rootDefinitionPaths,
+                            visited,
+                            cycleParentsByName,
+                            cycles,
+                            cycleKeys,
                             lang,
                             pathPatterns,
                             excludePathPatterns,
@@ -1071,20 +1077,54 @@ public partial class DbReader
         return (results, truncated, truncatedReason, terminationReason, cycles);
     }
 
-    private bool HasCallersBeyondDepth(
+    private bool InspectBoundaryCallers(
         string symbolName,
+        string resolvedName,
+        HashSet<string> rootDefinitionPaths,
+        HashSet<string> visited,
+        Dictionary<string, HashSet<string>> cycleParentsByName,
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
         string? lang,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests) =>
-        GetCallersExact(
-            symbolName,
-            limit: 1,
-            offset: 0,
-            lang: lang,
-            pathPatterns: pathPatterns,
-            excludePathPatterns: excludePathPatterns,
-            excludeTests: excludeTests).Count > 0;
+        bool excludeTests)
+    {
+        const int pageSize = 200;
+        var offset = 0;
+        while (true)
+        {
+            var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+            if (page.Count == 0)
+                return false;
+
+            foreach (var caller in page)
+            {
+                var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
+                if (IsCycleEdge(callerName, symbolName, cycleParentsByName))
+                    AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerName, symbolName, cycleParentsByName));
+                var isRoot = string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
+                    && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path));
+                if (isRoot)
+                    continue;
+
+                if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
+                {
+                    cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    cycleParentsByName[callerName] = cycleParentSet;
+                }
+                cycleParentSet.Add(symbolName);
+
+                var key = $"{caller.Path}:{callerName}";
+                if (!visited.Contains(key))
+                    return true;
+            }
+
+            if (page.Count < pageSize)
+                return false;
+            offset += page.Count;
+        }
+    }
 
     private static bool IsCycleEdge(
         string callerName,

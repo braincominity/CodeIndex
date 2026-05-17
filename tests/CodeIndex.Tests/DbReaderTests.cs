@@ -9772,6 +9772,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_BoundaryRootCycleReportsCycleNotMaxDepth()
+    {
+        InsertIndexedFile("src/impact_boundary_root_cycle.cs", "csharp",
+            """
+            public static class ImpactBoundaryRootCycle
+            {
+                public static void Leaf() { A(); }
+                public static void A() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_boundary_root_cycle"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.True(analysis.CycleDetected);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(new[] { "A", "Leaf" }, cycle.Members);
+    }
+
+    [Fact]
     public void AnalyzeImpact_MaxDepthReportsTerminationReason()
     {
         InsertIndexedFile("src/impact_depth_reason.cs", "csharp",
