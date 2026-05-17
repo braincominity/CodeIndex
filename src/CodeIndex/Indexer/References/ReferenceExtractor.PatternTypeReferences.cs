@@ -6,6 +6,16 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static readonly HashSet<string> TypeScriptTypeExpressionIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "as",
+        "extends",
+        "in",
+        "infer",
+        "keyof",
+        "readonly",
+    };
+
     internal static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
     {
         foreach (Match match in introRegex.Matches(text))
@@ -1211,6 +1221,12 @@ public static partial class ReferenceExtractor
                 i++;
 
             var segment = expression.Substring(segmentStart, i - segmentStart);
+            if (TypeScriptTypeExpressionIgnoredSegments.Contains(segment))
+            {
+                i--;
+                continue;
+            }
+
             AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, "typescript");
             i--;
         }
@@ -2041,6 +2057,8 @@ public static partial class ReferenceExtractor
         SymbolRecord? container,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        ignoredSegments ??= TypeScriptTypeExpressionIgnoredSegments;
+
         int i = 0;
         while (i < expression.Length)
         {
@@ -2079,6 +2097,11 @@ public static partial class ReferenceExtractor
                 i++;
 
             var segment = expression.Substring(segmentStart, i - segmentStart);
+            if (TypeScriptTypeExpressionIgnoredSegments.Contains(segment)
+                || ignoredSegments != null && ignoredSegments.Contains(segment))
+            {
+                continue;
+            }
             if (IsTypeScriptTypeLabelSegment(expression, i))
                 continue;
 
