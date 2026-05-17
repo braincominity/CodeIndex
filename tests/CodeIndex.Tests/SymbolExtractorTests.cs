@@ -6499,6 +6499,11 @@ public class SymbolExtractorTests
                 public void Update<T>(scoped ref T value, scoped Span<int> data)
                 {
                 }
+
+                public Buffer[] Buffer(scoped ref int value)
+                {
+                    return [];
+                }
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -6517,6 +6522,13 @@ public class SymbolExtractorTests
             && s.ContainerName == "Update"
             && s.ReturnType == "Span<int>"
             && s.Signature == "scoped Span<int> data");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "value"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Buffer"
+            && s.ReturnType == "int"
+            && s.Signature == "scoped ref int value");
     }
 
     [Fact]

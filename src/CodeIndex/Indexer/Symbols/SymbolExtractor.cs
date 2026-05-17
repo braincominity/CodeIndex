@@ -7076,8 +7076,11 @@ public static partial class SymbolExtractor
                     index++;
             }
 
-            if (index < signature.Length && signature[index] is '(' or '[')
+            if (index < signature.Length
+                && (signature[index] == '(' || (signature[index] == '[' && callableName == "this")))
+            {
                 return index;
+            }
         }
 
         return -1;
