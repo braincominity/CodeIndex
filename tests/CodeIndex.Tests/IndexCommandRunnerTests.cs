@@ -5574,6 +5574,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanJson_WritesLivenessToStderrOnly()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("cdidx: scanning files...", stderr);
+            Assert.Contains("cdidx: indexing...", stderr);
+            Assert.Contains("cdidx: indexed 0/1 file(s)...", stderr);
+            Assert.Contains("cdidx: indexed 1/1 file(s)...", stderr);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_NonGitWorkspace_DoesNotReportHeadChange()
     {
         var projectRoot = CreateTempProject();
@@ -5725,6 +5749,31 @@ public class IndexCommandRunnerTests
             finally
             {
                 Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                return (exitCode, document.RootElement.Clone(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
             }
         }
     }
