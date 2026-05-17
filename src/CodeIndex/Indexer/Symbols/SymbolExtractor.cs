@@ -171,7 +171,7 @@ public static partial class SymbolExtractor
         @"\bfriend\s+(?<kind>class|struct|union|enum(?:\s+class)?)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CppFriendFunctionDeclarationRegex = new(
-        @"\bfriend\s+(?!(?:class|struct|union|typename|enum)\b)(?<returnType>[^;()]*?)\b(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(?:\s*<[^>]+>)?\s*\(",
+        @"\bfriend\s+(?!(?:class|struct|union|typename|enum)\b)(?<returnType>[^;()]*?)\b(?<name>(?:[A-Za-z_]\w*::)*(?:[A-Za-z_]\w*|operator\s*(?:new\[\]|delete\[\]|new|delete|\[\]|[^\s(]+)))(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GoImportSpecRegex = new(
@@ -3906,11 +3906,15 @@ public static partial class SymbolExtractor
     private static string LastCppDeclarationSegment(string value)
     {
         var text = value.Trim();
-        var genericIndex = text.IndexOf('<');
-        if (genericIndex >= 0)
-            text = text[..genericIndex].TrimEnd();
-
         var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
+        var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
+        if (!leaf.StartsWith("operator", StringComparison.Ordinal))
+        {
+            var genericIndex = text.IndexOf('<');
+            if (genericIndex >= 0)
+                text = text[..genericIndex].TrimEnd();
+        }
+
         return qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
     }
 

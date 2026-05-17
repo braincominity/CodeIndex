@@ -1211,6 +1211,7 @@ public class SymbolExtractorTests
               friend class Inspector;
               friend struct ns::Peer;
               friend void freeFn(Widget&);
+              friend bool operator==(const Widget&, const Widget&);
               template <typename U> friend class Container;
               // friend class CommentOnly;
               const char* text = "friend class StringOnly;";
@@ -1233,6 +1234,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inspector" && s.Signature == "friend class Inspector;");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Peer" && s.Signature == "friend struct ns::Peer;");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "freeFn" && s.Signature == "friend void freeFn(Widget&);");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator==" && s.Signature == "friend bool operator==(const Widget&, const Widget&);");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Container" && s.Signature == "template <typename U> friend class Container;");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BoxInspector");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Probe" && s.Signature == "friend class Outer::Probe;");

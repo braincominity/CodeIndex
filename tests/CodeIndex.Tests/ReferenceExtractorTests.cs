@@ -10915,6 +10915,7 @@ public class ReferenceExtractorTests
               friend struct ns::Peer;
               friend enum class Status;
               friend void freeFn(Widget&);
+              friend bool operator==(const Widget&, const Widget&);
               template <typename U> friend class Container;
             };
             """;
@@ -10929,6 +10930,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Peer" && r.ReferenceKind == "friend");
         Assert.Contains(references, r => r.SymbolName == "Status" && r.ReferenceKind == "friend");
         Assert.Contains(references, r => r.SymbolName == "freeFn" && r.ReferenceKind == "friend");
+        Assert.Contains(references, r => r.SymbolName == "operator==" && r.ReferenceKind == "friend");
         Assert.Contains(references, r => r.SymbolName == "Container" && r.ReferenceKind == "friend");
         Assert.DoesNotContain(references, r => r.SymbolName == "ns" && r.ReferenceKind == "type_reference");
     }

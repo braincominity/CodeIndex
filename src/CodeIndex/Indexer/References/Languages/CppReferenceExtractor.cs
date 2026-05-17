@@ -10,7 +10,7 @@ internal static class CppReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex FriendFunctionRegex = new(
-        @"\bfriend\s+(?!(?:class|struct|union|typename|enum)\b)[^;()]*?\b(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(?:\s*<[^>]+>)?\s*\(",
+        @"\bfriend\s+(?!(?:class|struct|union|typename|enum)\b)[^;()]*?\b(?<name>(?:[A-Za-z_]\w*::)*(?:[A-Za-z_]\w*|operator\s*(?:new\[\]|delete\[\]|new|delete|\[\]|[^\s(]+)))(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static void EmitTypePositionReferences(
@@ -65,11 +65,15 @@ internal static class CppReferenceExtractor
     private static string LastQualifiedSegment(string value)
     {
         var text = value.Trim();
-        var genericIndex = text.IndexOf('<');
-        if (genericIndex >= 0)
-            text = text[..genericIndex].TrimEnd();
-
         var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
+        var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
+        if (!leaf.StartsWith("operator", StringComparison.Ordinal))
+        {
+            var genericIndex = text.IndexOf('<');
+            if (genericIndex >= 0)
+                text = text[..genericIndex].TrimEnd();
+        }
+
         return qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
     }
 }
