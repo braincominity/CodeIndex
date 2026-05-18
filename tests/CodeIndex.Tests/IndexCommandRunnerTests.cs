@@ -321,6 +321,28 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("feature")]
+    [InlineData("v1.0.0")]
+    [InlineData("main..feature")]
+    public void ParseArgs_CommitsRejectsBranchTagAndRangeRefs(string commitRef)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--commits", commitRef]);
+
+        Assert.Equal([commitRef], options.Commits);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("expected a 7-40 character hex commit ID", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CommitsAcceptsHexCommitId()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--commits", "0123456789abcdef"]);
+
+        Assert.Equal(["0123456789abcdef"], options.Commits);
+        Assert.Null(options.ParseError);
+    }
+
     [Fact]
     public void ParseArgs_ParallelismFlag_ParsesPositiveValue()
     {
@@ -2741,8 +2763,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
             RunGit(projectRoot, "add", ".gitignore");
             RunGit(projectRoot, "commit", "-m", "ignore generated");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -2858,11 +2881,12 @@ public class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret v2')\n");
             RunGit(projectRoot, "add", "secret.py");
             RunGit(projectRoot, "commit", "-m", "update secret");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
             originalMode = File.GetUnixFileMode(ignorePath);
             SetUnixPermissions(ignorePath, UnixFileMode.None);
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
@@ -3407,8 +3431,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(appPath, "print('v2 with more content')\n");
             RunGit(repoRoot, "add", "subproj/app.py");
             RunGit(repoRoot, "commit", "-m", "update app");
+            var commitId = RunGitCaptureStdOut(repoRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -3443,8 +3468,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/generated.py\n");
             RunGit(repoRoot, "add", ".gitignore");
             RunGit(repoRoot, "commit", "-m", "ignore generated");
+            var commitId = RunGitCaptureStdOut(repoRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -3520,8 +3546,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(newPath, "public class NewName { }\n");
             RunGit(projectRoot, "add", "-A");
             RunGit(projectRoot, "commit", "-m", "rename");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -3704,8 +3731,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(toolPath, "plain text now\n");
             RunGit(projectRoot, "add", "tool");
             RunGit(projectRoot, "commit", "-m", "remove shebang");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -4812,8 +4840,9 @@ public class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "tracked.cs"), "class Sample {}\n");
             RunGit(projectRoot, "add", "tracked.cs");
             RunGit(projectRoot, "commit", "-m", "initial");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
-            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--commits", "HEAD"]);
+            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--commits", commitId]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("prefer `cdidx .` over `--commits`", output);
