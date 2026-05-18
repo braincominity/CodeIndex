@@ -945,9 +945,9 @@ public static partial class ReferenceExtractor
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
         // Null / empty fast path — keep the direct-call null-safe contract that
-        // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
+        // FileIndexer.StripLineLeadingInvisibles' IsNullOrEmpty check used to provide
         // before the CRLF normalization step was added in front of it. Closes #183.
-        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingBom の前に
+        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingInvisibles の前に
         // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
         // ため、direct call の null セーフ契約をここで復元する。Closes #183.
         if (string.IsNullOrEmpty(content))
