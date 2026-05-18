@@ -10832,6 +10832,87 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsWorktreeHeadChangedWhenBranchBecomesDetachedAtSameCommit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_detached_head_changed_json");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+            var indexedBranch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+            TestProjectHelper.RunGit(projectRoot, "checkout", "--detach", indexedHead);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, indexedHead);
+                writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, indexedBranch);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(indexedHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsDetachedHeadAfterPartialUpdateAtSameCommit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_detached_head_after_partial_json");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+            TestProjectHelper.RunGit(projectRoot, "checkout", "--detach", indexedHead);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() {} }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--files", "app.cs", "--json", "--quiet"], _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(indexedHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_HumanOutput_WarnsWhenWorktreeHeadHasSwitchedSinceIndex()
     {
         // #1512: surface a `WARN` line plus an Indexed-HEAD echo and a ready-to-run reindex
