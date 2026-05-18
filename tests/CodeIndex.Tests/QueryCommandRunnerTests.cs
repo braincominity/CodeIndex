@@ -5337,6 +5337,46 @@ jobs:
     }
 
     [Fact]
+    public void RunReferences_AcceptsAugmentationKind_WithoutUnknownKindWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_augmentation_kind");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "a.ts"),
+                """
+                interface Widget { a: number }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "b.ts"),
+                """
+                interface Widget { b: string }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Widget", "--db", dbPath, "--kind", "augmentation", "--lang", "typescript", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain("not a known reference kind", stderr);
+            Assert.DoesNotContain("WARN:", stderr);
+            Assert.Contains("augmentation", stdout);
+            Assert.Contains("Widget", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonTypeReferenceKind_EmitsNoStderrWarning()
     {
         // issue #444 JSON path: the stderr "unknown reference kind" hint is suppressed for
@@ -12221,10 +12261,10 @@ jobs:
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
         });
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("kind 'badkind' is not recognized", stderr);
-        Assert.Contains("Valid symbol kinds:", stderr);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
         Assert.Contains("function", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
@@ -12239,10 +12279,10 @@ jobs:
 
         var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command, args, _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("kind 'badkind' is not recognized", stderr);
-        Assert.Contains(command == "references" ? "Valid reference kinds:" : "Valid call-graph reference kinds:", stderr);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
         Assert.Contains("call", stderr);
         Assert.Contains(command == "references" ? "type_reference" : "friend", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);

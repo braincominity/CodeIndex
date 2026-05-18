@@ -570,7 +570,7 @@ cdidx search "handleRequest" --lang go                  # filter by language
 cdidx search "TODO" --limit 50                          # more results
 cdidx search "auth*"                                    # trailing * on one token opts that token into FTS5 prefix matching
 cdidx search "計算" --prefix                            # widen every token to a prefix phrase (CJK runs are one unicode61 token; opt in to reach `計算する`)
-cdidx search "auth*" --fts                              # raw FTS5 syntax when you need operators like NEAR/OR
+cdidx search "auth*" --fts                              # raw FTS5 syntax when you need operators like NEAR/OR; NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
@@ -883,11 +883,14 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | Usage error (invalid arguments) |
+| `1` | Usage error (missing command, missing required positional input, or command-shape error) |
 | `2` | Not found (no search results, missing directory) |
-| `3` | Database error |
+| `3` | Permanent database error |
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
+| `6` | Transient database error (SQLite `BUSY` / `LOCKED`, retry with backoff) |
+| `7` | Invalid argument value (for example invalid `--kind`, `--color`, or `--metrics`) |
+| `8` | Cancelled by signal / Ctrl-C (`SIGINT` / `SIGTERM`-style cancellation path) |
 
 ### Error codes
 
@@ -906,6 +909,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E009_FEATURE_UNAVAILABLE` | Requested feature is unavailable in this build (e.g. `--json` on a manually trimmed custom build) |
 | `E010_USAGE_ERROR` | Argument parse error, conflicting flags, or unknown subcommand |
 | `E011_DIRECTORY_NOT_FOUND` | Project / target directory passed to `cdidx index` does not exist |
+| `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
 
 ### Debugging reader errors
 
@@ -2288,7 +2292,7 @@ cdidx search "handleRequest" --lang go                  # 言語でフィルタ
 cdidx search "TODO" --limit 50                          # 結果数を増やす
 cdidx search "auth*"                                    # 末尾の * はそのトークンだけを FTS5 prefix phrase にする shorthand
 cdidx search "計算" --prefix                            # クエリ全体を prefix phrase 化（CJK は unicode61 が連続コードポイントを 1 トークン扱いするため、`計算する` に届かせるには opt-in）
-cdidx search "auth*" --fts                              # 生のFTS5構文。NEAR / OR などの演算子が必要なときだけ使う
+cdidx search "auth*" --fts                              # 生のFTS5構文。NEAR / OR などの演算子が必要なときだけ使う。NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル

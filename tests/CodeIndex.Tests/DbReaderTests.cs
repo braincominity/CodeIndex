@@ -1140,6 +1140,38 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/auth.py", results[0].Path);
     }
 
+    [Theory]
+    [InlineData("NEAR(auth login, 101)")]
+    [InlineData("NEAR(1000000)")]
+    [InlineData("near(auth login, -1)")]
+    [InlineData("NEAR(auth login, 999999999999)")]
+    [InlineData("NEAR(auth login, 999999999999999999999999999999999)")]
+    public void Search_RawQueryRejectsOutOfRangeNearDistance_Issue2089(string query)
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.Search(query, rawQuery: true));
+
+        Assert.Contains("NEAR distance must be between 0 and 100", ex.Message);
+    }
+
+    [Fact]
+    public void CountSearchResults_RawQueryRejectsOutOfRangeNearDistance_Issue2089()
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.CountSearchResults("NEAR(auth login, 1000000)", rawQuery: true));
+
+        Assert.Contains("NEAR distance must be between 0 and 100", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("NEAR(auth login, 100)")]
+    [InlineData("auth NEAR login")]
+    [InlineData("\"NEAR(auth login, 1000000)\"")]
+    public void Search_RawQueryAllowsBoundedNearSyntax_Issue2089(string query)
+    {
+        var ex = Record.Exception(() => _reader.Search(query, rawQuery: true));
+
+        Assert.False(ex is FtsQuerySyntaxException);
+    }
+
     [Fact]
     public void Search_CjkSubstringDoesNotMatchLongerTokenByDefault()
     {

@@ -8,6 +8,8 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    internal const int MaxRawFtsNearDistance = 100;
+
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
     /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
@@ -100,6 +102,8 @@ public partial class DbReader
         else
         {
             var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery, prefix);
+            if (rawQuery)
+                ValidateRawFtsNearDistance(sanitizedQuery);
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank,
@@ -181,6 +185,8 @@ public partial class DbReader
         else
         {
             var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery, prefix);
+            if (rawQuery)
+                ValidateRawFtsNearDistance(sanitizedQuery);
             sql = $@"
                 SELECT f.path, c.start_line, c.end_line,
                        rank
@@ -265,6 +271,128 @@ public partial class DbReader
         return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
             || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase)
             || message.Contains("no such column", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ValidateRawFtsNearDistance(string query)
+    {
+        var inQuote = false;
+        for (var i = 0; i < query.Length; i++)
+        {
+            if (query[i] == '"')
+            {
+                if (inQuote && i + 1 < query.Length && query[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                inQuote = !inQuote;
+                continue;
+            }
+
+            if (inQuote)
+                continue;
+
+            if (!IsNearOperatorAt(query, i))
+                continue;
+
+            var openParen = SkipWhitespace(query, i + "NEAR".Length);
+            if (openParen >= query.Length || query[openParen] != '(')
+                continue;
+
+            var closeParen = FindNearCloseParen(query, openParen + 1);
+            if (closeParen < 0)
+                continue;
+
+            if (TryReadNearDistance(query.AsSpan(openParen + 1, closeParen - openParen - 1), out var distance)
+                && (distance < 0 || distance > MaxRawFtsNearDistance))
+            {
+                throw new FtsQuerySyntaxException(
+                    $"FTS5 NEAR distance must be between 0 and {MaxRawFtsNearDistance}, got {distance}.");
+            }
+
+            i = closeParen;
+        }
+    }
+
+    private static bool IsNearOperatorAt(string query, int index)
+    {
+        if (index + "NEAR".Length > query.Length)
+            return false;
+        if (!query.AsSpan(index, "NEAR".Length).Equals("NEAR", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return IsFtsBoundary(query, index - 1) && IsFtsBoundary(query, index + "NEAR".Length);
+    }
+
+    private static bool IsFtsBoundary(string query, int index)
+        => index < 0 || index >= query.Length || !char.IsLetterOrDigit(query[index]) && query[index] != '_';
+
+    private static int SkipWhitespace(string query, int index)
+    {
+        while (index < query.Length && char.IsWhiteSpace(query[index]))
+            index++;
+        return index;
+    }
+
+    private static int FindNearCloseParen(string query, int index)
+    {
+        var inQuote = false;
+        while (index < query.Length)
+        {
+            var ch = query[index];
+            if (ch == '"')
+            {
+                if (inQuote && index + 1 < query.Length && query[index + 1] == '"')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                inQuote = !inQuote;
+            }
+            else if (!inQuote && ch == ')')
+            {
+                return index;
+            }
+
+            index++;
+        }
+
+        return -1;
+    }
+
+    private static bool TryReadNearDistance(ReadOnlySpan<char> nearBody, out long distance)
+    {
+        distance = 0;
+        var lastComma = nearBody.LastIndexOf(',');
+        var candidate = (lastComma >= 0 ? nearBody[(lastComma + 1)..] : nearBody).Trim();
+        if (candidate.Length == 0)
+            return false;
+
+        if (long.TryParse(candidate.ToString(), out distance))
+            return true;
+
+        if (!IsSignedIntegerLiteral(candidate))
+            return false;
+
+        distance = MaxRawFtsNearDistance + 1L;
+        return true;
+    }
+
+    private static bool IsSignedIntegerLiteral(ReadOnlySpan<char> value)
+    {
+        var start = value[0] is '+' or '-' ? 1 : 0;
+        if (start == value.Length)
+            return false;
+
+        for (var i = start; i < value.Length; i++)
+        {
+            if (!char.IsDigit(value[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static string GetExactSearchTextSql(string valueSql, string langSql)

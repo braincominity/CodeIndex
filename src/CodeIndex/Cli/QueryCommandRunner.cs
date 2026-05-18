@@ -413,8 +413,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("definition", options.Kind))
-            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "definition", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -570,9 +570,9 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
         if (TryWriteUnsupportedOptionError("references", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("references"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "references", AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "references"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("references", options.Kind))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
@@ -698,8 +698,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callers", options.Kind))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("callers", options.Kind))
-            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "callers", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -824,8 +824,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callees", options.Kind))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("callees", options.Kind))
-            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "callees", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -968,9 +968,9 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "symbols"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("symbols", options.Kind))
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -2541,8 +2541,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("hotspots", options.Kind))
-            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
@@ -2945,8 +2945,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindError("unused", options.Kind))
-            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -4241,32 +4241,56 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryWriteInvalidKindError(string commandName, string? kind)
+    private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)
     {
-        if (string.IsNullOrWhiteSpace(kind))
-            return false;
+        "accessor",
+        "associatedtype",
+        "class",
+        "class_hook",
+        "constant",
+        "constructor",
+        "delegate",
+        "enum",
+        "event",
+        "field",
+        "function",
+        "heading",
+        "hook",
+        "impl",
+        "import",
+        "interface",
+        "label",
+        "method",
+        "module",
+        "namespace",
+        "operator",
+        "procedure",
+        "property",
+        "record",
+        "reference",
+        "specialization",
+        "struct",
+        "test.method",
+        "trait",
+        "type",
+        "typealias",
+        "union",
+        "variable",
+    };
 
-        var (acceptedKinds, label) = commandName switch
+    private static bool TryWriteInvalidKindFilterError(QueryCommandOptions options, string commandName, IReadOnlyCollection<string> acceptedKinds, params IReadOnlyCollection<string>[] alternateAcceptedKinds)
+    {
+        if (options.Kind != null
+            && !acceptedKinds.Contains(options.Kind)
+            && !alternateAcceptedKinds.Any(kinds => kinds.Contains(options.Kind)))
         {
-            "references" => (AllValidReferenceKinds, "reference kinds"),
-            "callers" or "callees" => (CallGraphOnlyReferenceKinds, "call-graph reference kinds"),
-            "validate" => (AllValidValidateKinds, "validate issue kinds"),
-            _ => (AllValidKinds, "symbol kinds"),
-        };
+            Console.Error.WriteLine($"Error: invalid --kind value `{options.Kind}`.");
+            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", acceptedKinds)}.");
+            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            return true;
+        }
 
-        if (acceptedKinds.Contains(kind, StringComparer.Ordinal))
-            return false;
-
-        if ((commandName == "references" || commandName == "callers" || commandName == "callees") &&
-            AllValidKinds.Contains(kind, StringComparer.Ordinal))
-            return false;
-
-        Console.Error.WriteLine($"Error: kind '{kind}' is not recognized for --kind on '{commandName}'. Valid {label}: {string.Join(", ", acceptedKinds)}.");
-        var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
-        if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
-        return true;
+        return false;
     }
 
     private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
@@ -5131,7 +5155,7 @@ public static class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -5140,7 +5164,7 @@ public static class QueryCommandRunner
     // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
     // C++ の `friend` は graph に出す coupling edge。
     private static readonly string[] CallGraphOnlyReferenceKinds =
-        ["call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
+        ["augmentation", "call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {

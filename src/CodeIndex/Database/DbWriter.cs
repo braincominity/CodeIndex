@@ -543,6 +543,7 @@ public class DbWriter
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, symbols.Count);
+            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
@@ -613,7 +614,7 @@ public class DbWriter
                 pIsMetadataTarget.Value = symbol.IsMetadataTarget.HasValue
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
-                pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
+                pNameFolded.Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
                 cmd.ExecuteNonQuery();
             }
 
@@ -720,6 +721,7 @@ public class DbWriter
         for (int i = 0; i < references.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, references.Count);
+            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
@@ -784,13 +786,158 @@ public class DbWriter
                 pReferenceLineId.Value = referenceLineId;
                 pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
-                pSymbolNameFolded.Value = (object?)NameFold.Fold(reference.SymbolName) ?? DBNull.Value;
-                pContainerNameFolded.Value = (object?)NameFold.Fold(reference.ContainerName) ?? DBNull.Value;
+                pSymbolNameFolded.Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                pContainerNameFolded.Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
                 cmd.ExecuteNonQuery();
             }
 
             transaction.Commit();
         }
+    }
+
+    public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
+    {
+        using var transaction = BeginTransaction();
+
+        using (var deleteCmd = _conn.CreateCommand())
+        {
+            deleteCmd.CommandText = "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'";
+            deleteCmd.ExecuteNonQuery();
+        }
+
+        var references = new List<ReferenceRecord>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.file_id,
+                       f.path,
+                       s.name,
+                       s.line,
+                       s.start_column,
+                       s.signature,
+                       s.kind,
+                       s.container_name,
+                       s.visibility
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'typescript'
+                  AND s.name IS NOT NULL
+                  AND s.name <> ''
+                  AND s.kind = 'interface'
+                ORDER BY s.name, s.file_id, s.line";
+
+            using var reader = cmd.ExecuteReader();
+            var declarations = new List<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)>();
+            while (reader.Read())
+            {
+                declarations.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3)),
+                    reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4) + 1),
+                    reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                    reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                    reader.IsDBNull(7) ? string.Empty : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8)));
+            }
+
+            var moduleFileIds = FindTypeScriptModuleFileIds(projectRoot, declarations);
+            foreach (var group in declarations.GroupBy(d => (d.Name, ScopeKey: BuildTypeScriptScopeKey(d.FileId, d.Path, d.Signature, d.ContainerName, moduleFileIds))))
+            {
+                if (group.Count() < 2)
+                    continue;
+
+                foreach (var declaration in group)
+                {
+                    references.Add(new ReferenceRecord
+                    {
+                        FileId = declaration.FileId,
+                        SymbolName = declaration.Name,
+                        ReferenceKind = "augmentation",
+                        Line = declaration.Line,
+                        Column = declaration.Column,
+                        Context = declaration.Signature,
+                        ContainerKind = declaration.Kind == "interface" ? "interface" : "type",
+                        ContainerName = declaration.Name,
+                    });
+                }
+            }
+        }
+
+        InsertReferences(references);
+        transaction.Commit();
+        return references.Count;
+    }
+
+    private static HashSet<long> FindTypeScriptModuleFileIds(
+        string? projectRoot,
+        IReadOnlyList<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)> declarations)
+    {
+        var moduleFileIds = new HashSet<long>();
+        foreach (var declaration in declarations)
+        {
+            if (declaration.Visibility == "export"
+                || declaration.Signature.StartsWith("export ", StringComparison.Ordinal)
+                || declaration.Signature.StartsWith("import ", StringComparison.Ordinal))
+            {
+                moduleFileIds.Add(declaration.FileId);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return moduleFileIds;
+
+        foreach (var file in declarations.GroupBy(static d => (d.FileId, d.Path)))
+        {
+            if (moduleFileIds.Contains(file.Key.FileId))
+                continue;
+
+            var absolutePath = Path.Combine(projectRoot, file.Key.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (TypeScriptFileHasModuleSyntax(absolutePath))
+                moduleFileIds.Add(file.Key.FileId);
+        }
+
+        return moduleFileIds;
+    }
+
+    private static string BuildTypeScriptScopeKey(long fileId, string path, string signature, string containerName, HashSet<long> moduleFileIds)
+    {
+        if (!moduleFileIds.Contains(fileId))
+            return "global:" + containerName;
+        if (containerName == "global" || signature.StartsWith("declare global ", StringComparison.Ordinal))
+            return "global:";
+        if (IsAmbientModuleContainer(containerName))
+            return "ambient-module:" + containerName;
+        return "module:" + path + ":" + containerName;
+    }
+
+    private static bool IsAmbientModuleContainer(string containerName)
+    {
+        if (string.IsNullOrWhiteSpace(containerName))
+            return false;
+        return containerName[0] is '"' or '\'' || containerName.Contains('/', StringComparison.Ordinal);
+    }
+
+    private static bool TypeScriptFileHasModuleSyntax(string absolutePath)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(absolutePath))
+            {
+                var trimmed = line.TrimStart();
+                if (trimmed.StartsWith("import ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("export ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("export{", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return false;
     }
 
     /// <summary>
@@ -2434,6 +2581,20 @@ public class DbWriter
         }
 
         return rows.Count;
+    }
+
+    private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
+    {
+        if (name == null)
+            return DBNull.Value;
+
+        if (!cache.TryGetValue(name, out var folded))
+        {
+            folded = NameFold.Fold(name);
+            cache[name] = folded;
+        }
+
+        return (object?)folded ?? DBNull.Value;
     }
 
     private void SetReadyBit(int flag)
