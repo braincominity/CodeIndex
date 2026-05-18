@@ -22,14 +22,14 @@ internal static class CssReferenceExtractor
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
+    private static readonly Regex CssClassSelectorReferenceRegex = new(@"\.(?<name>[\w-]+)", RegexOptions.Compiled);
     // First char restricted to letter/`_`/`-` so numeric hex colors like `#336699`
     // do not match. Letter-only hex colors (`#fff`) are still ambiguous; the
     // emission site additionally requires a selector-position context to skip them.
     // 数値開始の hex color (`#336699`) を弾くため最初の文字を letter / `_` / `-` に限定する。
     // `#fff` のような文字だけの hex color は曖昧なので、呼び出し側でセレクタ位置の
     // コンテキストをさらに要求して除外する。
-    private static readonly Regex CssIdSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])#(?<name>[A-Za-z_-][\w-]*)", RegexOptions.Compiled);
+    private static readonly Regex CssIdSelectorReferenceRegex = new(@"#(?<name>[A-Za-z_-][\w-]*)", RegexOptions.Compiled);
     private static readonly Regex CssImportReferenceRegex = new(
         @"@import\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -445,6 +445,10 @@ internal static class CssReferenceExtractor
         foreach (Match match in regex.Matches(selectorPartBody))
         {
             var nameGroup = match.Groups["name"];
+            var prefixIndex = nameGroup.Index - 1;
+            if (!IsCssSelectorPrefixOutsideAttributeValue(selectorPartBody, prefixIndex))
+                continue;
+
             var name = prefix + nameGroup.Value;
             if (definitionNames != null && definitionNames.Contains(name))
                 continue;
@@ -460,6 +464,42 @@ internal static class CssReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static bool IsCssSelectorPrefixOutsideAttributeValue(string selectorPartBody, int prefixIndex)
+    {
+        var bracketDepth = 0;
+        char quote = '\0';
+        for (var index = 0; index <= prefixIndex && index < selectorPartBody.Length; index++)
+        {
+            var ch = selectorPartBody[index];
+            if (quote != '\0')
+            {
+                if (ch == quote && (index == 0 || selectorPartBody[index - 1] != '\\'))
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+        }
+
+        return bracketDepth == 0 && quote == '\0';
     }
 
     private static IEnumerable<(int Start, int End)> EnumerateCssSelectorListSegments(string selectorSegment)

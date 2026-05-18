@@ -2361,6 +2361,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_CompoundSelectors_KeepClassAndIdReferencesVisible()
+    {
+        const string content = """
+            .btn { color: red; }
+            #main { padding: 0; }
+
+            a.btn {
+                text-decoration: none;
+            }
+
+            button#main {
+                background: blue;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == ".btn"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "#main"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_Css_QuotedAttributeSelectors_DoNotEmitClassReferences()
     {
         const string content = """
