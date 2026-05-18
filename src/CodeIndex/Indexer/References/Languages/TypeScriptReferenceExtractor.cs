@@ -328,6 +328,7 @@ internal static class TypeScriptReferenceExtractor
             return;
         }
 
+        var insideBlockComment = false;
         for (var currentLineIndex = literalOpenLineIndex; currentLineIndex <= assertionLineIndex; currentLineIndex++)
         {
             var rawLine = rawLines[currentLineIndex];
@@ -338,12 +339,26 @@ internal static class TypeScriptReferenceExtractor
 
             for (var index = scanStart; index < scanEnd; index++)
             {
+                if (SkipConstAssertionComment(rawLine, scanEnd, ref index, ref insideBlockComment))
+                    continue;
+
                 if (rawLine[index] is '"' or '\'' or '`')
                 {
                     var literalStart = index;
                     index = SkipQuotedLiteral(rawLine, index);
-                    if (index <= literalStart + 1)
+                    if (index <= literalStart + 1
+                        || !HasStandaloneConstAssertionLiteralBoundaries(
+                            rawLines,
+                            literalOpenLineIndex,
+                            literalOpenColumn,
+                            assertionLineIndex,
+                            asIndex,
+                            currentLineIndex,
+                            literalStart,
+                            index + 1))
+                    {
                         continue;
+                    }
 
                     ReferenceExtractor.AddReference(
                         references,
@@ -366,6 +381,20 @@ internal static class TypeScriptReferenceExtractor
                 {
                     var literalStart = index;
                     index = SkipNumberLiteral(rawLine, index);
+                    if (!HasStandaloneConstAssertionLiteralBoundaries(
+                            rawLines,
+                            literalOpenLineIndex,
+                            literalOpenColumn,
+                            assertionLineIndex,
+                            asIndex,
+                            currentLineIndex,
+                            literalStart,
+                            index))
+                    {
+                        index--;
+                        continue;
+                    }
+
                     ReferenceExtractor.AddReference(
                         references,
                         seen,
@@ -386,6 +415,18 @@ internal static class TypeScriptReferenceExtractor
 
                 if (!TryReadLiteralKeyword(rawLine, index, scanEnd, out var keyword))
                     continue;
+                if (!HasStandaloneConstAssertionLiteralBoundaries(
+                        rawLines,
+                        literalOpenLineIndex,
+                        literalOpenColumn,
+                        assertionLineIndex,
+                        asIndex,
+                        currentLineIndex,
+                        index,
+                        index + keyword.Length))
+                {
+                    continue;
+                }
 
                 ReferenceExtractor.AddReference(
                     references,
@@ -404,6 +445,157 @@ internal static class TypeScriptReferenceExtractor
                 index += keyword.Length - 1;
             }
         }
+    }
+
+    private static bool SkipConstAssertionComment(string line, int scanEnd, ref int index, ref bool insideBlockComment)
+    {
+        if (insideBlockComment)
+        {
+            var end = line.IndexOf("*/", index, Math.Max(0, scanEnd - index), StringComparison.Ordinal);
+            if (end < 0)
+            {
+                index = scanEnd;
+                return true;
+            }
+
+            index = end + 1;
+            insideBlockComment = false;
+            return true;
+        }
+
+        if (index + 1 >= scanEnd || line[index] != '/')
+            return false;
+
+        if (line[index + 1] == '/')
+        {
+            index = scanEnd;
+            return true;
+        }
+
+        if (line[index + 1] != '*')
+            return false;
+
+        insideBlockComment = true;
+        index++;
+        return true;
+    }
+
+    private static bool HasStandaloneConstAssertionLiteralBoundaries(
+        IReadOnlyList<string> preparedLines,
+        int literalOpenLineIndex,
+        int literalOpenColumn,
+        int assertionLineIndex,
+        int preparedAsIndex,
+        int literalLineIndex,
+        int literalStartColumn,
+        int literalEndColumn)
+    {
+        var previous = FindPreviousNonWhitespace(
+            preparedLines,
+            literalOpenLineIndex,
+            literalOpenColumn,
+            literalLineIndex,
+            literalStartColumn);
+        var next = FindNextNonWhitespace(
+            preparedLines,
+            literalLineIndex,
+            literalEndColumn,
+            assertionLineIndex,
+            preparedAsIndex);
+
+        if (previous == ':' && HasQuestionBeforeLiteralValue(rawLines: preparedLines, literalLineIndex, literalStartColumn))
+            return false;
+
+        return previous is '[' or '{' or ':' or ','
+               && next is ',' or ']' or '}';
+    }
+
+    private static bool HasQuestionBeforeLiteralValue(
+        IReadOnlyList<string> rawLines,
+        int literalLineIndex,
+        int literalStartColumn)
+    {
+        var line = rawLines[literalLineIndex];
+        for (var index = literalStartColumn - 1; index >= 0; index--)
+        {
+            if (line[index] == '?')
+                return true;
+
+            if (line[index] is ',' or '{' or '[')
+                return false;
+        }
+
+        return false;
+    }
+
+    private static char? FindPreviousNonWhitespace(
+        IReadOnlyList<string> lines,
+        int minLineIndex,
+        int minColumn,
+        int lineIndex,
+        int column)
+    {
+        for (var currentLineIndex = lineIndex; currentLineIndex >= minLineIndex; currentLineIndex--)
+        {
+            var line = lines[currentLineIndex];
+            var index = currentLineIndex == lineIndex ? column - 1 : line.Length - 1;
+            var stop = currentLineIndex == minLineIndex ? minColumn : 0;
+            var lineCommentStart = line.IndexOf("//", stop, Math.Max(0, index - stop + 1), StringComparison.Ordinal);
+            if (lineCommentStart >= 0)
+                index = lineCommentStart - 1;
+            for (; index >= stop; index--)
+            {
+                if (line[index] == '/' && index > stop && line[index - 1] == '*')
+                {
+                    var commentStart = line.LastIndexOf("/*", index - 1, index - stop, StringComparison.Ordinal);
+                    if (commentStart >= 0)
+                    {
+                        index = commentStart;
+                        continue;
+                    }
+                }
+
+                if (!char.IsWhiteSpace(line[index]))
+                    return line[index];
+            }
+        }
+
+        return null;
+    }
+
+    private static char? FindNextNonWhitespace(
+        IReadOnlyList<string> lines,
+        int lineIndex,
+        int column,
+        int maxLineIndex,
+        int maxColumn)
+    {
+        for (var currentLineIndex = lineIndex; currentLineIndex <= maxLineIndex; currentLineIndex++)
+        {
+            var line = lines[currentLineIndex];
+            var index = currentLineIndex == lineIndex ? column : 0;
+            var stop = currentLineIndex == maxLineIndex ? Math.Min(maxColumn, line.Length) : line.Length;
+            for (; index < stop; index++)
+            {
+                if (index + 1 < stop && line[index] == '/' && line[index + 1] == '*')
+                {
+                    var commentEnd = line.IndexOf("*/", index + 2, stop - index - 2, StringComparison.Ordinal);
+                    if (commentEnd < 0)
+                        return null;
+
+                    index = commentEnd + 1;
+                    continue;
+                }
+
+                if (index + 1 < stop && line[index] == '/' && line[index + 1] == '/')
+                    return null;
+
+                if (!char.IsWhiteSpace(line[index]))
+                    return line[index];
+            }
+        }
+
+        return null;
     }
 
     private static SymbolRecord? ResolveConstAssertionLiteralContainer(
