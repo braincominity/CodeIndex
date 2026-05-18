@@ -54,12 +54,9 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ### Indexing pipeline
 
 ```
-Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning) → Language detection → File read (UTF-8)
-  → UPSERT file record
-  → Split into chunks (80 lines, 10-line overlap)
-  → Extract symbols via regex
-  → Extract lightweight references via regex
-  → Batch insert chunks + symbols + references (500 per transaction)
+Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning)
+  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
+  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
 
@@ -181,6 +178,15 @@ idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded,
 idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
 ```
 
+### Query planner expectations
+
+Hot graph aggregations that constrain `symbol_references.symbol_name` and a
+small `reference_kind IN (...)` set must stay indexable through
+`idx_symbol_refs_name_kind`. Regression coverage uses `EXPLAIN QUERY PLAN`
+before and after `ANALYZE` so this compound index remains the expected plan for
+`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of falling back to a
+single-column symbol-name probe plus row-by-row kind filtering (#1922).
+
 Language + symbol-kind definition queries intentionally keep `lang` on
 `files` instead of denormalizing it into `symbols`. Query builders express that
 filter as `s.file_id IN (SELECT id FROM files WHERE lang = @lang)` so SQLite can
@@ -217,6 +223,7 @@ files 1──N symbol_references
 | `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
+| `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
@@ -224,6 +231,16 @@ TypeScript decorators emit `annotation` rows for the decorator name and must not
 ### Python symbol taxonomy
 
 Python extraction uses `function` for ordinary functions and methods, `class` for class declarations and dynamic class factories, `property` for class attributes, `@property` descriptors, accessor decorators, `Final` constants, and walrus-assigned names, and `class_hook` for lifecycle dunder hooks such as `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__`. `SubKind` refines Python property accessors as `getter` / `setter` / `deleter`, walrus assignments as `walrus`, and class hooks as `dunder`.
+
+### Extending reference extraction
+
+Reference extraction is routed through `IReferenceExtractor` instances keyed by normalized language strings. Use `ReferenceExtractor.TryGetExtractor(language, out var extractor)` when a caller needs to invoke a language extractor directly; aliases such as `vue` / `svelte` normalize to `typescript`, and `razor` / `blazor` / `cshtml` normalize to `csharp`. The public `ReferenceExtractor.Extract(...)` method remains the compatibility entry point and delegates through the same registry.
+
+Extractor inputs are passed as a `ReferenceExtractionContext`. Implementations must be stateless per call: keep mutable parse state in local variables or request-scoped helper objects, and treat shared regexes or lookup tables as immutable after initialization. New language extractors should register exactly one normalized language key and preserve existing reference-kind taxonomy (`call`, `instantiate`, `type_reference`, metadata kinds, and language-specific raw labels) so database readers and MCP output keep their contracts.
+
+### TypeScript type-graph extraction
+
+TypeScript extraction emits `type_reference` edges from type-only constructs as dependency metadata, not executable call-graph edges. Type aliases, mapped types, indexed access types, conditional types, template literal type holes, and `infer` clauses are scanned for referenced identifiers while TypeScript type operators such as `keyof`, `in`, `as`, `extends`, and `infer` are suppressed as keywords. For example, ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` records references to `T`, `K`, and `Capitalize`; `type Unwrap<T> = T extends Promise<infer U> ? U : never` records `T`, `Promise`, and `U`.
 
 ## Why a database instead of grep?
 
@@ -422,7 +439,9 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Swift still uses the regex path for `func`, `class`, `struct`, `protocol`, `enum`, `indirect enum`, stored properties (including `private(set)` / `fileprivate(set)` and backtick-escaped names), and enum cases, while a small dedicated trailing-lambda pass keeps idiomatic `name { ... }` call sites visible to the graph. Kotlin also stays on the regex path. Scala has a separate block-call pass for `name { ... }` / `name { x => ... }` forms so idiomatic calls such as `foreach {}`, `Try {}`, and `synchronized {}` stay visible too. Common Lisp and Racket use a lightweight S-expression scanner that masks strings, line comments, and `#| ... |#` block comments before extracting definitions and function ranges. HTML uses a dedicated character-level state machine instead of the regex pattern loop — it walks tag openers, quoted/unquoted attribute values (including multi-line values), and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. Named capture groups still extract identifiers for the regex-driven paths. Recent JS/TS additions also cover barrel re-export surfaces across commented, multiline, namespace, minified, TypeScript type-only-star, and `with {}` / `assert {}` import-attribute forms, while preserving the corresponding source-module `import` rows, alongside direct CommonJS named export assignments and their same-line / multiline parenthesized wrappers, multiline / constrained / async TypeScript generic-arrow RHS forms, prefix-safe function/class discrimination, and exported object-literal alias/shorthand properties.
 
-JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names. React hook detection is name-based: JavaScript/TypeScript function symbols whose names match `use[A-Z]...` are reclassified as `hook`, and JavaScript/TypeScript calls to `use[A-Z]...()` are emitted as `consumes_hook` references. Module specifiers collected as `import` symbols consult the nearest `tsconfig.json` or `jsconfig.json`, follow relative `extends` chains, and apply `compilerOptions.baseUrl` / `paths` mappings before falling back to the literal specifier. Alias matches only rewrite to project-relative paths when a concrete file exists, trying TypeScript/JavaScript extensions and `index.*` candidates.
+JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names. TypeScript namespace aliases from `export * as NS from "./module"`, `import * as NS from "./module"`, named import aliases, and `const NS = await import("./module")` also produce a `reference` edge back to the module specifier when later qualified usage such as `NS.Member()` appears; a later local declaration with the same alias name conservatively stops that module-linking range, and dynamic import aliases are limited to their local brace scope. React hook detection is name-based: JavaScript/TypeScript function symbols whose names match `use[A-Z]...` are reclassified as `hook`, and JavaScript/TypeScript calls to `use[A-Z]...()` are emitted as `consumes_hook` references. Module specifiers collected as `import` symbols consult the nearest `tsconfig.json` or `jsconfig.json`, follow relative `extends` chains, and apply `compilerOptions.baseUrl` / `paths` mappings before falling back to the literal specifier. Alias matches only rewrite to project-relative paths when a concrete file exists, trying TypeScript/JavaScript extensions and `index.*` candidates.
+
+SQL symbol extraction treats MySQL backtick-quoted identifiers as case-preserving symbol names while unquoted identifiers continue through the existing case-insensitive lookup paths. MySQL `DEFINER=user@host` clauses emit `definer` symbols, and PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters emit function-scoped `field` symbols for the synthetic result columns.
 
 Supported symbol kinds by language:
 
@@ -1643,6 +1662,15 @@ idx_symbol_refs_file      ON symbol_references(file_id)
 idx_symbol_refs_container ON symbol_references(container_name)
 ```
 
+### クエリプランナー期待値
+
+`symbol_references.symbol_name` と小さな `reference_kind IN (...)` 集合で絞る
+hot graph aggregation は、`idx_symbol_refs_name_kind` で indexable な状態を
+保つ必要があります。回帰テストは `ANALYZE` 前後の `EXPLAIN QUERY PLAN` を使い、
+`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約が単一カラムの symbol-name
+probe と行ごとの kind filtering に戻らず、この compound index を期待計画として
+維持することを確認します (#1922)。
+
 言語 + シンボル種別の定義検索では、`lang` を `symbols` に非正規化せず
 `files` に保持する方針です。クエリビルダーはこの条件を
 `s.file_id IN (SELECT id FROM files WHERE lang = @lang)` と表現し、
@@ -1682,6 +1710,10 @@ files 1──N symbol_references
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+### TypeScript type-graph extraction
+
+TypeScript 抽出は、type-only 構文から `type_reference` edge を dependency metadata として出力し、実行される call-graph edge とは扱わない。type alias、mapped type、indexed access type、conditional type、template literal type の hole、`infer` 句では参照先 identifier を走査し、`keyof`、`in`、`as`、`extends`、`infer` のような TypeScript type operator は keyword として抑止する。たとえば ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` は `T`、`K`、`Capitalize` への参照を記録し、`type Unwrap<T> = T extends Promise<infer U> ? U : never` は `T`、`Promise`、`U` を記録する。
 
 ## なぜgrepではなくデータベースなのか？
 
@@ -1880,7 +1912,7 @@ LIMIT 20;
 
 大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。Swift は引き続き正規表現経路ですが、`func` / `class` / `struct` / `protocol` / `enum` / `indirect enum`、`private(set)` / `fileprivate(set)` 付きの stored property、バッククォートでエスケープされた名前、そして enum case を拾うようにしており、小さな trailing-lambda 専用パスで `name { ... }` 形の慣用的な呼び出しを graph から落とさないようにしています。Kotlin も正規表現経路のままです。Scala には `name { ... }` / `name { x => ... }` 形式を拾う専用の block-call パスがあり、`foreach {}` や `Try {}`、`synchronized {}` のような慣用的な呼び出しも graph から消えないようにしています。Common Lisp と Racket は、文字列、行コメント、`#| ... |#` ブロックコメントをマスクしてから定義と関数範囲を抽出する軽量な S 式スキャナーを使います。HTML は汎用の正規表現ループを使わず、専用の文字単位 state machine でタグ構造を走査し、引用符付き/なし属性値（複数行の引用符付き値を含む）と `<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体、`<!-- ... -->` コメントをマスクして、属性名に似た本体内文字列から phantom シンボルが漏れないようにしています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
 
-JS/TS の export surface 走査は、`export const { foo, renamed: localName } = source` のような destructured named export も、実際に出力される binding 名で索引します。React hook 検出は名前ベースで、JavaScript/TypeScript の関数シンボル名が `use[A-Z]...` に一致する場合は `hook` として再分類し、JavaScript/TypeScript の `use[A-Z]...()` 呼び出しは `consumes_hook` 参照として出力します。`import` シンボルとして収集した module specifier は、最寄りの `tsconfig.json` / `jsconfig.json`、相対 `extends` chain、`compilerOptions.baseUrl` / `paths` mapping を使って解決し、解決できなければ literal specifier のまま残します。alias は実ファイルが存在する場合だけ project-relative path へ書き換え、TypeScript / JavaScript 拡張子と `index.*` 候補を試します。
+JS/TS の export surface 走査は、`export const { foo, renamed: localName } = source` のような destructured named export も、実際に出力される binding 名で索引します。TypeScript の `export * as NS from "./module"`、`import * as NS from "./module"`、named import alias、`const NS = await import("./module")` 由来の namespace alias は、後続の `NS.Member()` のような qualified usage から module specifier への `reference` edge も出します。同名のローカル宣言が後から現れた場合は、保守的にその行以降の module linking を止め、dynamic import alias はローカルの brace scope 内に限定します。React hook 検出は名前ベースで、JavaScript/TypeScript の関数シンボル名が `use[A-Z]...` に一致する場合は `hook` として再分類し、JavaScript/TypeScript の `use[A-Z]...()` 呼び出しは `consumes_hook` 参照として出力します。`import` シンボルとして収集した module specifier は、最寄りの `tsconfig.json` / `jsconfig.json`、相対 `extends` chain、`compilerOptions.baseUrl` / `paths` mapping を使って解決し、解決できなければ literal specifier のまま残します。alias は実ファイルが存在する場合だけ project-relative path へ書き換え、TypeScript / JavaScript 拡張子と `index.*` 候補を試します。
 
 言語別対応シンボル種別:
 

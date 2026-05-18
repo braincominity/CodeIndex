@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -367,6 +368,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
         var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
         var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
@@ -407,8 +409,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
         initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
             }
         }
         catch (IndexInterruptedException ex)
@@ -555,6 +557,7 @@ public static class IndexCommandRunner
     [
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--watch", "--debounce", "--duration-format", "--max-file-bytes",
+        "--parallelism",
         "--commits", "--changed-between", "--files", "--solution", "--project", "--help",
     ];
 
@@ -599,6 +602,7 @@ public static class IndexCommandRunner
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
+        var parallelism = ReadIndexParallelismFromEnvironment();
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -661,6 +665,12 @@ public static class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--max-file-bytes=", StringComparison.Ordinal):
                     maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
+                    break;
+                case "--parallelism" when i + 1 < args.Length:
+                    parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
+                    break;
+                case var option when option.StartsWith("--parallelism=", StringComparison.Ordinal):
+                    parallelism = ParseIndexParallelism(option["--parallelism=".Length..], parallelism, "--parallelism");
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -765,7 +775,32 @@ public static class IndexCommandRunner
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
             MaxFileSizeBytes = maxFileSizeBytes,
+            Parallelism = parallelism,
         };
+    }
+
+    internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
+
+    internal static int DefaultIndexParallelism()
+        => Math.Clamp(Environment.ProcessorCount, 1, 16);
+
+    private static int ReadIndexParallelismFromEnvironment()
+    {
+        var fallback = DefaultIndexParallelism();
+        var value = Environment.GetEnvironmentVariable(IndexParallelismEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+
+        return ParseIndexParallelism(value, fallback, IndexParallelismEnvironmentVariable);
+    }
+
+    private static int ParseIndexParallelism(string value, int fallback, string source)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+            return parsed;
+
+        Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
+        return fallback;
     }
 
     private static long? ReadMaxFileSizeBytesFromEnvironment()
@@ -915,6 +950,7 @@ public static class IndexCommandRunner
         int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        bool priorSymbolExtractorVersionsMatchCurrent,
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
@@ -1034,6 +1070,7 @@ public static class IndexCommandRunner
                 jsonOptions,
                 priorFoldVersion,
                 priorFoldFingerprint,
+                priorSymbolExtractorVersionsMatchCurrent,
                 priorCSharpSymbolNameContractVersion,
                 priorMetadataTargetCsharp,
                 priorSqlGraphContractVersion,
@@ -1055,6 +1092,7 @@ public static class IndexCommandRunner
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+        var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
@@ -1357,6 +1395,40 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
+                {
+                    var message = "Skipped hardlinked file because the same file content was already indexed from another path.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning($"{relPath}: {message}");
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
                 if (warning != null && !options.Json && !options.Quiet)
@@ -1460,7 +1532,8 @@ public static class IndexCommandRunner
         var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
-            && priorFoldFingerprint == currentFoldFingerprint;
+            && priorFoldFingerprint == currentFoldFingerprint
+            && priorSymbolExtractorVersionsMatchCurrent;
         string? foldReadyReasonAfter = foldReadyAfter
             ? null
             : GetFoldReadyReason(
@@ -1532,7 +1605,8 @@ public static class IndexCommandRunner
             // fold_ready=false のまま残す。
             if ((priorReadiness & DbContext.FoldReadyFlag) != 0
                 && priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint)
+                && priorFoldFingerprint == currentFoldFingerprint
+                && priorSymbolExtractorVersionsMatchCurrent)
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
                 // insert during this restamp window leaves foldReadyAfter=false. Issue #1535.
@@ -2052,6 +2126,7 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        bool priorSymbolExtractorVersionsMatchCurrent,
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
@@ -2291,6 +2366,8 @@ public static class IndexCommandRunner
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
+        var extractionParallelism = Math.Max(1, options.Parallelism);
+        var parallelizeExtraction = options.Rebuild || writer.GetCounts().files == 0;
 
         void StartIndexSpinnerIfNeeded()
         {
@@ -2405,7 +2482,12 @@ public static class IndexCommandRunner
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
-        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, files);
+        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+            writer,
+            indexer,
+            projectRoot,
+            files,
+            file => currentJsonIndexFile = file);
 
         try
         {
@@ -2416,19 +2498,83 @@ public static class IndexCommandRunner
                 ConsoleUi.PrintProgress(0, files.Count);
             }
 
-            foreach (var filePath in files)
+            using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
+            var nextFileIndex = -1;
+            var workers = Enumerable.Range(0, extractionParallelism)
+                .Select(_ => Task.Factory.StartNew(() =>
+                {
+                    while (true)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var fileIndex = Interlocked.Increment(ref nextFileIndex);
+                        if (fileIndex >= files.Count)
+                            break;
+
+                        var filePath = files[fileIndex];
+                        try
+                        {
+                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+                            IReadOnlyList<ChunkRecord>? chunks = null;
+                            IReadOnlyList<SymbolRecord>? symbols = null;
+                            IReadOnlyList<ReferenceRecord>? references = null;
+                            IReadOnlyList<FileIssue>? issues = null;
+                            if (parallelizeExtraction)
+                            {
+                                chunks = ChunkSplitter.Split(0, content);
+                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
+                                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                references = ReferenceExtractor.Extract(
+                                    0,
+                                    record.Lang,
+                                    content,
+                                    symbols,
+                                    record.Path,
+                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                            }
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
+                                cancellationToken);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
+                        }
+                    }
+                }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
+                .ToArray();
+
+            _ = Task.WhenAll(workers).ContinueWith(
+                task =>
+                {
+                    extractionResults.CompleteAdding();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            while (!extractionResults.IsCompleted)
             {
                 ThrowIfFullScanCancelled(processed, files.Count);
-                currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                if (!extractionResults.TryTake(out var item, millisecondsTimeout: 100))
+                    continue;
+
+                currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, item.FilePath));
                 EnsureIndexingActivityVisible();
                 try
                 {
-                    var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+                    if (item.Exception != null)
+                        throw item.Exception;
 
-                    if (warning != null && !options.Json && !options.Quiet)
+                    var record = item.Record!;
+                    if (item.Warning != null && !options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(warning);
+                        ConsoleUi.PrintWarning(item.Warning);
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
 
@@ -2471,21 +2617,27 @@ public static class IndexCommandRunner
 
                     using var txn = writer.BeginTransaction();
                     var fileId = writer.UpsertFile(record);
-                    var chunks = ChunkSplitter.Split(fileId, content);
+                    var chunks = item.Chunks == null
+                        ? ChunkSplitter.Split(fileId, item.Content!)
+                        : ReassignChunkFileIds(item.Chunks, fileId);
                     writer.InsertChunks(chunks);
-                    var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
-                    SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                    var symbols = item.Symbols == null
+                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!))
+                        : ReassignSymbolFileIds(item.Symbols, fileId);
+                    if (item.Symbols == null)
+                        SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
                     writer.InsertSymbols(symbols);
-                    var references = ReferenceExtractor.Extract(
-                        fileId,
-                        record.Lang,
-                        content,
-                        symbols,
-                        record.Path,
-                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                    var references = item.References == null
+                        ? ReferenceExtractor.Extract(
+                            fileId,
+                            record.Lang,
+                            item.Content!,
+                            symbols,
+                            record.Path,
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null)
+                        : ReassignReferenceFileIds(item.References, fileId);
                     writer.InsertReferences(references);
-                    // Validate content for encoding issues / エンコーディング問題を検証
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
                     writer.InsertIssues(fileId, issues);
                     WriteProjectRootOnce();
                     txn.Commit();
@@ -2501,12 +2653,12 @@ public static class IndexCommandRunner
                 catch (Exception ex)
                 {
                     errors++;
-                    errorList.Add(new CliJsonMessage(filePath, ex.Message));
+                    errorList.Add(new CliJsonMessage(item.FilePath, ex.Message));
                     if (!options.Json)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
-                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", filePath, ex));
+                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex));
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
                 }
@@ -2522,6 +2674,7 @@ public static class IndexCommandRunner
                     ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }
+            Task.WaitAll(workers, cancellationToken);
         }
         finally
         {
@@ -2598,13 +2751,14 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled();
+            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
-                && foldFingerprintMatchesCurrent;
+                && foldFingerprintMatchesCurrent
+                && priorSymbolExtractorVersionsMatchCurrent;
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
@@ -2623,7 +2777,7 @@ public static class IndexCommandRunner
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
                 // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady();
+                foldReadyAfter = writer.MarkFoldReady(stampCurrentSymbolExtractorVersions: skipped == 0);
                 if (!foldReadyAfter)
                 {
                     backfillReady = false;
@@ -2822,6 +2976,27 @@ public static class IndexCommandRunner
     private static string BuildFoldRebuildCommand(string projectRoot, string resolvedDbPath)
         => $"cdidx index {QuoteCommandArgument(projectRoot)} --db {QuoteCommandArgument(resolvedDbPath)} --rebuild";
 
+    private static IReadOnlyList<ChunkRecord> ReassignChunkFileIds(IReadOnlyList<ChunkRecord> chunks, long fileId)
+    {
+        foreach (var chunk in chunks)
+            chunk.FileId = fileId;
+        return chunks;
+    }
+
+    private static IReadOnlyList<SymbolRecord> ReassignSymbolFileIds(IReadOnlyList<SymbolRecord> symbols, long fileId)
+    {
+        foreach (var symbol in symbols)
+            symbol.FileId = fileId;
+        return symbols;
+    }
+
+    private static IReadOnlyList<ReferenceRecord> ReassignReferenceFileIds(IReadOnlyList<ReferenceRecord> references, long fileId)
+    {
+        foreach (var reference in references)
+            reference.FileId = fileId;
+        return references;
+    }
+
     private static FoldOnlyRemediation? BuildFoldOnlyReadinessRemediation(
         bool graphTableAvailable,
         bool issuesTableAvailable,
@@ -2969,7 +3144,8 @@ public static class IndexCommandRunner
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
-        IEnumerable<string> filePaths)
+        IEnumerable<string> filePaths,
+        Action<string?>? reportCurrentFile = null)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -2991,6 +3167,7 @@ public static class IndexCommandRunner
 
             try
             {
+                reportCurrentFile?.Invoke(relativePath);
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
                 if (record.Lang != "csharp")
                     continue;
@@ -3001,6 +3178,10 @@ public static class IndexCommandRunner
             {
                 // The real indexing pass reports file failures; this pre-pass only supplies
                 // workspace symbols for cross-file static interface member matching.
+            }
+            finally
+            {
+                reportCurrentFile?.Invoke(null);
             }
         }
 
@@ -3047,6 +3228,36 @@ public static class IndexCommandRunner
     private sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts);
+
+    private sealed record FullScanFileWorkItem(
+        string FilePath,
+        FileRecord? Record,
+        string? Content,
+        byte[]? RawBytes,
+        string? Warning,
+        IReadOnlyList<ChunkRecord>? Chunks,
+        IReadOnlyList<SymbolRecord>? Symbols,
+        IReadOnlyList<ReferenceRecord>? References,
+        IReadOnlyList<FileIssue>? Issues,
+        Exception? Exception)
+    {
+        public static FullScanFileWorkItem Success(
+            string filePath,
+            FileRecord record,
+            string content,
+            byte[] rawBytes,
+            string? warning,
+            IReadOnlyList<ChunkRecord>? chunks,
+            IReadOnlyList<SymbolRecord>? symbols,
+            IReadOnlyList<ReferenceRecord>? references,
+            IReadOnlyList<FileIssue>? issues)
+        {
+            return new FullScanFileWorkItem(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues, null);
+        }
+
+        public static FullScanFileWorkItem Failure(string filePath, Exception exception)
+            => new(filePath, null, null, null, null, null, null, null, null, exception);
+    }
 
     private sealed record FoldOnlyRemediation(
         string DegradedReason,
@@ -3107,6 +3318,7 @@ public sealed class IndexCommandOptions
     public int? WatchDebounceMs { get; init; }
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public long? MaxFileSizeBytes { get; init; }
+    public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
 }
 
 public sealed class BackfillFoldCommandOptions
