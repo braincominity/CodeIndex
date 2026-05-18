@@ -5004,19 +5004,20 @@ public static class QueryCommandRunner
     // - `type_reference`: 型位置エッジは compile-time な参照であり実行時呼び出しではない。
     //   `callers Foo --kind type_reference` は宣言型や generic 制約、`is`/`as`、XML-doc `cref`
     //   などの型言及を caller edge として誤って返す。
+    // - `import`: import/include dependency edges are structural, not call-graph edges.
     // CLI 境界で弾き、正しい列挙パスである `references --kind <kind>` に誘導する。
     private static readonly HashSet<string> NonCallGraphReferenceKinds = new(StringComparer.Ordinal)
     {
-        "attribute", "annotation", "type_reference",
+        "attribute", "annotation", "type_reference", "import",
     };
 
     /// <summary>
-    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference`) on
+    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference` / `import`) on
     /// commands (`callers` / `callees`) whose data model cannot answer those queries correctly.
     /// Returns true if the kind was rejected; the caller should then return
     /// `CommandExitCodes.UsageError`.
     /// `callers` / `callees` のようにデータモデル的に metadata / 型位置参照に答えられない
-    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` を弾く。
+    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` / `--kind import` を弾く。
     /// 弾いた場合 true を返すので、呼び出し側は `CommandExitCodes.UsageError` を返すこと。
     /// </summary>
     private static bool TryRejectNonCallGraphKindForGraphCommand(string command, string? kind)
@@ -5026,6 +5027,8 @@ public static class QueryCommandRunner
 
         if (kind == "type_reference")
             Console.Error.WriteLine($"Error: '--kind type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command} --kind type_reference` cannot return accurate call-graph rows.");
+        else if (kind == "import")
+            Console.Error.WriteLine($"Error: '--kind import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command} --kind import` cannot return accurate call-graph rows.");
         else
             Console.Error.WriteLine($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
         Console.Error.WriteLine($"Hint: use `cdidx references <name> --kind {kind}` instead.");
