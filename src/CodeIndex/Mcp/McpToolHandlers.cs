@@ -2226,6 +2226,7 @@ public partial class McpServer
                 csharpMetadataTargetReadyAfter = true;
             }
             sqlGraphContractReadyAfter = true;
+            writer.RebuildTypeScriptAugmentationReferences(projectPath);
             RestampHotspotFamilyTrust(
                 writer,
                 reusedHotspotFamilyLanguages,

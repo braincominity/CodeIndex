@@ -136,7 +136,7 @@ public partial class DbReader
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     // Razor の `razor_event_binding`、React の `consumes_hook`、C++ の `friend` は依存関係 graph query に含める。
-    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook')";
+    internal const string CallGraphReferenceKindsSql = "('augmentation', 'call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 
