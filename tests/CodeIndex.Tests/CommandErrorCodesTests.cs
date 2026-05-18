@@ -102,7 +102,7 @@ public class CommandErrorCodesTests
 
         var (exitCode, _, stderr) = RunSearchCapturingStreams(["foo", "--db", missingDb]);
 
-        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("[E001_DB_NOT_FOUND]", stderr);
     }
 

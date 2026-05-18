@@ -3280,6 +3280,7 @@ public static class QueryCommandRunner
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
+        var userPathPatterns = new List<string>();
         var projectFilters = new List<string>();
         string? solutionFilter = null;
         var excludePaths = new List<string>();
@@ -3610,7 +3611,10 @@ public static class QueryCommandRunner
                     break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
+                    {
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
+                        userPathPatterns.Add(pathPattern!);
+                    }
                     else
                         AddParseError(pathError!);
                     break;
@@ -3802,6 +3806,8 @@ public static class QueryCommandRunner
             }
         }
 
+        ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+
         return new QueryCommandOptions
         {
             DbPath = dbPath,
@@ -3852,6 +3858,60 @@ public static class QueryCommandRunner
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    private static void ValidateQueryPathOptionValues(
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        Action<string> addParseError)
+    {
+        foreach (var pattern in pathPatterns)
+            ValidatePathGlobPattern("--path", pattern, addParseError);
+        foreach (var pattern in excludePaths)
+            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+    }
+
+    private static void ValidatePathGlobPattern(string optionName, string pattern, Action<string> addParseError)
+    {
+        if (TryFindUnsupportedBracketGlob(pattern, out var reason))
+        {
+            addParseError($"Error: {optionName} '{pattern}' is not a valid glob: {reason}. Hint: escape '[' or ']' with a backslash when matching literal path characters, or use only '*' and '?' wildcards.");
+        }
+    }
+
+    private static bool TryFindUnsupportedBracketGlob(string pattern, out string reason)
+    {
+        var escaped = false;
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var ch = pattern[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                reason = "character classes are not supported";
+                return true;
+            }
+
+            if (ch == ']')
+            {
+                reason = "unmatched ']'";
+                return true;
+            }
+        }
+
+        reason = string.Empty;
+        return false;
     }
 
     internal static bool TryParseReferenceRankMode(string value, out ReferenceRankMode rankMode)
@@ -4226,13 +4286,31 @@ public static class QueryCommandRunner
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
     {
-        if (options.ParseError == null)
+        var dbPathError = BuildExplicitDbPathParseError(options);
+        if (options.ParseError == null && dbPathError == null)
             return false;
 
-        Console.Error.WriteLine(options.ParseError);
+        if (options.ParseError != null)
+            Console.Error.WriteLine(options.ParseError);
+        if (dbPathError != null)
+            Console.Error.WriteLine(dbPathError);
         Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
+    }
+
+    private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
+    {
+        if (!options.DbPathExplicit)
+            return null;
+        if (string.IsNullOrWhiteSpace(options.DbPath))
+            return BuildMissingOptionValueError("--db");
+        if (options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
+            return null;
+
+        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file. Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.";
     }
 
     private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)
