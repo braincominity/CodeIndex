@@ -4854,6 +4854,32 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRunWithInvalidCommitRange_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "tracked.cs"), "class Sample {}\n");
+            RunGit(projectRoot, "add", "tracked.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            File.WriteAllText(Path.Combine(projectRoot, "other.cs"), "class Other {}\n");
+            RunGit(projectRoot, "add", "other.cs");
+            RunGit(projectRoot, "commit", "-m", "other");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--commits", "HEAD~1..HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("ranges and tag refs are not accepted", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_IgnoresUnixFifoWithoutHanging()
     {
         if (OperatingSystem.IsWindows())

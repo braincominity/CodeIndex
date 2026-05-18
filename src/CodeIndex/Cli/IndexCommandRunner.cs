@@ -224,9 +224,9 @@ public static class IndexCommandRunner
                 var changedFiles = new HashSet<string>(StringComparer.Ordinal);
                 var relevantIgnoreFileChanged = false;
                 var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
-                foreach (var commit in options.Commits)
+                try
                 {
-                    try
+                    foreach (var commit in options.Commits)
                     {
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
                         var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
@@ -234,7 +234,16 @@ public static class IndexCommandRunner
                         foreach (var path in normalized)
                             changedFiles.Add(path);
                     }
-                    catch { /* ignore git errors in dry-run */ }
+                }
+                catch (Exception ex)
+                {
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        $"failed to resolve changed files from git commits: {ex.Message}",
+                        CommandExitCodes.UsageError,
+                        "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                        CommandErrorCodes.UsageError);
                 }
                 if (options.ChangedBetweenRefs.Count == 2)
                 {
@@ -690,7 +699,7 @@ public static class IndexCommandRunner
                         var commit = args[++i];
                         commits.Add(commit);
                         if (!GitHelper.IsCommitObjectId(commit))
-                            parseError ??= $"invalid --commits value '{commit}': expected a 7-40 character hex commit ID, not a branch, tag, or range";
+                            parseError ??= $"invalid --commits value '{commit}': expected a 7-40 character hex commit ID; ranges and tag refs are not accepted";
                     }
                     if (commits.Count == 0)
                         Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
@@ -2017,6 +2026,7 @@ public static class IndexCommandRunner
             FileIndexer.PathFilterKind.IgnoredByRules => "ignored by .gitignore/.cdidxignore",
             FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
             FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
+            FileIndexer.PathFilterKind.OutsideProjectRoot => "outside the project root",
             FileIndexer.PathFilterKind.IgnoreRulesUnavailable => "ignore rules unavailable",
             _ => "filtered",
         };
@@ -2955,6 +2965,7 @@ public static class IndexCommandRunner
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot));
             // #1509: also stamp the always-updated "last indexed HEAD" triple (SHA + branch +
             // timestamp). Unlike #1508's IndexedHeadCommitMetaKey which only fires here on
             // full scans, this triple is also stamped at the end of incremental update runs

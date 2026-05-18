@@ -5,6 +5,14 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
+public enum GitRepositoryType
+{
+    None,
+    Normal,
+    Worktree,
+    Bare,
+}
+
 /// <summary>
 /// Git integration helpers.
 /// Git連携ヘルパー。
@@ -27,7 +35,12 @@ public static class GitHelper
         if (Directory.Exists(ioDotGit)) return dotGit;
 
         // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
-        if (!File.Exists(ioDotGit)) return null;
+        if (!File.Exists(ioDotGit))
+        {
+            return TryGetRepositoryType(projectRoot) == GitRepositoryType.Bare
+                ? Path.GetFullPath(projectRoot)
+                : null;
+        }
 
         var gitFileContent = File.ReadAllText(ioDotGit).Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
@@ -50,18 +63,31 @@ public static class GitHelper
     }
 
     /// <summary>
+    /// Try to classify the repository shape for <paramref name="projectRoot"/>.
+    /// projectRoot の git リポジトリ形状を best-effort で判定する。
+    /// </summary>
+    public static GitRepositoryType TryGetRepositoryType(string projectRoot)
+    {
+        var dotGit = Path.Combine(projectRoot, ".git");
+        var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
+        if (Directory.Exists(ioDotGit))
+            return GitRepositoryType.Normal;
+        if (File.Exists(ioDotGit))
+            return GitRepositoryType.Worktree;
+
+        var isBare = TryRunGit(projectRoot, "rev-parse", "--is-bare-repository")?.Trim();
+        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
+            ? GitRepositoryType.Bare
+            : GitRepositoryType.None;
+    }
+
+    /// <summary>
     /// Get changed files from a git commit.
     /// gitコミットから変更ファイルを取得する。
     /// </summary>
     public static List<string> GetChangedFilesFromCommit(string projectRoot, string commitId)
     {
-        // Validate commit ID to prevent argument injection and ambiguous refs.
-        // --commits is intentionally commit-object-id only; branch names, tag names,
-        // and ranges such as main..branch belong to --changed-between or explicit git.
-        // コミットIDをバリデーションし、引数インジェクションと曖昧な ref を防ぐ。
-        // --commits は commit object ID 専用とし、branch/tag/range は拒否する。
-        if (!IsCommitObjectId(commitId))
-            throw new ArgumentException($"Invalid commit ID: {commitId}");
+        ValidateSingleCommitRef(projectRoot, commitId);
 
         var psi = new ProcessStartInfo
         {
@@ -112,6 +138,36 @@ public static class GitHelper
 
     public static bool IsCommitObjectId(string value)
         => !string.IsNullOrWhiteSpace(value) && Regex.IsMatch(value, "^[0-9a-fA-F]{7,40}$");
+
+    private static void ValidateSingleCommitRef(string projectRoot, string commitId)
+    {
+        // Reject range/pathspec syntax before invoking git so --commits remains a list
+        // of single commit-ish values, not revision-set expressions.
+        if (string.IsNullOrWhiteSpace(commitId)
+            || commitId.StartsWith('-')
+            || commitId.Contains("..", StringComparison.Ordinal)
+            || commitId.Contains("^{", StringComparison.Ordinal)
+            || commitId.Contains(':')
+            || !Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Provide a single commit-ish; ranges and tag refs are not accepted. Use `git rev-parse --verify <ref>^{{commit}}` to validate it.");
+        }
+
+        var symbolicName = TryRunGit(projectRoot, "rev-parse", "--symbolic-full-name", commitId)?.Trim();
+        if (symbolicName != null && symbolicName.StartsWith("refs/tags/", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Tag refs are not accepted for --commits; pass the peeled commit SHA from `git rev-parse --verify {commitId}^{{commit}}`.");
+        }
+
+        var resolved = TryRunGit(projectRoot, "rev-parse", "--verify", $"{commitId}^{{commit}}")?.Trim();
+        if (string.IsNullOrWhiteSpace(resolved))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Git could not resolve it to a single commit. Use `git rev-parse --verify <ref>^{{commit}}` to validate it.");
+        }
+    }
 
     /// <summary>
     /// Get changed files between two git refs, including both sides of renames.
@@ -356,13 +412,18 @@ public static class GitHelper
     internal static string? TryGetRepositoryRoot(string projectPath, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
     {
         var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--show-cdup");
-        if (cdup == null)
-            return null;
+        if (cdup != null)
+        {
+            var value = cdup.Trim();
+            return string.IsNullOrEmpty(value)
+                ? Path.GetFullPath(projectPath)
+                : Path.GetFullPath(Path.Combine(projectPath, value));
+        }
 
-        var value = cdup.Trim();
-        return string.IsNullOrEmpty(value)
+        var isBare = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--is-bare-repository")?.Trim();
+        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? Path.GetFullPath(projectPath)
-            : Path.GetFullPath(Path.Combine(projectPath, value));
+            : null;
     }
 
     private static string? TryRunGit(string projectRoot, params string[] args)

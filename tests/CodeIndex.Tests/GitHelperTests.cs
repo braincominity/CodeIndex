@@ -124,6 +124,38 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void ResolveGitCommonDir_BareRepository_ReturnsRepositoryDirectory()
+    {
+        var sourceRepo = CreateGitRepo();
+        File.WriteAllText(Path.Combine(sourceRepo, "tracked.txt"), "v1\n");
+        RunGit(sourceRepo, "add", "tracked.txt");
+        RunGit(sourceRepo, "commit", "-m", "initial");
+        var bareRepo = Path.Combine(_tempDir, "repo.git");
+        RunGit(_tempDir, "clone", "--bare", sourceRepo, bareRepo);
+
+        Assert.Equal(GitRepositoryType.Bare, GitHelper.TryGetRepositoryType(bareRepo));
+        Assert.Equal(Path.GetFullPath(bareRepo), Path.GetFullPath(GitHelper.ResolveGitCommonDir(bareRepo)!));
+        Assert.Equal(Path.GetFullPath(bareRepo), Path.GetFullPath(GitHelper.TryGetRepositoryRoot(bareRepo)!));
+    }
+
+    [Fact]
+    public void TryGetRepositoryType_ClassifiesNormalWorktreeBareAndNone()
+    {
+        var normalRepo = CreateGitRepo();
+        var linkedWorktree = Path.Combine(_tempDir, "linked-worktree");
+        RunGit(normalRepo, "worktree", "add", linkedWorktree);
+        var bareRepo = Path.Combine(_tempDir, "shape.git");
+        RunGit(_tempDir, "clone", "--bare", normalRepo, bareRepo);
+        var nonRepo = Path.Combine(_tempDir, "not-a-repo");
+        Directory.CreateDirectory(nonRepo);
+
+        Assert.Equal(GitRepositoryType.Normal, GitHelper.TryGetRepositoryType(normalRepo));
+        Assert.Equal(GitRepositoryType.Worktree, GitHelper.TryGetRepositoryType(linkedWorktree));
+        Assert.Equal(GitRepositoryType.Bare, GitHelper.TryGetRepositoryType(bareRepo));
+        Assert.Equal(GitRepositoryType.None, GitHelper.TryGetRepositoryType(nonRepo));
+    }
+
+    [Fact]
     public void GetChangedFilesFromCommit_ReturnsFilesForRegularCommit()
     {
         var repoDir = CreateGitRepo();
@@ -158,6 +190,40 @@ public class GitHelperTests : IDisposable
         var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
 
         Assert.Equal(["first.txt"], changedFiles);
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_RejectsRevisionRanges()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "first.txt"), "hello\n");
+        RunGit(repoDir, "add", "first.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        File.WriteAllText(Path.Combine(repoDir, "second.txt"), "hello\n");
+        RunGit(repoDir, "add", "second.txt");
+        RunGit(repoDir, "commit", "-m", "second");
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => GitHelper.GetChangedFilesFromCommit(repoDir, "HEAD~1..HEAD"));
+
+        Assert.Contains("ranges and tag refs are not accepted", ex.Message);
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_RejectsTagRefs()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "first.txt"), "hello\n");
+        RunGit(repoDir, "add", "first.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        RunGit(repoDir, "tag", "v1.0");
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => GitHelper.GetChangedFilesFromCommit(repoDir, "v1.0"));
+
+        Assert.Contains("Tag refs are not accepted", ex.Message);
     }
 
     [Fact]
