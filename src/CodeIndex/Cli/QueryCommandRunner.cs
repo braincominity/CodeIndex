@@ -413,6 +413,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "definition", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -1362,6 +1364,7 @@ public static class QueryCommandRunner
             var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
             if (results.Count == 0)
             {
+                var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 if (options.Json)
                 {
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
@@ -1372,14 +1375,22 @@ public static class QueryCommandRunner
                         payload["before"] = options.ContextBefore;
                         payload["after"] = options.ContextAfter;
                         payload["exact"] = options.Exact;
-                        payload["file_count"] = 0;
+                        payload["file_count"] = candidateFileCount;
                     });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No matches found", options));
-                    WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    if (candidateFileCount > 0)
+                    {
+                        var fileText = ConsoleUi.Counted(candidateFileCount, "file");
+                        WriteZeroResultHints(options, reader, filterHint: $"--path matched {fileText}, but the query did not match their contents. Try a broader query or check the query syntax.");
+                    }
+                    else
+                    {
+                        WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    }
                 }
                 return CommandExitCodes.NotFound;
             }
@@ -2539,6 +2550,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
@@ -2941,6 +2954,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -5216,7 +5231,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "property", "struct", "union"];
+        KnownSymbolKindFilters.OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
