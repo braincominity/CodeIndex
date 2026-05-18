@@ -71,7 +71,7 @@ internal sealed class PreparedCommandCache : IDisposable
             configureSchema(cmd);
             cmd.Prepare();
         }
-        catch
+        catch (Exception)
         {
             cmd.Dispose();
             throw;

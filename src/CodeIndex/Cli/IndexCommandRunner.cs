@@ -877,7 +877,7 @@ public static class IndexCommandRunner
         {
             return Path.GetFullPath(value);
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return value;
         }

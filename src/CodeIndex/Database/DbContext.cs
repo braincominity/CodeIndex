@@ -263,7 +263,7 @@ public class DbContext : IDisposable
                 if (attempt < maxOpenAttempts)
                     sleep?.Invoke(50 * attempt);
             }
-            catch
+            catch (Exception)
             {
                 connection.Dispose();
                 throw;

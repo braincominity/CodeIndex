@@ -147,7 +147,7 @@ internal static class IndexWatchRunner
         {
             if (watcher != null)
             {
-                try { watcher.EnableRaisingEvents = false; } catch { }
+                try { watcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
                 watcher.Dispose();
             }
         }
@@ -278,7 +278,7 @@ internal static class IndexWatchRunner
                 }
             }
         }
-        catch (Exception)
+        catch (JsonException)
         {
             detail = string.Empty;
         }
