@@ -3419,6 +3419,7 @@ public static partial class ReferenceExtractor
                 fileId);
         }
 
+        MarkMutualRecursionReferences(references);
         return references;
     }
 
@@ -3470,7 +3471,61 @@ public static partial class ReferenceExtractor
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
+            IsSelfReference = IsSameReferenceName(container?.Name, name),
         });
+    }
+
+    private static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
+    {
+        var edges = new HashSet<(string Caller, string Callee)>();
+        foreach (var reference in references)
+        {
+            if (!IsCallGraphLikeReferenceKind(reference.ReferenceKind)
+                || string.IsNullOrWhiteSpace(reference.ContainerName)
+                || string.IsNullOrWhiteSpace(reference.SymbolName)
+                || reference.IsSelfReference)
+            {
+                continue;
+            }
+
+            edges.Add((NormalizeReferenceCycleName(reference.ContainerName), NormalizeReferenceCycleName(reference.SymbolName)));
+        }
+
+        if (edges.Count == 0)
+            return;
+
+        foreach (var reference in references)
+        {
+            if (!IsCallGraphLikeReferenceKind(reference.ReferenceKind)
+                || string.IsNullOrWhiteSpace(reference.ContainerName)
+                || string.IsNullOrWhiteSpace(reference.SymbolName)
+                || reference.IsSelfReference)
+            {
+                continue;
+            }
+
+            var caller = NormalizeReferenceCycleName(reference.ContainerName);
+            var callee = NormalizeReferenceCycleName(reference.SymbolName);
+            if (edges.Contains((callee, caller)))
+                reference.IsMutualRecursion = true;
+        }
+    }
+
+    private static bool IsCallGraphLikeReferenceKind(string referenceKind)
+        => referenceKind is "call" or "instantiate" or "subscribe" or "unsubscribe" or "razor_event_binding";
+
+    private static bool IsSameReferenceName(string? left, string right)
+        => !string.IsNullOrWhiteSpace(left)
+            && string.Equals(NormalizeReferenceCycleName(left), NormalizeReferenceCycleName(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeReferenceCycleName(string name)
+    {
+        var trimmed = name.Trim();
+        var dot = trimmed.LastIndexOf('.');
+        if (dot >= 0 && dot + 1 < trimmed.Length)
+            return trimmed[(dot + 1)..];
+        var colon = trimmed.LastIndexOf("::", StringComparison.Ordinal);
+        return colon >= 0 && colon + 2 < trimmed.Length ? trimmed[(colon + 2)..] : trimmed;
     }
 
     private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);

@@ -7,13 +7,13 @@ public partial class DbReader
 {
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
-    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
+    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion);
 
     /// <summary>
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         lang = NormalizeQueryLanguage(lang);
@@ -22,14 +22,14 @@ public partial class DbReader
             return new List<ReferenceResult>();
 
         if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
-            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, 0, maxLineWidth);
+            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, 0, maxLineWidth, excludeSelfReferences);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
         var rawOffset = 0;
         var filtered = new List<ReferenceResult>();
         while (filtered.Count < limit)
         {
-            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth);
+            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth, excludeSelfReferences);
             if (rawResults.Count == 0)
                 break;
 
@@ -53,9 +53,9 @@ public partial class DbReader
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
     }
 
-    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth)
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences)
     {
-        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset);
+        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, excludeSelfReferences: excludeSelfReferences);
         var results = new List<ReferenceResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -75,16 +75,20 @@ public partial class DbReader
                 ContextTruncated = clampedContext.Truncated,
                 ContainerKind = row.ContainerKind,
                 ContainerName = row.ContainerName,
+                IsSelfReference = row.IsSelfReference,
+                IsMutualRecursion = row.IsMutualRecursion,
             });
         }
         return results;
     }
 
-    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true)
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false)
     {
         var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
+        var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
+        var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -93,7 +97,9 @@ public partial class DbReader
                        r.line, r.column_number,
                        MIN({contextSql}) AS context,
                        CASE WHEN COUNT(DISTINCT COALESCE(r.container_kind, '')) = 1 THEN MIN(r.container_kind) ELSE NULL END AS container_kind,
-                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_name, '')) = 1 THEN MIN(r.container_name) ELSE NULL END AS container_name
+                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_name, '')) = 1 THEN MIN(r.container_name) ELSE NULL END AS container_name,
+                       MAX({selfReferenceSql}) AS is_self_reference,
+                       MAX({mutualRecursionSql}) AS is_mutual_recursion
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 {referenceLineJoin}
@@ -101,7 +107,9 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
-                   " + contextSql + @", r.container_kind, r.container_name
+                   " + contextSql + @", r.container_kind, r.container_name,
+                   " + selfReferenceSql + @" AS is_self_reference,
+                   " + mutualRecursionSql + @" AS is_mutual_recursion
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             " + referenceLineJoin + @"
@@ -178,6 +186,8 @@ public partial class DbReader
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
+        if (excludeSelfReferences)
+            sql += $" AND {selfReferenceSql} = 0";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -187,7 +197,7 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @"
             )
             SELECT path, lang, symbol_name, reference_kind, line, column_number,
-                   context, container_kind, container_name
+                   context, container_kind, container_name, is_self_reference, is_mutual_recursion
             FROM logical_references r";
         }
         if (includeOrdering)
@@ -254,7 +264,9 @@ public partial class DbReader
             reader.GetInt32(5),
             reader.GetString(6),
             GetNullableString(reader, 7),
-            GetNullableString(reader, 8));
+            GetNullableString(reader, 8),
+            reader.GetInt32(9) != 0,
+            reader.GetInt32(10) != 0);
     }
 
     private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>

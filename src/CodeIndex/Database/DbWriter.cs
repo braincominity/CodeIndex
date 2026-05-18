@@ -765,12 +765,14 @@ public class DbWriter
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
                     context, reference_line_id, container_kind, container_name,
-                    symbol_name_folded, container_name_folded
+                    symbol_name_folded, container_name_folded, is_self_reference,
+                    is_mutual_recursion
                 )
                 VALUES (
                     @fid, @symbolName, @referenceKind, @line, @columnNumber,
                     @context, @referenceLineId, @containerKind, @containerName,
-                    @symbolNameFolded, @containerNameFolded
+                    @symbolNameFolded, @containerNameFolded, @isSelfReference,
+                    @isMutualRecursion
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pSymbolName = cmd.Parameters.Add("@symbolName", SqliteType.Text);
@@ -783,6 +785,8 @@ public class DbWriter
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
             var pSymbolNameFolded = cmd.Parameters.Add("@symbolNameFolded", SqliteType.Text);
             var pContainerNameFolded = cmd.Parameters.Add("@containerNameFolded", SqliteType.Text);
+            var pIsSelfReference = cmd.Parameters.Add("@isSelfReference", SqliteType.Integer);
+            var pIsMutualRecursion = cmd.Parameters.Add("@isMutualRecursion", SqliteType.Integer);
             cmd.Prepare();
 
             for (int j = i; j < end; j++)
@@ -809,6 +813,8 @@ public class DbWriter
                 pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
                 pSymbolNameFolded.Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
                 pContainerNameFolded.Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                pIsSelfReference.Value = reference.IsSelfReference ? 1 : 0;
+                pIsMutualRecursion.Value = reference.IsMutualRecursion ? 1 : 0;
                 cmd.ExecuteNonQuery();
             }
 
