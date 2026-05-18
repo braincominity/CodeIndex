@@ -28,6 +28,15 @@ internal static class TypeScriptReferenceExtractor
     private static readonly Regex LocalDeclarationRegex = new(
         @"^\s*(?:(?:const|let|var)\s+|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+|(?:export\s+)?(?:abstract\s+)?class\s+|(?:export\s+)?interface\s+|(?:export\s+)?type\s+)(?<name>[A-Za-z_$][\w$]*)\b",
         RegexOptions.Compiled);
+    private static readonly HashSet<string> MappedTypeClauseIgnoredSegments = new(StringComparer.Ordinal)
+    {
+        "as",
+        "extends",
+        "in",
+        "infer",
+        "keyof",
+        "readonly",
+    };
 
     public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
         IReadOnlyList<string> originalLines,
@@ -152,6 +161,7 @@ internal static class TypeScriptReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
+        EmitMappedTypeMemberReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericConstraintTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitTypeAliasTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -402,6 +412,87 @@ internal static class TypeScriptReferenceExtractor
         foreach (var range in ranges)
         {
             if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void EmitMappedTypeMemberReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var bracketStart = preparedLine.IndexOf('[');
+        if (bracketStart < 0)
+            return;
+
+        var bracketEnd = ReferenceExtractor.FindMatchingChar(preparedLine, bracketStart, '[', ']');
+        if (bracketEnd <= bracketStart)
+            return;
+
+        var clause = preparedLine.Substring(bracketStart + 1, bracketEnd - bracketStart - 1);
+        if (!clause.Contains("keyof", StringComparison.Ordinal)
+            && !clause.Contains(" in ", StringComparison.Ordinal)
+            && !clause.Contains(" as ", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var clauseStart = bracketStart + 1;
+        ReferenceExtractor.AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            clause,
+            clauseStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(clauseStart),
+            "typescript",
+            MappedTypeClauseIgnoredSegments);
+
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', bracketEnd + 1);
+        if (colonIndex < 0)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
+        if (typeStart >= preparedLine.Length)
+            return;
+
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart, stopAtArrow: false);
+        if (typeEnd <= typeStart)
+            return;
+
+        ReferenceExtractor.AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart),
+            "typescript");
+    }
+
+    public static bool IsSatisfiesTypeOperand(string preparedLine, int tokenIndex)
+    {
+        foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "satisfies"))
+        {
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, keywordIndex + "satisfies".Length);
+            if (typeStart >= preparedLine.Length || tokenIndex < typeStart)
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindKeywordFollowingTypeExpressionEnd(preparedLine, typeStart, "typescript");
+            if (typeEnd <= typeStart)
+                continue;
+
+            if (tokenIndex < typeEnd)
                 return true;
         }
 
