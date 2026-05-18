@@ -286,6 +286,7 @@ public static class ConsoleUi
     private static string[] _progressSpinnerFrames = DefaultBrailleSpinnerFrames;
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
+    private static bool _asciiOutputForced;
 
     /// <summary>
     /// Set progress bar spinner theme (reuses GetSpinnerFrames).
@@ -600,6 +601,7 @@ public static class ConsoleUi
         Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
+        Console.WriteLine("  --ascii                    Use ASCII progress glyphs (`#` / `-`) instead of Unicode block glyphs (also honors CDIDX_ASCII=1 and LANG=C/POSIX)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -1514,6 +1516,9 @@ public static class ConsoleUi
 
     private static bool IsAsciiOutputRequested()
     {
+        if (_asciiOutputForced)
+            return true;
+
         var ascii = Environment.GetEnvironmentVariable("CDIDX_ASCII");
         if (!string.IsNullOrEmpty(ascii) && ascii != "0")
             return true;
@@ -1527,6 +1532,10 @@ public static class ConsoleUi
         => locale != null
             && (locale.Equals("C", StringComparison.OrdinalIgnoreCase)
                 || locale.Equals("POSIX", StringComparison.OrdinalIgnoreCase));
+
+    internal static void SetAsciiOutput(bool enabled) => _asciiOutputForced = enabled;
+
+    internal static bool IsAsciiOutputForced() => _asciiOutputForced;
 
     /// <summary>
     /// Get console window width safely (some environments throw IOException).
