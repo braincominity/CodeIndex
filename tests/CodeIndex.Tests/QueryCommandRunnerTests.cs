@@ -6205,10 +6205,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(["InternalOnly", "UserDto", "FullName", "Run"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("likely_unused_private", out _));
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(2, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
         }
         finally

@@ -7209,8 +7209,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
         var symbols = response["result"]!["structuredContent"]!["symbols"]!.AsArray();
-        Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.Select(symbol => symbol!["name"]!.GetValue<string>()).ToArray());
-        Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal(["InternalOnly", "UserDto", "FullName", "Run"], symbols.Select(symbol => symbol!["name"]!.GetValue<string>()).ToArray());
+        Assert.Equal("reflection_or_config_suspect", symbols[2]!["unusedBucket"]!.GetValue<string>());
     }
 
     [Fact]
