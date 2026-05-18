@@ -2464,9 +2464,11 @@ public class McpServerTests : IDisposable
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
     [InlineData("callers", "type_reference")]
+    [InlineData("callers", "import")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
     [InlineData("callees", "type_reference")]
+    [InlineData("callees", "import")]
     public void ToolsCall_CallersOrCallees_NonCallGraphKindReturnsToolError(string tool, string kind)
     {
         // issue #293 + issue #444: the MCP `callers` / `callees` tools must reject non-call-graph
@@ -2475,12 +2477,14 @@ public class McpServerTests : IDisposable
         // instead of the annotated method, and file-level targets drop entirely). `type_reference`
         // rows are compile-time type mentions (declaration types, generic constraints, `is`/`as`/
         // `instanceof`, XML-doc `cref`) and not runtime calls. AI clients should be redirected to
-        // the `references` tool for these enumerations.
+        // the `references` tool for these enumerations. `import` rows are structural dependency
+        // edges, not runtime calls, and follow the same rejection path.
         // issue #293 + issue #444 補足: MCP の `callers` / `callees` ツールは非 call-graph な kind を
         // 必ず弾く。metadata 行 (`attribute` / `annotation`) は body-range の外側シンボルに帰属する
         // ため、`callers Obsolete kind=attribute` は注釈対象のメソッドではなく外側クラスを返し、
         // file-level target は完全に脱落する。`type_reference` は宣言型・generic 制約・`is`/`as`/
         // `instanceof`・XML-doc `cref` といった compile-time な型言及であり実行時呼び出しではない。
+        // `import` 行も runtime call ではなく構造的な dependency edge なので同じ拒否経路に入る。
         // AI クライアントは列挙のために `references` ツールに誘導する。
         var requestJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
             + "\"params\":{\"name\":\"" + tool + "\","
@@ -2492,6 +2496,8 @@ public class McpServerTests : IDisposable
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains($"'kind: {kind}' is not supported on '{tool}'", text);
         Assert.Contains("'references' tool", text);
+        if (kind == "import")
+            Assert.Contains("Import references are structural dependency edges, not runtime calls", text);
     }
 
     [Fact]

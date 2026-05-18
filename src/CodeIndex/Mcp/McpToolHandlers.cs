@@ -164,22 +164,23 @@ public partial class McpServer
 
     /// <summary>
     /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
-    /// `attribute` / `annotation` or compile-time `type_reference`) — these are valid on the
-    /// `references` tool but must be rejected on `callers` / `callees`, whose data model
+    /// `attribute` / `annotation`, compile-time `type_reference`, or structural `import`) —
+    /// these are valid on the `references` tool but must be rejected on `callers` / `callees`, whose data model
     /// cannot answer those queries correctly. Metadata rows are attributed to the enclosing
     /// body-range symbol rather than the annotated target (so file-level targets drop
     /// entirely and method-level metadata appears under the enclosing class); `type_reference`
     /// rows are compile-time type-position edges (declaration types, generic constraints,
     /// `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so they misreport type
-    /// mentions as caller/callee edges.
+    /// mentions as caller/callee edges; `import` rows are structural dependency edges.
     /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき kind
-    /// （metadata: `attribute` / `annotation`、型位置: `type_reference`）かを返す。metadata 行は
+    /// （metadata: `attribute` / `annotation`、型位置: `type_reference`、構造 dependency: `import`）かを返す。metadata 行は
     /// 注釈対象ではなく body-range 上の外側シンボルに帰属し、`type_reference` は実行時呼び出し
     /// ではなく compile-time な型言及（宣言型、generic 制約、`is`/`as`/`instanceof`、XML-doc
-    /// `cref` など）なので、`callers` / `callees` はいずれの kind にも正しく答えられない。
+    /// `cref` など）で、`import` は構造的な dependency edge なので、`callers` / `callees` は
+    /// いずれの kind にも正しく答えられない。
     /// </summary>
     private static bool IsNonCallGraphReferenceKind(string? kind) =>
-        kind == "attribute" || kind == "annotation" || kind == "type_reference";
+        kind == "attribute" || kind == "annotation" || kind == "type_reference" || kind == "import";
 
     /// <summary>
     /// Build the CLI / MCP error message for a non-call-graph reference kind rejected on
@@ -191,6 +192,8 @@ public partial class McpServer
     private static string BuildNonCallGraphKindRejectionMessage(string command, string kind) =>
         kind == "type_reference"
             ? $"'kind: type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command}` cannot return accurate rows for kind 'type_reference'. Use the 'references' tool with kind 'type_reference' instead."
+            : kind == "import"
+                ? $"'kind: import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command}` cannot return accurate rows for kind 'import'. Use the 'references' tool with kind 'import' instead."
             : $"'kind: {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol, so `{command}` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.";
 
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
