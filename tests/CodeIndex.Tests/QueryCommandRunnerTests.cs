@@ -2331,9 +2331,10 @@ jobs:
         {
             var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
             File.WriteAllText(dbPath, "this is not a sqlite database");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath],
+                ["--db", dbUri],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
@@ -2343,12 +2344,6 @@ jobs:
         }
         finally
         {
-            if (OperatingSystem.IsWindows())
-            {
-                SqliteConnection.ClearAllPools();
-                System.Threading.Thread.Sleep(250);
-            }
-
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
