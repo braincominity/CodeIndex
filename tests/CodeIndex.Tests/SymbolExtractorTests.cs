@@ -163,6 +163,7 @@ public class SymbolExtractorTests
     {
         const string content = """
             import Foundation
+            import SwiftUI
 
             public protocol StoreProtocol {
                 associatedtype Element
@@ -171,6 +172,24 @@ public class SymbolExtractorTests
             @MainActor
             public final class UserStore {
                 public var currentUser: User?
+                @State private var count = 0
+                @Environment(\.colorScheme) var scheme
+                @MyWrapper var value: Int
+                @MyLib.State var qualifiedCount = 0
+                @IBOutlet weak var titleLabel: UILabel!
+                @NSManaged var persistedName: String
+                @objc var exposedName: String = ""
+                var implicitName: String {
+                    model.set(value)
+                }
+                var fullName: String {
+                    get {
+                        "A"
+                    }
+                    set {
+                        _ = newValue
+                    }
+                }
 
                 public init() {}
 
@@ -201,10 +220,27 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "SwiftUI");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "StoreProtocol");
         Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Element");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "currentUser" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.SubKind == "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$count" && s.SubKind == "swift_projected_value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "scheme" && s.SubKind == "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$scheme" && s.SubKind == "swift_projected_value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.SubKind == "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$value" && s.SubKind == "swift_projected_value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qualifiedCount" && s.SubKind == "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$qualifiedCount" && s.SubKind == "swift_projected_value");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "titleLabel" && s.SubKind != "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "persistedName" && s.SubKind != "swift_wrapped_property");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "exposedName" && s.SubKind != "swift_wrapped_property");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "$titleLabel" or "$persistedName" or "$exposedName");
+        Assert.DoesNotContain(symbols, s => s.Kind == "accessor" && s.Name == "implicitName.set");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "fullName" && s.SubKind == "swift_computed_property");
+        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.get" && s.ContainerName == "fullName");
+        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.set" && s.ContainerName == "fullName");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init" && s.ContainerName == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadUser" && s.ContainerName == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit" && s.ContainerName == "UserStore");
