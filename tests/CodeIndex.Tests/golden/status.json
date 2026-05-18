@@ -70,7 +70,7 @@
   "graph_table_available": false,
   "issues_table_available": false,
   "hotspot_family_ready": false,
-  "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded for: csharp; run \u0060cdidx index \u003CprojectPath\u003E\u0060 to restamp authoritative hotspot families.",
+  "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild and stamp authoritative hotspot families.",
   "csharp_symbol_name_ready": false,
   "csharp_metadata_target_ready": false,
   "sql_graph_contract_ready": true,

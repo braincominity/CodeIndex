@@ -10774,7 +10774,7 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
         }
         finally
@@ -10819,7 +10819,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {
@@ -11917,7 +11917,40 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_disabled_at_index_time=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_ReportsStaleHotspotFamilyMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_stale_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("hotspot_family_metadata_stale=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {

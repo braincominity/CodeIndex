@@ -524,7 +524,7 @@ public partial class DbReader
                 Relevant: true,
                 DegradedReason: ready
                     ? null
-                    : $"cross-file hotspot family grouping for '{lang}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+                    : FormatHotspotFamilyDegradedReason([lang]));
         }
 
         var relevantLanguages = _indexedHotspotFamilyLanguages
@@ -542,7 +542,51 @@ public partial class DbReader
         return new HotspotFamilySignal(
             Ready: false,
             Relevant: true,
-            DegradedReason: $"cross-file hotspot family grouping is degraded for: {string.Join(", ", unreadyLanguages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+            DegradedReason: FormatHotspotFamilyDegradedReason(unreadyLanguages));
+    }
+
+    private string FormatHotspotFamilyDegradedReason(IReadOnlyList<string> languages)
+    {
+        var grouped = languages
+            .Select(language => (Language: language, Reason: ResolveHotspotFamilyDegradedReason(language)))
+            .GroupBy(item => item.Reason, item => item.Language, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => $"{group.Key}={string.Join(",", group.OrderBy(value => value, StringComparer.Ordinal))}");
+
+        return $"cross-file hotspot family grouping is degraded ({string.Join("; ", grouped)}); {GetHotspotFamilyRecoveryAction(languages)}";
+    }
+
+    private string ResolveHotspotFamilyDegradedReason(string lang)
+    {
+        if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
+            return "hotspot_family_support_not_indexed";
+
+        var raw = TryGetMetaString(_conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+        var fingerprint = TryGetMetaString(_conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+        if (string.IsNullOrWhiteSpace(raw))
+            return "hotspot_family_support_not_indexed";
+
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
+            || version != DbContext.HotspotFamilyVersion)
+        {
+            return "hotspot_family_metadata_stale";
+        }
+
+        return string.IsNullOrWhiteSpace(fingerprint)
+            ? "hotspot_family_disabled_at_index_time"
+            : "hotspot_family_metadata_stale";
+    }
+
+    private string GetHotspotFamilyRecoveryAction(IReadOnlyList<string> languages)
+    {
+        var reasons = languages
+            .Select(ResolveHotspotFamilyDegradedReason)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (reasons.SetEquals(["hotspot_family_metadata_stale"]))
+            return "run `cdidx index <projectPath> --files <changedFiles>` or `cdidx index <projectPath>` to restamp authoritative hotspot families.";
+
+        return "run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.";
     }
 
     private HashSet<string> LoadIndexes(string tableName)
