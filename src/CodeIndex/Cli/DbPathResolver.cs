@@ -155,8 +155,11 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadBranch(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
 
-    public static bool TryHasIndexedHeadBranchStamp(string dbPath)
-        => TryMetaKeyExists(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
+    public static string? TryReadIndexedHeadCommitBranch(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitBranchMetaKey);
+
+    public static bool TryHasIndexedHeadCommitBranchStamp(string dbPath)
+        => TryMetaKeyExists(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitBranchMetaKey);
 
     private static string? TryReadMetaString(string dbPath, string key)
     {

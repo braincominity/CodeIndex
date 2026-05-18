@@ -64,8 +64,8 @@ public static class WorkspaceMetadataEnricher
         var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot);
         var dirty = GitHelper.TryIsWorktreeDirty(projectRoot);
         var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
-        var indexedBranch = DbPathResolver.TryReadIndexedHeadBranch(dbPath);
-        var hasIndexedBranchStamp = DbPathResolver.TryHasIndexedHeadBranchStamp(dbPath);
+        var indexedBranch = DbPathResolver.TryReadIndexedHeadCommitBranch(dbPath);
+        var hasIndexedBranchStamp = DbPathResolver.TryHasIndexedHeadCommitBranchStamp(dbPath);
         // Detect a per-worktree branch / HEAD switch by comparing the runtime HEAD against
         // the HEAD captured at index time. Also compare the branch stamp when a HEAD stamp is
         // present so branch <-> detached transitions at the same commit are still visible.
