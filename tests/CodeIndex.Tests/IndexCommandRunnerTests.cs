@@ -6006,7 +6006,8 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Contains("cdidx: scanning files...", stderr);
-            Assert.Contains("cdidx: indexing...", stderr);
+            Assert.Contains("cdidx: preparing index writes...", stderr);
+            Assert.Contains("cdidx: preparing C# workspace symbols...", stderr);
             Assert.Contains("cdidx: indexed 0/1 file(s)...", stderr);
             Assert.Contains("cdidx: indexed 1/1 file(s)...", stderr);
         }

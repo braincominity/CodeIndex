@@ -13,6 +13,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
+    private const int CSharpStaticInterfacePrepassMaxChars = 250_000;
+
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
 
@@ -1162,7 +1164,20 @@ public static class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
-        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
+        try
+        {
+            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                writer,
+                indexer,
+                projectRoot,
+                targetPaths,
+                cancellationToken: cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(updated + removed, targetPaths.Count);
+        }
         if (csharpWorkspace.HasStaticInterfaceContracts)
         {
             foreach (var filePath in indexer.ScanFilesDetailed().Files)
@@ -1175,7 +1190,19 @@ public static class IndexCommandRunner
                 }
             }
 
-            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+            try
+            {
+                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    projectRoot,
+                    targetPaths,
+                    cancellationToken: cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new IndexInterruptedException(updated + removed, targetPaths.Count);
+            }
         }
 
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
@@ -2259,8 +2286,8 @@ public static class IndexCommandRunner
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
         WriteJsonLiveness(purged > 0
-            ? $"purged {purged:N0} stale file(s); indexing..."
-            : "indexing...");
+            ? $"purged {purged:N0} stale file(s); preparing index writes..."
+            : "preparing index writes...");
         if (!options.Json && !options.Quiet)
         {
             if (purged > 0)
@@ -2402,10 +2429,35 @@ public static class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
+        WriteJsonLiveness("preparing C# workspace symbols...");
+        string? currentCSharpWorkspaceFile = null;
+        var csharpWorkspaceHeartbeat = StartJsonPhaseHeartbeat(
+            "preparing C# workspace symbols",
+            () => currentCSharpWorkspaceFile);
+        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
+        try
+        {
+            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                writer,
+                indexer,
+                projectRoot,
+                files,
+                path => currentCSharpWorkspaceFile = path,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(0, files.Count);
+        }
+        finally
+        {
+            currentCSharpWorkspaceFile = null;
+            StopJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+        }
+
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
-        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, files);
 
         try
         {
@@ -2969,16 +3021,20 @@ public static class IndexCommandRunner
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
-        IEnumerable<string> filePaths)
+        IEnumerable<string> filePaths,
+        Action<string>? onCurrentFile = null,
+        CancellationToken cancellationToken = default)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = Path.IsPathRooted(filePath)
                 ? filePath
                 : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            onCurrentFile?.Invoke(relativePath);
             if (!IsOutsideProjectRoot(relativePath))
                 pendingPaths.Add(relativePath);
 
@@ -2993,6 +3049,15 @@ public static class IndexCommandRunner
             {
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
                 if (record.Lang != "csharp")
+                    continue;
+
+                if (!MayContainCSharpStaticInterfaceContract(content))
+                    continue;
+
+                // This prepass only enriches cross-file static-interface matching. Very large
+                // files still get indexed in the main pass below; skipping their prepass keeps
+                // liveness from getting stuck before normal per-file progress can begin (#2351).
+                if (content.Length > CSharpStaticInterfacePrepassMaxChars)
                     continue;
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
@@ -3010,6 +3075,44 @@ public static class IndexCommandRunner
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
+    }
+
+    private static bool MayContainCSharpStaticInterfaceContract(string content)
+    {
+        if (!content.Contains("interface", StringComparison.Ordinal))
+            return false;
+
+        var index = 0;
+        while ((index = content.IndexOf("static", index, StringComparison.Ordinal)) >= 0)
+        {
+            var next = index + "static".Length;
+            while (next < content.Length && char.IsWhiteSpace(content[next]))
+                next++;
+
+            if (StartsWithCSharpWord(content, next, "abstract")
+                || StartsWithCSharpWord(content, next, "virtual"))
+            {
+                return true;
+            }
+
+            index += "static".Length;
+        }
+
+        return false;
+    }
+
+    private static bool StartsWithCSharpWord(string text, int index, string word)
+    {
+        if (index < 0 || index + word.Length > text.Length)
+            return false;
+
+        if (!text.AsSpan(index, word.Length).SequenceEqual(word.AsSpan()))
+            return false;
+
+        var before = index == 0 ? '\0' : text[index - 1];
+        var afterIndex = index + word.Length;
+        var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+        return !IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after);
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
