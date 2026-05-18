@@ -140,6 +140,54 @@ public class ConsoleUiTests
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
     }
 
+    [Fact]
+    public void FormatProgressLine_UnicodeEnabled_UsesBlockGlyphBar()
+    {
+        var line = ConsoleUi.FormatProgressLine(25, 100, windowWidth: 80, useUnicodeGlyphs: true);
+
+        Assert.Contains('█', line);
+        Assert.Contains('░', line);
+        Assert.DoesNotContain('#', line);
+        Assert.Contains("25.0%  [25/100]", line);
+    }
+
+    [Fact]
+    public void FormatProgressLine_AsciiFallback_UsesAsciiBarAndSpinner()
+    {
+        var line = ConsoleUi.FormatProgressLine(25, 100, windowWidth: 80, useUnicodeGlyphs: false);
+
+        Assert.StartsWith("- [########", line);
+        Assert.Contains("------------------------]", line);
+        Assert.DoesNotContain('█', line);
+        Assert.DoesNotContain('░', line);
+    }
+
+    [Fact]
+    public void FormatProgressLine_NarrowUnicodeTerminal_UsesPercentageOnly()
+    {
+        var line = ConsoleUi.FormatProgressLine(2, 4, windowWidth: 39, useUnicodeGlyphs: true);
+
+        Assert.Equal(" 50.0%  [2/4]", line);
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_CdidxAsciiEnvVarDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_PosixLangDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
     [Theory]
     [InlineData(0L, "0 bytes")]
     [InlineData(1023L, "1,023 bytes")]
@@ -790,6 +838,32 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("TERM", originalTerm);
                 Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", originalPaletteEnv);
                 ConsoleUi.SetColorPalette(originalPalette);
+            }
+        }
+    }
+
+    private static void WithUnicodeEnvironment(string? cdidxAscii, string? lang, Action action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalAscii = Environment.GetEnvironmentVariable("CDIDX_ASCII");
+            var originalLang = Environment.GetEnvironmentVariable("LANG");
+            var originalLcAll = Environment.GetEnvironmentVariable("LC_ALL");
+            var originalLcCType = Environment.GetEnvironmentVariable("LC_CTYPE");
+            try
+            {
+                Environment.SetEnvironmentVariable("CDIDX_ASCII", cdidxAscii);
+                Environment.SetEnvironmentVariable("LANG", lang);
+                Environment.SetEnvironmentVariable("LC_ALL", null);
+                Environment.SetEnvironmentVariable("LC_CTYPE", null);
+                action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("CDIDX_ASCII", originalAscii);
+                Environment.SetEnvironmentVariable("LANG", originalLang);
+                Environment.SetEnvironmentVariable("LC_ALL", originalLcAll);
+                Environment.SetEnvironmentVariable("LC_CTYPE", originalLcCType);
             }
         }
     }

@@ -312,15 +312,11 @@ public static class ConsoleUi
         if (current % 50 != 0 && current != total)
             return;
 
-        const int barWidth = 32;
-        var pct = (double)current / total;
-        int filled = (int)Math.Round(pct * barWidth);
-        if (filled > barWidth) filled = barWidth;
-
-        // Show spinner while in progress, checkmark on completion / 処理中はスピナー、完了時はチェックマーク
-        var spinner = current == total ? " " : _progressSpinnerFrames[(current / 50) % _progressSpinnerFrames.Length];
-        var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
-        var line = $"{spinner} {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+        var line = FormatProgressLine(
+            current,
+            total,
+            redirected ? 80 : GetWindowWidth(),
+            ShouldUseUnicodeGlyphs());
 
         if (!redirected)
         {
@@ -338,6 +334,36 @@ public static class ConsoleUi
             // Fallback for redirected output / リダイレクト時はフォールバック
             output.WriteLine(line.TrimStart());
         }
+    }
+
+    internal static string FormatProgressLine(int current, int total, int windowWidth, bool useUnicodeGlyphs)
+    {
+        const int barWidth = 32;
+        var pct = (double)current / total;
+        var percentAndCounts = $"{pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+
+        if (useUnicodeGlyphs && windowWidth < 40)
+            return percentAndCounts;
+
+        int filled = (int)Math.Round(pct * barWidth);
+        if (filled > barWidth) filled = barWidth;
+        if (filled < 0) filled = 0;
+
+        var spinner = ResolveProgressSpinner(current, total, useUnicodeGlyphs);
+        var bar = useUnicodeGlyphs
+            ? new string('\u2588', filled) + new string('\u2591', barWidth - filled)
+            : $"[{new string('#', filled)}{new string('-', barWidth - filled)}]";
+        return $"{spinner} {bar} {percentAndCounts}";
+    }
+
+    private static string ResolveProgressSpinner(int current, int total, bool useUnicodeGlyphs)
+    {
+        if (current == total)
+            return " ";
+
+        return useUnicodeGlyphs
+            ? _progressSpinnerFrames[(current / 50) % _progressSpinnerFrames.Length]
+            : "-";
     }
 
     /// <summary>
@@ -1476,6 +1502,31 @@ public static class ConsoleUi
         var cliColor = Environment.GetEnvironmentVariable("CLICOLOR");
         return cliColor == "0";
     }
+
+    internal static bool ShouldUseUnicodeGlyphs()
+    {
+        if (IsAsciiOutputRequested())
+            return false;
+
+        return Console.OutputEncoding.CodePage == Encoding.UTF8.CodePage
+            || Console.OutputEncoding.CodePage == Encoding.Unicode.CodePage;
+    }
+
+    private static bool IsAsciiOutputRequested()
+    {
+        var ascii = Environment.GetEnvironmentVariable("CDIDX_ASCII");
+        if (!string.IsNullOrEmpty(ascii) && ascii != "0")
+            return true;
+
+        return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
+            || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
+            || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
+    }
+
+    private static bool IsPosixLocale(string? locale)
+        => locale != null
+            && (locale.Equals("C", StringComparison.OrdinalIgnoreCase)
+                || locale.Equals("POSIX", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Get console window width safely (some environments throw IOException).
