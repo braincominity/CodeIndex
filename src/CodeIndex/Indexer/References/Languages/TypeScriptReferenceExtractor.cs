@@ -126,6 +126,7 @@ internal static class TypeScriptReferenceExtractor
 
     public static void EmitTypePositionReferences(
         IReadOnlyList<string> preparedLines,
+        IReadOnlyList<string> rawLines,
         int lineIndex,
         string preparedLine,
         string rawLine,
@@ -180,7 +181,18 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
         if (!IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
         {
-            EmitConstAssertionReferences(preparedLine, rawLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            EmitConstAssertionReferences(
+                preparedLines,
+                rawLines,
+                lineIndex,
+                preparedLine,
+                rawLine,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
             EmitAsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
                 preparedLine,
@@ -247,6 +259,9 @@ internal static class TypeScriptReferenceExtractor
     }
 
     private static void EmitConstAssertionReferences(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<string> rawLines,
+        int lineIndex,
         string preparedLine,
         string rawLine,
         List<ReferenceRecord> references,
@@ -280,133 +295,202 @@ internal static class TypeScriptReferenceExtractor
                 resolveContainerForColumn(asIndex));
 
             EmitConstAssertionLiteralTypeReferences(
-                preparedLine,
-                rawLine,
+                preparedLines,
+                rawLines,
+                lineIndex,
                 asIndex,
                 rawAsIndex,
                 references,
                 seen,
                 fileId,
-                context,
-                lineNumber,
                 resolveContainerForColumn);
         }
     }
 
     private static void EmitConstAssertionLiteralTypeReferences(
-        string preparedLine,
-        string rawLine,
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<string> rawLines,
+        int assertionLineIndex,
         int preparedAsIndex,
         int asIndex,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
-        string context,
-        int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var literalOpen = FindConstAssertionLiteralOpen(preparedLine, preparedAsIndex);
-        if (literalOpen < 0)
-            return;
-
-        var literalClose = asIndex;
-
-        for (var index = literalOpen + 1; index < literalClose; index++)
+        if (!TryFindConstAssertionLiteralOpen(
+                preparedLines,
+                assertionLineIndex,
+                preparedAsIndex,
+                out var literalOpenLineIndex,
+                out var literalOpenColumn))
         {
-            if (rawLine[index] is '"' or '\'' or '`')
+            return;
+        }
+
+        for (var currentLineIndex = literalOpenLineIndex; currentLineIndex <= assertionLineIndex; currentLineIndex++)
+        {
+            var rawLine = rawLines[currentLineIndex];
+            var scanStart = currentLineIndex == literalOpenLineIndex ? literalOpenColumn + 1 : 0;
+            var scanEnd = currentLineIndex == assertionLineIndex ? Math.Min(asIndex, rawLine.Length) : rawLine.Length;
+            if (scanStart >= scanEnd)
+                continue;
+
+            for (var index = scanStart; index < scanEnd; index++)
             {
-                var literalStart = index;
-                index = SkipQuotedLiteral(rawLine, index);
-                if (index <= literalStart + 1)
+                if (rawLine[index] is '"' or '\'' or '`')
+                {
+                    var literalStart = index;
+                    index = SkipQuotedLiteral(rawLine, index);
+                    if (index <= literalStart + 1)
+                        continue;
+
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        rawLine.Substring(literalStart, index - literalStart + 1),
+                        literalStart,
+                        "type_reference",
+                        rawLine.Trim(),
+                        currentLineIndex + 1,
+                        ResolveConstAssertionLiteralContainer(
+                            currentLineIndex,
+                            assertionLineIndex,
+                            literalStart,
+                            resolveContainerForColumn));
+                    continue;
+                }
+
+                if (IsNumberLiteralStart(rawLine, index))
+                {
+                    var literalStart = index;
+                    index = SkipNumberLiteral(rawLine, index);
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        rawLine.Substring(literalStart, index - literalStart),
+                        literalStart,
+                        "type_reference",
+                        rawLine.Trim(),
+                        currentLineIndex + 1,
+                        ResolveConstAssertionLiteralContainer(
+                            currentLineIndex,
+                            assertionLineIndex,
+                            literalStart,
+                            resolveContainerForColumn));
+                    index--;
+                    continue;
+                }
+
+                if (!TryReadLiteralKeyword(rawLine, index, scanEnd, out var keyword))
                     continue;
 
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    rawLine.Substring(literalStart, index - literalStart + 1),
-                    literalStart,
+                    keyword,
+                    index,
                     "type_reference",
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(literalStart));
-                continue;
+                    rawLine.Trim(),
+                    currentLineIndex + 1,
+                    ResolveConstAssertionLiteralContainer(
+                        currentLineIndex,
+                        assertionLineIndex,
+                        index,
+                        resolveContainerForColumn));
+                index += keyword.Length - 1;
             }
-
-            if (IsNumberLiteralStart(rawLine, index))
-            {
-                var literalStart = index;
-                index = SkipNumberLiteral(rawLine, index);
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    rawLine.Substring(literalStart, index - literalStart),
-                    literalStart,
-                    "type_reference",
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(literalStart));
-                index--;
-                continue;
-            }
-
-            if (!TryReadLiteralKeyword(rawLine, index, literalClose, out var keyword))
-                continue;
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                keyword,
-                index,
-                "type_reference",
-                context,
-                lineNumber,
-                resolveContainerForColumn(index));
-            index += keyword.Length - 1;
         }
     }
 
-    private static int FindConstAssertionLiteralOpen(string preparedLine, int asIndex)
+    private static SymbolRecord? ResolveConstAssertionLiteralContainer(
+        int literalLineIndex,
+        int assertionLineIndex,
+        int column,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        for (var index = asIndex - 1; index >= 0; index--)
+        return literalLineIndex == assertionLineIndex ? resolveContainerForColumn(column) : null;
+    }
+
+    private static bool TryFindConstAssertionLiteralOpen(
+        IReadOnlyList<string> preparedLines,
+        int assertionLineIndex,
+        int asIndex,
+        out int openLineIndex,
+        out int openColumn)
+    {
+        openLineIndex = -1;
+        openColumn = -1;
+        for (var lineIndex = assertionLineIndex; lineIndex >= 0; lineIndex--)
         {
-            if (char.IsWhiteSpace(preparedLine[index]))
-                continue;
-
-            if (preparedLine[index] is ']' or '}')
+            var line = preparedLines[lineIndex];
+            var index = lineIndex == assertionLineIndex ? asIndex - 1 : line.Length - 1;
+            for (; index >= 0; index--)
             {
-                var openChar = preparedLine[index] == ']' ? '[' : '{';
-                return FindMatchingOpenChar(preparedLine, index, openChar, preparedLine[index]);
-            }
+                if (char.IsWhiteSpace(line[index]))
+                    continue;
 
-            return -1;
+                if (line[index] is ']' or '}')
+                {
+                    var openChar = line[index] == ']' ? '[' : '{';
+                    return TryFindMatchingOpenChar(
+                        preparedLines,
+                        lineIndex,
+                        index,
+                        openChar,
+                        line[index],
+                        out openLineIndex,
+                        out openColumn);
+                }
+
+                return false;
+            }
         }
 
-        return -1;
+        return false;
     }
 
-    private static int FindMatchingOpenChar(string text, int closeIndex, char openChar, char closeChar)
+    private static bool TryFindMatchingOpenChar(
+        IReadOnlyList<string> lines,
+        int closeLineIndex,
+        int closeColumn,
+        char openChar,
+        char closeChar,
+        out int openLineIndex,
+        out int openColumn)
     {
+        openLineIndex = -1;
+        openColumn = -1;
         var depth = 0;
-        for (var index = closeIndex; index >= 0; index--)
+        for (var lineIndex = closeLineIndex; lineIndex >= 0; lineIndex--)
         {
-            if (text[index] == closeChar)
+            var line = lines[lineIndex];
+            var index = lineIndex == closeLineIndex ? closeColumn : line.Length - 1;
+            for (; index >= 0; index--)
             {
-                depth++;
-                continue;
+                if (line[index] == closeChar)
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (line[index] != openChar)
+                    continue;
+
+                depth--;
+                if (depth == 0)
+                {
+                    openLineIndex = lineIndex;
+                    openColumn = index;
+                    return true;
+                }
             }
-
-            if (text[index] != openChar)
-                continue;
-
-            depth--;
-            if (depth == 0)
-                return index;
         }
 
-        return -1;
+        return false;
     }
 
     private static int SkipQuotedLiteral(string text, int quoteIndex)
