@@ -53,6 +53,8 @@ internal static class ProgramRunner
             return CommandExitCodes.InvalidArgument;
         }
 
+        TryConsumeAsciiFlag(ref args);
+
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
             Console.Error.WriteLine(metricsError);
@@ -290,6 +292,40 @@ internal static class ProgramRunner
             ConsoleUi.SetColorMode(requested.Value);
         args = kept.ToArray();
         return true;
+    }
+
+    internal static void TryConsumeAsciiFlag(ref string[] args)
+    {
+        ConsoleUi.SetAsciiOutput(false);
+        if (args.Length == 0)
+            return;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--ascii")
+            {
+                ConsoleUi.SetAsciiOutput(true);
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
     }
 
     // Strip `--palette <name>` / `--palette=<name>` from `args` before

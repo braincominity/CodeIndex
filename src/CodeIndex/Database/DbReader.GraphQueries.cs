@@ -772,9 +772,13 @@ public partial class DbReader
     /// <summary>
     /// Find exact-match callers for BFS traversal. Uses per-row case sensitivity
     /// and filters to graph-supported languages only (preventing stale edges from
-    /// unsupported languages leaking into results on pre-upgrade databases).
+    /// unsupported languages leaking into results on pre-upgrade databases). The
+    /// SQL query applies the requested LIMIT/OFFSET so callers do not materialize
+    /// a larger intermediate page than they asked for.
     /// BFS 走査用の完全一致 caller 検索。行ごとの case sensitivity 判定、
     /// かつ graph 対応言語のみにフィルタ（アップグレード前 DB の古いエッジ漏れを防止）。
+    /// SQL 側で要求された LIMIT/OFFSET を適用し、呼び出し側が要求以上の中間ページを
+    /// materialize しないようにする。
     /// </summary>
     private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
@@ -953,7 +957,7 @@ public partial class DbReader
             // ダイヤモンド型グラフで到達可能な caller が visited 重複に隠れるのを防止。
             var needed = limit - results.Count;
             var offset = 0;
-            const int pageSize = 200;
+            var pageSize = Math.Max(1, needed + 1);
             var fetchIterations = 0;
 
             while (results.Count < limit && fetchIterations < maxFetchIterations)
@@ -1129,7 +1133,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        const int pageSize = 200;
+        const int pageSize = 1;
         var offset = 0;
         while (true)
         {
