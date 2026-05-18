@@ -5176,9 +5176,11 @@ jobs:
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
     [InlineData("callers", "type_reference")]
+    [InlineData("callers", "import")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
     [InlineData("callees", "type_reference")]
+    [InlineData("callees", "import")]
     public void RunCallersCallees_RejectNonCallGraphKind_WithUsageError(string command, string kind)
     {
         // issue #293 + issue #444: `callers` / `callees` must reject non-call-graph reference
@@ -5189,8 +5191,9 @@ jobs:
         // `container_name` is NULL. `type_reference` rows are compile-time type-position edges
         // (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) and
         // are not runtime calls, so `callers Foo --kind type_reference` would misreport type
-        // mentions as caller edges. The correct path for these kinds is
-        // `references <name> --kind attribute|annotation|type_reference`.
+        // mentions as caller edges. `import` rows are structural dependency edges rather than
+        // runtime calls, so callers/callees cannot answer them as graph edges. The correct path
+        // for these kinds is `references <name> --kind attribute|annotation|type_reference|import`.
         // issue #293 + issue #444 補足: `callers` / `callees` は CLI 境界で非 call-graph な
         // reference kind を必ず弾く。metadata (`attribute` / `annotation`) 行は注釈対象ではなく
         // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
@@ -5198,8 +5201,9 @@ jobs:
         // file-level target は `container_name = NULL` で完全に脱落する。`type_reference` は
         // 宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な
         // 型言及であり実行時呼び出しではないので、`callers Foo --kind type_reference` は型言及を
-        // caller edge として誤って返す。正しい経路は
-        // `references <name> --kind attribute|annotation|type_reference`。
+        // caller edge として誤って返す。`import` 行は runtime call ではなく構造的な dependency
+        // edge なので callers/callees では graph edge として答えられない。正しい経路は
+        // `references <name> --kind attribute|annotation|type_reference|import`。
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
         try
         {
@@ -5216,6 +5220,8 @@ jobs:
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
             Assert.Contains($"references <name> --kind {kind}", stderr);
+            if (kind == "import")
+                Assert.Contains("Import references are structural dependency edges, not runtime calls", stderr);
         }
         finally
         {
