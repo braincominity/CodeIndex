@@ -58,7 +58,7 @@ public partial class McpServer : IDisposable
     // 現在実行中のツール呼び出しが観測するトークン。`ProcessFrame` 実行直前にセットし、
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
-    private CancellationToken _currentRequestToken = CancellationToken.None;
+    private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -392,60 +392,152 @@ public partial class McpServer : IDisposable
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
         Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
-        while (_running)
-        {
-            // The full read/process/write iteration is wrapped in the same cancellation guard so
-            // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
-            // exits the loop cleanly instead of bubbling OperationCanceledException out of the
-            // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
-            // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
-            // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
-            try
-            {
-                var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-                if (frame == null)
-                    break; // transport closed / トランスポートが閉じられた
+        if (transport is HttpMcpTransport httpTransport)
+            httpTransport.OutOfBandFrameHandler = ProcessFrame;
 
-                // Acquire the concurrency gate before doing any work so a future async dispatch
-                // mode (multiple frames in flight) can never run more than `MaxConcurrency` tool
-                // calls at once. Today the loop is sequential so the gate is effectively a no-op
-                // at runtime, but it documents the contract and gives tests a verifiable bound
-                // (#1567).
-                // 並列ディスパッチ時に in-flight 数が `MaxConcurrency` を超えないよう、ProcessFrame
-                // の手前で gate を取得する (#1567)。
-                await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
-                string? response;
+        try
+        {
+            if (string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunConcurrentFrameLoopAsync(transport, loopToken).ConfigureAwait(false);
+                return;
+            }
+
+            while (_running)
+            {
+                // The full read/process/write iteration is wrapped in the same cancellation guard so
+                // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
+                // exits the loop cleanly instead of bubbling OperationCanceledException out of the
+                // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
+                // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
+                // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
                 try
                 {
-                    // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
-                    // off can observe shutdown / client-disconnect cancellation through
-                    // `DbReader.Cancellation` (#1567).
-                    // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
-                    // token を `WithDbReader` に渡す (#1567)。
-                    _currentRequestToken = loopToken;
-                    response = ProcessFrame(frame);
+                    var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
+                    if (frame == null)
+                        break; // transport closed / トランスポートが閉じられた
+
+                    // Acquire the concurrency gate before doing any work so a future async dispatch
+                    // mode (multiple frames in flight) can never run more than `MaxConcurrency` tool
+                    // calls at once. Today the loop is sequential so the gate is effectively a no-op
+                    // at runtime, but it documents the contract and gives tests a verifiable bound
+                    // (#1567).
+                    // 並列ディスパッチ時に in-flight 数が `MaxConcurrency` を超えないよう、ProcessFrame
+                    // の手前で gate を取得する (#1567)。
+                    await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
+                    string? response;
+                    try
+                    {
+                        // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
+                        // off can observe shutdown / client-disconnect cancellation through
+                        // `DbReader.Cancellation` (#1567).
+                        // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
+                        // token を `WithDbReader` に渡す (#1567)。
+                        _currentRequestToken.Value = loopToken;
+                        response = ProcessFrame(frame);
+                    }
+                    finally
+                    {
+                        _currentRequestToken.Value = CancellationToken.None;
+                        _concurrencyGate.Release();
+                    }
+
+                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+
+                    // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
+                    // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
+                    // of a server that has been asked to stop.
+                    // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
+                    if (!_running)
+                        break;
                 }
-                finally
+                catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
                 {
-                    _currentRequestToken = CancellationToken.None;
-                    _concurrencyGate.Release();
-                }
-
-                await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
-
-                // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
-                // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
-                // of a server that has been asked to stop.
-                // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
-                if (!_running)
                     break;
+                }
+            }
+        }
+        finally
+        {
+            if (transport is HttpMcpTransport httpTransportToClear)
+                httpTransportToClear.OutOfBandFrameHandler = null;
+        }
+
+        Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
+    {
+        using var writeGate = new SemaphoreSlim(1, 1);
+        using var normalFrameGate = new SemaphoreSlim(1, 1);
+        var tasks = new List<Task>();
+
+        while (_running)
+        {
+            string? frame;
+            try
+            {
+                frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
             {
                 break;
             }
+            if (frame == null)
+                break;
+
+            if (IsCancellationFrame(frame))
+            {
+                var response = ProcessFrame(frame);
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
+                continue;
+            }
+
+            await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    await normalFrameGate.WaitAsync(loopToken).ConfigureAwait(false);
+                    string? response;
+                    try
+                    {
+                        _currentRequestToken.Value = loopToken;
+                        response = ProcessFrame(frame);
+                    }
+                    finally
+                    {
+                        _currentRequestToken.Value = CancellationToken.None;
+                        normalFrameGate.Release();
+                    }
+
+                    await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                    try
+                    {
+                        await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        writeGate.Release();
+                    }
+                }
+                finally
+                {
+                    _concurrencyGate.Release();
+                }
+            }, CancellationToken.None));
+            SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
+        await Task.WhenAll(tasks).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
@@ -650,7 +742,7 @@ public partial class McpServer : IDisposable
         if (requestKey == null)
             return action();
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken, _shutdownCts.Token);
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
         {
             return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
@@ -660,10 +752,10 @@ public partial class McpServer : IDisposable
         }
         RequestRegisteredForTests?.Invoke(id);
 
-        var previousToken = _currentRequestToken;
+        var previousToken = _currentRequestToken.Value;
         try
         {
-            _currentRequestToken = requestCts.Token;
+            _currentRequestToken.Value = requestCts.Token;
             requestCts.Token.ThrowIfCancellationRequested();
             return action();
         }
@@ -673,7 +765,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
-            _currentRequestToken = previousToken;
+            _currentRequestToken.Value = previousToken;
             _activeRequests.TryRemove(requestKey, out _);
         }
     }
@@ -688,6 +780,23 @@ public partial class McpServer : IDisposable
         {
             try { cts.Cancel(); }
             catch (ObjectDisposedException) { /* completed while cancellation was being delivered. */ }
+        }
+    }
+
+    private static bool IsCancellationFrame(string frame)
+    {
+        try
+        {
+            var node = JsonNode.Parse(frame);
+            if (node is not JsonObject obj)
+                return false;
+            var method = obj["method"]?.GetValue<string>();
+            return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
+                || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -1133,7 +1242,7 @@ public partial class McpServer : IDisposable
             };
             }
         }
-        catch (OperationCanceledException) when (_currentRequestToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (_currentRequestToken.Value.IsCancellationRequested)
         {
             metricsError = nameof(OperationCanceledException);
             throw;
@@ -1467,7 +1576,7 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var requestToken = _currentRequestToken;
+        var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
         return action(reader);
