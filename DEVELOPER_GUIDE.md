@@ -230,6 +230,12 @@ files 1──N symbol_references
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
 
+### Extending reference extraction
+
+Reference extraction is routed through `IReferenceExtractor` instances keyed by normalized language strings. Use `ReferenceExtractor.TryGetExtractor(language, out var extractor)` when a caller needs to invoke a language extractor directly; aliases such as `vue` / `svelte` normalize to `typescript`, and `razor` / `blazor` / `cshtml` normalize to `csharp`. The public `ReferenceExtractor.Extract(...)` method remains the compatibility entry point and delegates through the same registry.
+
+Extractor inputs are passed as a `ReferenceExtractionContext`. Implementations must be stateless per call: keep mutable parse state in local variables or request-scoped helper objects, and treat shared regexes or lookup tables as immutable after initialization. New language extractors should register exactly one normalized language key and preserve existing reference-kind taxonomy (`call`, `instantiate`, `type_reference`, metadata kinds, and language-specific raw labels) so database readers and MCP output keep their contracts.
+
 ### TypeScript type-graph extraction
 
 TypeScript extraction emits `type_reference` edges from type-only constructs as dependency metadata, not executable call-graph edges. Type aliases, mapped types, indexed access types, conditional types, template literal type holes, and `infer` clauses are scanned for referenced identifiers while TypeScript type operators such as `keyof`, `in`, `as`, `extends`, and `infer` are suppressed as keywords. For example, ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` records references to `T`, `K`, and `Capitalize`; `type Unwrap<T> = T extends Promise<infer U> ? U : never` records `T`, `Promise`, and `U`.
