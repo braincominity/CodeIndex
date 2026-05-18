@@ -27849,6 +27849,20 @@ jobs:
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("inspect")}", stderr);
     }
 
+    [Fact]
+    public void RunSymbols_BlankPositionalQueryReturnsDistinctUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["   "],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: symbols query cannot be empty or whitespace-only", stderr);
+        Assert.DoesNotContain("symbol name list is empty after normalization", stderr);
+        Assert.Contains("empty or whitespace-only arguments", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("symbols")}", stderr);
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]

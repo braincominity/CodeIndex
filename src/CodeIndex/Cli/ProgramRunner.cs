@@ -10,7 +10,12 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
-    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null, string? configStartDirectory = null)
+    internal static int Run(
+        string[] args,
+        JsonSerializerOptions? jsonOptions = null,
+        string? appVersion = null,
+        string? configStartDirectory = null,
+        Action? beforeDispatchForTesting = null)
     {
         appVersion ??= ConsoleUi.LoadVersion();
 
@@ -115,6 +120,8 @@ internal static class ProgramRunner
 
         try
         {
+            beforeDispatchForTesting?.Invoke();
+
             if (args[0] is "mcp" or "mcp-server")
             {
                 var mcpExitCode = RunMcp(args[1..], appVersion);
@@ -197,8 +204,9 @@ internal static class ProgramRunner
             }
 
             GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
+            Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
-            throw;
+            return CommandExitCodes.DatabaseError;
         }
     }
 

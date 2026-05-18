@@ -314,6 +314,39 @@ public partial class McpServer
         return paths.Count == 0 ? null : paths;
     }
 
+    private static bool TryReadRequiredStringParameter(JsonNode? args, string propertyName, out string value, out string? error)
+    {
+        var node = args?[propertyName];
+        if (node is null)
+        {
+            value = string.Empty;
+            error = $"Missing required parameter: {propertyName}";
+            return false;
+        }
+
+        value = node.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = $"Parameter \"{propertyName}\" cannot be empty or whitespace-only";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool HasBlankPathFilter(JsonNode? args)
+    {
+        var node = args?["path"];
+        if (node is null)
+            return false;
+
+        if (node is JsonArray array)
+            return array.Count > 0 && array.All(item => string.IsNullOrWhiteSpace(item?.GetValue<string>()));
+
+        return string.IsNullOrWhiteSpace(node.GetValue<string>());
+    }
+
     /// <summary>
     /// Serialize a path filter list back into a JSON echo value.
     /// Null/empty → JSON null; single element → string; multiple → array.
@@ -379,9 +412,8 @@ public partial class McpServer
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
@@ -561,9 +593,8 @@ public partial class McpServer
 
     private JsonNode ExecuteDefinition(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         if (IsBareVerbatimQueryToken(query))
@@ -619,9 +650,8 @@ public partial class McpServer
 
     private JsonNode ExecuteReferences(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         if (IsBareVerbatimQueryToken(query))
@@ -684,9 +714,8 @@ public partial class McpServer
 
     private JsonNode ExecuteCallers(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         if (IsBareVerbatimQueryToken(query))
@@ -751,9 +780,8 @@ public partial class McpServer
 
     private JsonNode ExecuteCallees(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         if (IsBareVerbatimQueryToken(query))
@@ -896,9 +924,8 @@ public partial class McpServer
 
     private JsonNode ExecuteAnalyzeSymbol(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         if (IsBareVerbatimQueryToken(query))
@@ -1099,9 +1126,8 @@ public partial class McpServer
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
     {
-        var path = args?["path"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(path))
-            return CreateToolErrorResponse(id, "Missing required parameter: path");
+        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
 
         return WithDbReader(id, reader =>
         {
@@ -1124,9 +1150,8 @@ public partial class McpServer
 
     private JsonNode ExecuteExcerpt(JsonNode? id, JsonNode? args)
     {
-        var path = args?["path"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(path))
-            return CreateToolErrorResponse(id, "Missing required parameter: path");
+        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
 
         var startLine = args?["startLine"]?.GetValue<int>();
         if (startLine == null || startLine <= 0)
@@ -1221,15 +1246,16 @@ public partial class McpServer
 
     private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var pathPatterns = ReadScopedPathList(args);
         if (pathPatterns == null || pathPatterns.Count == 0)
-            return CreateToolErrorResponse(id, "Missing required parameter: path");
+            return CreateToolErrorResponse(id, HasBlankPathFilter(args)
+                ? "Parameter \"path\" cannot be empty or whitespace-only"
+                : "Missing required parameter: path");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -1615,9 +1641,8 @@ public partial class McpServer
 
     private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)
     {
-        var query = args?["query"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(query))
-            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -1921,7 +1946,7 @@ public partial class McpServer
             ["version"] = _version,
             ["timestamp"] = DateTime.UtcNow.ToString("O"),
             ["db_path"] = _dbPath,
-            ["db_exists"] = File.Exists(_dbPath),
+            ["db_exists"] = File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)),
         };
         return CreateToolResult(id, $"cdidx v{_version} is ready.", payload);
     }
@@ -1969,9 +1994,8 @@ public partial class McpServer
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args)
     {
-        var path = args?["path"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(path))
-            return CreateToolErrorResponse(id, "Missing required parameter: path");
+        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
         long? maxFileBytes = null;
@@ -2404,9 +2428,8 @@ public partial class McpServer
     private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
     {
         // 1. Validate required parameters / 必須パラメータのバリデーション
-        var category = args?["category"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(category))
-            return CreateToolErrorResponse(id, "Missing required parameter: category");
+        if (!TryReadRequiredStringParameter(args, "category", out var category, out var requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
 
         if (!SuggestionRecord.ValidCategories.Contains(category))
         {
@@ -2417,9 +2440,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, message, similar);
         }
 
-        var description = args?["description"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(description))
-            return CreateToolErrorResponse(id, "Missing required parameter: description");
+        if (!TryReadRequiredStringParameter(args, "description", out var description, out requiredError))
+            return CreateToolErrorResponse(id, requiredError!);
 
         if (description.Length > MaxDescriptionLength)
             return CreateToolErrorResponse(id, $"Description too long ({description.Length} chars, max {MaxDescriptionLength})");
