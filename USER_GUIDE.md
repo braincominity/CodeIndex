@@ -3201,7 +3201,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
 
-`callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference_kind-フィルタの対応表)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
+`callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
