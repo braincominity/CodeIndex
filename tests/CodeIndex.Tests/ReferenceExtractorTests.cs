@@ -14448,8 +14448,8 @@ public class ReferenceExtractorTests
 
         Assert.Equal(2, references.Count(r => r.SymbolName == "ActiveUsers" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "RecentOrders" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "cte_body_reference");
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "cte_body_reference");
         Assert.Contains(references, r => r.SymbolName == "user_summary_view" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
@@ -14465,6 +14465,36 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
+    }
+
+    [Fact]
+    public void Extract_SQL_RecursiveCteCapturesBodyReferencesAndCteSymbols()
+    {
+        // issue #2098: recursive CTE source references should stay distinguishable from the
+        // outer SELECT, including the CTE's self-reference in the recursive member.
+        // issue #2098: recursive CTE 内の source 参照は outer SELECT と区別し、
+        // recursive member 内の CTE 自己参照も保持する。
+        const string content = """
+            WITH RECURSIVE org_tree AS (
+                SELECT id, manager_id
+                FROM employees
+                WHERE manager_id IS NULL
+                UNION ALL
+                SELECT e.id, e.manager_id
+                FROM employees e
+                JOIN org_tree ot ON e.manager_id = ot.id
+            )
+            SELECT id
+            FROM org_tree;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "org_tree");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "employees" && r.ReferenceKind == "cte_body_reference"));
+        Assert.Contains(references, r => r.SymbolName == "org_tree" && r.ReferenceKind == "cte_body_reference");
+        Assert.Contains(references, r => r.SymbolName == "org_tree" && r.ReferenceKind == "reference");
     }
 
     [Fact]
@@ -16118,7 +16148,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "cte_body_reference");
         Assert.Contains(references, r => r.SymbolName == "recent_users" && r.ReferenceKind == "reference");
     }
 
@@ -28615,9 +28645,9 @@ public class ReferenceExtractorTests
     public void Extract_NullContent_ReturnsEmpty()
     {
         // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
-        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // step added ahead of StripLineLeadingInvisibles would otherwise dereference `null`
         // before the helper's IsNullOrEmpty guard could run. Closes #183.
-        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingInvisibles
         // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
         // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
         Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
@@ -28635,8 +28665,8 @@ public class ReferenceExtractorTests
     public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
     {
         // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
-        // normalization must run before StripLineLeadingBom so call sites on mid-file
-        // BOM lines are still captured. Closes #183.
+        // normalization must run before StripLineLeadingInvisibles so call sites on
+        // mid-file BOM lines are still captured. Closes #183.
         // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
         // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
         const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";

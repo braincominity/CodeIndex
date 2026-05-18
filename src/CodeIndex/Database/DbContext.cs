@@ -550,6 +550,7 @@ public class DbContext : IDisposable
     // full scan が改めて記録する。同じ値を `status` (no `--check`) でも参照し、
     // `worktree_head_changed` として worktree の HEAD 切替を素早く通知する。Issues #1508 / #1512。
     public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
+    public const string IndexedHeadCommitBranchMetaKey = "indexed_head_commit_branch";
     // #1509: full Git HEAD commit and short branch name captured at the end of every
     // successful index run (full scan AND partial update), plus the UTC timestamp of that
     // stamp. Together they let `status` (and any future cross-session staleness check)

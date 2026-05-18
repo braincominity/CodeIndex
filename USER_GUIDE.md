@@ -1249,6 +1249,8 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
 
+CLI JSON (`--json`) and MCP tool responses are both stable integration surfaces, but they are not identical wire envelopes. CLI commands keep CLI-oriented metadata such as `api_version` and command result fields, while MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag; CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table.
+
 ## AI Integration
 
 cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local index.
@@ -1535,6 +1537,8 @@ Once configured, the AI can directly call these tools:
 | `index` | Index or re-index a project directory |
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
+
+For `callers`, `impact_analysis`, and `deps`, the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) explains which edge kinds each command walks and how to reconcile count differences with `references <Name> --kind attribute` or `--kind annotation`.
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
@@ -2928,6 +2932,8 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
 
+CLI JSON（`--json`）と MCP tool response はどちらも安定した integration surface ですが、wire envelope は同一ではありません。CLI command は `api_version` や command result field など CLI 向けのメタデータを保持し、MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有のメタデータを返す場合があります。参照行をグループ化する graph tool（`callers`、`callees`、および bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、ソート済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。
+
 遅い検索を調べる場合は、read 系コマンドに `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON オブジェクトを 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。
 
 ## AIとの連携
@@ -3221,6 +3227,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
+
+`callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
