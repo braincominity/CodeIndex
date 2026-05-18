@@ -925,8 +925,6 @@ public partial class DbReader
         while (queue.Count > 0 && results.Count < limit)
         {
             var (currentSymbol, depth) = queue.Dequeue();
-            if (depth > maxDepth)
-                break;
 
             // Fetch callers in pages, filtering out already-visited before counting toward limit.
             // This prevents diamond graphs from hiding reachable callers behind visited duplicates.
