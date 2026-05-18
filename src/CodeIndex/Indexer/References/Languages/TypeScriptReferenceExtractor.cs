@@ -540,7 +540,7 @@ internal static class TypeScriptReferenceExtractor
             var line = lines[currentLineIndex];
             var index = currentLineIndex == lineIndex ? column - 1 : line.Length - 1;
             var stop = currentLineIndex == minLineIndex ? minColumn : 0;
-            var lineCommentStart = line.IndexOf("//", stop, Math.Max(0, index - stop + 1), StringComparison.Ordinal);
+            var lineCommentStart = IndexOfLineCommentOutsideString(line, stop, Math.Max(0, index - stop + 1));
             if (lineCommentStart >= 0)
                 index = lineCommentStart - 1;
             for (; index >= stop; index--)
@@ -561,6 +561,38 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return null;
+    }
+
+    private static int IndexOfLineCommentOutsideString(string line, int startIndex, int count)
+    {
+        var endIndex = Math.Min(line.Length, startIndex + count);
+        char? quote = null;
+        for (var index = startIndex; index + 1 < endIndex; index++)
+        {
+            if (quote is char activeQuote)
+            {
+                if (line[index] == '\\')
+                {
+                    index++;
+                    continue;
+                }
+
+                if (line[index] == activeQuote)
+                    quote = null;
+                continue;
+            }
+
+            if (line[index] is '"' or '\'' or '`')
+            {
+                quote = line[index];
+                continue;
+            }
+
+            if (line[index] == '/' && line[index + 1] == '/')
+                return index;
+        }
+
+        return -1;
     }
 
     private static char? FindNextNonWhitespace(
