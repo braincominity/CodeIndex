@@ -456,7 +456,7 @@ Supported symbol kinds by language:
 | Java | methods, compact constructors, enum constants, classes, records, interfaces, annotations, enums, record components | imports, sealed `permits`, and `module-info.java` directives | yes |
 | Kotlin | functions, extension functions, secondary constructors, classes, objects, interfaces, enum classes, enum entries, properties | imports, type aliases, trailing-lambda calls | yes |
 | Go | functions, methods, test/benchmark/fuzz/example/init roles, type aliases, structs, interfaces | imports, type-position references, goroutine spawns, channel sends/receives | yes |
-| Rust | functions, macros, `const`, `static`, impl/type aliases, structs, unions, traits, enums | `use`, turbofish and structural type-position references | yes |
+| Rust | functions, macros, `const`, `static`, impl/type aliases, structs, unions, traits, enums, inline modules, file modules | `use`, turbofish, structural type-position references, associated-type bindings, and explicit lifetime references | yes |
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |

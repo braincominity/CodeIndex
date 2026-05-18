@@ -14308,6 +14308,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DistinguishesFileModulesAndScopesInlineModules()
+    {
+        var content = """
+            pub mod file_backed;
+
+            pub(crate) mod outer {
+                pub mod inner {
+                    pub fn build() {}
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var fileModule = Assert.Single(symbols, s => s.Kind == "file_module" && s.Name == "file_backed");
+        Assert.Equal("pub", fileModule.Visibility);
+
+        var outer = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "outer");
+        Assert.Equal("pub(crate)", outer.Visibility);
+
+        var inner = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "inner");
+        Assert.Equal("outer", inner.ContainerName);
+        Assert.Equal("pub", inner.Visibility);
+
+        var build = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Equal("inner", build.ContainerName);
+        Assert.Contains("outer", build.ContainerQualifiedName, StringComparison.Ordinal);
+        Assert.Contains("inner", build.ContainerQualifiedName, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
         var content = "type Handler struct {\n}\ntype ID = string\ntype Callback func(int) int\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";

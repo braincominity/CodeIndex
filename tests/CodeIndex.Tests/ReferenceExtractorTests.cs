@@ -30415,6 +30415,7 @@ public class ReferenceExtractorTests
                 raw: *const Marker,
                 mutable: *mut State,
                 text: &'static str,
+                dynamic: Box<dyn Iterator<Item = User> + Send + 'static>,
             }
             """;
 
@@ -30422,16 +30423,44 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "Future" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Box" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Iterator" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Item" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Send" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "State" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "'static" && r.ReferenceKind == "lifetime_reference");
         Assert.DoesNotContain(
             references,
             r => r.ReferenceKind == "type_reference"
                 && r.SymbolName is "impl" or "dyn" or "const" or "mut" or "ref" or "static");
+    }
+
+    [Fact]
+    public void Extract_RustLifetimeParameters_CaptureExplicitLifetimeReferences()
+    {
+        const string content = """
+            trait Borrower<'a> {
+                fn borrow<'b, T: Trait<'b>>(input: &'a T) -> &'b dyn Iterator<Item = T>
+                where
+                    T: for<'c> Parser<'c> + 'static;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "'a" && r.ReferenceKind == "lifetime_reference");
+        Assert.Contains(references, r => r.SymbolName == "'b" && r.ReferenceKind == "lifetime_reference");
+        Assert.Contains(references, r => r.SymbolName == "'c" && r.ReferenceKind == "lifetime_reference");
+        Assert.Contains(references, r => r.SymbolName == "'static" && r.ReferenceKind == "lifetime_reference");
+        Assert.Contains(references, r => r.SymbolName == "Trait" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Iterator" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Item" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Parser" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -30681,7 +30710,7 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustAssociatedTypeBinding_SkipsBindingKey()
+    public void Extract_RustAssociatedTypeBinding_CapturesBindingKey()
     {
         const string content = """
             fn make() -> impl Future<Output = User> {
@@ -30693,8 +30722,8 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "Future" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
