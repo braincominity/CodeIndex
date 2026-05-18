@@ -29932,6 +29932,8 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference" && r.Column == 43);
+        Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference" && r.Column == 55);
         Assert.DoesNotContain(references, r => r.SymbolName == "const" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "const_assertion");
     }

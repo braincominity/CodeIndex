@@ -331,15 +331,15 @@ internal static class TypeScriptReferenceExtractor
                 continue;
             }
 
-            if (IsNumberLiteralStart(preparedLine, index))
+            if (IsNumberLiteralStart(rawLine, index))
             {
                 var literalStart = index;
-                index = SkipNumberLiteral(preparedLine, index);
+                index = SkipNumberLiteral(rawLine, index);
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    preparedLine.Substring(literalStart, index - literalStart),
+                    rawLine.Substring(literalStart, index - literalStart),
                     literalStart,
                     "type_reference",
                     context,
@@ -349,7 +349,7 @@ internal static class TypeScriptReferenceExtractor
                 continue;
             }
 
-            if (!TryReadLiteralKeyword(preparedLine, index, literalClose, out var keyword))
+            if (!TryReadLiteralKeyword(rawLine, index, literalClose, out var keyword))
                 continue;
 
             ReferenceExtractor.AddReference(
