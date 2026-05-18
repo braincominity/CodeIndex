@@ -115,7 +115,8 @@ Choose the one refresh mode that matches your situation:
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --json
 
 # After a normal commit, prefer git-aware diff refresh because it sees renames/deletes
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+commit_id=$(git rev-parse HEAD)
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
 
 # After a branch switch, prefer the before/after refs when your workflow has both
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
@@ -228,7 +229,8 @@ dotnet build
 
 # Default post-commit path: refresh from the last commit's diff
 # This is safer than --files because git diff sees renames/deletes
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+commit_id=$(git rev-parse HEAD)
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
 
 # Branch switch path when the before/after refs are known
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
@@ -447,7 +449,8 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/
 
 # 通常のコミット直後は、そのコミット差分だけを反映
 # git diff が rename/delete も見られるので、こちらを既定にする
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+commit_id=$(git rev-parse HEAD)
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
 ```
 
 `dotnet run` でも構いません:
