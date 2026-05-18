@@ -127,6 +127,17 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (options.ParseError != null)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                options.ParseError,
+                CommandExitCodes.UsageError,
+                "Rerun `cdidx index <projectPath> --commits <commit-id> [commit-id ...]` with 7-40 hex commit object IDs.",
+                CommandErrorCodes.UsageError);
+        }
+
         if (options.ChangedBetweenSpecified && options.ChangedBetweenRefs.Count != 2)
         {
             return WriteCommandError(
@@ -613,6 +624,7 @@ public static class IndexCommandRunner
         var projectFilters = new List<string>();
         string? solutionPath = null;
         string? projectFilterError = null;
+        string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -674,7 +686,12 @@ public static class IndexCommandRunner
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
-                        commits.Add(args[++i]);
+                    {
+                        var commit = args[++i];
+                        commits.Add(commit);
+                        if (!GitHelper.IsCommitObjectId(commit))
+                            parseError ??= $"invalid --commits value '{commit}': expected a 7-40 character hex commit ID, not a branch, tag, or range";
+                    }
                     if (commits.Count == 0)
                         Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                     break;
@@ -768,6 +785,7 @@ public static class IndexCommandRunner
             ProjectFilters = projectFilters,
             SolutionPath = solutionPath,
             ProjectFilterError = projectFilterError,
+            ParseError = parseError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
@@ -3459,6 +3477,7 @@ public sealed class IndexCommandOptions
     public List<string> ProjectFilters { get; init; } = [];
     public string? SolutionPath { get; init; }
     public string? ProjectFilterError { get; init; }
+    public string? ParseError { get; init; }
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }
