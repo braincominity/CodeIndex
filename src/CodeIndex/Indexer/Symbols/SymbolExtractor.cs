@@ -3874,6 +3874,8 @@ public static partial class SymbolExtractor
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
+        if (lang == "go")
+            ClassifyGoFunctionRoles(symbols, filePath);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         if (lang is "javascript" or "typescript")
             ClassifyJavaScriptTypeScriptReactHooks(symbols);

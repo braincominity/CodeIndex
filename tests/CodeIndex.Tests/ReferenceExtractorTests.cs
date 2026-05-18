@@ -11,6 +11,77 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void Extract_Go_EmitsGoroutineAndChannelReferences()
+    {
+        const string content = """
+            package demo
+
+            func worker() {}
+
+            func run(ch chan int) {
+                go worker()
+                ch <- 1
+                value := <-ch
+                select {
+                case ch <- value:
+                case value = <-ch:
+                default:
+                }
+                if <-ch {
+                }
+                for <-ch {
+                }
+                switch <-ch {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "worker"
+            && reference.ReferenceKind == "goroutine_spawn"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "worker"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_send"
+            && reference.Line == 7);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 8);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_send"
+            && reference.Line == 10);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "value"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 10);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 11);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 14);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 16);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 18);
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

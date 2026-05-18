@@ -2034,7 +2034,17 @@ public static partial class ReferenceExtractor
             else if (language == "cpp")
                 CppReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
             else if (language == "go")
+            {
+                GoReferenceExtractor.EmitConcurrencyReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
                 GoReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, goImportBlockLines?[i] == true);
+            }
             else if (language == "dart")
                 DartReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
             else if (language == "vb")
