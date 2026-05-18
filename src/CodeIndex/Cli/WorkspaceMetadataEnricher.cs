@@ -61,17 +61,31 @@ public static class WorkspaceMetadataEnricher
         }
 
         var runtimeHead = GitHelper.TryGetHeadCommit(projectRoot);
+        var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot);
         var dirty = GitHelper.TryIsWorktreeDirty(projectRoot);
         var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
+        var indexedBranch = DbPathResolver.TryReadIndexedHeadBranch(dbPath);
+        var hasIndexedBranchStamp = DbPathResolver.TryHasIndexedHeadBranchStamp(dbPath);
         // Detect a per-worktree branch / HEAD switch by comparing the runtime HEAD against
-        // the HEAD captured at index time. Only meaningful when both sides have a value —
-        // legacy DBs or projects indexed outside git report null and must not trigger a
-        // false-positive switch warning. Issue #1512.
+        // the HEAD captured at index time. Also compare the branch stamp when a HEAD stamp is
+        // present so branch <-> detached transitions at the same commit are still visible.
+        // Only meaningful when enough metadata exists; legacy DBs or projects indexed outside
+        // git report null and must not trigger a false-positive switch warning. Issues #1512
+        // and #2094.
         // worktree 内の branch / HEAD 切替検出。index 時点と現在で HEAD を突き合わせる。
-        // 両側が値を持つ場合のみ有意義（legacy DB や非 git は null になり誤検出を避ける）。
-        bool? headChanged = (indexedHead != null && runtimeHead != null)
+        // 同一 commit の branch/detached 遷移も branch stamp で検出する。
+        var commitChanged = indexedHead != null && runtimeHead != null
             ? !string.Equals(indexedHead, runtimeHead, StringComparison.OrdinalIgnoreCase)
             : (bool?)null;
+        var branchChanged = indexedHead != null
+            && runtimeHead != null
+            && hasIndexedBranchStamp
+            && !string.Equals(indexedBranch, runtimeBranch, StringComparison.Ordinal)
+            ? true
+            : (bool?)null;
+        bool? headChanged = commitChanged == true || branchChanged == true
+            ? true
+            : commitChanged;
 
         setter(projectRoot, runtimeHead, dirty, indexedHead, headChanged);
     }

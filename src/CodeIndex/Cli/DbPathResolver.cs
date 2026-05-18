@@ -152,6 +152,12 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadCommit(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitMetaKey);
 
+    public static string? TryReadIndexedHeadBranch(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
+
+    public static bool TryHasIndexedHeadBranchStamp(string dbPath)
+        => TryMetaKeyExists(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
+
     private static string? TryReadMetaString(string dbPath, string key)
     {
         try
@@ -167,6 +173,23 @@ public static class DbPathResolver
         catch
         {
             return null;
+        }
+    }
+
+    private static bool TryMetaKeyExists(string dbPath, string key)
+    {
+        try
+        {
+            using var connection = OpenMetadataConnection(dbPath);
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM codeindex_meta WHERE key = @key LIMIT 1";
+            cmd.Parameters.AddWithValue("@key", key);
+            return cmd.ExecuteScalar() != null;
+        }
+        catch
+        {
+            return false;
         }
     }
 

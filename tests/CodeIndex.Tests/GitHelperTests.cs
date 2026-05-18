@@ -124,6 +124,38 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void ResolveGitCommonDir_BareRepository_ReturnsRepositoryDirectory()
+    {
+        var sourceRepo = CreateGitRepo();
+        File.WriteAllText(Path.Combine(sourceRepo, "tracked.txt"), "v1\n");
+        RunGit(sourceRepo, "add", "tracked.txt");
+        RunGit(sourceRepo, "commit", "-m", "initial");
+        var bareRepo = Path.Combine(_tempDir, "repo.git");
+        RunGit(_tempDir, "clone", "--bare", sourceRepo, bareRepo);
+
+        Assert.Equal(GitRepositoryType.Bare, GitHelper.TryGetRepositoryType(bareRepo));
+        Assert.Equal(Path.GetFullPath(bareRepo), Path.GetFullPath(GitHelper.ResolveGitCommonDir(bareRepo)!));
+        Assert.Equal(Path.GetFullPath(bareRepo), Path.GetFullPath(GitHelper.TryGetRepositoryRoot(bareRepo)!));
+    }
+
+    [Fact]
+    public void TryGetRepositoryType_ClassifiesNormalWorktreeBareAndNone()
+    {
+        var normalRepo = CreateGitRepo();
+        var linkedWorktree = Path.Combine(_tempDir, "linked-worktree");
+        RunGit(normalRepo, "worktree", "add", linkedWorktree);
+        var bareRepo = Path.Combine(_tempDir, "shape.git");
+        RunGit(_tempDir, "clone", "--bare", normalRepo, bareRepo);
+        var nonRepo = Path.Combine(_tempDir, "not-a-repo");
+        Directory.CreateDirectory(nonRepo);
+
+        Assert.Equal(GitRepositoryType.Normal, GitHelper.TryGetRepositoryType(normalRepo));
+        Assert.Equal(GitRepositoryType.Worktree, GitHelper.TryGetRepositoryType(linkedWorktree));
+        Assert.Equal(GitRepositoryType.Bare, GitHelper.TryGetRepositoryType(bareRepo));
+        Assert.Equal(GitRepositoryType.None, GitHelper.TryGetRepositoryType(nonRepo));
+    }
+
+    [Fact]
     public void GetChangedFilesFromCommit_ReturnsFilesForRegularCommit()
     {
         var repoDir = CreateGitRepo();
