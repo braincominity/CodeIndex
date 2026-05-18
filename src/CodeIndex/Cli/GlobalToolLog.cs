@@ -38,7 +38,7 @@ internal static class GlobalToolLog
             session.Write("INFO", $"args={FormatArgs(args)}");
             return session;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             CurrentSession.Value = null;
             return null;
@@ -127,7 +127,7 @@ internal static class GlobalToolLog
             foreach (var file in oldLogs)
                 file.Delete();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort only / ベストエフォートのみ
         }
@@ -190,7 +190,7 @@ internal static class GlobalToolLog
                     _writer.WriteLine($"{DateTimeOffset.UtcNow:O} [{level}] {message}");
                     _writer.Flush();
                 }
-                catch
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     // Best-effort only / ベストエフォートのみ
                 }
@@ -210,7 +210,7 @@ internal static class GlobalToolLog
                     if (_originalError != null)
                         Console.SetError(_originalError);
                 }
-                catch
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     // Best-effort only / ベストエフォートのみ
                 }
