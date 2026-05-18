@@ -1,11 +1,33 @@
+using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
 internal static class TypeScriptReferenceExtractor
 {
+    internal readonly record struct LineRange(int StartLine, int EndLine);
+    internal sealed record NamespaceAliasBinding(
+        string Alias,
+        string ModuleSpecifier,
+        int BindingLine,
+        int? ShadowLine,
+        int? EndLine,
+        IReadOnlyList<LineRange> ScopedShadowRanges);
+
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
+    private static readonly Regex NamespaceImportExportRegex = new(
+        @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
+        RegexOptions.Compiled);
+    private static readonly Regex DynamicImportNamespaceRegex = new(
+        @"^\s*(?:const|let|var)\s+(?<alias>[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\s*\(\s*[""'](?<module>[^""']+)[""']\s*\)",
+        RegexOptions.Compiled);
+    private static readonly Regex NamedImportRegex = new(
+        @"^\s*import\s+(?:type\s+)?\{(?<body>[^}]*)\}\s+from\s*[""'](?<module>[^""']+)[""']",
+        RegexOptions.Compiled);
+    private static readonly Regex LocalDeclarationRegex = new(
+        @"^\s*(?:(?:const|let|var)\s+|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+|(?:export\s+)?(?:abstract\s+)?class\s+|(?:export\s+)?interface\s+|(?:export\s+)?type\s+)(?<name>[A-Za-z_$][\w$]*)\b",
+        RegexOptions.Compiled);
     private static readonly HashSet<string> MappedTypeClauseIgnoredSegments = new(StringComparer.Ordinal)
     {
         "as",
@@ -15,6 +37,92 @@ internal static class TypeScriptReferenceExtractor
         "keyof",
         "readonly",
     };
+
+    public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
+        IReadOnlyList<string> originalLines,
+        IReadOnlyList<string> preparedLines)
+    {
+        var bindings = new List<NamespaceAliasBinding>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        for (var index = 0; index < originalLines.Count; index++)
+        {
+            var line = originalLines[index];
+            var match = NamespaceImportExportRegex.Match(line);
+            if (match.Success)
+            {
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    match.Groups["alias"].Value,
+                    match.Groups["module"].Value,
+                    index + 1,
+                    endLine: null);
+                continue;
+            }
+
+            match = DynamicImportNamespaceRegex.Match(line);
+            if (match.Success)
+            {
+                var bindingLine = index + 1;
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    match.Groups["alias"].Value,
+                    match.Groups["module"].Value,
+                    bindingLine,
+                    FindDynamicImportAliasEndLine(preparedLines, braceDepths, index));
+                continue;
+            }
+
+            match = NamedImportRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            foreach (var alias in ExtractNamedImportExportAliases(match.Groups["body"].Value))
+            {
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    alias,
+                    match.Groups["module"].Value,
+                    index + 1,
+                    endLine: null);
+            }
+        }
+
+        return bindings;
+    }
+
+    private static void AddNamespaceAliasBinding(
+        List<NamespaceAliasBinding> bindings,
+        IReadOnlyList<string> preparedLines,
+        string alias,
+        string module,
+        int bindingLine,
+        int? endLine)
+    {
+        if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
+            return;
+
+        var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
+        var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, alias);
+        bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
+    }
+
+    private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
+    {
+        foreach (var part in body.Split(','))
+        {
+            var item = part.Trim();
+            if (item.Length == 0)
+                continue;
+
+            var asIndex = item.LastIndexOf(" as ", StringComparison.Ordinal);
+            var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
+            if (IsTypeScriptIdentifier(alias))
+                yield return alias;
+        }
+    }
 
     public static void EmitTypePositionReferences(
         IReadOnlyList<string> preparedLines,
@@ -26,8 +134,21 @@ internal static class TypeScriptReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyList<NamespaceAliasBinding> namespaceAliases)
     {
+        EmitNamespaceAliasQualifiedReferences(
+            preparedLines,
+            lineIndex,
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            namespaceAliases);
+
         ReferenceExtractor.EmitTypeScriptTypePositionReferences(
             preparedLines,
             lineIndex,
@@ -91,6 +212,212 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
     }
 
+    private static void EmitNamespaceAliasQualifiedReferences(
+        IReadOnlyList<string> preparedLines,
+        int lineIndex,
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyList<NamespaceAliasBinding> namespaceAliases)
+    {
+        if (namespaceAliases.Count == 0 || IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
+            return;
+
+        foreach (var binding in namespaceAliases)
+        {
+            if (lineNumber <= binding.BindingLine
+                || (binding.EndLine is int endLine && lineNumber > endLine)
+                || (binding.ShadowLine is int shadowLine && lineNumber >= shadowLine)
+                || IsInsideScopedShadow(binding.ScopedShadowRanges, lineNumber))
+            {
+                continue;
+            }
+
+            foreach (Match match in Regex.Matches(
+                         preparedLine,
+                         $@"(?<![\w$]){Regex.Escape(binding.Alias)}\s*\.\s*[A-Za-z_$][\w$]*"))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    binding.ModuleSpecifier,
+                    match.Index,
+                    "reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(match.Index));
+            }
+        }
+    }
+
+    private static int? FindShadowLine(IReadOnlyList<string> preparedLines, string alias, int bindingLine)
+    {
+        for (var index = bindingLine; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            if (NamespaceImportExportRegex.IsMatch(line) || DynamicImportNamespaceRegex.IsMatch(line))
+                continue;
+
+            var match = LocalDeclarationRegex.Match(line);
+            if (match.Success && string.Equals(match.Groups["name"].Value, alias, StringComparison.Ordinal))
+                return index + 1;
+        }
+
+        return null;
+    }
+
+    private static int[] BuildBraceDepthsBeforeLine(IReadOnlyList<string> preparedLines)
+    {
+        var depths = new int[preparedLines.Count];
+        var depth = 0;
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            depths[index] = depth;
+            foreach (var ch in preparedLines[index])
+            {
+                if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+            }
+        }
+
+        return depths;
+    }
+
+    private static int? FindDynamicImportAliasEndLine(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        int bindingLineIndex)
+    {
+        var bindingDepth = braceDepths[bindingLineIndex];
+        if (bindingDepth <= 0)
+            return null;
+
+        for (var index = bindingLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] < bindingDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
+    }
+
+    private static IReadOnlyList<LineRange> BuildParameterShadowRanges(IReadOnlyList<string> preparedLines, string alias)
+    {
+        var ranges = new List<LineRange>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            if (!TryGetSingleLineCallableParameters(preparedLines[index], out var parameters)
+                || !ParameterListDeclaresName(parameters, alias))
+            {
+                continue;
+            }
+
+            var endLine = FindBlockEndLine(preparedLines, braceDepths, index);
+            if (endLine >= index + 1)
+                ranges.Add(new LineRange(index + 1, endLine));
+        }
+
+        return ranges;
+    }
+
+    private static bool TryGetSingleLineCallableParameters(string line, out string parameters)
+    {
+        parameters = string.Empty;
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("if ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if(", StringComparison.Ordinal)
+            || trimmed.StartsWith("for ", StringComparison.Ordinal)
+            || trimmed.StartsWith("for(", StringComparison.Ordinal)
+            || trimmed.StartsWith("while ", StringComparison.Ordinal)
+            || trimmed.StartsWith("while(", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch(", StringComparison.Ordinal)
+            || trimmed.Contains("=>", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(line, '(');
+        if (openParen < 0)
+            return false;
+
+        var closeParen = ReferenceExtractor.FindMatchingChar(line, openParen, '(', ')');
+        if (closeParen <= openParen)
+            return false;
+
+        var afterParameters = line[(closeParen + 1)..];
+        if (!afterParameters.Contains('{', StringComparison.Ordinal))
+            return false;
+
+        parameters = line.Substring(openParen + 1, closeParen - openParen - 1);
+        return trimmed.StartsWith("function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("export function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("export async function ", StringComparison.Ordinal)
+               || trimmed.StartsWith("async function ", StringComparison.Ordinal)
+               || IsLikelyMethodDeclarationPrefix(line[..openParen]);
+    }
+
+    private static bool IsLikelyMethodDeclarationPrefix(string prefix)
+    {
+        var trimmed = prefix.Trim();
+        if (trimmed.Length == 0 || trimmed.Contains('='))
+            return false;
+
+        var lastSpace = trimmed.LastIndexOf(' ');
+        var name = lastSpace >= 0 ? trimmed[(lastSpace + 1)..] : trimmed;
+        return IsTypeScriptIdentifier(name);
+    }
+
+    private static bool ParameterListDeclaresName(string parameters, string alias)
+    {
+        foreach (var part in parameters.Split(','))
+        {
+            var item = part.TrimStart();
+            if (item.StartsWith("...", StringComparison.Ordinal))
+                item = item[3..].TrimStart();
+
+            if (!item.StartsWith(alias, StringComparison.Ordinal))
+                continue;
+
+            var after = item.Length == alias.Length ? '\0' : item[alias.Length];
+            if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FindBlockEndLine(IReadOnlyList<string> preparedLines, IReadOnlyList<int> braceDepths, int startLineIndex)
+    {
+        var startDepth = braceDepths[startLineIndex];
+        for (var index = startLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] <= startDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
+    }
+
+    private static bool IsInsideScopedShadow(IReadOnlyList<LineRange> ranges, int lineNumber)
+    {
+        foreach (var range in ranges)
+        {
+            if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+                return true;
+        }
+
+        return false;
+    }
+
     private static void EmitMappedTypeMemberReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -152,7 +479,7 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn(typeStart),
             "typescript");
     }
-  
+
     public static bool IsSatisfiesTypeOperand(string preparedLine, int tokenIndex)
     {
         foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "satisfies"))
@@ -779,6 +1106,20 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsTypeScriptIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
+
+    private static bool IsTypeScriptIdentifier(string text)
+    {
+        if (text.Length == 0 || !IsTypeScriptIdentifierStart(text[0]))
+            return false;
+
+        for (var index = 1; index < text.Length; index++)
+        {
+            if (!IsTypeScriptIdentifierPart(text[index]))
+                return false;
+        }
+
+        return true;
+    }
 
     private static bool IsTypeScriptIdentifierStart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetter(ch);
