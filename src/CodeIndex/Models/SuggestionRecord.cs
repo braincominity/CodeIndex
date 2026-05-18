@@ -98,6 +98,15 @@ public class SuggestionRecord
     /// <summary>UTC timestamp of the last upstream sync / 最後に upstream と同期したUTCタイムスタンプ</summary>
     public DateTime? LastSyncedAt { get; set; }
 
+    /// <summary>Last GitHub submission error, if any / 最後の GitHub 送信エラー（存在する場合）</summary>
+    public string? LastSubmitError { get; set; }
+
+    /// <summary>UTC timestamp of the last GitHub submission attempt / 最後に GitHub 送信を試行したUTCタイムスタンプ</summary>
+    public DateTime? LastSubmitAttempt { get; set; }
+
+    /// <summary>Number of GitHub submission attempts / GitHub 送信試行回数</summary>
+    public int SubmitAttemptCount { get; set; }
+
     /// <summary>UTC timestamp when the suggestion was resolved / 提案が解決されたUTCタイムスタンプ</summary>
     public DateTime? ResolvedAt { get; set; }
 
