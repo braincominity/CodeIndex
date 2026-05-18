@@ -178,6 +178,10 @@ public partial class DbReader
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
     /// </summary>
+    // Issue #2121 audit: deps is a bounded aggregate query, not a depth-bounded
+    // traversal, so there is no maxDepth contract to align here.
+    // issue #2121 監査: deps は上限付きの集計クエリであり depth-bounded traversal ではないため、
+    // maxDepth の inclusive/exclusive 契約は持たない。
     public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
         lang = NormalizeQueryLanguage(lang);

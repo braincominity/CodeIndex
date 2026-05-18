@@ -10406,6 +10406,40 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_MaxDepthIsInclusiveAcrossChain()
+    {
+        // Issue #2121: AnalyzeImpact forwards maxDepth into the caller BFS, so it must keep
+        // the same inclusive contract pinned by GetTransitiveCallers: maxDepth=N returns
+        // callers at depths 1..N, not just 1..N-1.
+        // issue #2121: AnalyzeImpact は maxDepth を caller BFS に渡すため、
+        // GetTransitiveCallers と同じ inclusive 契約 (depth 1..N を返す) を維持する。
+        InsertIndexedFile("src/impact_analyze_depth_chain.cs", "csharp",
+            """
+            public static class ImpactAnalyzeDepthChain
+            {
+                public static void Leaf() { }
+                public static void Mid() { Leaf(); }
+                public static void Top() { Mid(); }
+            }
+            """);
+
+        var depth1 = _reader.AnalyzeImpact(
+            "Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+        var depth2 = _reader.AnalyzeImpact(
+            "Leaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+
+        Assert.Equal(new (string?, int)[] { ("Mid", 1) }, depth1.Callers.Select(r => (r.CallerName, r.Depth)).ToArray());
+        Assert.Equal(ImpactTerminationReasons.MaxDepthReached, depth1.TerminationReason);
+
+        var depth2Pairs = depth2.Callers
+            .Select(r => (r.CallerName, r.Depth))
+            .OrderBy(p => p.Depth)
+            .ToArray();
+        Assert.Equal(new (string?, int)[] { ("Mid", 1), ("Top", 2) }, depth2Pairs);
+        Assert.Equal(ImpactTerminationReasons.Completed, depth2.TerminationReason);
+    }
+
+    [Fact]
     public void AnalyzeImpact_MaxDepthBoundaryWithoutSkippedCallerReportsCompleted()
     {
         InsertIndexedFile("src/impact_depth_completed.cs", "csharp",
