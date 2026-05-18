@@ -103,7 +103,8 @@ public static class GitHelper
         psi.ArgumentList.Add("--root");
         psi.ArgumentList.Add("-m");
         psi.ArgumentList.Add("-r");
-        psi.ArgumentList.Add("--name-only");
+        psi.ArgumentList.Add("-M");
+        psi.ArgumentList.Add("--name-status");
         psi.ArgumentList.Add(commitId);
 
         var (exitCode, output, error) = RunProcessCapturingOutput(psi)
@@ -112,10 +113,31 @@ public static class GitHelper
         if (exitCode != 0)
             throw new InvalidOperationException($"git diff-tree failed for commit {commitId}: {error.Trim()}");
 
-        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(FileIndexer.NormalizePathSeparators)
-            .ToList();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                continue;
+
+            var status = parts[0];
+            if ((status.StartsWith('R') || status.StartsWith('C')) && parts.Length >= 3)
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[2]));
+            }
+            else if (parts.Length >= 2)
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
+            }
+        }
+
+        return paths.ToList();
     }
+
+    public static bool IsCommitObjectId(string value)
+        => !string.IsNullOrWhiteSpace(value) && Regex.IsMatch(value, "^[0-9a-fA-F]{7,40}$");
 
     private static void ValidateSingleCommitRef(string projectRoot, string commitId)
     {

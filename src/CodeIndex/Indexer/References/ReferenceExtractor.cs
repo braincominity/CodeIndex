@@ -2013,6 +2013,7 @@ public static partial class ReferenceExtractor
             {
                 TypeScriptReferenceExtractor.EmitTypePositionReferences(
                     preparedLines,
+                    lines,
                     i,
                     preparedLine,
                     lines[i],

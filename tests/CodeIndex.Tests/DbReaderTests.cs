@@ -1144,6 +1144,38 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/auth.py", results[0].Path);
     }
 
+    [Theory]
+    [InlineData("NEAR(auth login, 101)")]
+    [InlineData("NEAR(1000000)")]
+    [InlineData("near(auth login, -1)")]
+    [InlineData("NEAR(auth login, 999999999999)")]
+    [InlineData("NEAR(auth login, 999999999999999999999999999999999)")]
+    public void Search_RawQueryRejectsOutOfRangeNearDistance_Issue2089(string query)
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.Search(query, rawQuery: true));
+
+        Assert.Contains("NEAR distance must be between 0 and 100", ex.Message);
+    }
+
+    [Fact]
+    public void CountSearchResults_RawQueryRejectsOutOfRangeNearDistance_Issue2089()
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.CountSearchResults("NEAR(auth login, 1000000)", rawQuery: true));
+
+        Assert.Contains("NEAR distance must be between 0 and 100", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("NEAR(auth login, 100)")]
+    [InlineData("auth NEAR login")]
+    [InlineData("\"NEAR(auth login, 1000000)\"")]
+    public void Search_RawQueryAllowsBoundedNearSyntax_Issue2089(string query)
+    {
+        var ex = Record.Exception(() => _reader.Search(query, rawQuery: true));
+
+        Assert.False(ex is FtsQuerySyntaxException);
+    }
+
     [Fact]
     public void Search_CjkSubstringDoesNotMatchLongerTokenByDefault()
     {
@@ -10407,6 +10439,40 @@ public class DbReaderTests : IDisposable
         Assert.Equal(ImpactTerminationReasons.MaxDepthReached, analysis.TerminationReason);
         Assert.False(analysis.CycleDetected);
         Assert.Null(analysis.Cycles);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_MaxDepthIsInclusiveAcrossChain()
+    {
+        // Issue #2121: AnalyzeImpact forwards maxDepth into the caller BFS, so it must keep
+        // the same inclusive contract pinned by GetTransitiveCallers: maxDepth=N returns
+        // callers at depths 1..N, not just 1..N-1.
+        // issue #2121: AnalyzeImpact は maxDepth を caller BFS に渡すため、
+        // GetTransitiveCallers と同じ inclusive 契約 (depth 1..N を返す) を維持する。
+        InsertIndexedFile("src/impact_analyze_depth_chain.cs", "csharp",
+            """
+            public static class ImpactAnalyzeDepthChain
+            {
+                public static void Leaf() { }
+                public static void Mid() { Leaf(); }
+                public static void Top() { Mid(); }
+            }
+            """);
+
+        var depth1 = _reader.AnalyzeImpact(
+            "Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+        var depth2 = _reader.AnalyzeImpact(
+            "Leaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+
+        Assert.Equal(new (string?, int)[] { ("Mid", 1) }, depth1.Callers.Select(r => (r.CallerName, r.Depth)).ToArray());
+        Assert.Equal(ImpactTerminationReasons.MaxDepthReached, depth1.TerminationReason);
+
+        var depth2Pairs = depth2.Callers
+            .Select(r => (r.CallerName, r.Depth))
+            .OrderBy(p => p.Depth)
+            .ToArray();
+        Assert.Equal(new (string?, int)[] { ("Mid", 1), ("Top", 2) }, depth2Pairs);
+        Assert.Equal(ImpactTerminationReasons.Completed, depth2.TerminationReason);
     }
 
     [Fact]
