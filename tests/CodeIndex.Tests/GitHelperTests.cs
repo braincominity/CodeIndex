@@ -255,6 +255,43 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void GetChangedFilesFromCommit_DeduplicatesFilesForOctopusMergeCommit()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n");
+        RunGit(repoDir, "add", "base.txt");
+        RunGit(repoDir, "commit", "-m", "base");
+        var baseBranch = RunGit(repoDir, "branch", "--show-current").Trim();
+
+        RunGit(repoDir, "switch", "-c", "feature-one");
+        File.WriteAllText(Path.Combine(repoDir, "one.txt"), "one\n");
+        RunGit(repoDir, "add", "one.txt");
+        RunGit(repoDir, "commit", "-m", "feature one");
+
+        RunGit(repoDir, "switch", baseBranch);
+        RunGit(repoDir, "switch", "-c", "feature-two");
+        File.WriteAllText(Path.Combine(repoDir, "two.txt"), "two\n");
+        RunGit(repoDir, "add", "two.txt");
+        RunGit(repoDir, "commit", "-m", "feature two");
+
+        RunGit(repoDir, "switch", baseBranch);
+        RunGit(repoDir, "switch", "-c", "feature-three");
+        File.WriteAllText(Path.Combine(repoDir, "three.txt"), "three\n");
+        RunGit(repoDir, "add", "three.txt");
+        RunGit(repoDir, "commit", "-m", "feature three");
+
+        RunGit(repoDir, "switch", baseBranch);
+        RunGit(repoDir, "merge", "--no-ff", "feature-one", "feature-two", "feature-three", "-m", "octopus merge");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+
+        Assert.Equal(["one.txt", "three.txt", "two.txt"], changedFiles.OrderBy(x => x).ToArray());
+        Assert.Equal(changedFiles.Count, changedFiles.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void GetChangedFilesFromCommit_IncludesOldAndNewPathsForRenameCommit()
     {
         var repoDir = CreateGitRepo();
@@ -274,6 +311,19 @@ public class GitHelperTests : IDisposable
 
         Assert.Contains("old.txt", changedFiles);
         Assert.Contains("new.txt", changedFiles);
+    }
+
+    [Theory]
+    [InlineData("feature")]
+    [InlineData("v1.0.0")]
+    [InlineData("main..feature")]
+    public void GetChangedFilesFromCommit_RejectsNonCommitIdRefs(string commitRef)
+    {
+        var repoDir = CreateGitRepo();
+
+        var ex = Assert.Throws<ArgumentException>(() => GitHelper.GetChangedFilesFromCommit(repoDir, commitRef));
+
+        Assert.Contains("Invalid commit ID", ex.Message);
     }
 
     [Fact]
