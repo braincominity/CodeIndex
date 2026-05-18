@@ -755,6 +755,21 @@ internal static class TypeScriptReferenceExtractor
         if (index < text.Length && text[index] == '-')
             index++;
 
+        if (index + 1 < text.Length
+            && text[index] == '0'
+            && text[index + 1] is 'x' or 'X' or 'b' or 'B' or 'o' or 'O')
+        {
+            var radixPrefix = text[index + 1];
+            index += 2;
+            while (index < text.Length && (IsRadixDigit(text[index], radixPrefix) || text[index] == '_'))
+                index++;
+
+            if (index < text.Length && text[index] == 'n')
+                index++;
+
+            return index;
+        }
+
         while (index < text.Length && (char.IsDigit(text[index]) || text[index] == '_'))
             index++;
 
@@ -783,6 +798,17 @@ internal static class TypeScriptReferenceExtractor
             index++;
 
         return index;
+    }
+
+    private static bool IsRadixDigit(char ch, char radixPrefix)
+    {
+        return radixPrefix switch
+        {
+            'x' or 'X' => char.IsAsciiHexDigit(ch),
+            'b' or 'B' => ch is '0' or '1',
+            'o' or 'O' => ch is >= '0' and <= '7',
+            _ => false,
+        };
     }
 
     private static bool TryReadLiteralKeyword(string text, int index, int endExclusive, out string keyword)
