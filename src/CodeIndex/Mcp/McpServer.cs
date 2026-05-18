@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -45,6 +46,12 @@ public partial class McpServer : IDisposable
     // `notifications/exit`) を受けると cancel され、トランスポート未クローズでも
     // 読み取りループが unblock して正常終了する (#1567)。
     private readonly CancellationTokenSource _shutdownCts = new();
+    // Active JSON-RPC requests keyed by their serialized `id`, so MCP `$/cancelRequest`
+    // notifications can cancel the exact in-flight tool instead of only shutting down the
+    // whole server (#1418).
+    // JSON-RPC request id ごとの実行中 CTS。MCP `$/cancelRequest` 通知でサーバー全体ではなく
+    // 対象ツール呼び出しだけを cancel するため (#1418)。
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new(StringComparer.Ordinal);
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
     // cancellation token to `DbReader` for SQLite work (#1567).
@@ -258,6 +265,8 @@ public partial class McpServer : IDisposable
     /// 提案 attribution レコードに使う不透明セッションID (#1873)。
     /// </summary>
     internal string CurrentSessionId => _sessionId;
+
+    internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -548,8 +557,18 @@ public partial class McpServer : IDisposable
                 suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
                 retrySafe: false);
 
+        if (method == "$/cancelRequest" || method == "notifications/cancelled")
+        {
+            var cancelAuth = _authenticator.Authenticate(request);
+            if (cancelAuth.IsAuthenticated)
+                TryCancelRequest(request["params"]);
+            else
+                Console.Error.WriteLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
+            return null;
+        }
+
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
-        if (method == "notifications/initialized" || method == "notifications/cancelled")
+        if (method == "notifications/initialized")
             return null;
 
         // Graceful shutdown via JSON-RPC notification (#1567). Without this, the only way to
@@ -612,7 +631,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return method switch
+        return DispatchWithRequestCancellation(id, () => method switch
         {
             "initialize" => HandleInitialize(id, request["params"]),
             "tools/list" => HandleToolsList(id),
@@ -622,7 +641,54 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false),
-        };
+        });
+    }
+
+    private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
+    {
+        var requestKey = SerializeRequestId(id);
+        if (requestKey == null)
+            return action();
+
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken, _shutdownCts.Token);
+        if (!_activeRequests.TryAdd(requestKey, requestCts))
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
+                retrySafe: true);
+        }
+        RequestRegisteredForTests?.Invoke(id);
+
+        var previousToken = _currentRequestToken;
+        try
+        {
+            _currentRequestToken = requestCts.Token;
+            requestCts.Token.ThrowIfCancellationRequested();
+            return action();
+        }
+        catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
+        {
+            return CreateCancelledResponse(id);
+        }
+        finally
+        {
+            _currentRequestToken = previousToken;
+            _activeRequests.TryRemove(requestKey, out _);
+        }
+    }
+
+    private void TryCancelRequest(JsonNode? cancelParams)
+    {
+        var requestId = cancelParams?["id"];
+        var requestKey = SerializeRequestId(requestId);
+        if (requestKey == null)
+            return;
+        if (_activeRequests.TryGetValue(requestKey, out var cts))
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { /* completed while cancellation was being delivered. */ }
+        }
     }
 
     // Safe accessor that returns null instead of throwing when `name` is missing OR present
@@ -1066,6 +1132,11 @@ public partial class McpServer : IDisposable
                     extraData: new JsonObject { ["tool"] = toolName }),
             };
             }
+        }
+        catch (OperationCanceledException) when (_currentRequestToken.IsCancellationRequested)
+        {
+            metricsError = nameof(OperationCanceledException);
+            throw;
         }
         catch (Exception ex)
         {
@@ -1524,6 +1595,13 @@ public partial class McpServer : IDisposable
             response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
         return response;
     }
+
+    private static JsonObject CreateCancelledResponse(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeRequestCancelled,
+            message: "Request cancelled",
+            category: McpErrorEnvelope.CategoryRequestCancelled,
+            suggestion: "The client cancelled this request before completion. Reissue the call if the work is still needed.",
+            retrySafe: true);
 
     /// <summary>
     /// Create a tool result response (MCP format).

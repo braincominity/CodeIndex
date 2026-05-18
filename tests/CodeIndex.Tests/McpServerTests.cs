@@ -228,6 +228,37 @@ public class McpServerTests : IDisposable
         Assert.Contains("2024-11-05", McpServer.SupportedProtocolVersions);
     }
 
+    [Fact]
+    public void CancelRequest_ForActiveRequest_ReturnsRequestCancelledError()
+    {
+        // Issue #1418: MCP `$/cancelRequest` must target the matching JSON-RPC id and
+        // cancel the per-request token before the tool does DB work.
+        // Issue #1418: MCP `$/cancelRequest` は対応する JSON-RPC id の per-request token を
+        // cancel し、ツールが DB 作業に入る前に中断できる必要がある。
+        _server.RequestRegisteredForTests = id =>
+        {
+            var cancel = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1418}}""")!;
+            Assert.Null(_server.HandleMessage(cancel));
+        };
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, error["code"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", error["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void CancelRequest_UnknownOrMalformedId_IsNotificationOnly()
+    {
+        var unknown = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"missing"}}""")!;
+        var missing = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{}}""")!;
+
+        Assert.Null(_server.HandleMessage(unknown));
+        Assert.Null(_server.HandleMessage(missing));
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
