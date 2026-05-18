@@ -1099,6 +1099,14 @@ JSON5-style line comments (`//`) and trailing commas are accepted so the file st
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
 
+### Incremental update reliability
+
+Scoped updates use the same path filter as a full scan. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan so newly ignored files are purged and newly re-included files can be indexed. `--files` only updates the paths you pass, so after changing ignore rules use `cdidx <projectPath> --json` unless a commit-scoped command can see the ignore-file change.
+
+Indexing commits file-by-file SQLite transactions. Other processes can query during a long refresh, but they may observe a transitional live snapshot until the indexing command finishes. For automation, run `cdidx status --check --json` after the refresh completes and require `index_matches_workspace: true` before trusting search, symbol, or graph results.
+
+Successful narrow update JSON reports `mode: "update"` with `summary.updated`, `summary.removed`, and `summary.skipped`. A promoted full scan uses the full-scan JSON shape: `mode` remains `"incremental"` unless `--rebuild` was passed, and the summary includes `files_scanned`, `files_skipped`, and `files_purged`. Branch-switch or history-moving workflows should use `--changed-between <old-ref> <new-ref>` when both refs are known; otherwise use `cdidx <projectPath> --json` for repo-wide stale-path cleanup.
+
 ## Git integration
 
 `cdidx index` automatically adds `.cdidx/` to `.git/info/exclude`. You don't need to edit `.gitignore` just to hide the local index, and user-authored `.gitignore` rules are honored during scanning and scoped updates. If you want cdidx-only exclusions without changing Git behavior, add a `.cdidxignore` file.
@@ -2805,6 +2813,14 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 ## 動作の仕組み
 
 cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
+
+### インクリメンタル更新の信頼性
+
+部分更新はフルスキャンと同じ path filter を使います。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行をフルインクリメンタルスキャンへ昇格し、新しく ignore されたファイルを purge し、新しく再包含されたファイルを index できるようにします。`--files` は渡した path だけを更新するため、ignore ルール変更後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx <projectPath> --json` を使ってください。
+
+indexing はファイル単位の SQLite transaction を commit します。長い refresh 中も別プロセスから query できますが、indexing command が完了するまでは途中の live snapshot を観測する可能性があります。自動化では refresh 完了後に `cdidx status --check --json` を実行し、`index_matches_workspace: true` を確認してから search、symbol、graph の結果を信頼してください。
+
+狭い update の成功 JSON は `mode: "update"` と `summary.updated`、`summary.removed`、`summary.skipped` を返します。昇格された full scan は full-scan JSON 形状になり、`--rebuild` を渡していない限り `mode` は `"incremental"` のまま、summary には `files_scanned`、`files_skipped`、`files_purged` が含まれます。ブランチ切り替えや履歴を書き換える workflow では、前後の ref が分かるなら `--changed-between <old-ref> <new-ref>`、分からない場合は repo 全体の stale path cleanup のために `cdidx <projectPath> --json` を使ってください。
 
 ## Git連携
 
