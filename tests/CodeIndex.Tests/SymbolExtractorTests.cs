@@ -12,6 +12,25 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Fact]
+    public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
+    {
+        const string content = """
+            namespace CodeIndex.Indexer;
+
+            internal static class StructuralLineMasker
+            {
+                internal static string[] MaskLines(string? lang, string[] originalLines)
+                    => originalLines;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "CodeIndex.Indexer");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "StructuralLineMasker");
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]

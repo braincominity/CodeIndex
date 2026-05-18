@@ -212,6 +212,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpLineCommentAttributeCandidate_DoesNotScanToEndOfFile()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("class Service");
+        builder.AppendLine("{");
+        builder.AppendLine("    void Run()");
+        builder.AppendLine("    {");
+        for (var i = 0; i < 1000; i++)
+            builder.AppendLine($"        Call{i}(); // argument, [not an attribute candidate");
+        builder.AppendLine("        ActualCall();");
+        builder.AppendLine("    }");
+        builder.AppendLine("}");
+
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
+    }
+
+    [Fact]
     public void Extract_TypeScriptGenericConditionalConstraint_EmitsBranchTypeReferences()
     {
         const string content = """
