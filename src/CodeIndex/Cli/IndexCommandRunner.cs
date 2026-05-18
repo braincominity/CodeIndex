@@ -2917,7 +2917,9 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
+            var backfillReady = writer.AllFoldedColumnsBackfilled(
+                requireCurrentSymbolExtractorVersions: skipped != 0);
+            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
@@ -2935,7 +2937,7 @@ public static class IndexCommandRunner
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
             // current と一致しているときだけ FoldReady を stamp する。途中中断で
             // user_version だけ落ちた current DB もここで回復させる。
-            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
+            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; if a concurrent writer slipped
                 // in a NULL-folded row between the upfront check and this stamp, the stamp is
