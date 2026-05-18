@@ -2343,6 +2343,12 @@ jobs:
         }
         finally
         {
+            if (OperatingSystem.IsWindows())
+            {
+                SqliteConnection.ClearAllPools();
+                System.Threading.Thread.Sleep(250);
+            }
+
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
