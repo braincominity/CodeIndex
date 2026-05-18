@@ -638,6 +638,8 @@ public static partial class SymbolExtractor
         int? ReturnTypeEndColumn = null,
         int? HeaderEndColumn = null,
         bool HasBody = true,
+        bool IsAsync = false,
+        bool IsGenerator = false,
         // For class-field arrow properties with an expression body (`handleClick = () => 42;`),
         // this marks the inclusive column of the last expression char (before `;`) in the
         // accumulated sanitized header. Null means brace body or no expression body was detected.
@@ -810,10 +812,10 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?:async\s+)?function(?:\s+|\s*\*\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?function(?:\s+|\s*\*\s*)(?:\w+)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?:\w+)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings such as
             // `const Wrapped = React.memo(...)`, `const Box = React.forwardRef(...)`,
             // `const Connected = connect(...)(Component)`, `const Styled = styled.div`...``,
@@ -883,8 +885,8 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?:async\s+)?function(?:\s+|\s*\*\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -2779,6 +2781,12 @@ public static partial class SymbolExtractor
                         kind = "class_hook";
                         pythonSubKind = "dunder";
                         (endLine, bodyStartLine, bodyEndLine) = FindPythonIndentedBodyRange(lines, i);
+                    }
+                    else if (kind == "function" && lang is "javascript" or "typescript")
+                    {
+                        kind = ResolveJavaScriptTypeScriptFunctionKind(
+                            TryGetGroup(match, "async") != null,
+                            TryGetGroup(match, "generator") != null);
                     }
 
                     if (lang == "css")
