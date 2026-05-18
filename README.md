@@ -56,7 +56,8 @@ During indexing, the terminal shows `Scanning...`, `Indexing...`, and a
 `2.4s` or `5m 42s`. For later edits or branch switches, refresh incrementally
 with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead
 of rebuilding; see
-[Quick Start](USER_GUIDE.md#quick-start).
+[Quick Start](USER_GUIDE.md#quick-start) and
+[Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -207,7 +208,8 @@ cdidx mcp
 進捗行が表示され、最後に `2.4s` や `5m 42s` のような単位付き経過時間が出ます。
 編集後やブランチ切り替え後は再構築ではなく `--files`、`--commits`、または
 `--changed-between <old-ref> <new-ref>` で差分更新できます。詳細は
-[クイックスタート](USER_GUIDE.md#クイックスタート)
+[クイックスタート](USER_GUIDE.md#クイックスタート) と
+[インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性)
 を参照してください。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
