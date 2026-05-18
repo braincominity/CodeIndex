@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using System.Text;
 
 namespace CodeIndex.Database;
 
@@ -13,6 +14,7 @@ public class DbWriter
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private const int BatchSize = 500;
+    private const int MaxSqlVariables = 999;
     private int _transactionDepth;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
@@ -250,9 +252,11 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true, string? language = null)
     {
         if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
 
         var cmd = RentCommand(
@@ -343,6 +347,60 @@ public class DbWriter
         }
         if (result != null)
             DeleteFileData((long)result);
+    }
+
+    /// <summary>
+    /// Purge stale DB rows for deleted/renamed files that still share the current file's checksum.
+    /// 現在のファイルと同じ checksum を持つ削除/rename 済みの古いDB行を削除する。
+    /// </summary>
+    public int PurgeStaleFilesSharingChecksum(string projectRoot, string retainedRelativePath, string? checksum)
+    {
+        if (string.IsNullOrEmpty(checksum))
+            return 0;
+
+        var staleIds = new List<long>();
+        var cmd = RentCommand(
+            "SELECT id, path FROM files WHERE checksum = @checksum AND path <> @path",
+            static c =>
+            {
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@path", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@checksum"].Value = checksum;
+            cmd.Parameters["@path"].Value = retainedRelativePath;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var relativePath = reader.GetString(1);
+                var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                    staleIds.Add(id);
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn?.Commit();
+
+        return staleIds.Count;
     }
 
     /// <summary>
@@ -458,39 +516,33 @@ public class DbWriter
     {
         if (chunks.Count == 0) return;
 
-        for (int i = 0; i < chunks.Count; i += BatchSize)
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 5);
+        for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
-            int end = Math.Min(i + BatchSize, chunks.Count);
+            int end = Math.Min(i + rowsPerStatement, chunks.Count);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
-            // Prepare after transaction starts so the command inherits the connection's transaction state
-            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-                VALUES (@fid, @idx, @start, @end, @content)";
-            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-            var pIdx = cmd.Parameters.Add("@idx", SqliteType.Integer);
-            var pStart = cmd.Parameters.Add("@start", SqliteType.Integer);
-            var pEnd = cmd.Parameters.Add("@end", SqliteType.Integer);
-            var pContent = cmd.Parameters.Add("@content", SqliteType.Text);
-            cmd.Prepare();
-
+            var sql = new StringBuilder();
+            sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
             for (int j = i; j < end; j++)
             {
                 var chunk = chunks[j];
-                pFid.Value = chunk.FileId;
-                pIdx.Value = chunk.ChunkIndex;
-                pStart.Value = chunk.StartLine;
-                pEnd.Value = chunk.EndLine;
-                pContent.Value = chunk.Content;
-                // FTS index is populated automatically by fts_chunks_ai trigger
-                // FTSインデックスはfts_chunks_aiトリガーにより自動で反映される
-                cmd.ExecuteNonQuery();
+                if (j > i)
+                    sql.Append(", ");
+                var suffix = j - i;
+                sql.Append($"(@fid{suffix}, @idx{suffix}, @start{suffix}, @end{suffix}, @content{suffix})");
+                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = chunk.FileId;
+                cmd.Parameters.Add($"@idx{suffix}", SqliteType.Integer).Value = chunk.ChunkIndex;
+                cmd.Parameters.Add($"@start{suffix}", SqliteType.Integer).Value = chunk.StartLine;
+                cmd.Parameters.Add($"@end{suffix}", SqliteType.Integer).Value = chunk.EndLine;
+                cmd.Parameters.Add($"@content{suffix}", SqliteType.Text).Value = chunk.Content;
             }
 
+            cmd.CommandText = sql.ToString();
+            cmd.ExecuteNonQuery();
             transaction?.Commit();
         }
     }
@@ -505,18 +557,18 @@ public class DbWriter
     {
         if (symbols.Count == 0) return;
 
-        for (int i = 0; i < symbols.Count; i += BatchSize)
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 19);
+        for (int i = 0; i < symbols.Count; i += rowsPerStatement)
         {
-            int end = Math.Min(i + BatchSize, symbols.Count);
+            int end = Math.Min(i + rowsPerStatement, symbols.Count);
             var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
-            // Prepare after transaction starts so the command inherits the connection's transaction state
-            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"
+            var sql = new StringBuilder();
+            sql.Append(@"
                 INSERT INTO symbols (
                     file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
                     body_start_line, body_end_line, signature,
@@ -525,64 +577,49 @@ public class DbWriter
                     is_metadata_target,
                     name_folded
                 )
-                VALUES (
-                    @fid, @kind, @subKind, @name, @line, @startLine, @startColumn, @endLine,
-                    @bodyStartLine, @bodyEndLine, @signature,
-                    @containerKind, @containerName, @containerQualifiedName, @familyKey,
-                    @visibility, @returnType,
-                    @isMetadataTarget,
-                    @nameFolded
-                )";
-            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-            var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
-            var pSubKind = cmd.Parameters.Add("@subKind", SqliteType.Text);
-            var pName = cmd.Parameters.Add("@name", SqliteType.Text);
-            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
-            var pStartLine = cmd.Parameters.Add("@startLine", SqliteType.Integer);
-            var pStartColumn = cmd.Parameters.Add("@startColumn", SqliteType.Integer);
-            var pEndLine = cmd.Parameters.Add("@endLine", SqliteType.Integer);
-            var pBodyStartLine = cmd.Parameters.Add("@bodyStartLine", SqliteType.Integer);
-            var pBodyEndLine = cmd.Parameters.Add("@bodyEndLine", SqliteType.Integer);
-            var pSignature = cmd.Parameters.Add("@signature", SqliteType.Text);
-            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
-            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
-            var pContainerQualifiedName = cmd.Parameters.Add("@containerQualifiedName", SqliteType.Text);
-            var pFamilyKey = cmd.Parameters.Add("@familyKey", SqliteType.Text);
-            var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
-            var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
-            var pIsMetadataTarget = cmd.Parameters.Add("@isMetadataTarget", SqliteType.Integer);
-            var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
-            cmd.Prepare();
+                VALUES ");
 
             for (int j = i; j < end; j++)
             {
                 var symbol = symbols[j];
                 var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
                 var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
-                pFid.Value = symbol.FileId;
-                pKind.Value = symbol.Kind;
-                pSubKind.Value = (object?)symbol.SubKind ?? DBNull.Value;
-                pName.Value = symbol.Name;
-                pLine.Value = symbol.Line;
-                pStartLine.Value = startLine;
-                pStartColumn.Value = (object?)symbol.StartColumn ?? DBNull.Value;
-                pEndLine.Value = endLine;
-                pBodyStartLine.Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
-                pBodyEndLine.Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
-                pSignature.Value = (object?)symbol.Signature ?? DBNull.Value;
-                pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
-                pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
-                pContainerQualifiedName.Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
-                pFamilyKey.Value = (object?)symbol.FamilyKey ?? DBNull.Value;
-                pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
-                pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
-                pIsMetadataTarget.Value = symbol.IsMetadataTarget.HasValue
+                if (j > i)
+                    sql.Append(", ");
+                var suffix = j - i;
+                sql.Append($@"(
+                    @fid{suffix}, @kind{suffix}, @subKind{suffix}, @name{suffix}, @line{suffix}, @startLine{suffix}, @startColumn{suffix}, @endLine{suffix},
+                    @bodyStartLine{suffix}, @bodyEndLine{suffix}, @signature{suffix},
+                    @containerKind{suffix}, @containerName{suffix}, @containerQualifiedName{suffix}, @familyKey{suffix},
+                    @visibility{suffix}, @returnType{suffix},
+                    @isMetadataTarget{suffix},
+                    @nameFolded{suffix}
+                )");
+                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = symbol.FileId;
+                cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = symbol.Kind;
+                cmd.Parameters.Add($"@subKind{suffix}", SqliteType.Text).Value = (object?)symbol.SubKind ?? DBNull.Value;
+                cmd.Parameters.Add($"@name{suffix}", SqliteType.Text).Value = symbol.Name;
+                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = symbol.Line;
+                cmd.Parameters.Add($"@startLine{suffix}", SqliteType.Integer).Value = startLine;
+                cmd.Parameters.Add($"@startColumn{suffix}", SqliteType.Integer).Value = (object?)symbol.StartColumn ?? DBNull.Value;
+                cmd.Parameters.Add($"@endLine{suffix}", SqliteType.Integer).Value = endLine;
+                cmd.Parameters.Add($"@bodyStartLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
+                cmd.Parameters.Add($"@bodyEndLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
+                cmd.Parameters.Add($"@signature{suffix}", SqliteType.Text).Value = (object?)symbol.Signature ?? DBNull.Value;
+                cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerKind ?? DBNull.Value;
+                cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                cmd.Parameters.Add($"@containerQualifiedName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+                cmd.Parameters.Add($"@familyKey{suffix}", SqliteType.Text).Value = (object?)symbol.FamilyKey ?? DBNull.Value;
+                cmd.Parameters.Add($"@visibility{suffix}", SqliteType.Text).Value = (object?)symbol.Visibility ?? DBNull.Value;
+                cmd.Parameters.Add($"@returnType{suffix}", SqliteType.Text).Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                cmd.Parameters.Add($"@isMetadataTarget{suffix}", SqliteType.Integer).Value = symbol.IsMetadataTarget.HasValue
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
-                pNameFolded.Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
-                cmd.ExecuteNonQuery();
+                cmd.Parameters.Add($"@nameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
             }
 
+            cmd.CommandText = sql.ToString();
+            cmd.ExecuteNonQuery();
             transaction?.Commit();
         }
     }
@@ -683,9 +720,10 @@ public class DbWriter
         if (references.Count == 0) return;
 
         var referenceLineIds = new Dictionary<(long FileId, int Line), long>();
-        for (int i = 0; i < references.Count; i += BatchSize)
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 11);
+        for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
-            int end = Math.Min(i + BatchSize, references.Count);
+            int end = Math.Min(i + rowsPerStatement, references.Count);
             var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
@@ -705,29 +743,14 @@ public class DbWriter
             lineCmd.Prepare();
 
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"
+            var sql = new StringBuilder();
+            sql.Append(@"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
                     context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded
                 )
-                VALUES (
-                    @fid, @symbolName, @referenceKind, @line, @columnNumber,
-                    @context, @referenceLineId, @containerKind, @containerName,
-                    @symbolNameFolded, @containerNameFolded
-                )";
-            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-            var pSymbolName = cmd.Parameters.Add("@symbolName", SqliteType.Text);
-            var pReferenceKind = cmd.Parameters.Add("@referenceKind", SqliteType.Text);
-            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
-            var pColumnNumber = cmd.Parameters.Add("@columnNumber", SqliteType.Integer);
-            var pContext = cmd.Parameters.Add("@context", SqliteType.Text);
-            var pReferenceLineId = cmd.Parameters.Add("@referenceLineId", SqliteType.Integer);
-            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
-            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
-            var pSymbolNameFolded = cmd.Parameters.Add("@symbolNameFolded", SqliteType.Text);
-            var pContainerNameFolded = cmd.Parameters.Add("@containerNameFolded", SqliteType.Text);
-            cmd.Prepare();
+                VALUES ");
 
             for (int j = i; j < end; j++)
             {
@@ -742,20 +765,29 @@ public class DbWriter
                     referenceLineIds[referenceLineKey] = referenceLineId;
                 }
 
-                pFid.Value = reference.FileId;
-                pSymbolName.Value = reference.SymbolName;
-                pReferenceKind.Value = reference.ReferenceKind;
-                pLine.Value = reference.Line;
-                pColumnNumber.Value = reference.Column;
-                pContext.Value = DBNull.Value;
-                pReferenceLineId.Value = referenceLineId;
-                pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
-                pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
-                pSymbolNameFolded.Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                pContainerNameFolded.Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
-                cmd.ExecuteNonQuery();
+                if (j > i)
+                    sql.Append(", ");
+                var suffix = j - i;
+                sql.Append($@"(
+                    @fid{suffix}, @symbolName{suffix}, @referenceKind{suffix}, @line{suffix}, @columnNumber{suffix},
+                    @context{suffix}, @referenceLineId{suffix}, @containerKind{suffix}, @containerName{suffix},
+                    @symbolNameFolded{suffix}, @containerNameFolded{suffix}
+                )");
+                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = reference.FileId;
+                cmd.Parameters.Add($"@symbolName{suffix}", SqliteType.Text).Value = reference.SymbolName;
+                cmd.Parameters.Add($"@referenceKind{suffix}", SqliteType.Text).Value = reference.ReferenceKind;
+                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = reference.Line;
+                cmd.Parameters.Add($"@columnNumber{suffix}", SqliteType.Integer).Value = reference.Column;
+                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = DBNull.Value;
+                cmd.Parameters.Add($"@referenceLineId{suffix}", SqliteType.Integer).Value = referenceLineId;
+                cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)reference.ContainerName ?? DBNull.Value;
+                cmd.Parameters.Add($"@symbolNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                cmd.Parameters.Add($"@containerNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
             }
 
+            cmd.CommandText = sql.ToString();
+            cmd.ExecuteNonQuery();
             transaction.Commit();
         }
     }
@@ -1299,11 +1331,11 @@ public class DbWriter
             }
             return true;
         }
-        catch
+        catch (Exception)
         {
             if (ownTransaction)
             {
-                try { Execute("ROLLBACK"); } catch { /* best effort */ }
+                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
             }
             throw;
         }
@@ -2486,17 +2518,50 @@ public class DbWriter
         return true;
     }
 
+    public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
+    {
+        if (requireCurrentSymbolExtractorLanguages.Count > 0
+            && !SymbolExtractorVersionsMatchCurrent(requireCurrentSymbolExtractorLanguages))
+        {
+            return false;
+        }
+
+        return AllFoldedColumnsBackfilled();
+    }
+
     public bool SymbolExtractorVersionsMatchCurrent()
     {
         foreach (var lang in GetIndexedLanguages())
         {
-            var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
-            var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (stored != current)
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
                 return false;
         }
 
         return true;
+    }
+
+    public bool SymbolExtractorVersionsMatchCurrent(IEnumerable<string> languages)
+    {
+        foreach (var lang in languages)
+        {
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool SymbolExtractorVersionMatchesCurrent(string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return true;
+
+        var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
+        if (stored == null)
+            return true;
+
+        var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return stored == current;
     }
 
     /// <summary>
@@ -2612,6 +2677,14 @@ public class DbWriter
         return (object?)folded ?? DBNull.Value;
     }
 
+    private static int GetRowsPerInsertStatement(int columnCount)
+    {
+        if (columnCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(columnCount));
+
+        return Math.Max(1, Math.Min(BatchSize, MaxSqlVariables / columnCount));
+    }
+
     private void SetReadyBit(int flag)
     {
         // The ready bits share a single PRAGMA user_version word, so two parallel
@@ -2640,11 +2713,11 @@ public class DbWriter
                 ownTransaction = false;
             }
         }
-        catch
+        catch (Exception)
         {
             if (ownTransaction)
             {
-                try { Execute("ROLLBACK"); } catch { /* best effort */ }
+                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
             }
             throw;
         }

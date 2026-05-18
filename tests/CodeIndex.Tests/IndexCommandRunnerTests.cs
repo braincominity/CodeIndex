@@ -225,6 +225,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void MayContainCSharpStaticInterfaceContract_RealContract_ReturnsTrue()
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+            static virtual int Count => 0;
+        }
+        """;
+
+        Assert.True(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Fact]
+    public void MayContainCSharpStaticInterfaceContract_HelperNamesAndStrings_ReturnsFalse()
+    {
+        var content = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "CodeIndex",
+            "Database",
+            "DbWriter.cs"));
+
+        Assert.False(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Fact]
     public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
     {
         using var cts = new CancellationTokenSource();
@@ -4536,6 +4568,112 @@ public class IndexCommandRunnerTests
             Assert.Equal(
                 DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FilesUpdate_ReindexesUnchangedFileWhenLanguageExtractorVersionChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "lib.py");
+            File.WriteAllText(
+                sourcePath,
+                """
+                def target():
+                    return 1
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET signature = 'def stale():';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'symbol_extractor_version_python';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", sourcePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var signatureCmd = verify.CreateCommand();
+            signatureCmd.CommandText = "SELECT signature FROM symbols WHERE name = 'target'";
+            Assert.Equal("def target():", signatureCmd.ExecuteScalar() as string);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_python'";
+            Assert.Equal("0", versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RestampsExtractorVersionWhenOnlyStaleLanguageWasReindexed()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "lib.py"),
+                """
+                def target():
+                    return 1
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET signature = 'def stale():' WHERE name = 'target';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'symbol_extractor_version_python';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var signatureCmd = verify.CreateCommand();
+            signatureCmd.CommandText = "SELECT signature FROM symbols WHERE name = 'target'";
+            Assert.Equal("def target():", signatureCmd.ExecuteScalar() as string);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_python'";
+            Assert.Equal("1", versionCmd.ExecuteScalar() as string);
         }
         finally
         {

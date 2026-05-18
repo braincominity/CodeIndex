@@ -25341,6 +25341,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftPropertyObserverCalls_AreAttributedToProperty()
+    {
+        const string content = """
+            class C {
+                var x: Int = 0 {
+                    didSet { print(x) }
+                    @willSet { precondition(newValue >= 0) }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "print"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "precondition"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
+    }
+
+    [Fact]
     public void Extract_SwiftTypedThrows_RecordsThrownErrorType()
     {
         const string content = """

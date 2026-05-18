@@ -62,6 +62,18 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### CLI recoverable error format
+
+Recoverable command errors in human output use the canonical line shape below. Include only non-null lines, but every error must include a recovery hint:
+
+```text
+Error: <message>
+Hint: <actionable recovery path>
+Usage: <command shape>
+```
+
+When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
+
 ### C# / .NET integration
 
 `SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
@@ -79,6 +91,27 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 ### Status freshness age threshold
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
+
+### Degradation reason codes
+
+Readiness degradation reason codes are centralized in `DegradationReasonCodes`. Add new codes there with human text, a recommended action, and an alternative action before emitting them from readers, CLI, or MCP payloads.
+
+Current stable codes and triggers:
+
+| Code | Trigger | Recovery |
+|---|---|---|
+| `missing_fold_backfill` | legacy rows do not have folded-name values | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_version` | folded rows were stamped with an older fold-key version | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_fingerprint` | folded rows were stamped under an older runtime fingerprint | `cdidx backfill-fold` or full rebuild |
+| `fold_rows_not_restamped` | fold metadata is current but one or more folded rows were not restamped | `cdidx backfill-fold` or full rebuild |
+| `fold_ready=false` | aggregate fold readiness bit is degraded | `cdidx backfill-fold` or full rebuild |
+| `sql_graph_contract_ready=false` | SQL graph rows do not match the current call-column / qualified-name contract | `cdidx index <projectPath>` |
+| `hotspot_family_ready=false` | one or more hotspot-family languages lack current authoritative family stamps | `cdidx index <projectPath>` |
+| `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
+| `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
+| `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
+| `index_newer_than_reader=true` | the DB was written with a newer persisted contract than this reader understands | use a current `cdidx` binary or rebuild with this version |
 
 ### SQLite WAL durability policy
 

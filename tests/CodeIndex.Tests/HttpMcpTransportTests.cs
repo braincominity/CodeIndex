@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -76,15 +77,8 @@ public class HttpMcpTransportTests : IDisposable
     [Fact]
     public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
     {
-        var records = new List<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(
-            _dbPath,
-            bearerToken: "token",
-            requestLogger: record =>
-            {
-                lock (records)
-                    records.Add(record);
-            });
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
 
         using var client = new HttpClient();
         using (var missingAuth = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
@@ -111,24 +105,27 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        var loggedRecords = await WaitForRequestLogRecordsAsync(records, 3);
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
 
-        Assert.Equal("missing", loggedRecords[0].AuthOutcome);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, loggedRecords[0].StatusCode);
-        Assert.Equal("POST", loggedRecords[0].Method);
-        Assert.Equal("/", loggedRecords[0].Path);
-        Assert.Null(loggedRecords[0].RequestId);
-        Assert.True(loggedRecords[0].DurationMs >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(loggedRecords[0].CorrelationId));
-        Assert.False(string.IsNullOrWhiteSpace(loggedRecords[0].RemotePeer));
+        var missingPost = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "missing" &&
+            record.StatusCode == (int)HttpStatusCode.Unauthorized &&
+            record.Method == "POST");
+        Assert.Equal("/", missingPost.Path);
+        Assert.Null(missingPost.RequestId);
+        Assert.True(missingPost.DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(missingPost.CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(missingPost.RemotePeer));
 
-        Assert.Equal("missing", loggedRecords[1].AuthOutcome);
-        Assert.Equal("GET", loggedRecords[1].Method);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, loggedRecords[1].StatusCode);
+        var missingGet = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "missing" &&
+            record.Method == "GET");
+        Assert.Equal((int)HttpStatusCode.Unauthorized, missingGet.StatusCode);
 
-        Assert.Equal("ok", loggedRecords[2].AuthOutcome);
-        Assert.Equal("7", loggedRecords[2].RequestId);
-        Assert.Equal((int)HttpStatusCode.OK, loggedRecords[2].StatusCode);
+        var okPost = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "ok" &&
+            record.RequestId == "7");
+        Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
     }
 
     [Fact]
@@ -356,26 +353,21 @@ public class HttpMcpTransportTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static async Task<List<HttpMcpTransport.HttpRequestLogRecord>> WaitForRequestLogRecordsAsync(
-        List<HttpMcpTransport.HttpRequestLogRecord> records,
+    private static async Task<HttpMcpTransport.HttpRequestLogRecord[]> WaitForRequestLogRecordsAsync(
+        ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord> records,
         int expectedCount)
     {
         for (var attempt = 0; attempt < 100; attempt++)
         {
-            lock (records)
-            {
-                if (records.Count >= expectedCount)
-                    return records.ToList();
-            }
+            if (records.Count >= expectedCount)
+                return records.ToArray();
 
             await Task.Delay(10);
         }
 
-        lock (records)
-        {
-            Assert.Equal(expectedCount, records.Count);
-            return records.ToList();
-        }
+        var snapshot = records.ToArray();
+        Assert.Equal(expectedCount, snapshot.Length);
+        return snapshot;
     }
 
     private sealed class McpHttpHarness : IAsyncDisposable

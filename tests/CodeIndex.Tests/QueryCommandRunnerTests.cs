@@ -2205,7 +2205,7 @@ jobs:
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
             Assert.Contains("does not point to an existing database file", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
         }
         finally
@@ -12301,6 +12301,58 @@ jobs:
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("symbols")]
+    [InlineData("unused")]
+    [InlineData("hotspots")]
+    public void SymbolKindCommands_InvalidKindFailsWithValidKindList(string command)
+    {
+        var args = command switch
+        {
+            "definition" => new[] { "Target", "--kind", "badkind" },
+            "symbols" => ["Target", "--kind", "badkind"],
+            "unused" => ["--kind", "badkind"],
+            "hotspots" => ["--kind", "badkind"],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(args, _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
+        Assert.Contains("function", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void GraphCommands_InvalidReferenceKindFailsWithScopedValidKindList(string command)
+    {
+        var args = new[] { "Target", "--kind", "badkind" };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command, args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
+        Assert.Contains("call", stderr);
+        Assert.Contains(command == "references" ? "type_reference" : "friend", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
     [Fact]
@@ -27828,7 +27880,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
+    public void RunFind_ZeroResultHintDistinguishesPathMatchesFromQueryMiss_Issue1406()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");
         try
@@ -27847,8 +27899,38 @@ jobs:
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("No matches found.", stderr);
-            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.Contains("--path matched 1 file, but the query did not match their contents", stderr);
+            Assert.Contains("try a broader query or check the query syntax", normalizedStderr);
+            Assert.DoesNotContain("broadening --path or adding another --path value", normalizedStderr);
             Assert.DoesNotContain("try removing --lang, --path", normalizedStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_ZeroResultHintStillSuggestsBroadeningUnmatchedPath_Issue1406()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_path_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "hello world\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["hello", "--db", dbPath, "--path", "src/**/*.cs"],
+                _jsonOptions));
+            var normalizedStderr = stderr.ToLowerInvariant();
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.DoesNotContain("query did not match", normalizedStderr);
         }
         finally
         {
@@ -30123,7 +30205,7 @@ jobs:
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("does not point to an existing database file", stderr);
-        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
     }
 
     [Fact]

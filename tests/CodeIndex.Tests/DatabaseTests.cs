@@ -141,6 +141,87 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    );";
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+
+            using (var fkCheck = db.Connection.CreateCommand())
+            {
+                fkCheck.CommandText = "PRAGMA foreign_keys";
+                Assert.Equal(1L, Convert.ToInt64(fkCheck.ExecuteScalar()));
+            }
+
+            using (var insertFile = db.Connection.CreateCommand())
+            {
+                insertFile.CommandText = "INSERT INTO files(path) VALUES ('src/Use.cs')";
+                insertFile.ExecuteNonQuery();
+            }
+
+            using var insertReference = db.Connection.CreateCommand();
+            insertReference.CommandText = @"
+                INSERT INTO symbol_references(file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id)
+                VALUES (1, 'MissingLine', 'call', 1, 1, 'MissingLine()', 999)";
+            var ex = Assert.Throws<SqliteException>(() => insertReference.ExecuteNonQuery());
+            Assert.Equal(19, ex.SqliteErrorCode);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void Constructor_ConfiguresWalDurabilityPragmas()
     {
         Assert.Equal("wal", ExecuteScalarString("PRAGMA journal_mode"));
@@ -211,6 +292,23 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenLanguageExtractorVersionIsStale()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/lib.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
+
+        var id = _writer.GetUnchangedFileId("src/lib.py", modified, language: "python");
+
+        Assert.Null(id);
+    }
+
+    [Fact]
     public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -232,6 +330,55 @@ public class DatabaseTests : IDisposable
         // タイムスタンプもチェックサムも異なるならnullを返す
         var id2 = _writer.GetUnchangedFileId("src/checksum.py", newModified.AddHours(1), "different_checksum");
         Assert.Null(id2);
+    }
+
+    [Fact]
+    public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src/current.py"), "print('same')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src/duplicate.py"), "print('same')\n");
+
+            var modified = new DateTime(2026, 5, 18, 0, 0, 0, DateTimeKind.Utc);
+            var currentId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/current.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            var staleId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/renamed-away.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            var duplicateId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/duplicate.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            _writer.InsertChunks([
+                new() { FileId = currentId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "current" },
+                new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = duplicateId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "duplicate" },
+            ]);
+
+            var purged = _writer.PurgeStaleFilesSharingChecksum(projectRoot, "src/current.py", "same_checksum");
+
+            Assert.Equal(1, purged);
+            Assert.True(_writer.HasFileAtPath("src/current.py"));
+            Assert.False(_writer.HasFileAtPath("src/renamed-away.py"));
+            Assert.True(_writer.HasFileAtPath("src/duplicate.py"));
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM chunks";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot))
+                TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -258,6 +405,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertChunks_MultiRowValuesPopulatesFtsForEveryRow()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/multi.py", Lang = "python", Size = 300, Lines = 300,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var chunks = Enumerable.Range(0, 4)
+            .Select(i => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = i,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Content = $"def multirow_token_{i}(): pass",
+            })
+            .ToList();
+
+        _writer.InsertChunks(chunks);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'multirow_token_3'";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void InsertSymbols_InsertsCorrectly()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -275,6 +449,32 @@ public class DatabaseTests : IDisposable
 
         var (_, _, symbolCount, _) = _writer.GetCounts();
         Assert.Equal(2, symbolCount);
+    }
+
+    [Fact]
+    public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/symbols.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var symbols = Enumerable.Range(0, 120)
+            .Select(i => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"fn_{i}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+            })
+            .ToList();
+
+        _writer.InsertSymbols(symbols);
+
+        var (_, _, symbolCount, _) = _writer.GetCounts();
+        Assert.Equal(120, symbolCount);
     }
 
     [Fact]
@@ -312,6 +512,37 @@ public class DatabaseTests : IDisposable
 
         var (_, _, _, referenceCount) = _writer.GetCounts();
         Assert.Equal(1, referenceCount);
+    }
+
+    [Fact]
+    public void InsertReferences_ChunksLargeInputAndDeduplicatesReferenceLines()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/refs.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var references = Enumerable.Range(0, 120)
+            .Select(i => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{i}",
+                ReferenceKind = "call",
+                Line = i % 10 + 1,
+                Column = 4,
+                Context = $"callee_{i}()",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToList();
+
+        _writer.InsertReferences(references);
+
+        var (_, _, _, referenceCount) = _writer.GetCounts();
+        Assert.Equal(120, referenceCount);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines";
+        Assert.Equal(10L, (long)cmd.ExecuteScalar()!);
     }
 
     [Fact]

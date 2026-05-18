@@ -16063,6 +16063,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_PropertyObserversAreChildrenOfProperty()
+    {
+        var content = """
+            class C {
+                var x: Int = 0 {
+                    didSet { print(x) }
+                    @willSet { precondition(newValue >= 0) }
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "x"));
+        Assert.Equal("swift_computed_property", property.SubKind);
+        Assert.Equal(2, property.BodyStartLine);
+        Assert.Equal(5, property.BodyEndLine);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "accessor"
+            && s.Name == "x.didSet"
+            && s.ContainerKind == "property"
+            && s.ContainerName == "x");
+        Assert.Contains(symbols, s =>
+            s.Kind == "accessor"
+            && s.Name == "x.willSet"
+            && s.ContainerKind == "property"
+            && s.ContainerName == "x");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsOperatorsAndPrecedenceGroup()
     {
         var content = """

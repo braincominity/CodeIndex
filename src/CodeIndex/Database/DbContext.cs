@@ -23,6 +23,7 @@ public class DbContext : IDisposable
 
     private readonly SqliteConnection _connection;
     private readonly bool _isReadOnly;
+    private SqliteTransaction? _activeMigrationTransaction;
     private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
 
@@ -217,10 +218,7 @@ public class DbContext : IDisposable
 
         if (!_isReadOnly)
         {
-            Execute("PRAGMA foreign_keys=ON");
-            var fkResult = ExecuteScalar("PRAGMA foreign_keys");
-            if (fkResult != "1")
-                Console.Error.WriteLine("Warning: foreign_keys pragma not enabled");
+            EnsureForeignKeysEnabled();
         }
     }
 
@@ -265,7 +263,7 @@ public class DbContext : IDisposable
                 if (attempt < maxOpenAttempts)
                     sleep?.Invoke(50 * attempt);
             }
-            catch
+            catch (Exception)
             {
                 connection.Dispose();
                 throw;
@@ -318,7 +316,7 @@ public class DbContext : IDisposable
             var uri = new Uri(trimmed);
             return uri.IsFile ? uri.LocalPath : null;
         }
-        catch
+        catch (UriFormatException)
         {
             return null;
         }
@@ -955,8 +953,18 @@ public class DbContext : IDisposable
     private void Execute(string sql)
     {
         using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private void EnsureForeignKeysEnabled()
+    {
+        Execute("PRAGMA foreign_keys=ON");
+        var fkResult = ExecuteScalar("PRAGMA foreign_keys");
+        if (fkResult != "1")
+            Console.Error.WriteLine("Warning: foreign_keys pragma not enabled");
     }
 
     /// <summary>
@@ -990,37 +998,52 @@ public class DbContext : IDisposable
 
         try
         {
-            foreach (var (description, action) in BuildReadMigrationSteps())
+            EnsureForeignKeysEnabled();
+            using var transaction = _connection.BeginTransaction(deferred: true);
+            _activeMigrationTransaction = transaction;
+
+            try
             {
-                try
+                foreach (var (description, action) in BuildReadMigrationSteps())
                 {
-                    action();
-                }
-                catch (SqliteException ex)
-                {
-                    var failure = new DbMigrationFailure(
-                        description,
-                        ex.SqliteErrorCode,
-                        ex.Message,
-                        BuildMigrationSuggestedAction(ex.SqliteErrorCode));
-                    LastMigrationFailure = failure;
-                    EmitMigrationFailureWarning(failure);
+                    try
+                    {
+                        action();
+                    }
+                    catch (SqliteException ex)
+                    {
+                        var failure = new DbMigrationFailure(
+                            description,
+                            ex.SqliteErrorCode,
+                            ex.Message,
+                            BuildMigrationSuggestedAction(ex.SqliteErrorCode));
+                        LastMigrationFailure = failure;
+                        EmitMigrationFailureWarning(failure);
 
-                    // Read-only DB / filesystem / sandbox — stop further steps and degrade.
-                    // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
-                    // some restricted environments report CANTOPEN when SQLite tries to create
-                    // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
-                    // will drive the degraded read path; later read queries that hit a still-
-                    // missing column will now have a single clear preceding diagnostic to refer to.
-                    // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
-                    if (IsReadOnlyOpenError(ex)) return;
+                        // Read-only DB / filesystem / sandbox — stop further steps and degrade.
+                        // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                        // some restricted environments report CANTOPEN when SQLite tries to create
+                        // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
+                        // will drive the degraded read path; later read queries that hit a still-
+                        // missing column will now have a single clear preceding diagnostic to refer to.
+                        // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
+                        if (IsReadOnlyOpenError(ex)) return;
 
-                    // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
-                    // migration concerns — preserve the existing surface-the-exception behavior.
-                    // それ以外の SQLite エラーは従来通り上位に伝播させる。
-                    throw;
+                        // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
+                        // migration concerns — preserve the existing surface-the-exception behavior.
+                        // それ以外の SQLite エラーは従来通り上位に伝播させる。
+                        throw;
+                    }
                 }
+
+                transaction.Commit();
             }
+            finally
+            {
+                _activeMigrationTransaction = null;
+            }
+
+            EnsureForeignKeysEnabled();
         }
         finally
         {
@@ -1194,6 +1217,8 @@ public class DbContext : IDisposable
     private bool ColumnExists(string tableName, string columnName)
     {
         using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = $"PRAGMA table_info({tableName})";
 
         using var reader = cmd.ExecuteTrackedReader();
@@ -1208,6 +1233,8 @@ public class DbContext : IDisposable
     private string ExecuteScalar(string sql)
     {
         using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
