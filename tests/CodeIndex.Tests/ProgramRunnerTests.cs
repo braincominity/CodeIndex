@@ -359,6 +359,27 @@ public class ProgramRunnerTests
         Assert.Contains("Hint:", stderr);
     }
 
+    [Fact]
+    public void CliRecoverableErrors_UseCanonicalHumanFormat_Issue1955()
+    {
+        var missingProject = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}");
+
+        var cases = new[]
+        {
+            CaptureConsole(() => ProgramRunner.Run(["--completions"], appVersion: "1.10.0")),
+            CaptureConsole(() => IndexCommandRunner.Run([missingProject], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
+            CaptureConsole(() => QueryCommandRunner.RunSearch(["Symbol", "--since", "not-a-date"], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
+            CaptureConsole(() => QueryCommandRunner.RunSearch(["Symbol", "--db", Path.Combine(missingProject, "missing.db")], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
+        };
+
+        Assert.All(cases, result =>
+        {
+            Assert.NotEqual(CommandExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Stdout);
+            AssertCanonicalCommandError(result.Stderr);
+        });
+    }
+
     [Theory]
     [InlineData(new[] { "--palette=truecolor", "status" }, ColorPalette.Truecolor, new[] { "status" })]
     [InlineData(new[] { "status", "--palette", "256" }, ColorPalette.Color256, new[] { "status" })]
@@ -643,6 +664,17 @@ public class ProgramRunnerTests
                 Console.SetError(originalErr);
             }
         }
+    }
+
+    private static void AssertCanonicalCommandError(string stderr)
+    {
+        var lines = stderr.TrimEnd().Split(Environment.NewLine);
+        Assert.InRange(lines.Length, 2, 3);
+        Assert.StartsWith("Error", lines[0]);
+        Assert.Contains(": ", lines[0]);
+        Assert.StartsWith("Hint: ", lines[1]);
+        if (lines.Length == 3)
+            Assert.StartsWith("Usage: ", lines[2]);
     }
 
     private sealed class ThrowingResolver : IJsonTypeInfoResolver

@@ -65,19 +65,13 @@ public static class IndexCommandRunner
 
         if (!Directory.Exists(options.ProjectPath))
         {
-            if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
-                    "error",
-                    $"directory not found: {options.ProjectPath}",
-                    "Check the project path and rerun `cdidx index <projectPath>` with an existing directory.",
-                    CommandErrorCodes.DirectoryNotFound),
-                    jsonContext.CommandErrorJsonResult));
-            else
-            {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DirectoryNotFound}]: directory not found: {options.ProjectPath}");
-                Console.Error.WriteLine("Hint: check the project path and rerun `cdidx index <projectPath>` with an existing directory.");
-            }
-            return CommandExitCodes.NotFound;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                $"directory not found: {options.ProjectPath}",
+                CommandExitCodes.NotFound,
+                "check the project path and rerun `cdidx index <projectPath>` with an existing directory.",
+                errorCode: CommandErrorCodes.DirectoryNotFound);
         }
 
         if (options.Watch)
@@ -2209,20 +2203,7 @@ public static class IndexCommandRunner
     }
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
-    {
-        if (json)
-            Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-        else
-        {
-            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
-            Console.Error.WriteLine($"{prefix}: {message}");
-            if (hint != null)
-                Console.Error.WriteLine($"Hint: {hint}");
-        }
-        return exitCode;
-    }
+        => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
 
     private static int WriteInterruptedResult(bool json, JsonSerializerOptions jsonOptions, int filesProcessed, int? filesTotal)
     {

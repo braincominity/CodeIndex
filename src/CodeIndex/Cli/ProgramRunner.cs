@@ -27,9 +27,10 @@ internal static class ProgramRunner
         var configResult = CdidxConfigFile.LoadAndApply(configStartDirectory ?? Environment.CurrentDirectory);
         if (configResult.Failed)
         {
-            Console.Error.WriteLine(configResult.Error);
-            Console.Error.WriteLine($"Hint: fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
-            return CommandExitCodes.UsageError;
+            return CommandErrorWriter.Write(
+                StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
+                CommandExitCodes.UsageError,
+                $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
         }
 
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
@@ -39,16 +40,14 @@ internal static class ProgramRunner
 
         if (!TryConsumeColorFlag(ref args, out var colorError))
         {
-            Console.Error.WriteLine(colorError);
-            Console.Error.WriteLine("Hint: use one of `auto`, `always`, `never`.");
+            CommandErrorWriter.Write(StripErrorPrefix(colorError), "use one of `auto`, `always`, `never`.");
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} color_flag_invalid=true");
             return CommandExitCodes.InvalidArgument;
         }
 
         if (!TryConsumePaletteFlag(ref args, out var paletteError))
         {
-            Console.Error.WriteLine(paletteError);
-            Console.Error.WriteLine("Hint: use one of `basic`, `256`, `truecolor`.");
+            CommandErrorWriter.Write(StripErrorPrefix(paletteError), "use one of `basic`, `256`, `truecolor`.");
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} palette_flag_invalid=true");
             return CommandExitCodes.InvalidArgument;
         }
@@ -57,8 +56,7 @@ internal static class ProgramRunner
 
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
-            Console.Error.WriteLine(metricsError);
-            Console.Error.WriteLine("Hint: pass `--metrics <path>` (e.g. `--metrics out.jsonl`).");
+            CommandErrorWriter.Write(StripErrorPrefix(metricsError), "pass `--metrics <path>` (e.g. `--metrics out.jsonl`).");
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} metrics_flag_invalid=true");
             return CommandExitCodes.InvalidArgument;
         }
@@ -1013,34 +1011,40 @@ internal static class ProgramRunner
     private static int RunCompletions(string[] cmdArgs)
     {
         if (cmdArgs.Length == 0)
-        {
-            Console.Error.WriteLine("Error: --completions requires a shell value.");
-            Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
-            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
-            return CommandExitCodes.UsageError;
-        }
+            return CommandErrorWriter.Write(
+                "--completions requires a shell value.",
+                CommandExitCodes.UsageError,
+                "rerun with one of `bash`, `zsh`, or `fish`.",
+                "cdidx --completions <shell>");
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
-        {
-            Console.Error.WriteLine($"Error: --completions requires a shell value, got option-like token '{cmdArgs[0]}'.");
-            Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
-            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
-            return CommandExitCodes.UsageError;
-        }
+            return CommandErrorWriter.Write(
+                $"--completions requires a shell value, got option-like token '{cmdArgs[0]}'.",
+                CommandExitCodes.UsageError,
+                "rerun with one of `bash`, `zsh`, or `fish`.",
+                "cdidx --completions <shell>");
 
         if (cmdArgs.Length > 1)
-        {
-            Console.Error.WriteLine($"Error: --completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.");
-            Console.Error.WriteLine("Hint: rerun with exactly one shell name: `bash`, `zsh`, or `fish`.");
-            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
-            return CommandExitCodes.UsageError;
-        }
+            return CommandErrorWriter.Write(
+                $"--completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
+                CommandExitCodes.UsageError,
+                "rerun with exactly one shell name: `bash`, `zsh`, or `fish`.",
+                "cdidx --completions <shell>");
 
         if (ConsoleUi.PrintCompletions(cmdArgs[0]))
             return CommandExitCodes.Success;
 
-        Console.Error.WriteLine("Usage: cdidx --completions <shell>");
-        return CommandExitCodes.UsageError;
+        return CommandErrorWriter.Write(
+            $"unsupported completion shell `{cmdArgs[0]}`.",
+            CommandExitCodes.UsageError,
+            "rerun with one of `bash`, `zsh`, or `fish`.",
+            "cdidx --completions <shell>");
+    }
+
+    private static string StripErrorPrefix(string message)
+    {
+        const string prefix = "Error: ";
+        return message.StartsWith(prefix, StringComparison.Ordinal) ? message[prefix.Length..] : message;
     }
 
     private static int ShowError(string[] args, string message)
