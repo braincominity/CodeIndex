@@ -1362,6 +1362,7 @@ public static class QueryCommandRunner
             var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
             if (results.Count == 0)
             {
+                var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 if (options.Json)
                 {
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
@@ -1372,14 +1373,22 @@ public static class QueryCommandRunner
                         payload["before"] = options.ContextBefore;
                         payload["after"] = options.ContextAfter;
                         payload["exact"] = options.Exact;
-                        payload["file_count"] = 0;
+                        payload["file_count"] = candidateFileCount;
                     });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No matches found", options));
-                    WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    if (candidateFileCount > 0)
+                    {
+                        var fileText = ConsoleUi.Counted(candidateFileCount, "file");
+                        WriteZeroResultHints(options, reader, filterHint: $"--path matched {fileText}, but the query did not match their contents. Try a broader query or check the query syntax.");
+                    }
+                    else
+                    {
+                        WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    }
                 }
                 return CommandExitCodes.NotFound;
             }
