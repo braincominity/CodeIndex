@@ -2473,9 +2473,31 @@ public class DbWriter
         return missing == 0;
     }
 
+    public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
+    {
+        if (requireCurrentSymbolExtractorLanguages.Count > 0
+            && !SymbolExtractorVersionsMatchCurrent(requireCurrentSymbolExtractorLanguages))
+        {
+            return false;
+        }
+
+        return AllFoldedColumnsBackfilled();
+    }
+
     public bool SymbolExtractorVersionsMatchCurrent()
     {
         foreach (var lang in GetIndexedLanguages())
+        {
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
+                return false;
+        }
+
+        return true;
+    }
+
+    public bool SymbolExtractorVersionsMatchCurrent(IEnumerable<string> languages)
+    {
+        foreach (var lang in languages)
         {
             if (!SymbolExtractorVersionMatchesCurrent(lang))
                 return false;

@@ -2508,6 +2508,7 @@ public static class IndexCommandRunner
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
@@ -2762,6 +2763,8 @@ public static class IndexCommandRunner
                     {
                         skipped++;
                         processed++;
+                        if (!string.IsNullOrWhiteSpace(record.Lang))
+                            skippedSymbolExtractorLanguages.Add(record.Lang);
                         if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
                             reusedHotspotFamilyLanguages.Add(record.Lang);
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -2919,14 +2922,16 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
+            var backfillReady = skipped == 0
+                ? writer.AllFoldedColumnsBackfilled()
+                : writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
                 && foldFingerprintMatchesCurrent
-                && priorSymbolExtractorVersionsMatchCurrent;
+                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguages);
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when

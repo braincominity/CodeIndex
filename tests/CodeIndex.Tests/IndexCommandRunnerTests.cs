@@ -4563,6 +4563,59 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RestampsExtractorVersionWhenOnlyStaleLanguageWasReindexed()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "lib.py"),
+                """
+                def target():
+                    return 1
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET signature = 'def stale():' WHERE name = 'target';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'symbol_extractor_version_python';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var signatureCmd = verify.CreateCommand();
+            signatureCmd.CommandText = "SELECT signature FROM symbols WHERE name = 'target'";
+            Assert.Equal("def target():", signatureCmd.ExecuteScalar() as string);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_python'";
+            Assert.Equal("1", versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_JsonReportsDegradedCSharpCanonicalNameTrust()
     {
         var projectRoot = CreateTempProject();
