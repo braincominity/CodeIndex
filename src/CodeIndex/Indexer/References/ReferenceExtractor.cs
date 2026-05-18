@@ -911,7 +911,7 @@ public static partial class ReferenceExtractor
                 return [];
             if (content.Contains('\r'))
                 content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingBom(content);
+            content = FileIndexer.StripLineLeadingInvisibles(content);
 
             return pluginExtractor.Extract(
                     fileId,
@@ -968,21 +968,20 @@ public static partial class ReferenceExtractor
 
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
-        // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on
-        // line 1 and on any mid-file line that begins with a BOM (e.g. from file
-        // concatenation or tool insertion). StripLineLeadingBom assumes `\n` is
-        // the sole line separator, so the CRLF pass must come first. Non-line-
-        // leading U+FEFF is preserved so content with intentional ZWNBSP inside
-        // a string literal stays verbatim. Closes #183.
-        // まず CRLF / CR を LF に正規化する。StripLineLeadingBom は `\n` を唯一の
+        // UTF-8 BOM (U+FEFF) and zero-width space (U+200B) defensively so
+        // `^\s*`-anchored patterns match on line 1 and on any mid-file line that
+        // begins with such a marker (e.g. from file concatenation or tool insertion).
+        // StripLineLeadingInvisibles assumes `\n` is the sole line separator, so the
+        // CRLF pass must come first. Non-line-leading markers are preserved. Closes #183/#2117.
+        // まず CRLF / CR を LF に正規化する。StripLineLeadingInvisibles は `\n` を唯一の
         // 行区切りとして行頭判定するので、FileIndexer を経由しない direct call
-        // でも CRLF 正規化を済ませてから呼ばないと mid-file の行頭 BOM を剥がし
-        // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
-        // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
-        // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        // でも CRLF 正規化を済ませてから呼ばないと mid-file の行頭 marker を剥がし
+        // 損なう。続いて行頭 U+FEFF/U+200B のみ剥がし、1 行目と mid-file の行頭
+        // marker 両方で `^\s*` 固定パターンを成立させる。行頭以外の marker は
+        // そのまま保持する。Closes #183/#2117.
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        content = FileIndexer.StripLineLeadingBom(content);
+        content = FileIndexer.StripLineLeadingInvisibles(content);
 
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)

@@ -28588,9 +28588,9 @@ public class ReferenceExtractorTests
     public void Extract_NullContent_ReturnsEmpty()
     {
         // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
-        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // step added ahead of StripLineLeadingInvisibles would otherwise dereference `null`
         // before the helper's IsNullOrEmpty guard could run. Closes #183.
-        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingInvisibles
         // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
         // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
         Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));

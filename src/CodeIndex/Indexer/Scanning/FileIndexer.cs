@@ -2319,7 +2319,7 @@ public class FileIndexer
         // CRLF / CR のみを LF に潰すため、BOM の追加 / 削除はインクリメンタル
         // 再索引で引き続き検知される。Closes #183。OS をまたいだ CRLF / LF の
         // 同一性は ComputeChecksum 自体で担保する。#1544 参照。
-        content = StripLineLeadingBom(content);
+        content = StripLineLeadingInvisibles(content);
         // Accurate line count: ignore trailing newline, and treat content that became
         // empty after CRLF / BOM stripping as zero lines (not `"".Split('\n') == [""]`'s
         // off-by-one of 1) so `files.lines` stays consistent with the 0-chunk contract
@@ -2392,37 +2392,36 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Strip every line-leading UTF-8 BOM (U+FEFF). Assumes CRLF has already been
-    /// normalized to LF so `\n` is the sole line separator. Preserves non-line-
-    /// leading U+FEFF verbatim (intentional ZWNBSP inside string literals etc.).
-    /// 行頭の UTF-8 BOM (U+FEFF) のみ剥がす。呼び出し前に CRLF が LF へ
-    /// 正規化済みであることを前提とする。行頭以外の U+FEFF (文字列リテラル等で
-    /// 意図的に使われる ZWNBSP) はそのまま保持する。
+    /// Strip every line-leading UTF-8 BOM (U+FEFF) and zero-width space (U+200B).
+    /// Assumes CRLF has already been normalized to LF so `\n` is the sole line
+    /// separator. Preserves non-line-leading invisibles verbatim.
+    /// 行頭の UTF-8 BOM (U+FEFF) と zero-width space (U+200B) のみ剥がす。
+    /// 呼び出し前に CRLF が LF へ正規化済みであることを前提とする。
+    /// 行頭以外の不可視文字はそのまま保持する。
     /// </summary>
-    internal static string StripLineLeadingBom(string content)
+    internal static string StripLineLeadingInvisibles(string content)
     {
         if (string.IsNullOrEmpty(content))
             return content;
-        // Fast path: BOM-free files (the dominant case) skip the line-tracking
+        // Fast path: invisible-free files (the dominant case) skip the line-tracking
         // scan and return the input unchanged so no StringBuilder is allocated.
-        // 高速パス: BOM が一切無いファイル (支配的ケース) は行頭追跡走査を回避し、
-        // 入力をそのまま返して StringBuilder を確保しない。
-        if (!content.Contains('\uFEFF'))
+        // 高速パス: 対象の不可視文字が一切無いファイル (支配的ケース) は行頭追跡走査を
+        // 回避し、入力をそのまま返して StringBuilder を確保しない。
+        if (!content.Contains('\uFEFF') && !content.Contains('\u200B'))
             return content;
 
-        // U+FEFF is present somewhere. Locate the first *line-leading* BOM in a
-        // single pass; if every occurrence is mid-line (intentional ZWNBSP
-        // inside string literals etc.), return the input unchanged so the
-        // no-strip path also avoids any allocation.
-        // U+FEFF が含まれている。最初の「行頭」 BOM を 1 パスで探し、行頭以外
-        // のみ (文字列リテラル内の意図的な ZWNBSP 等) であれば入力をそのまま
-        // 返し、「剥がし不要」のケースでも割り当てを発生させない。
+        // A target invisible is present somewhere. Locate the first line-leading
+        // occurrence in a single pass; if every occurrence is mid-line, return
+        // the input unchanged so the no-strip path also avoids any allocation.
+        // 対象の不可視文字が含まれている。最初の「行頭」出現を 1 パスで探し、行頭
+        // 以外のみであれば入力をそのまま返し、「剥がし不要」のケースでも割り当てを
+        // 発生させない。
         int firstStripIndex = -1;
         bool atLineStart = true;
         for (int i = 0; i < content.Length; i++)
         {
             char c = content[i];
-            if (c == '\uFEFF' && atLineStart)
+            if (IsLineLeadingInvisible(c) && atLineStart)
             {
                 firstStripIndex = i;
                 break;
@@ -2432,29 +2431,31 @@ public class FileIndexer
         if (firstStripIndex < 0)
             return content;
 
-        // Allocate only after at least one line-leading BOM is confirmed. The
-        // capacity accounts for stripping at least the BOM at firstStripIndex.
-        // 少なくとも 1 つの行頭 BOM が確定した時点で初めて確保する。容量は
-        // firstStripIndex の BOM を必ず剥がす分を差し引いた値にしておく。
+        // Allocate only after at least one line-leading invisible is confirmed.
+        // The capacity accounts for stripping at least the char at firstStripIndex.
+        // 少なくとも 1 つの行頭不可視文字が確定した時点で初めて確保する。容量は
+        // firstStripIndex の文字を必ず剥がす分を差し引いた値にしておく。
         var sb = new StringBuilder(content.Length - 1);
         if (firstStripIndex > 0)
             sb.Append(content, 0, firstStripIndex);
-        // The char at firstStripIndex is itself a line-leading BOM; resume
+        // The char at firstStripIndex is itself a line-leading invisible; resume
         // after it with atLineStart = true so consecutive BOMs at the same
-        // logical position (e.g. multiple BOMs right after `\n`) are stripped.
-        // firstStripIndex の文字自体が行頭 BOM。直後から再開し atLineStart を
-        // true に戻すことで `\n` 直後に連続する BOM も同じ論理位置として剥がす。
+        // logical position (e.g. multiple markers right after `\n`) are stripped.
+        // firstStripIndex の文字自体が行頭不可視文字。直後から再開し atLineStart を
+        // true に戻すことで `\n` 直後に連続する marker も同じ論理位置として剥がす。
         atLineStart = true;
         for (int i = firstStripIndex + 1; i < content.Length; i++)
         {
             char c = content[i];
-            if (c == '\uFEFF' && atLineStart)
+            if (IsLineLeadingInvisible(c) && atLineStart)
                 continue;
             sb.Append(c);
             atLineStart = c == '\n';
         }
         return sb.ToString();
     }
+
+    private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
 
     /// <summary>
     /// Validate file content for encoding issues.
