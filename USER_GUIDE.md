@@ -1425,6 +1425,28 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 Prefer `--commits` for commit-driven automation and `--changed-between <old-ref> <new-ref>` when a branch-switch workflow can provide the before/after refs. Use `--files` for editor/save hooks that only touch existing paths or add new files. After `git reset`, `git rebase`, `git commit --amend`, or `git merge`, prefer a full `cdidx ./myproject --json` refresh so repo-wide stale paths are purged against the current checkout.
 
 These options make it practical to keep the index up-to-date in real time, even on large codebases, without pretending that every delta workflow purges stale paths equally.
+
+### Incremental update reliability
+
+Scoped updates reuse the same skip and ignore rules as a full scan. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan automatically so files newly hidden by ignore rules are purged and files newly re-included can appear in the index. `--files` is narrower: it updates only the paths you pass, so use a full `cdidx ./myproject --json` refresh after changing ignore rules unless a commit-scoped command can see that ignore-file change.
+
+The index database is updated file by file inside SQLite transactions. Queries from another process can continue during a long refresh, but they may observe a transitional mix of old and new rows until the indexing command finishes. Treat that as a live snapshot, not a corrupted database: rerun `cdidx status --check --json` after the refresh completes before trusting automation results. If a branch switch or other history-moving operation left rows for files that exist only on the previous checkout, incremental JSON output includes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice`; use `--changed-between <old-ref> <new-ref>` when you know both refs, or run a full project refresh when you need repo-wide stale-path cleanup.
+
+Use `--json` to tell what actually happened. Successful indexing output includes `mode` and `summary.files_scanned` / `summary.files_skipped` / `summary.files_purged`. A scoped update that is promoted because ignore files changed reports a full-scan mode rather than a narrow commit/file update, while ordinary delta runs keep the incremental mode and show how many files were skipped.
+
+Example:
+
+```bash
+cdidx ./myproject --files src/app.cs --commits HEAD --json
+```
+
+If `HEAD` only changed `src/app.cs`, this updates that path and the commit-local paths, skipping unchanged files. If `HEAD` also changed `.gitignore` or `.cdidxignore`, cdidx promotes the command to a full incremental scan so the database reflects the new ignore boundary. If the command follows a branch switch and old/new refs are known, prefer:
+
+```bash
+cdidx ./myproject --changed-between old-branch new-branch --json
+```
+
+If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx status --check --json`.
 ~~~
 
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
@@ -3115,6 +3137,28 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 コミット単位の自動化では `--commits` を優先し、ブランチ切り替え workflow が前後の ref を持っている場合は `--changed-between <old-ref> <new-ref>` を使えます。`--files` は既存 path の編集や新規ファイル追加だけを前提にした editor/save hook 向けです。`git reset`、`git rebase`、`git commit --amend`、`git merge` の後は、repo 全体の stale path を掃除するために `cdidx ./myproject --json` のフル更新を優先してください。
 
 これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保ちやすくなりますが、stale path を purge できる範囲は更新モードごとに異なります。
+
+### インクリメンタル更新の信頼性
+
+部分更新はフルスキャンと同じ skip / ignore ルールを使います。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行を自動的にフルインクリメンタルスキャンへ昇格します。これにより、新しく ignore されたファイルは purge され、新しく再包含されたファイルはインデックスに入ります。`--files` はより狭く、渡した path だけを更新します。ignore ルールを変更した後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx ./myproject --json` のフル更新を使ってください。
+
+インデックスDBはファイル単位の SQLite transaction で更新されます。長い refresh 中も別プロセスからの query は続行できますが、indexing command が完了するまでは古い行と新しい行が混在した途中状態を観測する可能性があります。これはDB破損ではなく、その時点の live snapshot です。自動化で結果を信頼する前に、refresh 完了後に `cdidx status --check --json` を再実行してください。ブランチ切り替えや履歴を書き換える操作により前 checkout にしか存在しない行が残る場合、incremental JSON 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` が含まれます。前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、repo 全体の stale path cleanup が必要ならフル更新を実行してください。
+
+実際にどの経路になったかは `--json` で確認できます。成功時の indexing 出力には `mode` と `summary.files_scanned` / `summary.files_skipped` / `summary.files_purged` が含まれます。ignore ファイル変更により昇格された部分更新は狭い commit/file 更新ではなく full-scan mode を報告し、通常の差分更新は incremental mode と skip 済みファイル数を示します。
+
+例:
+
+```bash
+cdidx ./myproject --files src/app.cs --commits HEAD --json
+```
+
+`HEAD` が `src/app.cs` だけを変更していれば、その path と commit 由来 path を更新し、未変更ファイルは skip します。`HEAD` が `.gitignore` または `.cdidxignore` も変更していれば、cdidx はDBを新しい ignore 境界に合わせるためフルインクリメンタルスキャンへ昇格します。ブランチ切り替え後で旧 / 新 ref が分かる場合は、次を優先してください:
+
+```bash
+cdidx ./myproject --changed-between old-branch new-branch --json
+```
+
+ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx status --check --json` で検証してください。
 ~~~
 
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
