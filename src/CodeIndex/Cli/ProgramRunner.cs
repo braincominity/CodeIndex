@@ -203,8 +203,7 @@ internal static class ProgramRunner
             }
 
             GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
-            Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` or enable cdidx diagnostics for details.");
-            DbDebug.DumpToStderr(ex);
+            Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
             return CommandExitCodes.DatabaseError;
         }
