@@ -5144,7 +5144,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["associatedtype", "async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "operator", "property", "struct", "trait", "typealias", "union"];
+        KnownSymbolKindFilters.OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
