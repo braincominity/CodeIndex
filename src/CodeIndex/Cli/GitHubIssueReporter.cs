@@ -93,13 +93,13 @@ internal static class GitHubIssueReporter
         {
             // Idempotency check: if a previous submission attempt actually
             // created an issue on GitHub but the response was lost in transit,
-            // the local record still shows SubmittedToGitHub=false. Search
-            // GitHub for an existing issue carrying this suggestion's hash
-            // before posting a new one, so retries do not create duplicates.
+            // the local record still shows SubmittedToGitHub=false. Look for
+            // an existing issue carrying this suggestion's hash before
+            // posting a new one, so retries do not create duplicates.
             // 冪等性チェック: 過去の送信試行で GitHub 側に Issue が作成されたが
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
-            // 当該提案ハッシュを含む既存 Issue を検索する。
+            // 当該提案ハッシュを含む既存 Issue を探す。
             var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token);
             if (existingUrl != null)
                 return existingUrl;
@@ -117,15 +117,19 @@ internal static class GitHubIssueReporter
 
     /// <summary>
     /// Search the target GitHub repository for an existing Issue whose body
-    /// contains the suggestion hash. Returns the html_url of the first match,
-    /// or null if no match is found or the hash looks unsafe to search with.
-    /// On any API failure this returns null — the caller falls through to the
-    /// normal create path so an indexing delay never blocks a legitimate
-    /// first submission.
+    /// contains the suggestion hash. The primary check uses GitHub Search;
+    /// the backstop lists ai-suggestion issues directly so same-second retries
+    /// are not exposed to Search indexing latency. Returns the html_url of the
+    /// first match, or null if no match is found or the hash looks unsafe to
+    /// search with. On API failure this returns null — the caller falls through
+    /// to the normal create path so a GitHub-side lookup outage never blocks a
+    /// legitimate first submission.
     /// 当該提案ハッシュを含む既存 Issue を対象リポジトリから検索する。
-    /// 一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
-    /// 検索に使えない形の場合は null。API 失敗時も null を返し、検索遅延に
-    /// よって新規送信がブロックされないようにする。
+    /// 主経路は GitHub Search を使い、backstop として ai-suggestion Issue を
+    /// 直接一覧取得することで、同秒の再試行が Search の index 遅延に影響されない
+    /// ようにする。一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
+    /// 検索に使えない形の場合は null。API 失敗時も null を返し、GitHub 側 lookup の
+    /// 障害によって新規送信がブロックされないようにする。
     /// </summary>
     internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token)
     {
@@ -135,6 +139,15 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(hash) || !IsHexHash(hash))
             return null;
 
+        var searchUrl = await SearchExistingIssueByHashAsync(hash, token);
+        if (searchUrl != null)
+            return searchUrl;
+
+        return await ListExistingSuggestionIssueByHashAsync(hash, token);
+    }
+
+    private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token)
+    {
         var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} \"{hash}\" in:body");
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
 
@@ -152,6 +165,37 @@ internal static class GitHubIssueReporter
             return null;
 
         return items[0]?["html_url"]?.GetValue<string>();
+    }
+
+    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(string hash, string token)
+    {
+        for (var page = 1; ; page++)
+        {
+            var labels = Uri.EscapeDataString("ai-suggestion");
+            var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
+
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+            requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var response = await HttpClient.SendAsync(requestMessage);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            var responseJson = await response.Content.ReadAsStringAsync();
+            var items = JsonNode.Parse(responseJson) as JsonArray;
+            if (items == null || items.Count == 0)
+                return null;
+
+            foreach (var item in items)
+            {
+                var body = item?["body"]?.GetValue<string>();
+                if (body != null && body.Contains(hash, StringComparison.Ordinal))
+                    return item?["html_url"]?.GetValue<string>();
+            }
+
+            if (items.Count < 100)
+                return null;
+        }
     }
 
     private static bool IsHexHash(string value)

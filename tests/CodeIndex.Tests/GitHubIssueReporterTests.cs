@@ -190,6 +190,57 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueAsync_SearchMissesButLabelListFindsExistingIssue_DoesNotCreateDuplicate()
+    {
+        // GitHub Search can lag behind newly-created issues. When Search
+        // returns no items, the direct labeled issue list must still catch an
+        // issue that already exists on GitHub and carries the suggestion hash.
+        // GitHub Search は作成直後の Issue を反映するまで遅延し得る。
+        // Search が空でも、label 付き Issue の直接一覧で提案ハッシュを持つ
+        // 既存 Issue を検出し、重複作成を防ぐこと。
+        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var record = MakeRecordWithKnownHash();
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent($$"""
+                [
+                    {
+                        "html_url": "https://github.com/widthdom/CodeIndex/issues/2468",
+                        "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                    }
+                ]
+                """),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/2468", url);
+            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+            Assert.Equal("/search/issues", handler.Requests[0].RequestUri!.AbsolutePath);
+            Assert.Equal("/repos/widthdom/CodeIndex/issues", handler.Requests[1].RequestUri!.AbsolutePath);
+            Assert.Contains("labels=ai-suggestion", handler.Requests[1].RequestUri!.Query);
+            Assert.Contains("state=all", handler.Requests[1].RequestUri!.Query);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueAsync_NoExistingIssue_CreatesNew()
     {
         // Baseline: search returns no items, so the reporter falls through to
@@ -205,6 +256,11 @@ public class GitHubIssueReporterTests : IDisposable
             {
                 Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
             });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
         handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
             new HttpResponseMessage(HttpStatusCode.Created)
             {
@@ -218,9 +274,10 @@ public class GitHubIssueReporterTests : IDisposable
             var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
 
             Assert.Equal("https://github.com/widthdom/CodeIndex/issues/12345", url);
-            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(3, handler.RequestCount);
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
-            Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
+            Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
             var postedJson = Assert.Single(handler.RequestBodies);
             Assert.Contains("codex/5.0", postedJson);
             Assert.Contains("session-123", postedJson);
@@ -261,7 +318,10 @@ public class GitHubIssueReporterTests : IDisposable
             var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
 
             Assert.Equal("https://github.com/widthdom/CodeIndex/issues/777", url);
-            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(3, handler.RequestCount);
+            Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+            Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
         }
         finally
         {
