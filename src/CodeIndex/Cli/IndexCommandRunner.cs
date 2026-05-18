@@ -2009,6 +2009,7 @@ public static class IndexCommandRunner
             FileIndexer.PathFilterKind.IgnoredByRules => "ignored by .gitignore/.cdidxignore",
             FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
             FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
+            FileIndexer.PathFilterKind.OutsideProjectRoot => "outside the project root",
             FileIndexer.PathFilterKind.IgnoreRulesUnavailable => "ignore rules unavailable",
             _ => "filtered",
         };

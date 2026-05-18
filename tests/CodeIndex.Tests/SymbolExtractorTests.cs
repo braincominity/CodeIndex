@@ -3612,12 +3612,12 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.ContainerName == "Example");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.ContainerName == "Example");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "iterator" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.ContainerName == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.Signature == "#hidden() {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.Signature == "*iterator() {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.Signature == "async *stream() {}");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "iterator" && s.Signature == "*iterator() {}");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.Signature == "async *stream() {}");
     }
 
     [Fact]
@@ -3647,10 +3647,10 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.asyncIterator]" && s.Signature == "async [Symbol.asyncIterator]() {}");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "[Symbol.asyncIterator]" && s.Signature == "async [Symbol.asyncIterator]() {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.toStringTag]" && s.Signature == "get [Symbol.toStringTag]() {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[key]" && s.Signature == "set [key](value) {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.Signature == "async *[Symbol.iterator]() {}");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "[Symbol.iterator]" && s.Signature == "async *[Symbol.iterator]() {}");
     }
 
     [Fact]
@@ -3693,6 +3693,33 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "\"a\\\"b\"" && s.Signature == "\"a\\\"b\"() {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "'c\\'d'" && s.Signature == "'c\\'d'() {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "next" && s.Signature == "next() {}");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_ClassifiesAsyncAndGeneratorFunctionKinds()
+    {
+        var content = """
+            function plain() {}
+            async function asyncPlain() {}
+            function* generated() {}
+            async function* asyncGenerated() {}
+            export default async function* () {}
+            class Example {
+                async method() {}
+                *items() {}
+                async *stream() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plain");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "asyncPlain");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "generated");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "asyncGenerated");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "default" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "method" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "items" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.ContainerName == "Example");
     }
 
     [Theory]
@@ -3752,7 +3779,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.ContainerName == "Example");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "generate" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "generate" && s.ContainerName == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "next" && s.ContainerName == "Example");
     }
 
@@ -4405,7 +4432,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
     }
 
     [Fact]
@@ -5031,7 +5058,7 @@ public class SymbolExtractorTests
     {
         var symbols = SymbolExtractor.Extract(1, language, content);
 
-        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == expectedName));
+        var function = Assert.Single(symbols.Where(s => (s.Kind == "function" || s.Kind == "generator") && s.Name == expectedName));
         Assert.Equal("export", function.Visibility);
         Assert.Equal(content, function.Signature);
     }
@@ -5550,12 +5577,12 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.ContainerName == "Example" && s.ReturnType == "void");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.ContainerName == "Example" && s.ReturnType == "AsyncIterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "iterator" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.ContainerName == "Example" && s.ReturnType == "AsyncIterable<number>");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example" && s.ReturnType == "void");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.Signature == "#hidden(): void {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.Signature == "*iterator(): Iterable<number> {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.Signature == "async *stream(): AsyncIterable<number> {}");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "iterator" && s.Signature == "*iterator(): Iterable<number> {}");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.Signature == "async *stream(): AsyncIterable<number> {}");
     }
 
     [Fact]
@@ -5586,11 +5613,11 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.asyncIterator]" && s.Signature == "async [Symbol.asyncIterator](): AsyncGenerator<number> {}" && s.ReturnType == "AsyncGenerator<number>");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "[Symbol.asyncIterator]" && s.Signature == "async [Symbol.asyncIterator](): AsyncGenerator<number> {}" && s.ReturnType == "AsyncGenerator<number>");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.Signature == "public static [Symbol.iterator](): IterableIterator<number> {}" && s.Visibility == "public" && s.ReturnType == "IterableIterator<number>");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.toStringTag]" && s.Signature == "get [Symbol.toStringTag](): string {}" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[key]" && s.Signature == "set [key](value: string) {}");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.dispose]" && s.Signature == "async *[Symbol.dispose](): AsyncGenerator<string> {}" && s.ReturnType == "AsyncGenerator<string>");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "[Symbol.dispose]" && s.Signature == "async *[Symbol.dispose](): AsyncGenerator<string> {}" && s.ReturnType == "AsyncGenerator<string>");
     }
 
     [Fact]
@@ -5712,6 +5739,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_ClassifiesAsyncAndGeneratorFunctionKinds()
+    {
+        var content = """
+            function plain(): void {}
+            async function asyncPlain(): Promise<void> {}
+            function* generated(): Iterable<number> {}
+            async function* asyncGenerated(): AsyncIterable<number> {}
+            export default async function* (): AsyncIterable<number> {}
+            export class Example {
+                async method(): Promise<void> {}
+                *items(): Iterable<number> {}
+                async *stream(): AsyncIterable<number> {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plain");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "asyncPlain");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "generated");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "asyncGenerated");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "default" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "method" && s.ContainerName == "Example" && s.ReturnType == "Promise<void>");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "items" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "stream" && s.ContainerName == "Example" && s.ReturnType == "AsyncIterable<number>");
+    }
+
+    [Fact]
     public void Extract_TypeScript_SemicolonlessFieldInitializerDoesNotHideComputedOrGeneratorMethods()
     {
         var content = """
@@ -5726,7 +5780,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.ContainerName == "Example" && s.ReturnType == "Iterator<number>");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "generate" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "generate" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "next" && s.ContainerName == "Example" && s.ReturnType == "void");
     }
 
@@ -23049,9 +23103,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "regularGen");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "asyncGen");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacedGen");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "regularGen");
+        Assert.Contains(symbols, s => s.Kind == "async_generator" && s.Name == "asyncGen");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "spacedGen");
     }
 
     [Fact]
@@ -23063,10 +23117,10 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var regular = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "regularGen");
+        var regular = symbols.FirstOrDefault(s => s.Kind == "generator" && s.Name == "regularGen");
         Assert.NotNull(regular);
 
-        var asyncGen = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "asyncGen");
+        var asyncGen = symbols.FirstOrDefault(s => s.Kind == "async_generator" && s.Name == "asyncGen");
         Assert.NotNull(asyncGen);
     }
 
@@ -23093,8 +23147,8 @@ public class SymbolExtractorTests
         Assert.NotNull(setFoo);
         Assert.Equal("object", setFoo.ContainerKind);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "bar" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "async_function" && s.Name == "baz" && s.ContainerKind == "object");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "qux" && s.ContainerKind == "object");
     }
 
@@ -23111,7 +23165,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
     }
 
     [Fact]
@@ -23126,7 +23180,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "object");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "gen" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "gen" && s.ContainerKind == "object");
     }
 
     [Fact]
@@ -23262,7 +23316,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
     }
 
     [Fact]
@@ -23357,7 +23411,7 @@ public class SymbolExtractorTests
         Assert.Equal("object", foo.ContainerKind);
         Assert.Equal("default", foo.ContainerName);
 
-        var bar = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "bar");
+        var bar = symbols.FirstOrDefault(s => s.Kind == "async_function" && s.Name == "bar");
         Assert.NotNull(bar);
         Assert.Equal("object", bar.ContainerKind);
         Assert.Equal("default", bar.ContainerName);
