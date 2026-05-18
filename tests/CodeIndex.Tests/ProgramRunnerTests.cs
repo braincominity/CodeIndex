@@ -11,6 +11,27 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Fact]
+    public void Run_UnhandledException_ReturnsSanitizedSingleLineError()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["status"],
+            appVersion: "1.10.0",
+            beforeDispatchForTesting: () => throw new InvalidOperationException("boom")));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+
+        var trimmed = stderr.TrimEnd();
+        Assert.Equal(trimmed, stderr.Trim());
+        Assert.DoesNotContain(Environment.NewLine, trimmed);
+        Assert.DoesNotContain("InvalidOperationException", trimmed);
+        Assert.DoesNotContain("CodeIndex.", trimmed);
+        Assert.DoesNotContain(" at ", trimmed);
+        Assert.DoesNotContain(" in ", trimmed);
+        Assert.StartsWith("Error: command failed before it could complete.", trimmed);
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
