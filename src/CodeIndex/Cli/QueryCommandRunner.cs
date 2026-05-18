@@ -4187,6 +4187,13 @@ public static class QueryCommandRunner
         var sqlite = FindException<SqliteException>(ex);
         if (sqlite != null)
         {
+            if (sqlite.SqliteErrorCode == 14)
+            {
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                Console.Error.WriteLine("Hint: check that `--db` points to a readable SQLite file, verify parent directory permissions, or use a SQLite `file:` URI with `immutable=1` for read-only mounts.");
+                return;
+            }
+
             if (sqlite.SqliteErrorCode == 11)
             {
                 Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
