@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -122,6 +123,44 @@ public class IndexCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_HardlinkedTargets_SkipsDuplicatePathWithWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var original = Path.Combine(projectRoot, "original.cs");
+            var duplicate = Path.Combine(projectRoot, "duplicate.cs");
+            File.WriteAllText(original, "public class HardlinkFixture { }\n");
+            CreateHardLink(original, duplicate);
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(original, "public class HardlinkFixture2 { }\n");
+            File.SetLastWriteTimeUtc(original, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "original.cs", "duplicate.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            var summary = json.GetProperty("summary");
+            Assert.Equal(1, summary.GetProperty("updated").GetInt32());
+            Assert.Equal(1, summary.GetProperty("warnings").GetInt32());
+            var warning = Assert.Single(json.GetProperty("warnings").EnumerateArray());
+            Assert.Contains("hardlinked", warning.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Single(ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -253,6 +292,40 @@ public class IndexCommandRunnerTests
         finally
         {
             Console.SetError(originalErr);
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_ParallelismFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "3"]);
+
+        Assert.Equal(3, options.Parallelism);
+    }
+
+    [Fact]
+    public void ParseArgs_ParallelismInlineFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--parallelism=4"]);
+
+        Assert.Equal(4, options.Parallelism);
+    }
+
+    [Fact]
+    public void ParseArgs_IndexParallelismEnvironment_ProvidesDefault()
+    {
+        var original = Environment.GetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, "2");
+
+            var options = IndexCommandRunner.ParseArgs(["."]);
+
+            Assert.Equal(2, options.Parallelism);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, original);
         }
     }
 
@@ -5166,6 +5239,59 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_DoesNotRestampFoldReadyWhenSymbolExtractorVersionMismatches()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            File.WriteAllText(Path.Combine(projectRoot, "untouched.cs"), "public class Untouched { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"UPDATE codeindex_meta SET value = '0' WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(SymbolExtractor.GetContractVersion("csharp").ToString(System.Globalization.CultureInfo.InvariantCulture), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
     {
         var projectRoot = CreateTempProject();
@@ -6573,6 +6699,27 @@ public class IndexCommandRunnerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static void CreateHardLink(string existingPath, string newPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "ln",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(existingPath);
+        psi.ArgumentList.Add(newPath);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start ln / ln の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"ln failed: {stderr.Trim()}");
     }
 
     private static void WriteOversizedAsciiFile(string path)

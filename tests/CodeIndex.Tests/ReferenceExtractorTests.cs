@@ -10,6 +10,50 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Fact]
+    public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
+    {
+        const string content = """
+            function demo() {
+                runTask();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.True(ReferenceExtractor.TryGetExtractor("javascript", out var extractor));
+        Assert.Equal("javascript", extractor.Language);
+
+        var references = extractor.Extract(new ReferenceExtractionContext(
+            1,
+            extractor.Language,
+            content,
+            symbols));
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "runTask"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void RegisteredLanguages_MatchSupportedReferenceLanguages()
+    {
+        foreach (var language in ReferenceExtractor.RegisteredLanguages)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            Assert.True(ReferenceExtractor.TryGetExtractor(language, out var extractor));
+            Assert.Equal(language, extractor.Language);
+        }
+
+        Assert.True(ReferenceExtractor.SupportsLanguage("vue"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("vue", out var vueExtractor));
+        Assert.Equal("typescript", vueExtractor.Language);
+        Assert.True(ReferenceExtractor.SupportsLanguage("razor"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("razor", out var razorExtractor));
+        Assert.Equal("csharp", razorExtractor.Language);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
@@ -165,6 +209,27 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+    }
+
+    [Fact]
+    public void Extract_CsharpLineCommentAttributeCandidate_DoesNotScanToEndOfFile()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("class Service");
+        builder.AppendLine("{");
+        builder.AppendLine("    void Run()");
+        builder.AppendLine("    {");
+        for (var i = 0; i < 1000; i++)
+            builder.AppendLine($"        Call{i}(); // argument, [not an attribute candidate");
+        builder.AppendLine("        ActualCall();");
+        builder.AppendLine("    }");
+        builder.AppendLine("}");
+
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
     }
 
     [Fact]
@@ -15158,6 +15223,29 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "OrderNumbers" && r.ReferenceKind == "reference" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "InvoiceNumbers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_SystemVariablesEmitsSystemVariableReferences()
+    {
+        const string content = """
+            CREATE PROCEDURE dbo.SaveOrder
+            AS
+            BEGIN
+                SELECT @@IDENTITY;
+                IF @@ROWCOUNT = 0 SELECT @@ERROR;
+                SELECT @@session.sql_mode, @@global.max_connections;
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "@@IDENTITY" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ROWCOUNT" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ERROR" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@session.sql_mode" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@global.max_connections" && r.ReferenceKind == "system_variable");
     }
 
     [Fact]
