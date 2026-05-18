@@ -173,7 +173,7 @@ public static class DbPathResolver
             var raw = cmd.ExecuteScalar();
             return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
         }
-        catch
+        catch (SqliteException)
         {
             return null;
         }
@@ -190,7 +190,7 @@ public static class DbPathResolver
             cmd.Parameters.AddWithValue("@key", key);
             return cmd.ExecuteScalar() != null;
         }
-        catch
+        catch (SqliteException)
         {
             return false;
         }
@@ -320,7 +320,7 @@ public static class DbPathResolver
 
             return samples;
         }
-        catch
+        catch (SqliteException)
         {
             // Fall back to persisted metadata / 永続化 metadata 側へフォールバック
             return [];
@@ -349,7 +349,7 @@ public static class DbPathResolver
                 if (string.Equals(checksum, sample.Checksum, StringComparison.OrdinalIgnoreCase))
                     checksumMatches++;
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Ignore unreadable samples and keep comparing the rest.
                 // 読み込めないサンプルは無視して残りを比較する。
