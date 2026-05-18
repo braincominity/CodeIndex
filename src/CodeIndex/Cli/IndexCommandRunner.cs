@@ -1010,6 +1010,8 @@ public static class IndexCommandRunner
         if (options.ChangedBetweenSpecified)
         {
             CancellationTokenSource? spinnerCts = null;
+            WriteJsonLiveness("resolving changed files between git refs...");
+            var resolveHeartbeat = StartJsonPhaseHeartbeat("resolving changed files between git refs");
             try
             {
                 if (!options.Json)
@@ -1033,9 +1035,11 @@ public static class IndexCommandRunner
             }
             finally
             {
+                StopJsonPhaseHeartbeat(resolveHeartbeat);
                 ConsoleUi.StopSpinner(spinnerCts);
             }
 
+            WriteJsonLiveness($"found {ConsoleUi.Counted(targetPaths.Count, "changed file")}; preparing update...");
             if (!options.Json)
                 Console.WriteLine($"  Found {targetPaths.Count} changed file(s) between git refs");
         }
@@ -1108,6 +1112,61 @@ public static class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
+
+        void WriteJsonLiveness(string message)
+        {
+            if (!options.Json || options.Quiet)
+                return;
+
+            Console.Error.WriteLine($"cdidx: {message}");
+        }
+
+        (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
+        {
+            if (!options.Json || options.Quiet)
+                return null;
+
+            var cts = new CancellationTokenSource();
+            var token = cts.Token;
+            var task = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    var detail = detailProvider?.Invoke();
+                    var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
+                    Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
+                }
+            }, token);
+            return (cts, task);
+        }
+
+        void StopJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
+        {
+            if (heartbeat == null)
+                return;
+
+            heartbeat.Value.Cts.Cancel();
+            try
+            {
+                heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+            {
+            }
+            heartbeat.Value.Cts.Dispose();
+        }
 
         void DemoteReadinessOnce()
         {
@@ -1200,6 +1259,8 @@ public static class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
+        WriteJsonLiveness("checking C# workspace contracts...");
+        var csharpWorkspaceHeartbeat = StartJsonPhaseHeartbeat("checking C# workspace contracts");
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
@@ -1214,20 +1275,26 @@ public static class IndexCommandRunner
         {
             throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
+        finally
+        {
+            StopJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+        }
         if (csharpWorkspace.HasStaticInterfaceContracts)
         {
-            foreach (var filePath in indexer.ScanFilesDetailed().Files)
-            {
-                var detection = FileIndexer.TryDetectLanguage(filePath);
-                if (detection.Status == FileIndexer.FileProbeStatus.Supported
-                    && detection.Language == "csharp")
-                {
-                    targetPaths.Add(filePath);
-                }
-            }
-
+            WriteJsonLiveness("expanding C# update set for static interface contracts...");
+            var expandHeartbeat = StartJsonPhaseHeartbeat("expanding C# update set for static interface contracts");
             try
             {
+                foreach (var filePath in indexer.ScanFilesDetailed().Files)
+                {
+                    var detection = FileIndexer.TryDetectLanguage(filePath);
+                    if (detection.Status == FileIndexer.FileProbeStatus.Supported
+                        && detection.Language == "csharp")
+                    {
+                        targetPaths.Add(filePath);
+                    }
+                }
+
                 csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
                     writer,
                     indexer,
@@ -1238,6 +1305,10 @@ public static class IndexCommandRunner
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw new IndexInterruptedException(updated + removed, targetPaths.Count);
+            }
+            finally
+            {
+                StopJsonPhaseHeartbeat(expandHeartbeat);
             }
         }
 
@@ -1253,56 +1324,66 @@ public static class IndexCommandRunner
 
         StartUpdateSpinnerIfNeeded();
 
-        foreach (var relPath in targetPaths)
+        WriteJsonLiveness($"updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
+        string? currentUpdatePath = null;
+        var updateHeartbeat = StartJsonPhaseHeartbeat(
+            "updating index",
+            () => currentUpdatePath == null
+                ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
+                : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
+        try
         {
-            ThrowIfUpdateCancelled();
-            StartUpdateSpinnerIfNeeded();
-            var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
-            try
+            foreach (var relPath in targetPaths)
             {
-                if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
+                ThrowIfUpdateCancelled();
+                StartUpdateSpinnerIfNeeded();
+                currentUpdatePath = relPath;
+                var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+                try
                 {
-                    if (!writer.HasFileAtPath(relPath))
+                    if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
                     {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
+                        if (!writer.HasFileAtPath(relPath))
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                            continue;
+                        }
+
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [DEL ] {relPath}");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
                         }
                         continue;
                     }
 
-                    DemoteReadinessOnce();
-                    using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(relPath))
-                    {
-                        WriteProjectRootOnce();
-                        deleteTxn.Commit();
-                        removed++;
-                        ftsMutated = true;
-                        if (options.Verbose && !options.Json && !options.Quiet)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [DEL ] {relPath}");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    else
-                    {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    continue;
-                }
-
-                var pathFilter = indexer.EvaluatePathFilter(absPath);
+                    var pathFilter = indexer.EvaluatePathFilter(absPath);
                 RecordScanErrors(pathFilter.Errors);
                 if (pathFilter.ShouldSkip)
                 {
@@ -1528,6 +1609,11 @@ public static class IndexCommandRunner
                     ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
+        }
+        }
+        finally
+        {
+            StopJsonPhaseHeartbeat(updateHeartbeat);
         }
 
         ThrowIfUpdateCancelled();
@@ -3165,15 +3251,21 @@ public static class IndexCommandRunner
                 patterns = [$"{dbDirRelative.TrimEnd('/')}/"];
             }
 
-            var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
+            var ioExcludeFile = LongPath.EnsureWindowsPrefix(excludeFile);
+            var existingContent = File.Exists(ioExcludeFile) ? File.ReadAllText(ioExcludeFile) : "";
             var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
 
             var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();
             if (missing.Count == 0) return;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(excludeFile)!);
+            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(Path.GetDirectoryName(excludeFile)!));
 
-            using var sw = File.AppendText(excludeFile);
+            using var stream = new FileStream(
+                ioExcludeFile,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read);
+            using var sw = new StreamWriter(stream);
             if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
                 sw.WriteLine();
             sw.WriteLine("# cdidx (CodeIndex) — auto-generated");

@@ -3,6 +3,8 @@ using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -12,6 +14,26 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class SymbolExtractorTests
 {
+    [Fact]
+    public void Extract_CustomSymbolPlugin_HandlesUnsupportedLanguage()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            ExtractorPluginRegistry.ResetForTests();
+            ExtractorPluginRegistry.Register(new ToyDslSymbolExtractor());
+
+            var symbols = SymbolExtractor.Extract(7, "toydsl", "entity Widget", "demo.toy");
+
+            var symbol = Assert.Single(symbols);
+            Assert.Equal(7, symbol.FileId);
+            Assert.Equal("class", symbol.Kind);
+            Assert.Equal("Widget", symbol.Name);
+            Assert.Equal("toydsl", FileIndexer.DetectLanguage("demo.toy"));
+            Assert.Contains("toydsl", SymbolExtractor.GetSupportedLanguages());
+            ExtractorPluginRegistry.ResetForTests();
+        }
+    }
+
     [Fact]
     public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
     {
@@ -132,6 +154,119 @@ public class SymbolExtractorTests
 
         var patternCache = Assert.IsAssignableFrom<IDictionary>(field.GetValue(null));
         return patternCache.Keys.Cast<string>().Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private sealed class ToyDslSymbolExtractor : ISymbolExtractor
+    {
+        public string Language => "toydsl";
+
+        public IReadOnlyCollection<string> FileExtensions => [".toy"];
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        {
+            var name = source.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last();
+            return
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = name,
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = source.Trim(),
+                },
+            ];
+        }
+    }
+
+    [Fact]
+    public void Extract_Go_ClassifiesTestBenchmarkExampleInitFunctions()
+    {
+        const string content = """
+            package demo
+
+            import "testing"
+
+            func init() {}
+            func TestMain(m *testing.M) {}
+            func TestWidget(t *testing.T) {}
+            func Test1(t *testing.T) {}
+            func Test_HTTP(t *testing.T) {}
+            func BenchmarkWidget(b *testing.B) {}
+            func Benchmark1(b *testing.B) {}
+            func FuzzWidget(f *testing.F) {}
+            func Fuzz_HTTP(f *testing.F) {}
+            func ExampleWidget() {}
+            func helper() {}
+            func TestExporter() {}
+            func TestTransaction(t Transaction) {}
+            func BenchmarkBuilder(b Builder) {}
+            func FuzzFactory(f Factory) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content, filePath: "widget_test.go");
+
+        Assert.Contains(symbols, symbol => symbol.Name == "init" && symbol.SubKind == "init");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestMain" && symbol.SubKind == "test_main");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestWidget" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "Test1" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "Test_HTTP" && symbol.SubKind == "test");
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkWidget" && symbol.SubKind == "benchmark");
+        Assert.Contains(symbols, symbol => symbol.Name == "Benchmark1" && symbol.SubKind == "benchmark");
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzWidget" && symbol.SubKind == "fuzz");
+        Assert.Contains(symbols, symbol => symbol.Name == "Fuzz_HTTP" && symbol.SubKind == "fuzz");
+        Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == "example");
+        Assert.Contains(symbols, symbol => symbol.Name == "helper" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestExporter" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestTransaction" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkBuilder" && symbol.SubKind == "test_helper");
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzFactory" && symbol.SubKind == "test_helper");
+    }
+
+    [Fact]
+    public void Extract_Go_DoesNotClassifyTestRolesOutsideTestFiles()
+    {
+        const string content = """
+            package demo
+
+            import "testing"
+
+            func init() {}
+            func TestWidget(t *testing.T) {}
+            func BenchmarkWidget(b *testing.B) {}
+            func FuzzWidget(f *testing.F) {}
+            func ExampleWidget() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content, filePath: "widget.go");
+
+        Assert.Contains(symbols, symbol => symbol.Name == "init" && symbol.SubKind == "init");
+        Assert.Contains(symbols, symbol => symbol.Name == "TestWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "BenchmarkWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "FuzzWidget" && symbol.SubKind == null);
+        Assert.Contains(symbols, symbol => symbol.Name == "ExampleWidget" && symbol.SubKind == null);
+    }
+
+    [Fact]
+    public void Extract_Go_QualifiedPointerReceiverUsesBareTypeContainer()
+    {
+        const string content = """
+            package demo
+
+            type Widget struct {}
+
+            func (w *pkg.Widget) Run() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Run"
+            && symbol.ContainerName == "Widget"
+            && symbol.ContainerKind == "struct");
     }
 
     [Fact]
@@ -495,7 +630,70 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
         Assert.Equal(3, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.SubKind == "setter");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.SubKind == "deleter");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsClassHooksAndWalrusAssignments()
+    {
+        var content = """
+            class Base:
+                def __init_subclass__(cls) -> None:
+                    pass
+
+                def __class_getitem__(cls, item):
+                    return cls
+
+            values = [captured := item for item in range(3)]
+
+            def read(stream):
+                while chunk := stream.read(8192):
+                    pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__init_subclass__");
+        Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__class_getitem__");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "captured" && s.SubKind == "walrus");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "chunk" && s.SubKind == "walrus");
+    }
+
+    [Fact]
+    public void Extract_Python_StoresMultilineFunctionAndClassHeaders()
+    {
+        var content = """
+            def build_result[
+                T,
+            ](
+                value: T,
+                fallback: list[T],
+            ) -> Result[T]:
+                return Result(value)
+
+            class Repository(
+                BaseRepository,
+                Generic[T],
+            ):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "build_result"
+            && s.Signature != null
+            && s.Signature.Contains("fallback: list[T]", StringComparison.Ordinal)
+            && s.Signature.Contains("-> Result[T]", StringComparison.Ordinal));
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "Repository"
+            && s.Signature != null
+            && s.Signature.Contains("BaseRepository", StringComparison.Ordinal)
+            && s.Signature.Contains("Generic[T]", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -14154,6 +14352,37 @@ public class SymbolExtractorTests
         var symbol = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "exported_api");
         Assert.Equal(2, symbol.Line);
         Assert.Equal(7, symbol.StartColumn);
+    }
+
+    [Fact]
+    public void Extract_Rust_DistinguishesFileModulesAndScopesInlineModules()
+    {
+        var content = """
+            pub mod file_backed;
+
+            pub(crate) mod outer {
+                pub mod inner {
+                    pub fn build() {}
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var fileModule = Assert.Single(symbols, s => s.Kind == "file_module" && s.Name == "file_backed");
+        Assert.Equal("pub", fileModule.Visibility);
+
+        var outer = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "outer");
+        Assert.Equal("pub(crate)", outer.Visibility);
+
+        var inner = Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == "inner");
+        Assert.Equal("outer", inner.ContainerName);
+        Assert.Equal("pub", inner.Visibility);
+
+        var build = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Equal("inner", build.ContainerName);
+        Assert.Contains("outer", build.ContainerQualifiedName, StringComparison.Ordinal);
+        Assert.Contains("inner", build.ContainerQualifiedName, StringComparison.Ordinal);
     }
 
     [Fact]

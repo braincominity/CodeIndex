@@ -592,7 +592,7 @@ public static partial class SymbolExtractor
     {
         var typeKinds = symbols
             .Where(symbol => symbol.Kind is "struct" or "interface" or "class")
-            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .GroupBy(symbol => GetGoReceiverTypeLookupName(symbol.Name), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Kind, StringComparer.Ordinal);
 
         foreach (var symbol in symbols)
@@ -604,9 +604,137 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            symbol.ContainerName = receiverTypeName;
-            symbol.ContainerKind = typeKinds.TryGetValue(receiverTypeName, out var kind) ? kind : "class";
+            var receiverLookupName = GetGoReceiverTypeLookupName(receiverTypeName);
+            symbol.ContainerName = receiverLookupName;
+            symbol.ContainerKind = typeKinds.TryGetValue(receiverLookupName, out var kind) ? kind : "class";
         }
+    }
+
+    private static void ClassifyGoFunctionRoles(List<SymbolRecord> symbols, string? filePath)
+    {
+        var isTestFile = filePath != null
+            && filePath.EndsWith("_test.go", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function")
+                continue;
+
+            symbol.SubKind = GetGoFunctionSubKind(symbol, isTestFile);
+        }
+    }
+
+    private static string? GetGoFunctionSubKind(SymbolRecord symbol, bool isTestFile)
+    {
+        var signature = symbol.Signature ?? string.Empty;
+        if (string.Equals(symbol.Name, "init", StringComparison.Ordinal)
+            && symbol.ContainerName == null
+            && GoSignatureHasNoParameters(signature))
+        {
+            return "init";
+        }
+
+        if (!isTestFile)
+            return null;
+
+        if (string.Equals(symbol.Name, "TestMain", StringComparison.Ordinal)
+            && GoSignatureHasParameterType(signature, "testing.M"))
+        {
+            return "test_main";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Test")
+            && GoSignatureHasParameterType(signature, "testing.T"))
+        {
+            return "test";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Benchmark")
+            && GoSignatureHasParameterType(signature, "testing.B"))
+        {
+            return "benchmark";
+        }
+
+        if (IsGoExportedPrefixedName(symbol.Name, "Fuzz")
+            && GoSignatureHasParameterType(signature, "testing.F"))
+        {
+            return "fuzz";
+        }
+
+        if (symbol.Name.StartsWith("Example", StringComparison.Ordinal)
+            && GoSignatureHasNoParameters(signature)
+            && GoSignatureHasNoReturnValue(signature))
+        {
+            return "example";
+        }
+
+        return isTestFile ? "test_helper" : null;
+    }
+
+    private static bool IsGoExportedPrefixedName(string name, string prefix)
+        => name.Length > prefix.Length
+           && name.StartsWith(prefix, StringComparison.Ordinal)
+           && !char.IsLower(name[prefix.Length]);
+
+    private static bool GoSignatureHasParameterType(string signature, string typeName)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close <= open)
+            return false;
+
+        var parameters = signature[(open + 1)..close].Replace("*", string.Empty, StringComparison.Ordinal);
+        var bareTypeName = GetGoReceiverTypeLookupName(typeName);
+        return ContainsGoTypeToken(parameters, typeName)
+            || ContainsGoTypeToken(parameters, bareTypeName);
+    }
+
+    private static bool ContainsGoTypeToken(string text, string typeName)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(typeName, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + typeName.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsGoTypeTokenPart(before) && !IsGoTypeTokenPart(after))
+                return true;
+
+            searchStart = afterIndex;
+        }
+
+        return false;
+    }
+
+    private static bool IsGoTypeTokenPart(char ch)
+        => ch == '_' || ch == '.' || char.IsLetterOrDigit(ch);
+
+    private static bool GoSignatureHasNoParameters(string signature)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        return close > open && string.IsNullOrWhiteSpace(signature[(open + 1)..close]);
+    }
+
+    private static bool GoSignatureHasNoReturnValue(string signature)
+    {
+        var open = signature.IndexOf('(');
+        if (open < 0)
+            return false;
+        var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
+        if (close < 0 || close + 1 >= signature.Length)
+            return true;
+
+        var trailing = signature[(close + 1)..].TrimStart();
+        return trailing.Length == 0 || trailing[0] == '{';
     }
 
     private static bool TryGetGoMethodReceiverTypeName(string signature, out string receiverTypeName)
@@ -656,6 +784,22 @@ public static partial class SymbolExtractor
 
         receiverTypeName = typeText.Trim();
         return receiverTypeName.Length > 0;
+    }
+
+    private static string GetGoReceiverTypeLookupName(string typeName)
+    {
+        var lookupName = typeName.Trim();
+        while (lookupName.StartsWith("*", StringComparison.Ordinal))
+            lookupName = lookupName[1..].TrimStart();
+
+        var genericStart = lookupName.IndexOf('[');
+        if (genericStart >= 0)
+            lookupName = lookupName[..genericStart];
+
+        var dot = lookupName.LastIndexOf('.');
+        return dot >= 0 && dot + 1 < lookupName.Length
+            ? lookupName[(dot + 1)..].Trim()
+            : lookupName;
     }
 
     private static int SkipGoSymbolWhitespace(string text, int start)

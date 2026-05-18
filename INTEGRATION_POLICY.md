@@ -42,8 +42,8 @@ access:
 
 ## API Surface and Library Use
 
-CodeIndex ships as a **CLI and MCP server only**. It does not publish a library
-or SDK API for embedders.
+CodeIndex ships primarily as a **CLI and MCP server**. It does not publish a
+general-purpose library or SDK API for embedders.
 
 - The stable, supported surfaces are the `cdidx` CLI (including its `--json`
   output) and the `cdidx mcp` JSON-RPC interface. Versioning guarantees only
@@ -59,10 +59,15 @@ or SDK API for embedders.
 - Projects that need a programmatic interface should depend on the CLI's
   `--json` output or on the MCP server, both of which are covered by the
   changelog and the documented status contract.
+- The extractor plugin interfaces under `CodeIndex.Indexer.Extensibility` are
+  a narrow exception for language-extension DLLs loaded by `cdidx` itself from
+  `.cdidx/plugins` or `~/.cdidx/plugins`. They are not a general embedding API.
+  Plugins run in the `cdidx` process and must be treated as trusted local code.
 
 If a future need justifies a real library API, it will be carved out as a
 separate package with its own explicit interface and versioning contract.
-Until then, treat embedding the `cdidx` assembly as unsupported.
+Until then, treat embedding the `cdidx` assembly outside the extractor plugin
+contract as unsupported.
 
 ## Boundary
 

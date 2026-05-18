@@ -138,6 +138,8 @@ internal static class RustReferenceExtractor
         SymbolRecord? container,
         SymbolRecord? enumContainer)
     {
+        EmitLifetimeReferences(context, references, seen, fileId, context, lineNumber, container);
+        EmitHigherRankedTraitBoundReferences(context, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitUseReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitExternCrateReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
         EmitModuleDeclarationReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
@@ -158,6 +160,81 @@ internal static class RustReferenceExtractor
         EmitStructLiteralInstantiationReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitLifetimeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        for (var index = 0; index + 1 < preparedLine.Length; index++)
+        {
+            if (preparedLine[index] != '\'' || !IsRustLifetimeStart(preparedLine[index + 1]))
+                continue;
+
+            var end = index + 2;
+            while (end < preparedLine.Length && IsRustLifetimePart(preparedLine[end]))
+                end++;
+
+            if (end < preparedLine.Length && preparedLine[end] == '\'')
+            {
+                index = end;
+                continue;
+            }
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                preparedLine.Substring(index, end - index),
+                index,
+                "lifetime_reference",
+                context,
+                lineNumber,
+                container);
+            index = end - 1;
+        }
+    }
+
+    private static void EmitHigherRankedTraitBoundReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var forIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(line, "for"))
+        {
+            var openAngle = SkipWhitespace(line, forIndex + "for".Length);
+            if (openAngle >= line.Length || line[openAngle] != '<')
+                continue;
+
+            var closeAngle = FindRustGenericClose(line, openAngle);
+            if (closeAngle <= openAngle)
+                continue;
+
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(line, closeAngle + 1);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(line, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                line.Substring(typeStart, typeEnd - typeStart),
+                typeStart,
+                "rust",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+        }
     }
 
     private static void EmitUseReferences(
@@ -797,6 +874,12 @@ internal static class RustReferenceExtractor
 
     private static bool IsRustIdentifierStart(char ch) =>
         ch == '_' || char.IsLetter(ch);
+
+    private static bool IsRustLifetimeStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsRustLifetimePart(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static int SkipWhitespace(string text, int index)
     {

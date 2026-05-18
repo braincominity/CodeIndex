@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,7 +10,12 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
-    internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null, string? configStartDirectory = null)
+    internal static int Run(
+        string[] args,
+        JsonSerializerOptions? jsonOptions = null,
+        string? appVersion = null,
+        string? configStartDirectory = null,
+        Action? beforeDispatchForTesting = null)
     {
         appVersion ??= ConsoleUi.LoadVersion();
 
@@ -114,6 +120,8 @@ internal static class ProgramRunner
 
         try
         {
+            beforeDispatchForTesting?.Invoke();
+
             if (args[0] is "mcp" or "mcp-server")
             {
                 var mcpExitCode = RunMcp(args[1..], appVersion);
@@ -196,8 +204,9 @@ internal static class ProgramRunner
             }
 
             GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
+            Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
-            throw;
+            return CommandExitCodes.DatabaseError;
         }
     }
 
@@ -639,7 +648,7 @@ internal static class ProgramRunner
         HttpMcpTransport transport;
         try
         {
-            transport = new HttpMcpTransport(resolved.Prefix, resolved.Host, resolved.Port, bearerToken);
+            transport = new HttpMcpTransport(resolved.Prefix, resolved.Host, resolved.Port, bearerToken, LogHttpMcpRequest);
         }
         catch (HttpListenerException ex)
         {
@@ -671,6 +680,33 @@ internal static class ProgramRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static void LogHttpMcpRequest(HttpMcpTransport.HttpRequestLogRecord record)
+    {
+        GlobalToolLog.Info(
+            "mcp_http_request"
+            + $" correlation_id={record.CorrelationId}"
+            + $" request_id={FormatLogValue(record.RequestId)}"
+            + $" remote_peer={FormatLogValue(record.RemotePeer)}"
+            + $" method={FormatLogValue(record.Method)}"
+            + $" path={FormatLogValue(record.Path)}"
+            + $" status={record.StatusCode.ToString(CultureInfo.InvariantCulture)}"
+            + $" duration_ms={record.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)}"
+            + $" auth={FormatLogValue(record.AuthOutcome)}");
+    }
+
+    private static string FormatLogValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return "-";
+
+        return value
+            .Replace('\\', '/')
+            .Replace('\r', '_')
+            .Replace('\n', '_')
+            .Replace('\t', '_')
+            .Replace(' ', '_');
     }
 
     private static void PrintMcpUsage()

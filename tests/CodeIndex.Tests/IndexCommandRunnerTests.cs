@@ -165,6 +165,32 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_JsonWritesLivenessToStderrWithoutPollutingStdout()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "public class Program { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "public class Program { public void Run() { } }\n");
+
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "Program.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            Assert.Contains("cdidx: checking C# workspace contracts", stderr);
+            Assert.Contains("cdidx: updating", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
     {
         using var cts = new CancellationTokenSource();
@@ -6449,18 +6475,25 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedDll, string workingDirectory, params string[] args)
+    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedCli, string workingDirectory, params string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
         {
-            FileName = "dotnet",
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.ArgumentList.Add(publishedDll);
+        if (Path.GetExtension(publishedCli).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.FileName = "dotnet";
+            psi.ArgumentList.Add(publishedCli);
+        }
+        else
+        {
+            psi.FileName = publishedCli;
+        }
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
@@ -6506,10 +6539,15 @@ public class IndexCommandRunnerTests
             throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
 
         var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (!File.Exists(publishedDll))
-            throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
+        if (File.Exists(publishedDll))
+            return publishedDll;
 
-        return publishedDll;
+        var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        if (File.Exists(publishedAppHost))
+            return publishedAppHost;
+
+        throw new InvalidOperationException(
+            $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");
     }
 
     private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)

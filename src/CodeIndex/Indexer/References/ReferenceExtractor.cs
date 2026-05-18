@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -771,7 +772,11 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => RegisteredLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
+        => RegisteredLanguages
+            .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
+            .Concat(ExtractorPluginRegistry.ReferenceLanguages)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Registered language keys for reference extraction.
@@ -780,13 +785,30 @@ public static partial class ReferenceExtractor
     public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte"
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return null;
+
+        lang = lang.Trim().ToLowerInvariant();
+        return lang is "vue" or "svelte"
             ? "typescript"
             : lang is "razor" or "blazor" or "cshtml"
                 ? "csharp"
                 : lang;
+    }
 
-    public static bool SupportsLanguage(string? lang) => TryGetExtractor(lang, out _);
+    private static string? NormalizePluginLanguage(string? lang)
+        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+
+    public static bool SupportsLanguage(string? lang)
+    {
+        var normalized = NormalizeLanguage(lang);
+        if (normalized != null && Extractors.ContainsKey(normalized))
+            return true;
+
+        return NormalizePluginLanguage(lang) is string pluginLanguage
+            && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+    }
 
     /// <summary>
     /// Returns the registered reference extractor for a supported language.
@@ -877,8 +899,26 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
     {
         var requestedLanguage = lang;
+        var pluginLanguage = NormalizePluginLanguage(lang);
         if (!TryGetExtractor(lang, out var extractor))
-            return [];
+        {
+            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
+                return [];
+
+            if (string.IsNullOrEmpty(content))
+                return [];
+            if (ChunkSplitter.HasOversizeLine(content))
+                return [];
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingBom(content);
+
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
+                .ToList();
+        }
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
@@ -943,6 +983,7 @@ public static partial class ReferenceExtractor
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
+
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)
             : content;
@@ -1071,7 +1112,7 @@ public static partial class ReferenceExtractor
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
                               (symbol.Kind == "function" || symbol.Kind == "hook" || symbol.Kind == "class"
                                || symbol.Kind == "struct" || symbol.Kind == "namespace"
-                               || symbol.Kind == "property"))
+                               || symbol.Kind == "property" || symbol.Kind == "class_hook"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
         var containerResolver = new InnermostContainerResolver(containerCandidates);
@@ -2034,7 +2075,17 @@ public static partial class ReferenceExtractor
             else if (language == "cpp")
                 CppReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
             else if (language == "go")
+            {
+                GoReferenceExtractor.EmitConcurrencyReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
                 GoReferenceExtractor.EmitTypePositionReferences(preparedLine, originalLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall, goImportBlockLines?[i] == true);
+            }
             else if (language == "dart")
                 DartReferenceExtractor.EmitTypePositionReferences(preparedLine, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
             else if (language == "vb")
@@ -2974,6 +3025,21 @@ public static partial class ReferenceExtractor
 
             if (language == "python")
             {
+                var pythonPreparedLine = preparedLine;
+                var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
+                var pythonHeaderSymbol = symbols.FirstOrDefault(symbol =>
+                    symbol.Line == lineNumber
+                    && symbol.Signature != null
+                    && symbol.Kind is "function" or "class" or "property" or "class_hook");
+                if (pythonHeaderSymbol?.Signature != null
+                    && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
+                {
+                    pythonPreparedLine = builtPythonHeaderMap.Text;
+                    pythonHeaderMap = builtPythonHeaderMap;
+                }
+                var pythonHeaderContainer = pythonHeaderSymbol ?? container;
+
+                var pythonReferenceStart = references.Count;
                 PythonReferenceExtractor.EmitDecoratorReferences(
                     preparedLine,
                     references,
@@ -3039,37 +3105,34 @@ public static partial class ReferenceExtractor
                     container,
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitClassBaseReferences(
-                    preparedLine,
+                    pythonPreparedLine,
                     references,
                     seen,
                     fileId,
                     context,
                     lineNumber,
-                    container,
-                    index => ResolveContainerForCall(index)
-                        ?? ResolvePythonDefinitionContainer(lineNumber, "class"),
+                    pythonHeaderContainer,
+                    index => pythonHeaderContainer ?? ResolveContainerForCall(index) ?? ResolvePythonDefinitionContainer(lineNumber, "class"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionReturnReferences(
-                    preparedLine,
+                    pythonPreparedLine,
                     references,
                     seen,
                     fileId,
                     context,
                     lineNumber,
-                    container,
-                    index => ResolveContainerForCall(index)
-                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
+                    pythonHeaderContainer,
+                    index => pythonHeaderContainer ?? ResolveContainerForCall(index) ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitFunctionParameterReferences(
-                    preparedLine,
+                    pythonPreparedLine,
                     references,
                     seen,
                     fileId,
                     context,
                     lineNumber,
-                    container,
-                    index => ResolveContainerForCall(index)
-                        ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
+                    pythonHeaderContainer,
+                    index => pythonHeaderContainer ?? ResolveContainerForCall(index) ?? ResolvePythonDefinitionContainer(lineNumber, "function"),
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitVariableAnnotationReferences(
                     preparedLine,
@@ -3170,6 +3233,9 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+
+                if (pythonHeaderMap.HasValue)
+                    RemapPythonLogicalHeaderReferences(references, pythonReferenceStart, pythonHeaderMap.Value, lines);
             }
 
             if (language == "r")
@@ -3399,6 +3465,122 @@ public static partial class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
+
+    private static bool TryBuildPythonLogicalHeaderReferenceLine(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out PythonLogicalHeaderReferenceLine header)
+    {
+        var builder = new StringBuilder();
+        var physicalLines = new List<int>();
+        var physicalColumns = new List<int>();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inString = false;
+        var quote = '\0';
+
+        for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = lineIndex == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
+            if (column < line.Length)
+            {
+                if (builder.Length > 0)
+                {
+                    builder.Append(' ');
+                    physicalLines.Add(lineIndex);
+                    physicalColumns.Add(column);
+                }
+
+                for (var fragmentColumn = column; fragmentColumn < line.Length; fragmentColumn++)
+                {
+                    var fragmentChar = line[fragmentColumn];
+                    if (fragmentChar == '\\' && fragmentColumn == line.Length - 1)
+                        break;
+
+                    builder.Append(fragmentChar);
+                    physicalLines.Add(lineIndex);
+                    physicalColumns.Add(fragmentColumn);
+                }
+            }
+
+            for (var scan = column; scan < line.Length; scan++)
+            {
+                var ch = line[scan];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        scan++;
+                        continue;
+                    }
+
+                    if (ch == quote)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quote = ch;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == ':' && parenDepth == 0 && bracketDepth == 0)
+                {
+                    header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+                    return header.Text.Length > 0;
+                }
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+                break;
+        }
+
+        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        return header.Text.Length > 0;
+    }
+
+    private static int FindFirstNonWhitespaceColumn(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        return index;
+    }
+
+    private static void RemapPythonLogicalHeaderReferences(
+        List<ReferenceRecord> references,
+        int startIndex,
+        PythonLogicalHeaderReferenceLine header,
+        string[] lines)
+    {
+        for (var i = startIndex; i < references.Count; i++)
+        {
+            var logicalIndex = references[i].Column - 1;
+            if (logicalIndex < 0 || logicalIndex >= header.PhysicalLines.Length)
+                continue;
+
+            var physicalLineIndex = header.PhysicalLines[logicalIndex];
+            references[i].Line = physicalLineIndex + 1;
+            references[i].Column = header.PhysicalColumns[logicalIndex] + 1;
+            references[i].Context = lines[physicalLineIndex].Trim();
+        }
     }
 
     private static Dictionary<(int Line, string Kind), SymbolRecord> BuildPythonDefinitionContainersByLineAndKind(IReadOnlyList<SymbolRecord> symbols)

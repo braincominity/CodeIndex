@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.CompilerServices;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -779,7 +780,7 @@ public static partial class SymbolExtractor
     {
         ["python"] =
         [
-            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*\(", RegexOptions.Compiled), BodyStyle.Indent),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|collections)\.)?(?:NamedTuple|namedtuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None),
@@ -1374,7 +1375,8 @@ public static partial class SymbolExtractor
             // `impl Trait for Type` / `unsafe impl Trait for Type` は、拡張先の型に紐づける。
             new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)(?!\s+for\b)", RegexOptions.Compiled), BodyStyle.Brace),
-            // mod / モジュール
+            // file module declarations and inline modules / ファイルモジュール宣言とインラインモジュール
+            new("file_module", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // type alias / 型エイリアス
             new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
@@ -2055,15 +2057,28 @@ public static partial class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => PatternCache.Keys.Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" }).ToArray();
+      => PatternCache.Keys
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" })
+          .Concat(ExtractorPluginRegistry.SymbolLanguages)
+          .Distinct(StringComparer.Ordinal)
+          .ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte" ? "typescript" : lang;
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return null;
+
+        lang = lang.Trim().ToLowerInvariant();
+        return lang is "vue" or "svelte" ? "typescript" : lang;
+    }
+
+    private static string? NormalizePluginLanguage(string? lang)
+        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
 
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum", "heading", "specialization"
+        "class", "struct", "interface", "namespace", "enum", "heading", "specialization", "class_hook"
     ];
 
     /// <summary>
@@ -2079,7 +2094,8 @@ public static partial class SymbolExtractor
     {
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
-        if (lang == null)
+        var pluginLanguage = NormalizePluginLanguage(originalLang);
+        if (lang == null && pluginLanguage == null)
             return [];
 
         // Null / empty fast path — keep the direct-call null-safe contract that
@@ -2104,19 +2120,28 @@ public static partial class SymbolExtractor
         if (ChunkSplitter.HasOversizeLine(content))
             return [];
 
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        content = FileIndexer.StripLineLeadingBom(content);
+
+        if (pluginLanguage != null
+            && !PatternCache.ContainsKey(pluginLanguage)
+            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
+        {
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, filePath))
+                .ToList();
+        }
+
         if (lang == "xml")
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingBom(content);
             return ExtractXmlSymbols(fileId, content.Split('\n'));
         }
 
         if (lang == "markdown")
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingBom(content);
             var markdownLines = content.Split('\n');
             var markdownSymbols = ExtractMarkdownSymbols(fileId, markdownLines);
             AssignContainers(markdownSymbols, markdownLines, null);
@@ -2138,9 +2163,6 @@ public static partial class SymbolExtractor
         // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
         // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
         // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
-        if (content.Contains('\r'))
-            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var pythonModulePrefix = lang == "python"
             ? GetPythonModulePrefix(filePath)
@@ -2149,7 +2171,7 @@ public static partial class SymbolExtractor
         if (lang is "commonlisp" or "racket")
             return ExtractLispSymbols(fileId, lang, lines);
 
-        if (!PatternCache.TryGetValue(lang, out var patterns))
+        if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
@@ -2740,8 +2762,18 @@ public static partial class SymbolExtractor
                     // Python @property decorator: reclassify the def as property
                     // Python @property デコレータ: def を property に再分類
                     var kind = pattern.Kind;
+                    string? pythonSubKind = null;
                     if (kind == "function" && lang == "python" && HasPythonPropertyDecorator(lines, i))
+                    {
                         kind = "property";
+                        pythonSubKind = GetPythonPropertyAccessorSubKind(lines, i);
+                    }
+                    else if (kind == "function" && lang == "python" && IsPythonClassHook(name))
+                    {
+                        kind = "class_hook";
+                        pythonSubKind = "dunder";
+                        (endLine, bodyStartLine, bodyEndLine) = FindPythonIndentedBodyRange(lines, i);
+                    }
 
                     if (lang == "css")
                         name = ResolveCssSymbolName(matchLine[absoluteStartColumn..], name, lines, i, endLine);
@@ -3074,6 +3106,8 @@ public static partial class SymbolExtractor
                             ? patternMatchLine[absoluteStartColumn..].Trim()
                             : line[absoluteStartColumn..].Trim();
                     }
+                    if (lang == "python" && pattern.Kind is "function" or "class")
+                        signature = BuildPythonLogicalHeaderSignature(lines, i, absoluteStartColumn);
 
                     List<string>? fortranProcedureNames = null;
                     if (lang == "fortran"
@@ -3358,7 +3392,7 @@ public static partial class SymbolExtractor
                                         BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     FamilyKey = lang == "cpp" && kind == "specialization" ? name : null,
-                                    SubKind = ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
+                                    SubKind = pythonSubKind ?? ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(rawReturnType),
                                 },
@@ -3845,6 +3879,8 @@ public static partial class SymbolExtractor
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         if (lang == "python")
             ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
+        if (lang == "python")
+            ExtractPythonWalrusSymbols(fileId, lines, symbols);
         if (lang == "perl")
             ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         if (lang == "php")
@@ -3874,6 +3910,8 @@ public static partial class SymbolExtractor
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
             AssignGoMethodReceiverContainers(symbols);
+        if (lang == "go")
+            ClassifyGoFunctionRoles(symbols, filePath);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         if (lang is "javascript" or "typescript")
             ClassifyJavaScriptTypeScriptReactHooks(symbols);
