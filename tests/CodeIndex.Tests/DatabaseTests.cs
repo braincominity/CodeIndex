@@ -140,6 +140,87 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    );";
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+
+            using (var fkCheck = db.Connection.CreateCommand())
+            {
+                fkCheck.CommandText = "PRAGMA foreign_keys";
+                Assert.Equal(1L, Convert.ToInt64(fkCheck.ExecuteScalar()));
+            }
+
+            using (var insertFile = db.Connection.CreateCommand())
+            {
+                insertFile.CommandText = "INSERT INTO files(path) VALUES ('src/Use.cs')";
+                insertFile.ExecuteNonQuery();
+            }
+
+            using var insertReference = db.Connection.CreateCommand();
+            insertReference.CommandText = @"
+                INSERT INTO symbol_references(file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id)
+                VALUES (1, 'MissingLine', 'call', 1, 1, 'MissingLine()', 999)";
+            var ex = Assert.Throws<SqliteException>(() => insertReference.ExecuteNonQuery());
+            Assert.Equal(19, ex.SqliteErrorCode);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void Constructor_ConfiguresWalDurabilityPragmas()
     {
         Assert.Equal("wal", ExecuteScalarString("PRAGMA journal_mode"));
