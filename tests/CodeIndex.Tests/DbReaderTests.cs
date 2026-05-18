@@ -1145,6 +1145,7 @@ public class DbReaderTests : IDisposable
     [InlineData("NEAR(1000000)")]
     [InlineData("near(auth login, -1)")]
     [InlineData("NEAR(auth login, 999999999999)")]
+    [InlineData("NEAR(auth login, 999999999999999999999999999999999)")]
     public void Search_RawQueryRejectsOutOfRangeNearDistance_Issue2089(string query)
     {
         var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.Search(query, rawQuery: true));

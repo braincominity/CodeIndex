@@ -370,7 +370,29 @@ public partial class DbReader
         if (candidate.Length == 0)
             return false;
 
-        return long.TryParse(candidate.ToString(), out distance);
+        if (long.TryParse(candidate.ToString(), out distance))
+            return true;
+
+        if (!IsSignedIntegerLiteral(candidate))
+            return false;
+
+        distance = MaxRawFtsNearDistance + 1L;
+        return true;
+    }
+
+    private static bool IsSignedIntegerLiteral(ReadOnlySpan<char> value)
+    {
+        var start = value[0] is '+' or '-' ? 1 : 0;
+        if (start == value.Length)
+            return false;
+
+        for (var i = start; i < value.Length; i++)
+        {
+            if (!char.IsDigit(value[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static string GetExactSearchTextSql(string valueSql, string langSql)
