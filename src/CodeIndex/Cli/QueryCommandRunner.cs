@@ -4290,11 +4290,14 @@ public static class QueryCommandRunner
         if (options.ParseError == null && dbPathError == null)
             return false;
 
+        var primaryError = options.ParseError ?? dbPathError!;
         CommandErrorWriter.Write(
-            StripErrorPrefix(options.ParseError ?? dbPathError!),
-            "fix the invalid or missing option value, then rerun with the command shape below.",
+            StripErrorPrefix(primaryError),
+            primaryError == dbPathError && options.ParseError == null
+                ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
+                : "fix the invalid or missing option value, then rerun with the command shape below.",
             GetUsageLineOrThrow(commandName),
-            ExtractErrorCode(options.ParseError ?? dbPathError!));
+            ExtractErrorCode(primaryError));
         if (options.ParseError != null && dbPathError != null)
             CommandErrorWriter.Write(
                 StripErrorPrefix(dbPathError),
@@ -4315,7 +4318,7 @@ public static class QueryCommandRunner
         if (File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
             return null;
 
-        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file. Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.";
+        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file.";
     }
 
     private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)

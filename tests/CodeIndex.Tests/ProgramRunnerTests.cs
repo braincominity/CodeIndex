@@ -350,6 +350,7 @@ public class ProgramRunnerTests
             CaptureConsole(() => ProgramRunner.Run(["--completions"], appVersion: "1.10.0")),
             CaptureConsole(() => IndexCommandRunner.Run([missingProject], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
             CaptureConsole(() => QueryCommandRunner.RunSearch(["Symbol", "--since", "not-a-date"], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
+            CaptureConsole(() => QueryCommandRunner.RunSearch(["Symbol", "--db", Path.Combine(missingProject, "missing.db")], new JsonSerializerOptions(JsonSerializerDefaults.Web))),
         };
 
         Assert.All(cases, result =>
