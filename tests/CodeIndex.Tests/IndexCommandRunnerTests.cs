@@ -165,6 +165,32 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_JsonWritesLivenessToStderrWithoutPollutingStdout()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "public class Program { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "public class Program { public void Run() { } }\n");
+
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "Program.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            Assert.Contains("cdidx: checking C# workspace contracts", stderr);
+            Assert.Contains("cdidx: updating", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
     {
         using var cts = new CancellationTokenSource();
