@@ -74,6 +74,56 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
+    {
+        var records = new List<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Add);
+
+        using var client = new HttpClient();
+        using (var missingAuth = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        })
+        using (var missingAuthResponse = await client.SendAsync(missingAuth))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, missingAuthResponse.StatusCode);
+        }
+
+        using (var getResponse = await client.GetAsync(harness.Endpoint))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, getResponse.StatusCode);
+        }
+
+        using (var ok = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":7,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        })
+        {
+            ok.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "token");
+            using var okResponse = await client.SendAsync(ok);
+            Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
+        }
+
+        Assert.Equal(3, records.Count);
+        Assert.Equal("missing", records[0].AuthOutcome);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, records[0].StatusCode);
+        Assert.Equal("POST", records[0].Method);
+        Assert.Equal("/", records[0].Path);
+        Assert.Null(records[0].RequestId);
+        Assert.True(records[0].DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(records[0].CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(records[0].RemotePeer));
+
+        Assert.Equal("missing", records[1].AuthOutcome);
+        Assert.Equal("GET", records[1].Method);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, records[1].StatusCode);
+
+        Assert.Equal("ok", records[2].AuthOutcome);
+        Assert.Equal("7", records[2].RequestId);
+        Assert.Equal((int)HttpStatusCode.OK, records[2].StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across
@@ -258,10 +308,10 @@ public class HttpMcpTransportTests : IDisposable
 
         public string Endpoint { get; }
 
-        public static async Task<McpHttpHarness> StartAsync(string dbPath, string? bearerToken = null)
+        public static async Task<McpHttpHarness> StartAsync(string dbPath, string? bearerToken = null, Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
-            var transport = new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken);
+            var transport = new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken, requestLogger);
             var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var cts = new CancellationTokenSource();
             var loopTask = Task.Run(() => server.RunAsync(transport, cts.Token));

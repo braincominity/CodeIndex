@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Mcp;
 
@@ -24,6 +25,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
 {
     private readonly HttpListener _listener;
     private readonly string _endpoint;
+    private readonly Action<HttpRequestLogRecord>? _requestLogger;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
     // per-request work proportional only to the attacker-supplied input length, eliminating the
@@ -31,7 +33,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
     // 設定トークンの SHA-256 をコンストラクタで一度だけ計算し、リクエスト毎の auth では
     // 攻撃者入力のみハッシュ計算する。これにより設定トークン長による timing 漏洩を排除する。
     private readonly byte[]? _bearerTokenHash;
-    private HttpListenerContext? _pendingContext;
+    private PendingRequest? _pendingRequest;
     private bool _disposed;
 
     /// <summary>
@@ -43,11 +45,12 @@ internal sealed class HttpMcpTransport : IMcpTransport
     /// が空でない場合、すべてのリクエストに `Authorization: Bearer ...` ヘッダーが必要。トークン未指定で
     /// loopback 以外に bind しようとした場合は明示的に拒否し、秘密情報なしの LAN 露出を防ぐ。
     /// </summary>
-    internal HttpMcpTransport(string prefix, string host, int boundPort, string? bearerToken)
+    internal HttpMcpTransport(string prefix, string host, int boundPort, string? bearerToken, Action<HttpRequestLogRecord>? requestLogger = null)
     {
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
+        _requestLogger = requestLogger;
         _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
             ? null
             : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
@@ -155,7 +158,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_pendingContext is not null)
+        if (_pendingRequest is not null)
             throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
         while (true)
@@ -179,7 +182,9 @@ internal sealed class HttpMcpTransport : IMcpTransport
                 return null;
             }
 
-            if (!await TryAuthorizeAsync(context).ConfigureAwait(false))
+            var request = BeginRequest(context);
+
+            if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
                 continue;
 
             if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
@@ -190,6 +195,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
                 // RFC 9110 §15.5.6 に従い 405 にはサポートメソッドを示す `Allow` ヘッダを付ける。
                 context.Response.AddHeader("Allow", "POST");
                 await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
                 continue;
             }
 
@@ -206,10 +212,12 @@ internal sealed class HttpMcpTransport : IMcpTransport
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
                 context.Response.Close();
+                LogRequest(request, (int)HttpStatusCode.NoContent);
                 continue;
             }
 
-            _pendingContext = context;
+            request.RequestId = TryExtractJsonRpcId(body);
+            _pendingRequest = request;
             return body;
         }
     }
@@ -217,9 +225,10 @@ internal sealed class HttpMcpTransport : IMcpTransport
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var context = _pendingContext
+        var request = _pendingRequest
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
-        _pendingContext = null;
+        _pendingRequest = null;
+        var context = request.Context;
 
         try
         {
@@ -227,6 +236,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
                 context.Response.Close();
+                LogRequest(request, (int)HttpStatusCode.NoContent);
                 return;
             }
 
@@ -236,6 +246,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
             context.Response.ContentLength64 = payload.LongLength;
             await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
             context.Response.OutputStream.Close();
+            LogRequest(request, (int)HttpStatusCode.OK);
         }
         catch
         {
@@ -246,22 +257,38 @@ internal sealed class HttpMcpTransport : IMcpTransport
         }
     }
 
-    private async Task<bool> TryAuthorizeAsync(HttpListenerContext context)
+    private async Task<bool> TryAuthorizeAsync(PendingRequest request)
     {
+        var context = request.Context;
         if (_bearerTokenHash is null)
+        {
+            request.AuthOutcome = "ok";
             return true;
+        }
 
         // RFC 6750 §2.1: the auth-scheme token is case-insensitive — clients sending
         // `authorization: bearer ...` are valid and must be accepted.
         // RFC 6750 §2.1 で auth-scheme は case-insensitive と規定されているため、
         // `bearer ...` のような小文字スキームも受理する。
         var header = context.Request.Headers["Authorization"];
-        if (header is not null && header.Length >= "Bearer ".Length
-            && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(header))
+        {
+            request.AuthOutcome = "missing";
+        }
+        else if (header.Length >= "Bearer ".Length && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var provided = header.Substring("Bearer ".Length).Trim();
             if (HashEqualsConfiguredToken(provided))
+            {
+                request.AuthOutcome = "ok";
                 return true;
+            }
+
+            request.AuthOutcome = "wrong-token";
+        }
+        else
+        {
+            request.AuthOutcome = "wrong-scheme";
         }
 
         // RFC 7235 §4.1: 401 responses SHOULD carry a WWW-Authenticate challenge so
@@ -271,6 +298,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
         // 手動デバッグ時に必要なスキームを示す。
         context.Response.AddHeader("WWW-Authenticate", "Bearer realm=\"cdidx-mcp\"");
         await RespondAsync(context, (int)HttpStatusCode.Unauthorized, "Missing or invalid bearer token.\n").ConfigureAwait(false);
+        LogRequest(request, (int)HttpStatusCode.Unauthorized);
         return false;
     }
 
@@ -315,10 +343,10 @@ internal sealed class HttpMcpTransport : IMcpTransport
         _disposed = true;
         try
         {
-            if (_pendingContext is not null)
+            if (_pendingRequest is not null)
             {
-                try { _pendingContext.Response.Abort(); } catch { /* ignore */ }
-                _pendingContext = null;
+                try { _pendingRequest.Context.Response.Abort(); } catch { /* ignore */ }
+                _pendingRequest = null;
             }
             _listener.Close();
         }
@@ -332,4 +360,104 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
     internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback);
+
+    internal sealed record HttpRequestLogRecord(
+        string CorrelationId,
+        string? RequestId,
+        string RemotePeer,
+        string Method,
+        string Path,
+        int StatusCode,
+        double DurationMs,
+        string AuthOutcome);
+
+    private PendingRequest BeginRequest(HttpListenerContext context)
+    {
+        var remotePeer = context.Request.RemoteEndPoint is { } endpoint
+            ? endpoint.ToString()
+            : "<unknown>";
+        return new PendingRequest(
+            context,
+            Guid.NewGuid().ToString("N"),
+            remotePeer,
+            context.Request.HttpMethod,
+            context.Request.Url?.AbsolutePath ?? "/");
+    }
+
+    private void LogRequest(PendingRequest request, int statusCode)
+    {
+        if (_requestLogger is null || request.Logged)
+            return;
+
+        request.Logged = true;
+        try
+        {
+            _requestLogger(new HttpRequestLogRecord(
+                request.CorrelationId,
+                request.RequestId,
+                request.RemotePeer,
+                request.Method,
+                request.Path,
+                statusCode,
+                request.Elapsed.TotalMilliseconds,
+                request.AuthOutcome));
+        }
+        catch
+        {
+            // Logging is best-effort and must not affect the HTTP wire path.
+        }
+    }
+
+    private static string? TryExtractJsonRpcId(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("id", out var id))
+                return null;
+
+            return id.ValueKind switch
+            {
+                JsonValueKind.String => id.GetString(),
+                JsonValueKind.Number => id.GetRawText(),
+                _ => id.GetRawText(),
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed class PendingRequest
+    {
+        private readonly long _startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path)
+        {
+            Context = context;
+            CorrelationId = correlationId;
+            RemotePeer = remotePeer;
+            Method = method;
+            Path = path;
+        }
+
+        internal HttpListenerContext Context { get; }
+
+        internal string CorrelationId { get; }
+
+        internal string? RequestId { get; set; }
+
+        internal string RemotePeer { get; }
+
+        internal string Method { get; }
+
+        internal string Path { get; }
+
+        internal string AuthOutcome { get; set; } = "none";
+
+        internal bool Logged { get; set; }
+
+        internal TimeSpan Elapsed => System.Diagnostics.Stopwatch.GetElapsedTime(_startedTimestamp);
+    }
 }
