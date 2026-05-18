@@ -230,6 +230,10 @@ files 1──N symbol_references
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
 
+### Python symbol taxonomy
+
+Python extraction uses `function` for ordinary functions and methods, `class` for class declarations and dynamic class factories, `property` for class attributes, `@property` descriptors, accessor decorators, `Final` constants, and walrus-assigned names, and `class_hook` for lifecycle dunder hooks such as `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__`. `SubKind` refines Python property accessors as `getter` / `setter` / `deleter`, walrus assignments as `walrus`, and class hooks as `dunder`.
+
 ### Extending reference extraction
 
 Reference extraction is routed through `IReferenceExtractor` instances keyed by normalized language strings. Use `ReferenceExtractor.TryGetExtractor(language, out var extractor)` when a caller needs to invoke a language extractor directly; aliases such as `vue` / `svelte` normalize to `typescript`, and `razor` / `blazor` / `cshtml` normalize to `csharp`. The public `ReferenceExtractor.Extract(...)` method remains the compatibility entry point and delegates through the same registry.

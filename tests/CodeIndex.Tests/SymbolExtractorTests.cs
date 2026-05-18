@@ -583,7 +583,70 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
         Assert.Equal(3, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.SubKind == "setter");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.SubKind == "deleter");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsClassHooksAndWalrusAssignments()
+    {
+        var content = """
+            class Base:
+                def __init_subclass__(cls) -> None:
+                    pass
+
+                def __class_getitem__(cls, item):
+                    return cls
+
+            values = [captured := item for item in range(3)]
+
+            def read(stream):
+                while chunk := stream.read(8192):
+                    pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__init_subclass__");
+        Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__class_getitem__");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "captured" && s.SubKind == "walrus");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "chunk" && s.SubKind == "walrus");
+    }
+
+    [Fact]
+    public void Extract_Python_StoresMultilineFunctionAndClassHeaders()
+    {
+        var content = """
+            def build_result[
+                T,
+            ](
+                value: T,
+                fallback: list[T],
+            ) -> Result[T]:
+                return Result(value)
+
+            class Repository(
+                BaseRepository,
+                Generic[T],
+            ):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "build_result"
+            && s.Signature != null
+            && s.Signature.Contains("fallback: list[T]", StringComparison.Ordinal)
+            && s.Signature.Contains("-> Result[T]", StringComparison.Ordinal));
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "Repository"
+            && s.Signature != null
+            && s.Signature.Contains("BaseRepository", StringComparison.Ordinal)
+            && s.Signature.Contains("Generic[T]", StringComparison.Ordinal));
     }
 
     [Fact]

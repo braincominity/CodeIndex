@@ -19,6 +19,27 @@ public static partial class SymbolExtractor
     private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassMatchArgsAssignmentRegex = new(@"^\s*__match_args__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAnnotationsAssignmentRegex = new(@"^\s*__annotations__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonWalrusAssignmentRegex = new(@"(?<![:<>=!])\b(?<name>[_\p{L}]\w*)\s*:=", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static string? GetPythonPropertyAccessorSubKind(string[] lines, int defLineIndex)
+    {
+        for (var i = defLineIndex - 1; i >= 0; i--)
+        {
+            var trimmed = lines[i].Trim();
+            if (!trimmed.StartsWith('@'))
+                return null;
+
+            var decorator = NormalizePythonDecoratorName(trimmed);
+            if (decorator.EndsWith(".getter", StringComparison.Ordinal))
+                return "getter";
+            if (decorator.EndsWith(".setter", StringComparison.Ordinal))
+                return "setter";
+            if (decorator.EndsWith(".deleter", StringComparison.Ordinal))
+                return "deleter";
+        }
+
+        return null;
+    }
 
     private static bool HasPythonPropertyDecorator(string[] lines, int defLineIndex)
     {
@@ -37,6 +58,17 @@ public static partial class SymbolExtractor
 
     private static bool IsPythonPropertyDecorator(string trimmedDecorator)
     {
+        var decorator = NormalizePythonDecoratorName(trimmedDecorator);
+        return decorator is "property" or "cached_property" or "abstractproperty"
+            || decorator.EndsWith(".cached_property", StringComparison.Ordinal)
+            || decorator.EndsWith(".abstractproperty", StringComparison.Ordinal)
+            || decorator.EndsWith(".getter", StringComparison.Ordinal)
+            || decorator.EndsWith(".setter", StringComparison.Ordinal)
+            || decorator.EndsWith(".deleter", StringComparison.Ordinal);
+    }
+
+    private static string NormalizePythonDecoratorName(string trimmedDecorator)
+    {
         var decorator = trimmedDecorator[1..];
         var commentIndex = decorator.IndexOf('#');
         if (commentIndex >= 0)
@@ -46,11 +78,96 @@ public static partial class SymbolExtractor
             decorator = decorator[..parenIndex];
 
         decorator = decorator.Trim();
-        return decorator is "property" or "cached_property" or "abstractproperty"
-            || decorator.EndsWith(".cached_property", StringComparison.Ordinal)
-            || decorator.EndsWith(".abstractproperty", StringComparison.Ordinal)
-            || decorator.EndsWith(".setter", StringComparison.Ordinal)
-            || decorator.EndsWith(".deleter", StringComparison.Ordinal);
+        return decorator;
+    }
+
+    private static bool IsPythonClassHook(string name) =>
+        name is "__init_subclass__" or "__class_getitem__" or "__set_name__" or "__class_subclasses__";
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
+    {
+        var declarationIndent = CountIndent(lines[startLineIndex]);
+        int? firstBodyLine = null;
+        var lastBodyLine = startLineIndex + 1;
+
+        for (var i = startLineIndex + 1; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+                continue;
+
+            var indent = CountIndent(lines[i]);
+            if (indent <= declarationIndent)
+                break;
+
+            firstBodyLine ??= i + 1;
+            lastBodyLine = i + 1;
+        }
+
+        return firstBodyLine.HasValue
+            ? (lastBodyLine, firstBodyLine.Value, lastBodyLine)
+            : (startLineIndex + 1, null, null);
+    }
+
+    private static string BuildPythonLogicalHeaderSignature(string[] lines, int startLineIndex, int startColumn)
+    {
+        var builder = new StringBuilder();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inString = false;
+        var quote = '\0';
+
+        for (var i = startLineIndex; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var column = i == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
+            var fragment = column < line.Length ? line[column..].Trim() : string.Empty;
+            if (fragment.Length > 0)
+            {
+                if (builder.Length > 0)
+                    builder.Append(' ');
+                builder.Append(fragment.TrimEnd('\\').TrimEnd());
+            }
+
+            for (var j = column; j < line.Length; j++)
+            {
+                var ch = line[j];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        j++;
+                        continue;
+                    }
+                    if (ch == quote)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quote = ch;
+                    continue;
+                }
+                if (ch == '#')
+                    break;
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == ':' && parenDepth == 0 && bracketDepth == 0)
+                    return builder.ToString();
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+                break;
+        }
+
+        return builder.ToString();
     }
 
     private static List<PythonImportSymbolEntry>? TryExpandPythonImportSymbols(
@@ -305,6 +422,46 @@ public static partial class SymbolExtractor
                 Signature = lines[lineIndex].Trim(),
             },
             lines[lineIndex]);
+    }
+
+    private static void ExtractPythonWalrusSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols)
+    {
+        var seen = new HashSet<string>(symbols.Select(static symbol => $"{symbol.Line}:{symbol.Kind}:{symbol.Name}"), StringComparer.Ordinal);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            foreach (Match match in PythonWalrusAssignmentRegex.Matches(line))
+            {
+                var name = match.Groups["name"].Value;
+                if (name is "if" or "while" or "for")
+                    continue;
+
+                var key = $"{i + 1}:property:{name}";
+                if (!seen.Add(key))
+                    continue;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        SubKind = "walrus",
+                        Name = name,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = match.Groups["name"].Index,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    },
+                    line);
+            }
+        }
     }
 
     private static List<PythonExportSymbolEntry>? TryExpandPythonStringDictionaryKeys(
