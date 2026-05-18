@@ -911,7 +911,16 @@ public class DbWriter
             return "global:" + containerName;
         if (containerName == "global" || signature.StartsWith("declare global ", StringComparison.Ordinal))
             return "global:";
+        if (IsAmbientModuleContainer(containerName))
+            return "ambient-module:" + containerName;
         return "module:" + path + ":" + containerName;
+    }
+
+    private static bool IsAmbientModuleContainer(string containerName)
+    {
+        if (string.IsNullOrWhiteSpace(containerName))
+            return false;
+        return containerName[0] is '"' or '\'' || containerName.Contains('/', StringComparison.Ordinal);
     }
 
     private static bool TypeScriptFileHasModuleSyntax(string absolutePath)

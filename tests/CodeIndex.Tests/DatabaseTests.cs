@@ -320,6 +320,8 @@ public class DatabaseTests : IDisposable
         Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
         File.WriteAllText(Path.Combine(projectRoot, "src/module-c.ts"), "export {}\ninterface Ambient {}\n");
         File.WriteAllText(Path.Combine(projectRoot, "src/module-d.ts"), "import \"./setup\";\ninterface Ambient {}\n");
+        File.WriteAllText(Path.Combine(projectRoot, "src/express-a.ts"), "declare module \"express\" { interface Request { user: string } }\n");
+        File.WriteAllText(Path.Combine(projectRoot, "src/express-b.ts"), "declare module \"express\" { interface Request { account: string } }\n");
 
         var firstFileId = _writer.UpsertFile(new FileRecord
         {
@@ -361,6 +363,16 @@ public class DatabaseTests : IDisposable
             Path = "src/ambient-global.ts", Lang = "typescript", Size = 80, Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
+        var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/express-a.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/express-b.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
 
         _writer.InsertSymbols([
             new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
@@ -373,11 +385,13 @@ public class DatabaseTests : IDisposable
             new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
             new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
             new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
+            new SymbolRecord { FileId = ambientModuleFirstFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { user: string }", ContainerName = "\"express\"" },
+            new SymbolRecord { FileId = ambientModuleSecondFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { account: string }", ContainerName = "\"express\"" },
         ]);
 
         var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
-        Assert.Equal(4, inserted);
+        Assert.Equal(6, inserted);
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
@@ -390,6 +404,10 @@ public class DatabaseTests : IDisposable
         Assert.True(reader.Read());
         Assert.Equal("Options", reader.GetString(0));
         Assert.Equal("type", reader.GetString(1));
+        Assert.Equal(2, reader.GetInt32(2));
+        Assert.True(reader.Read());
+        Assert.Equal("Request", reader.GetString(0));
+        Assert.Equal("interface", reader.GetString(1));
         Assert.Equal(2, reader.GetInt32(2));
         Assert.True(reader.Read());
         Assert.Equal("Widget", reader.GetString(0));
