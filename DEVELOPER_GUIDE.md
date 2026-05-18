@@ -219,6 +219,8 @@ files 1──N symbol_references
 
 `symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
+Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
+
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
