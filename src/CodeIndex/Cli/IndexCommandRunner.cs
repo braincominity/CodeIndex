@@ -3244,42 +3244,10 @@ public static class IndexCommandRunner
     }
 
     private static bool MayContainCSharpStaticInterfaceContract(string content)
-    {
-        if (!content.Contains("interface", StringComparison.Ordinal))
-            return false;
-
-        var index = 0;
-        while ((index = content.IndexOf("static", index, StringComparison.Ordinal)) >= 0)
-        {
-            var next = index + "static".Length;
-            while (next < content.Length && char.IsWhiteSpace(content[next]))
-                next++;
-
-            if (StartsWithCSharpWord(content, next, "abstract")
-                || StartsWithCSharpWord(content, next, "virtual"))
-            {
-                return true;
-            }
-
-            index += "static".Length;
-        }
-
-        return false;
-    }
-
-    private static bool StartsWithCSharpWord(string text, int index, string word)
-    {
-        if (index < 0 || index + word.Length > text.Length)
-            return false;
-
-        if (!text.AsSpan(index, word.Length).SequenceEqual(word.AsSpan()))
-            return false;
-
-        var before = index == 0 ? '\0' : text[index - 1];
-        var afterIndex = index + word.Length;
-        var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
-        return !IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after);
-    }
+        => ContainsCSharpWord(content, "interface")
+           && ContainsCSharpWord(content, "static")
+           && (ContainsCSharpWord(content, "abstract")
+               || ContainsCSharpWord(content, "virtual"));
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "property"
