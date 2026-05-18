@@ -1183,38 +1183,11 @@ public class DbContext : IDisposable
             failure.SuggestedAction);
     }
 
-    /// <summary>
-    /// Test seam: invoked between the initial PRAGMA-based column-existence check and the
-    /// ALTER TABLE ADD COLUMN statement in <see cref="EnsureColumn"/>. Lets a test
-    /// deterministically simulate a concurrent column-addition race so the catch-path
-    /// recovery introduced for issue #1532 can be exercised end-to-end. Production code
-    /// never assigns this; the field stays null in normal use.
-    /// 1532 番で導入した catch-path recovery を決定論的に検証するためのテスト用フック。
-    /// 本番コードからは設定されず、通常実行時は null のまま。
-    /// </summary>
-    internal Action? EnsureColumnBeforeAlterHookForTesting { get; set; }
-
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
-        if (ColumnExists(tableName, columnName))
-            return;
-
-        try
-        {
-            EnsureColumnBeforeAlterHookForTesting?.Invoke();
-            Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}");
-        }
-        catch (SqliteException) when (ColumnExists(tableName, columnName))
-        {
-            // Another process or an earlier partial migration may have added the
-            // column between our PRAGMA inspection and the ALTER. We re-check
-            // PRAGMA table_info instead of matching SQLite's English error text
-            // so a localized SQLite build or a future wording change can still
-            // be recognized as "already migrated" — only swallow the exception
-            // when the column is verifiably present (#1532).
-            // 列存在を PRAGMA で再確認することで、SQLite のロケール差や将来の
-            // メッセージ変更に依存せず「移行済み」を判定する (#1532)。
-        }
+        DbColumnEnsurer.EnsureColumn(
+            () => ColumnExists(tableName, columnName),
+            () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
     }
 
     private bool ColumnExists(string tableName, string columnName)
@@ -1262,3 +1235,26 @@ public sealed record DbMigrationFailure(
     int SqliteErrorCode,
     string SqliteMessage,
     string SuggestedAction);
+
+internal static class DbColumnEnsurer
+{
+    internal static void EnsureColumn(Func<bool> columnExists, Action alterColumn)
+    {
+        if (columnExists())
+            return;
+
+        try
+        {
+            alterColumn();
+        }
+        catch (SqliteException) when (columnExists())
+        {
+            // Another process or an earlier partial migration may have added the
+            // column between PRAGMA inspection and ALTER. Re-check PRAGMA-derived
+            // state instead of matching SQLite's English error text so localized
+            // builds or future wording changes still recover (#1532).
+            // 列存在を PRAGMA 相当の状態で再確認し、SQLite の英語メッセージに依存せず
+            // 「移行済み」を判定する (#1532)。
+        }
+    }
+}
