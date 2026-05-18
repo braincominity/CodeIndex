@@ -13,6 +13,17 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class SymbolExtractor
 {
+    public const int DefaultContractVersion = 1;
+
+    public static int GetContractVersion(string? lang)
+    {
+        return lang switch
+        {
+            null or "" => DefaultContractVersion,
+            _ => DefaultContractVersion,
+        };
+    }
+
     // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
     // instances and lookup tables are initialized once by the CLR and must be treated as
     // immutable after type initialization; per-file extraction state belongs in local
@@ -2042,7 +2053,7 @@ public static partial class SymbolExtractor
     /// <param name="content">Full file content / ファイル全体の内容</param>
     /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
     /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
-    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null)
+    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null)
     {
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
@@ -2253,19 +2264,19 @@ public static partial class SymbolExtractor
 
             if (lang is "javascript" or "typescript")
             {
-                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
             }
 
             if (lang is "javascript" or "typescript"
-                && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, line, i + 1, symbols))
+                && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, lang, filePath, projectRoot, line, i + 1, symbols))
             {
                 continue;
             }
@@ -2682,6 +2693,8 @@ public static partial class SymbolExtractor
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
                     name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
+                    if (pattern.Kind == "import" && lang is "javascript" or "typescript")
+                        name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, name);
                     var rubyAttrNames = lang == "ruby"
                         && pattern.Kind == "property"
                         ? TryExpandRubyAttrDeclaratorList(patternMatchLine, absoluteStartColumn, match, name)

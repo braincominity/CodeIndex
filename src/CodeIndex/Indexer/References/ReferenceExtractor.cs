@@ -31,7 +31,7 @@ public static partial class ReferenceExtractor
         public int HeaderGenericParameterDepth { get; set; }
         public string HeaderGenericParameterText { get; set; } = string.Empty;
     }
-    private static readonly HashSet<string> SupportedLanguages =
+    private static readonly string[] BuiltInLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
@@ -41,6 +41,11 @@ public static partial class ReferenceExtractor
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css", "fortran", "pascal", "objc", "smalltalk"
     ];
+    private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =
+        BuiltInLanguages.ToDictionary(
+            static language => language,
+            static language => (IReferenceExtractor)new BuiltInReferenceExtractor(language),
+            StringComparer.Ordinal);
 
 
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
@@ -767,11 +772,17 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => SupportedLanguages
+        => RegisteredLanguages
             .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
             .Concat(ExtractorPluginRegistry.ReferenceLanguages)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+
+    /// <summary>
+    /// Registered language keys for reference extraction.
+    /// 参照抽出に登録されている言語キー。
+    /// </summary>
+    public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
 
     private static string? NormalizeLanguage(string? lang)
     {
@@ -792,11 +803,25 @@ public static partial class ReferenceExtractor
     public static bool SupportsLanguage(string? lang)
     {
         var normalized = NormalizeLanguage(lang);
-        if (normalized != null && SupportedLanguages.Contains(normalized))
+        if (normalized != null && Extractors.ContainsKey(normalized))
             return true;
 
         return NormalizePluginLanguage(lang) is string pluginLanguage
             && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+    }
+
+    /// <summary>
+    /// Returns the registered reference extractor for a supported language.
+    /// 対応言語の登録済み参照抽出器を返す。
+    /// </summary>
+    public static bool TryGetExtractor(string? lang, out IReferenceExtractor extractor)
+    {
+        var normalized = NormalizeLanguage(lang);
+        if (normalized != null && Extractors.TryGetValue(normalized, out extractor!))
+            return true;
+
+        extractor = null!;
+        return false;
     }
 
     public static bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
@@ -875,15 +900,47 @@ public static partial class ReferenceExtractor
     {
         var requestedLanguage = lang;
         var pluginLanguage = NormalizePluginLanguage(lang);
-        var normalizedLanguage = NormalizeLanguage(lang);
-        var hasBuiltInLanguage = normalizedLanguage != null && SupportedLanguages.Contains(normalizedLanguage);
-        IReferenceExtractor? pluginExtractor = null;
-        var hasPluginLanguage = pluginLanguage != null && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out pluginExtractor);
-        if (!hasBuiltInLanguage && !hasPluginLanguage)
-            return [];
+        if (!TryGetExtractor(lang, out var extractor))
+        {
+            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
+                return [];
 
-        lang = normalizedLanguage;
-        var language = lang ?? pluginLanguage!;
+            if (string.IsNullOrEmpty(content))
+                return [];
+            if (ChunkSplitter.HasOversizeLine(content))
+                return [];
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingBom(content);
+
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
+                .ToList();
+        }
+
+        lang = NormalizeLanguage(lang);
+        var language = lang!;
+        return extractor.Extract(new ReferenceExtractionContext(
+            fileId,
+            language,
+            content,
+            symbols,
+            path,
+            workspaceSymbols,
+            requestedLanguage));
+    }
+
+    internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
+    {
+        var fileId = request.FileId;
+        var language = request.Language;
+        var content = request.Content;
+        var symbols = request.Symbols;
+        var path = request.Path;
+        var workspaceSymbols = request.WorkspaceSymbols;
+        var requestedLanguage = request.RequestedLanguage;
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
@@ -926,15 +983,6 @@ public static partial class ReferenceExtractor
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
-
-        if (!hasBuiltInLanguage && pluginLanguage != null && pluginExtractor != null)
-        {
-            return pluginExtractor.Extract(
-                    fileId,
-                    content,
-                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
-                .ToList();
-        }
 
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)
@@ -979,6 +1027,9 @@ public static partial class ReferenceExtractor
         var razorImplementedTypeNames = isRazorFile
             ? LanguageReferenceExtractionSupport.ExtractRazorImplementedTypeNames(lines)
             : null;
+        var typeScriptNamespaceAliases = language == "typescript"
+            ? TypeScriptReferenceExtractor.BuildNamespaceAliasBindings(lines, preparedLines)
+            : [];
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -1947,7 +1998,8 @@ public static partial class ReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    ResolveContainerForCall);
+                    ResolveContainerForCall,
+                    typeScriptNamespaceAliases);
 
                 TypeScriptReferenceExtractor.EmitDeclarationTypeReferences(
                     preparedLine,
@@ -2401,16 +2453,18 @@ public static partial class ReferenceExtractor
                     return false;
                 }
 
-                  // C# positional patterns such as `case Point(var x, var y):` are type-pattern
-                  // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
-                  // phantom `call` edge alongside the real `type_reference`.
-                  // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
-                  // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
-                  // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
-                  var isCSharpPatternHeadCallSite = language == "csharp"
-                      && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
-                  if (isCSharpPatternHeadCallSite)
-                      return false;
+                // C# positional patterns such as `case Point(var x, var y):` are type-pattern
+                // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
+                // phantom `call` edge alongside the real `type_reference`.
+                // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
+                // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
+                // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
+                var isCSharpPatternHeadCallSite = language == "csharp"
+                    && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
+                if (isCSharpPatternHeadCallSite)
+                    return false;
+                if (language == "typescript" && TypeScriptReferenceExtractor.IsSatisfiesTypeOperand(preparedLine, callIndex))
+                    return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
@@ -4468,6 +4522,18 @@ public static partial class ReferenceExtractor
         return true;
     }
 
+    private sealed class BuiltInReferenceExtractor(string language) : IReferenceExtractor
+    {
+        public string Language { get; } = language;
+
+        public List<ReferenceRecord> Extract(ReferenceExtractionContext request)
+        {
+            if (!string.Equals(request.Language, Language, StringComparison.Ordinal))
+                throw new ArgumentException($"Extractor for '{Language}' cannot handle '{request.Language}'.", nameof(request));
+
+            return ExtractCore(request);
+        }
+    }
 
 
 }

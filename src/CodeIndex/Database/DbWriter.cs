@@ -337,6 +337,26 @@ public class DbWriter
         return cmd.ExecuteScalar() != null;
     }
 
+    public IReadOnlyList<string> GetIndexedLanguages()
+    {
+        var languages = new List<string>();
+        if (!TableExists("files"))
+            return languages;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT f.lang
+            FROM files f
+            WHERE f.lang IS NOT NULL
+              AND f.lang <> ''
+              AND EXISTS (SELECT 1 FROM symbols s WHERE s.file_id = f.id)
+            ORDER BY f.lang";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            languages.Add(reader.GetString(0));
+        return languages;
+    }
+
     /// <summary>
     /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
     /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
@@ -1119,13 +1139,16 @@ public class DbWriter
     /// fold_ready が嘘になるのを防ぐ。Issue #1535。
     /// </summary>
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
-    public bool MarkFoldReady()
+    public bool MarkFoldReady(bool stampCurrentSymbolExtractorVersions = false)
     {
         bool ownTransaction = !IsInTransaction();
         if (ownTransaction)
             Execute("BEGIN IMMEDIATE");
         try
         {
+            if (stampCurrentSymbolExtractorVersions)
+                StampSymbolExtractorVersions();
+
             if (!AllFoldedColumnsBackfilled())
             {
                 if (ownTransaction)
@@ -1155,6 +1178,7 @@ public class DbWriter
 
             SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
             SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+            StampSymbolExtractorVersions();
 
             if (ownTransaction)
             {
@@ -1170,6 +1194,16 @@ public class DbWriter
                 try { Execute("ROLLBACK"); } catch { /* best effort */ }
             }
             throw;
+        }
+    }
+
+    public void StampSymbolExtractorVersions()
+    {
+        foreach (var lang in GetIndexedLanguages())
+        {
+            SetMeta(
+                DbContext.GetSymbolExtractorVersionMetaKey(lang),
+                SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 
@@ -2247,6 +2281,14 @@ public class DbWriter
         cmd.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
+
+    private string? GetMetaString(string key)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        return cmd.ExecuteScalar() as string;
+    }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
 
     private bool TableExists(string name)
@@ -2266,8 +2308,11 @@ public class DbWriter
     /// full scan 成功時でも、incremental で skip された legacy 行が NULL のまま残っていれば
     /// fold-ready にしてはならない。stamp 前にこの実検証を通す。
     /// </summary>
-    public bool AllFoldedColumnsBackfilled()
+    public bool AllFoldedColumnsBackfilled(bool requireCurrentSymbolExtractorVersions = false)
     {
+        if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
+            return false;
+
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
             SELECT
@@ -2277,6 +2322,19 @@ public class DbWriter
         var raw = cmd.ExecuteScalar();
         long missing = raw is long l ? l : (raw is int i ? i : 0);
         return missing == 0;
+    }
+
+    public bool SymbolExtractorVersionsMatchCurrent()
+    {
+        foreach (var lang in GetIndexedLanguages())
+        {
+            var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
+            var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (stored != current)
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>

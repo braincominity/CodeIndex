@@ -30,6 +30,50 @@ public class ReferenceExtractorTests
         }
     }
 
+    [Fact]
+    public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
+    {
+        const string content = """
+            function demo() {
+                runTask();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.True(ReferenceExtractor.TryGetExtractor("javascript", out var extractor));
+        Assert.Equal("javascript", extractor.Language);
+
+        var references = extractor.Extract(new ReferenceExtractionContext(
+            1,
+            extractor.Language,
+            content,
+            symbols));
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "runTask"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void RegisteredLanguages_MatchSupportedReferenceLanguages()
+    {
+        foreach (var language in ReferenceExtractor.RegisteredLanguages)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            Assert.True(ReferenceExtractor.TryGetExtractor(language, out var extractor));
+            Assert.Equal(language, extractor.Language);
+        }
+
+        Assert.True(ReferenceExtractor.SupportsLanguage("vue"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("vue", out var vueExtractor));
+        Assert.Equal("typescript", vueExtractor.Language);
+        Assert.True(ReferenceExtractor.SupportsLanguage("razor"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("razor", out var razorExtractor));
+        Assert.Equal("csharp", razorExtractor.Language);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
@@ -57,7 +101,7 @@ public class ReferenceExtractorTests
             && reference.ContainerName == "default");
     }
 
-    private sealed class ToyDslReferenceExtractor : IReferenceExtractor
+    private sealed class ToyDslReferenceExtractor : CodeIndex.Indexer.Extensibility.IReferenceExtractor
     {
         public string Language => "toydsl";
 
@@ -29541,6 +29585,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptSatisfies_CapturesTypeReferencesWithoutCalls()
+    {
+        const string content = """
+            const config = { port: 8080 } satisfies ServerConfig;
+            const wrapped = (x: number) => x satisfies Brand;
+            const chained = config satisfies ServerConfig satisfies RuntimeConfig;
+            const nested = wrap<ServerConfig satisfies RuntimeConfig>(config);
+            const parser = {} satisfies { parse(input: Request): Response };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ServerConfig" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "parse" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_TypeScriptDecoratedMembers_CaptureDecoratorAndTypeReferences()
     {
         const string content = """
@@ -30548,6 +30617,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptMappedAndConditionalTypes_EmitTypeParameterReferences()
+    {
+        const string content = """
+            type Getters<T> = {
+              [K in keyof T as `get${Capitalize<K>}`]: () => T[K];
+            };
+            type AwaitedValue<T> = T extends Promise<infer U> ? U : never;
+            function useApi(api: Api) {
+              api.in();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "K" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "Capitalize" && r.ReferenceKind == "type_reference" && r.Line == 2);
+        Assert.Contains(references, r =>
+            r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "Promise" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "U" && r.ReferenceKind == "type_reference" && r.Line == 4);
+        Assert.Contains(references, r =>
+            r.SymbolName == "in" && r.ReferenceKind == "call" && r.Line == 6);
+        var forbiddenTypeOperators = references
+            .Where(r =>
+                (r.SymbolName is "keyof" or "in" or "as" or "extends" or "infer" or "never")
+                && r.ReferenceKind == "type_reference")
+            .Select(r => $"{r.SymbolName}@{r.Line}:{r.Column}");
+        Assert.Empty(forbiddenTypeOperators);
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeExpressions_IgnoreTemplateRawTextAndStringKeys()
     {
         const string content = """
@@ -30809,6 +30916,183 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "shape.type=fake"
             && r.ReferenceKind == "type_tag");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceReExportQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            export * as Widgets from "./widgets";
+
+            export function render() {
+                return Widgets.Button.create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./widgets"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r => r.SymbolName == "create" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsAfterLocalShadow()
+    {
+        const string content = """
+            import * as Api from "./api";
+
+            export function before() {
+                Api.Client.connect();
+            }
+
+            const Api = localFactory();
+
+            export function after() {
+                Api.Client.connect();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "before");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 10);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_StopsOutsideLocalScope()
+    {
+        const string content = """
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+
+            export function after(Lazy: any) {
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 7);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedImportAliasQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            import { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedReExportAliasQualifiedUsage_DoesNotCreateLocalModuleReference()
+    {
+        const string content = """
+            export { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsInsideParameterShadowScope()
+    {
+        const string content = """
+            import * as Api from "./api";
+            import { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function before() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function shadowed(Api: LocalApi, PublicNamespace: LocalPublic) {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function after() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 10);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
