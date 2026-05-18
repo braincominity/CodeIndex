@@ -71,6 +71,9 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - CLI-first search with human-readable and machine-oriented output.
 - Search ranking prefers public/exported symbol matches ahead of protected,
   internal, and private matches; `--no-visibility-rank` keeps the legacy order.
+- `symbols`, `definition`, `unused`, and `hotspots` can include or exclude
+  `public`, `protected`, `internal`, and `private` symbols with `--visibility`
+  and `--exclude-visibility`.
 - Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
   excerpt commands.
 - `.sln` / `.csproj`-aware `--project <name|path>` filters for indexing and
@@ -228,6 +231,9 @@ cdidx mcp
 - CLI-first の検索。人間向け出力と機械処理向け出力に対応。
 - 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
   従来順が必要な場合は `--no-visibility-rank` を使えます。
+- `symbols`、`definition`、`unused`、`hotspots` は `--visibility` と
+  `--exclude-visibility` で `public`、`protected`、`internal`、`private`
+  シンボルを include / exclude できます。
 - 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
   コマンドを提供。
 - `.sln` / `.csproj` を使った `--project <name|path>` filter により、
