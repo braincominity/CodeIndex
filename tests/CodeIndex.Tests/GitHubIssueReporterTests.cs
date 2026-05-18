@@ -362,7 +362,10 @@ public class GitHubIssueReporterTests : IDisposable
 
             Assert.Null(result.IssueUrl);
             Assert.Equal("""422: { "message": "validation failed" }""", result.Error);
-            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(3, handler.RequestCount);
+            Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+            Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
         }
         finally
         {
