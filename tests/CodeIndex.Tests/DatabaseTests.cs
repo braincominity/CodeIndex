@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -475,6 +476,43 @@ public class DatabaseTests : IDisposable
 
         cmd.CommandText = "SELECT context FROM reference_lines WHERE file_id = @fileId AND line = 2";
         Assert.Equal("return authenticate(user, password)", (string)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void InsertReferences_TypeScriptConstAssertion_RoundTripsThroughSql()
+    {
+        const string content = """
+            const tuple = ["alpha", "beta"] as const;
+            """;
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/const-assertion.ts",
+            Lang = "typescript",
+            Size = content.Length,
+            Lines = 1,
+            Modified = new DateTime(2026, 5, 18, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var symbols = SymbolExtractor.Extract(fileId, "typescript", content);
+        var references = ReferenceExtractor.Extract(fileId, "typescript", content, symbols);
+
+        _writer.InsertReferences(references);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+        cmd.CommandText = """
+            SELECT symbol_name, reference_kind
+            FROM symbol_references
+            WHERE file_id = @fileId
+            ORDER BY line, column_number, reference_kind
+            """;
+        var rows = new List<(string SymbolName, string ReferenceKind)>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+
+        Assert.Contains(("const", "const_assertion"), rows);
+        Assert.Contains(("\"alpha\"", "type_reference"), rows);
+        Assert.Contains(("\"beta\"", "type_reference"), rows);
     }
 
     [Fact]
