@@ -292,6 +292,23 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenLanguageExtractorVersionIsStale()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/lib.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
+
+        var id = _writer.GetUnchangedFileId("src/lib.py", modified, language: "python");
+
+        Assert.Null(id);
+    }
+
+    [Fact]
     public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
