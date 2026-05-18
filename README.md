@@ -58,10 +58,11 @@ with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead
 of rebuilding; see
 [Quick Start](USER_GUIDE.md#quick-start) and
 [Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
-Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`, or a
-`LANG=C` / `POSIX` locale render progress with `#` / `-` bars instead of
-Unicode block glyphs. Very narrow Unicode-capable terminals show a
-percentage-only progress line so the display does not wrap.
+Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`,
+`NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale render
+spinner frames as `|` / `/` / `-` / `\` and progress bars with `#` / `-` instead
+of Unicode glyphs. Very narrow Unicode-capable terminals show a percentage-only
+progress line so the display does not wrap.
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -215,10 +216,10 @@ cdidx mcp
 [クイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性)
 を参照してください。
-`--ascii`、`CDIDX_ASCII=1`、または `LANG=C` / `POSIX` locale により ASCII-only
-出力が要求されている端末では、進捗バーは Unicode のブロック文字ではなく
-`#` / `-` で描画されます。Unicode を利用できる端末でも幅が非常に狭い場合は、
-折り返しを避けるため percentage-only の進捗行を表示します。
+`--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、
+または非 UTF-8 locale により ASCII-only 出力が要求されている端末では、スピナーは
+`|` / `/` / `-` / `\`、進捗バーは `#` / `-` で描画されます。Unicode を利用できる端末でも
+幅が非常に狭い場合は、折り返しを避けるため percentage-only の進捗行を表示します。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
