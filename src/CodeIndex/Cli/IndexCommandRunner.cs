@@ -1581,6 +1581,7 @@ public static class IndexCommandRunner
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     skipped++;
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
@@ -1593,6 +1594,7 @@ public static class IndexCommandRunner
 
                 DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
+                writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
@@ -2758,6 +2760,7 @@ public static class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                         skipped++;
                         processed++;
                         if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
@@ -2781,6 +2784,7 @@ public static class IndexCommandRunner
                     }
 
                     using var txn = writer.BeginTransaction();
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     var fileId = writer.UpsertFile(record);
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
