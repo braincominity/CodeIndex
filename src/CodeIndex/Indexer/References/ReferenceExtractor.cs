@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -771,7 +772,11 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => RegisteredLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
+        => RegisteredLanguages
+            .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
+            .Concat(ExtractorPluginRegistry.ReferenceLanguages)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Registered language keys for reference extraction.
@@ -780,13 +785,30 @@ public static partial class ReferenceExtractor
     public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
 
     private static string? NormalizeLanguage(string? lang)
-        => lang is "vue" or "svelte"
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return null;
+
+        lang = lang.Trim().ToLowerInvariant();
+        return lang is "vue" or "svelte"
             ? "typescript"
             : lang is "razor" or "blazor" or "cshtml"
                 ? "csharp"
                 : lang;
+    }
 
-    public static bool SupportsLanguage(string? lang) => TryGetExtractor(lang, out _);
+    private static string? NormalizePluginLanguage(string? lang)
+        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+
+    public static bool SupportsLanguage(string? lang)
+    {
+        var normalized = NormalizeLanguage(lang);
+        if (normalized != null && Extractors.ContainsKey(normalized))
+            return true;
+
+        return NormalizePluginLanguage(lang) is string pluginLanguage
+            && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+    }
 
     /// <summary>
     /// Returns the registered reference extractor for a supported language.
@@ -877,8 +899,26 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
     {
         var requestedLanguage = lang;
+        var pluginLanguage = NormalizePluginLanguage(lang);
         if (!TryGetExtractor(lang, out var extractor))
-            return [];
+        {
+            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
+                return [];
+
+            if (string.IsNullOrEmpty(content))
+                return [];
+            if (ChunkSplitter.HasOversizeLine(content))
+                return [];
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingBom(content);
+
+            return pluginExtractor.Extract(
+                    fileId,
+                    content,
+                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
+                .ToList();
+        }
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
@@ -943,6 +983,7 @@ public static partial class ReferenceExtractor
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
+
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)
             : content;

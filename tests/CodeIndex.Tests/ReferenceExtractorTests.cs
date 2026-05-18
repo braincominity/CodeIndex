@@ -1,5 +1,6 @@
 using System.Text;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
@@ -10,6 +11,25 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Fact]
+    public void Extract_CustomReferencePlugin_HandlesUnsupportedLanguage()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            ExtractorPluginRegistry.ResetForTests();
+            ExtractorPluginRegistry.Register(new ToyDslReferenceExtractor());
+
+            var references = ReferenceExtractor.Extract(3, "toydsl", "call Widget", [], "demo.toy");
+
+            var reference = Assert.Single(references);
+            Assert.Equal(3, reference.FileId);
+            Assert.Equal("Widget", reference.SymbolName);
+            Assert.Equal("call", reference.ReferenceKind);
+            Assert.Contains("toydsl", ReferenceExtractor.GetSupportedLanguages());
+            ExtractorPluginRegistry.ResetForTests();
+        }
+    }
+
     [Fact]
     public void Extract_Go_EmitsGoroutineAndChannelReferences()
     {
@@ -150,6 +170,28 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "call"
             && reference.ContainerKind == "function"
             && reference.ContainerName == "default");
+    }
+
+    private sealed class ToyDslReferenceExtractor : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        public string Language => "toydsl";
+
+        public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+        {
+            var name = source.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last();
+            return
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = name,
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 6,
+                    Context = source.Trim(),
+                },
+            ];
+        }
     }
 
     [Theory]
