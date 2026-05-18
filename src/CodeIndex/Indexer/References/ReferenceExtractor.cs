@@ -100,6 +100,9 @@ public static partial class ReferenceExtractor
         "?",
     };
 
+    private static bool IsFunctionLikeSymbolKind(string kind)
+        => kind is "function" or "async_function" or "generator" or "async_generator";
+
     private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
@@ -1109,7 +1112,7 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                              (symbol.Kind == "function" || symbol.Kind == "hook" || symbol.Kind == "class"
+                              (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "class"
                                || symbol.Kind == "struct" || symbol.Kind == "namespace"
                                || symbol.Kind == "property" || symbol.Kind == "class_hook"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
