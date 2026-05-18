@@ -308,6 +308,27 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void TryConsumeAsciiFlag_StripsFlagBeforeDoubleDashAndForcesAscii()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.IsAsciiOutputForced();
+            try
+            {
+                var args = new[] { "index", "--ascii", "--", "--ascii" };
+                ProgramRunner.TryConsumeAsciiFlag(ref args);
+
+                Assert.True(ConsoleUi.IsAsciiOutputForced());
+                Assert.Equal(new[] { "index", "--", "--ascii" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetAsciiOutput(original);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_InvalidColorValue_ReturnsInvalidArgument()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(

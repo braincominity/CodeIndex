@@ -250,9 +250,11 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true, string? language = null)
     {
         if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
 
         var cmd = RentCommand(
@@ -343,6 +345,60 @@ public class DbWriter
         }
         if (result != null)
             DeleteFileData((long)result);
+    }
+
+    /// <summary>
+    /// Purge stale DB rows for deleted/renamed files that still share the current file's checksum.
+    /// 現在のファイルと同じ checksum を持つ削除/rename 済みの古いDB行を削除する。
+    /// </summary>
+    public int PurgeStaleFilesSharingChecksum(string projectRoot, string retainedRelativePath, string? checksum)
+    {
+        if (string.IsNullOrEmpty(checksum))
+            return 0;
+
+        var staleIds = new List<long>();
+        var cmd = RentCommand(
+            "SELECT id, path FROM files WHERE checksum = @checksum AND path <> @path",
+            static c =>
+            {
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@path", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@checksum"].Value = checksum;
+            cmd.Parameters["@path"].Value = retainedRelativePath;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var relativePath = reader.GetString(1);
+                var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                    staleIds.Add(id);
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn?.Commit();
+
+        return staleIds.Count;
     }
 
     /// <summary>
@@ -2486,17 +2542,50 @@ public class DbWriter
         return true;
     }
 
+    public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
+    {
+        if (requireCurrentSymbolExtractorLanguages.Count > 0
+            && !SymbolExtractorVersionsMatchCurrent(requireCurrentSymbolExtractorLanguages))
+        {
+            return false;
+        }
+
+        return AllFoldedColumnsBackfilled();
+    }
+
     public bool SymbolExtractorVersionsMatchCurrent()
     {
         foreach (var lang in GetIndexedLanguages())
         {
-            var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
-            var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (stored != current)
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
                 return false;
         }
 
         return true;
+    }
+
+    public bool SymbolExtractorVersionsMatchCurrent(IEnumerable<string> languages)
+    {
+        foreach (var lang in languages)
+        {
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool SymbolExtractorVersionMatchesCurrent(string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return true;
+
+        var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
+        if (stored == null)
+            return true;
+
+        var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return stored == current;
     }
 
     /// <summary>
