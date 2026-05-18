@@ -93,6 +93,40 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UnresolvedMergeState_RejectsIndexingBeforeScanning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unresolved_merge");
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "class Program { void Base() {} }\n");
+            RunGit(projectRoot, "add", "Program.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var defaultBranch = RunGitCaptureStdOut(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+            RunGit(projectRoot, "switch", "-c", "feature");
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "class Program { void Feature() {} }\n");
+            RunGit(projectRoot, "commit", "-am", "feature");
+            RunGit(projectRoot, "switch", defaultBranch);
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "class Program { void Mainline() {} }\n");
+            RunGit(projectRoot, "commit", "-am", "mainline");
+
+            Assert.Throws<InvalidOperationException>(() => RunGit(projectRoot, "merge", "feature"));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("unresolved merge conflicts", json.GetProperty("message").GetString());
+            Assert.Contains("Program.cs", json.GetProperty("message").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsToProjectFiles_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter");
