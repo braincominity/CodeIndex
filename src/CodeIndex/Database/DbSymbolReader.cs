@@ -74,28 +74,52 @@ public partial class DbReader
     private void AppendVisibilityFilters(ref string sql, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         if (visibilityFilters is { Count: > 0 })
-            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) IN ({string.Join(",", visibilityFilters.Select((_, i) => $"@visibility{i}"))})";
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) IN ({string.Join(",", ExpandVisibilityFilterValues(visibilityFilters).Select((_, i) => $"@visibility{i}"))})";
         if (excludeVisibilityFilters is { Count: > 0 })
-            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) NOT IN ({string.Join(",", excludeVisibilityFilters.Select((_, i) => $"@excludeVisibility{i}"))})";
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) NOT IN ({string.Join(",", ExpandVisibilityFilterValues(excludeVisibilityFilters).Select((_, i) => $"@excludeVisibility{i}"))})";
     }
 
     private static void AddVisibilityFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         if (visibilityFilters is { Count: > 0 })
         {
-            for (int i = 0; i < visibilityFilters.Count; i++)
-                cmd.Parameters.AddWithValue($"@visibility{i}", visibilityFilters[i]);
+            var expanded = ExpandVisibilityFilterValues(visibilityFilters);
+            for (int i = 0; i < expanded.Count; i++)
+                cmd.Parameters.AddWithValue($"@visibility{i}", expanded[i]);
         }
 
         if (excludeVisibilityFilters is { Count: > 0 })
         {
-            for (int i = 0; i < excludeVisibilityFilters.Count; i++)
-                cmd.Parameters.AddWithValue($"@excludeVisibility{i}", excludeVisibilityFilters[i]);
+            var expanded = ExpandVisibilityFilterValues(excludeVisibilityFilters);
+            for (int i = 0; i < expanded.Count; i++)
+                cmd.Parameters.AddWithValue($"@excludeVisibility{i}", expanded[i]);
         }
     }
 
     private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
         => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };
+
+    private static List<string> ExpandVisibilityFilterValues(IReadOnlyList<string> filters)
+    {
+        var expanded = new List<string>();
+        foreach (var filter in filters)
+        {
+            string[] aliases = filter switch
+            {
+                "public" => ["public", "pub", "open", "export"],
+                "private" => ["private", "fileprivate"],
+                _ => [filter],
+            };
+
+            foreach (var alias in aliases)
+            {
+                if (!expanded.Contains(alias, StringComparer.Ordinal))
+                    expanded.Add(alias);
+            }
+        }
+
+        return expanded;
+    }
 
     private static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
         CASE {referenceKindSql}

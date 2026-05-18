@@ -671,6 +671,30 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_PublicVisibilityFilterMatchesLanguageAliases()
+    {
+        InsertIndexedFile(
+            "src/visibility.rs",
+            "rust",
+            """
+            pub fn exported_fn() {}
+            fn private_fn() {}
+            """);
+
+        var publicResults = _reader.SearchSymbols(
+            lang: "rust",
+            visibilityFilters: ["public"]);
+        var nonPublicResults = _reader.SearchSymbols(
+            lang: "rust",
+            excludeVisibilityFilters: ["public"]);
+
+        Assert.Contains(publicResults, result => result.Name == "exported_fn" && result.Visibility == "pub");
+        Assert.DoesNotContain(publicResults, result => result.Name == "private_fn");
+        Assert.Contains(nonPublicResults, result => result.Name == "private_fn");
+        Assert.DoesNotContain(nonPublicResults, result => result.Name == "exported_fn");
+    }
+
+    [Fact]
     public void SearchSymbols_JavaScriptCommonJsExportQueriesResolveToLeafNames()
     {
         InsertIndexedFile(
