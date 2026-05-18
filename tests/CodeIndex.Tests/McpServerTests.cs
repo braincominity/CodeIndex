@@ -250,6 +250,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void NotificationsCancelled_ForActiveRequestId_ReturnsRequestCancelledError()
+    {
+        _server.RequestRegisteredForTests = id =>
+        {
+            var cancel = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1418}}""")!;
+            Assert.Null(_server.HandleMessage(cancel));
+        };
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, error["code"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", error["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void CancelRequest_UnknownOrMalformedId_IsNotificationOnly()
     {
         var unknown = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"missing"}}""")!;

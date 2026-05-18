@@ -680,7 +680,7 @@ public partial class McpServer : IDisposable
 
     private void TryCancelRequest(JsonNode? cancelParams)
     {
-        var requestId = cancelParams?["id"];
+        var requestId = cancelParams?["id"] ?? cancelParams?["requestId"];
         var requestKey = SerializeRequestId(requestId);
         if (requestKey == null)
             return;
