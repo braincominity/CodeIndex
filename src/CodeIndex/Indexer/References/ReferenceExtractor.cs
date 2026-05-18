@@ -30,7 +30,7 @@ public static partial class ReferenceExtractor
         public int HeaderGenericParameterDepth { get; set; }
         public string HeaderGenericParameterText { get; set; } = string.Empty;
     }
-    private static readonly HashSet<string> SupportedLanguages =
+    private static readonly string[] BuiltInLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
@@ -40,6 +40,11 @@ public static partial class ReferenceExtractor
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
         "zig", "css", "fortran", "pascal", "objc", "smalltalk"
     ];
+    private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =
+        BuiltInLanguages.ToDictionary(
+            static language => language,
+            static language => (IReferenceExtractor)new BuiltInReferenceExtractor(language),
+            StringComparer.Ordinal);
 
 
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
@@ -766,7 +771,13 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => SupportedLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
+        => RegisteredLanguages.Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" }).ToArray();
+
+    /// <summary>
+    /// Registered language keys for reference extraction.
+    /// 参照抽出に登録されている言語キー。
+    /// </summary>
+    public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
 
     private static string? NormalizeLanguage(string? lang)
         => lang is "vue" or "svelte"
@@ -775,8 +786,21 @@ public static partial class ReferenceExtractor
                 ? "csharp"
                 : lang;
 
-    public static bool SupportsLanguage(string? lang) =>
-        NormalizeLanguage(lang) is string normalized && SupportedLanguages.Contains(normalized);
+    public static bool SupportsLanguage(string? lang) => TryGetExtractor(lang, out _);
+
+    /// <summary>
+    /// Returns the registered reference extractor for a supported language.
+    /// 対応言語の登録済み参照抽出器を返す。
+    /// </summary>
+    public static bool TryGetExtractor(string? lang, out IReferenceExtractor extractor)
+    {
+        var normalized = NormalizeLanguage(lang);
+        if (normalized != null && Extractors.TryGetValue(normalized, out extractor!))
+            return true;
+
+        extractor = null!;
+        return false;
+    }
 
     public static bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
     {
@@ -853,11 +877,30 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
     {
         var requestedLanguage = lang;
-        if (!SupportsLanguage(lang))
+        if (!TryGetExtractor(lang, out var extractor))
             return [];
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
+        return extractor.Extract(new ReferenceExtractionContext(
+            fileId,
+            language,
+            content,
+            symbols,
+            path,
+            workspaceSymbols,
+            requestedLanguage));
+    }
+
+    internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
+    {
+        var fileId = request.FileId;
+        var language = request.Language;
+        var content = request.Content;
+        var symbols = request.Symbols;
+        var path = request.Path;
+        var workspaceSymbols = request.WorkspaceSymbols;
+        var requestedLanguage = request.RequestedLanguage;
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
@@ -943,6 +986,9 @@ public static partial class ReferenceExtractor
         var razorImplementedTypeNames = isRazorFile
             ? LanguageReferenceExtractionSupport.ExtractRazorImplementedTypeNames(lines)
             : null;
+        var typeScriptNamespaceAliases = language == "typescript"
+            ? TypeScriptReferenceExtractor.BuildNamespaceAliasBindings(lines, preparedLines)
+            : [];
         // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
         // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
         // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
@@ -1932,7 +1978,8 @@ public static partial class ReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    ResolveContainerForCall);
+                    ResolveContainerForCall,
+                    typeScriptNamespaceAliases);
 
                 TypeScriptReferenceExtractor.EmitDeclarationTypeReferences(
                     preparedLine,
@@ -4456,6 +4503,18 @@ public static partial class ReferenceExtractor
         return true;
     }
 
+    private sealed class BuiltInReferenceExtractor(string language) : IReferenceExtractor
+    {
+        public string Language { get; } = language;
+
+        public List<ReferenceRecord> Extract(ReferenceExtractionContext request)
+        {
+            if (!string.Equals(request.Language, Language, StringComparison.Ordinal))
+                throw new ArgumentException($"Extractor for '{Language}' cannot handle '{request.Language}'.", nameof(request));
+
+            return ExtractCore(request);
+        }
+    }
 
 
 }

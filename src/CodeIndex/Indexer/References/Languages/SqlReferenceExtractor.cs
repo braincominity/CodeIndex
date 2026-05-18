@@ -57,6 +57,9 @@ internal static class SqlReferenceExtractor
     private static readonly Regex ProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + ProcCallQualifierPattern + @"(?<name>" + ProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SystemVariableReferenceRegex = new(
+        @"(?<!@)(?<name>@@[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*(?:\s*\.\s*[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)?)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex FromSourceListRegex = new(
         $@"(?<![\w$])FROM\b\s+{SourceListItemPattern}(?:\s*,\s*{SourceListItemPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -487,6 +490,18 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName,
             shouldSuppressDefinitionCall);
+
+        EmitSystemVariableReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall);
 
         EmitSourceCaptureReferences(
             FromSourceListRegex.Matches(statement),
@@ -1407,6 +1422,34 @@ internal static class SqlReferenceExtractor
 
             var container = resolveContainerForCall(nameGroup.Index);
             ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "call", context, lineNumber, container);
+        }
+    }
+
+    private static void EmitSystemVariableReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        foreach (Match match in SystemVariableReferenceRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Index < statementLineOffset)
+                continue;
+
+            var resolvedName = SqlSymbolNameNormalizer.Normalize(nameGroup.Value);
+            var nameColumn = nameGroup.Index + statementStart - lineOffset;
+            var container = resolveContainerForCall(nameGroup.Index);
+            ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "system_variable", context, lineNumber, container);
         }
     }
 
