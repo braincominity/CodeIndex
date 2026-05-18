@@ -28615,9 +28615,9 @@ public class ReferenceExtractorTests
     public void Extract_NullContent_ReturnsEmpty()
     {
         // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
-        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // step added ahead of StripLineLeadingInvisibles would otherwise dereference `null`
         // before the helper's IsNullOrEmpty guard could run. Closes #183.
-        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingInvisibles
         // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
         // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
         Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
@@ -28635,8 +28635,8 @@ public class ReferenceExtractorTests
     public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
     {
         // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
-        // normalization must run before StripLineLeadingBom so call sites on mid-file
-        // BOM lines are still captured. Closes #183.
+        // normalization must run before StripLineLeadingInvisibles so call sites on
+        // mid-file BOM lines are still captured. Closes #183.
         // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
         // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
         const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
