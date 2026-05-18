@@ -413,6 +413,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "definition", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -2539,6 +2541,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
@@ -2941,6 +2945,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -5216,7 +5222,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "property", "struct", "union"];
+        KnownSymbolKindFilters.OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
