@@ -142,6 +142,28 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ConcurrentPosts_AreAcceptedAndCorrelatedToResponses()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        var first = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""");
+        var second = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""");
+        var responses = await Task.WhenAll(first, second);
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        var ids = new List<int>();
+        foreach (var response in responses)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            ids.Add(doc.RootElement.GetProperty("id").GetInt32());
+        }
+
+        Assert.Contains(21, ids);
+        Assert.Contains(22, ids);
+    }
+
+    [Fact]
     public async Task HttpTransport_EmptyBody_Returns204AndDoesNotKillServer()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -154,6 +176,42 @@ public class HttpMcpTransportTests : IDisposable
         var body = await follow.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
         Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        Assert.Equal("text/event-stream", events.Content.Headers.ContentType!.MediaType);
+
+        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventsStream_UsesBearerAuth()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token");
+
+        using var client = new HttpClient();
+        using var unauthorized = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+
+        using var authorizedRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(harness.Endpoint), "events"));
+        authorizedRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "token");
+        using var authorized = await client.SendAsync(authorizedRequest, HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.OK, authorized.StatusCode);
+        Assert.Equal("text/event-stream", authorized.Content.Headers.ContentType!.MediaType);
     }
 
     [Fact]

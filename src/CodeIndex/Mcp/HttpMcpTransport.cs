@@ -4,6 +4,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 
 namespace CodeIndex.Mcp;
 
@@ -26,6 +28,10 @@ internal sealed class HttpMcpTransport : IMcpTransport
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
+    private readonly ConcurrentBag<Task> _sseStreams = new();
+    private readonly CancellationTokenSource _acceptCts = new();
+    private readonly Channel<PendingRequest> _requestQueue = Channel.CreateUnbounded<PendingRequest>();
+    private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
     // per-request work proportional only to the attacker-supplied input length, eliminating the
@@ -55,6 +61,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
             ? null
             : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
         _endpoint = $"http://{host}:{boundPort}/";
+        _acceptLoop = Task.Run(() => AcceptLoopAsync(_acceptCts.Token), CancellationToken.None);
     }
 
     public string Name => "http";
@@ -161,65 +168,93 @@ internal sealed class HttpMcpTransport : IMcpTransport
         if (_pendingRequest is not null)
             throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
-        while (true)
+        try
         {
-            HttpListenerContext context;
-            try
+            var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            _pendingRequest = request;
+            return request.Body;
+        }
+        catch (ChannelClosedException)
+        {
+            return null;
+        }
+    }
+
+    private async Task AcceptLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
             {
-                using (cancellationToken.Register(() => _listener.Stop()))
+                HttpListenerContext context;
+                try
                 {
                     context = await _listener.GetContextAsync().ConfigureAwait(false);
                 }
-            }
-            catch (HttpListenerException)
-            {
-                // Listener was stopped — treat as end-of-stream so the MCP loop exits cleanly.
-                // listener が止められた場合は EOS と同じ扱いでループを正常終了させる。
-                return null;
-            }
-            catch (ObjectDisposedException)
-            {
-                return null;
-            }
+                catch (HttpListenerException) when (cancellationToken.IsCancellationRequested || _disposed)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
 
-            var request = BeginRequest(context);
-
-            if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
-                continue;
-
-            if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
-            {
-                // RFC 9110 §15.5.6: a 405 response MUST generate an `Allow` header listing the
-                // methods the resource supports so generic HTTP clients can react without parsing
-                // the response body.
-                // RFC 9110 §15.5.6 に従い 405 にはサポートメソッドを示す `Allow` ヘッダを付ける。
-                context.Response.AddHeader("Allow", "POST");
-                await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
-                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
-                continue;
+                _ = Task.Run(() => HandleContextAsync(context, cancellationToken), CancellationToken.None);
             }
-
-            string body;
-            using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8))
-            {
-                body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            // An empty body is treated like a closed stdio line — skip it without producing a
-            // response so a misbehaving client cannot pin the loop on a junk frame.
-            // 空ボディは stdio の空行と同じ扱いでスキップ。応答は返さない。
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                context.Response.StatusCode = (int)HttpStatusCode.NoContent;
-                context.Response.Close();
-                LogRequest(request, (int)HttpStatusCode.NoContent);
-                continue;
-            }
-
-            request.RequestId = TryExtractJsonRpcId(body);
-            _pendingRequest = request;
-            return body;
         }
+        finally
+        {
+            _requestQueue.Writer.TryComplete();
+        }
+    }
+
+    private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        var request = BeginRequest(context);
+
+        if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
+            return;
+
+        if (IsEventsPath(context.Request.Url?.AbsolutePath))
+        {
+            if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.AddHeader("Allow", "GET");
+                await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP event stream only accepts GET.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                return;
+            }
+
+            _sseStreams.Add(Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None));
+            return;
+        }
+
+        if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Response.AddHeader("Allow", "POST");
+            await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+            return;
+        }
+
+        string body;
+        using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8))
+        {
+            body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.NoContent;
+            context.Response.Close();
+            LogRequest(request, (int)HttpStatusCode.NoContent);
+            return;
+        }
+
+        request.Body = body;
+        request.RequestId = TryExtractJsonRpcId(body);
+        await _requestQueue.Writer.WriteAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
@@ -319,6 +354,44 @@ internal sealed class HttpMcpTransport : IMcpTransport
         }
     }
 
+    private static bool IsEventsPath(string? path)
+        => string.Equals(path, "/events", StringComparison.Ordinal);
+
+    private async Task RunEventStreamAsync(PendingRequest request, CancellationToken cancellationToken)
+    {
+        var context = request.Context;
+        try
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.OK;
+            context.Response.ContentType = "text/event-stream; charset=utf-8";
+            context.Response.SendChunked = true;
+            context.Response.AddHeader("Cache-Control", "no-cache");
+            context.Response.AddHeader("Connection", "keep-alive");
+
+            var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
+            await context.Response.OutputStream.WriteAsync(prelude.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Normal server shutdown.
+            }
+        }
+        catch
+        {
+            // Client disconnects are expected for long-lived SSE streams.
+        }
+        finally
+        {
+            LogRequest(request, (int)HttpStatusCode.OK);
+            try { context.Response.Close(); } catch { /* ignore */ }
+        }
+    }
+
     private bool HashEqualsConfiguredToken(string provided)
     {
         // Hash only the attacker-supplied input and compare to the pre-computed configured-token
@@ -336,11 +409,12 @@ internal sealed class HttpMcpTransport : IMcpTransport
         return CryptographicOperations.FixedTimeEquals(providedHash, _bearerTokenHash);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
-            return ValueTask.CompletedTask;
+            return;
         _disposed = true;
+        try { _acceptCts.Cancel(); } catch { /* ignore */ }
         try
         {
             if (_pendingRequest is not null)
@@ -355,7 +429,8 @@ internal sealed class HttpMcpTransport : IMcpTransport
             // Disposal must not throw — the parent server is already on its way down.
             // dispose は例外を投げない方針: 親サーバーは既に終了処理中なので。
         }
-        return ValueTask.CompletedTask;
+        try { await _acceptLoop.ConfigureAwait(false); } catch { /* ignore */ }
+        _acceptCts.Dispose();
     }
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
@@ -447,6 +522,8 @@ internal sealed class HttpMcpTransport : IMcpTransport
         internal string CorrelationId { get; }
 
         internal string? RequestId { get; set; }
+
+        internal string? Body { get; set; }
 
         internal string RemotePeer { get; }
 
