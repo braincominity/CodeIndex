@@ -1730,6 +1730,7 @@ public static class IndexCommandRunner
             {
                 csharpMetadataTargetReadyAfter = true;
             }
+            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
             RestampHotspotFamilyTrustForUpdate(
                 writer,
                 priorHotspotFamilyVersions,
@@ -2900,6 +2901,7 @@ public static class IndexCommandRunner
             graphTableAvailableAfter = true;
             issuesTableAvailableAfter = true;
             csharpSymbolNameReadyAfter = true;
+            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
             RestampHotspotFamilyTrustForFullScan(
                 writer,
                 reusedHotspotFamilyLanguages,
