@@ -8038,7 +8038,7 @@ public static partial class SymbolExtractor
                             symbols.Add(new SymbolRecord
                             {
                                 FileId = fileId,
-                                Kind = "function",
+                                Kind = ResolveJavaScriptTypeScriptFunctionKindFromHeader(methodHeader),
                                 Name = GetJavaScriptTypeScriptMethodNameFromSource(methodCapture.SourceHeader, 0) ?? methodHeader.Name,
                                 Line = startLine,
                                 StartLine = startLine,
@@ -9952,6 +9952,7 @@ public static partial class SymbolExtractor
         methodHeader = default;
         var index = Math.Max(0, startColumn);
         string? visibility = null;
+        var isAsync = false;
 
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
             index++;
@@ -9973,6 +9974,8 @@ public static partial class SymbolExtractor
                 {
                     if (token is "public" or "private" or "protected")
                         visibility = token;
+                    if (token == "async")
+                        isAsync = true;
                     continue;
                 }
 
@@ -10091,7 +10094,7 @@ public static partial class SymbolExtractor
                             && returnBraceDepth == 0)
                         {
                             returnTypeEndColumn ??= index - 1;
-                            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false);
+                            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false, isAsync, isGenerator);
                             return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
                         }
 
@@ -10162,7 +10165,7 @@ public static partial class SymbolExtractor
                                 if (sawReturnTypeToken)
                                 {
                                     returnTypeEndColumn = index - 1;
-                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
+                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, IsAsync: isAsync, IsGenerator: isGenerator);
                                     return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
                                 }
                             }
@@ -10222,7 +10225,7 @@ public static partial class SymbolExtractor
                 if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
                     return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
-                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
+                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, IsAsync: isAsync, IsGenerator: isGenerator);
                 return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
             }
         }
@@ -10784,6 +10787,18 @@ public static partial class SymbolExtractor
 
         return NormalizeMetadata(sourceHeader[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
     }
+
+    private static string ResolveJavaScriptTypeScriptFunctionKindFromHeader(JavaScriptTypeScriptMethodHeaderInfo methodHeader)
+        => ResolveJavaScriptTypeScriptFunctionKind(methodHeader.IsAsync, methodHeader.IsGenerator);
+
+    private static string ResolveJavaScriptTypeScriptFunctionKind(bool isAsync, bool isGenerator)
+        => (isAsync, isGenerator) switch
+        {
+            (true, true) => "async_generator",
+            (true, false) => "async_function",
+            (false, true) => "generator",
+            _ => "function",
+        };
 
     private static bool TryGetJavaScriptTypeScriptNextToken(
         string[] lines,
