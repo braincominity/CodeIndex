@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -5195,6 +5196,59 @@ public class IndexCommandRunnerTests
             // reader treat mixed-state rows as fully fold-ready.
             // version は "0" のままで OK。現在の NameFold.Version に昇格してはいけない。
             Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotRestampFoldReadyWhenSymbolExtractorVersionMismatches()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            File.WriteAllText(Path.Combine(projectRoot, "untouched.cs"), "public class Untouched { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"UPDATE codeindex_meta SET value = '0' WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(SymbolExtractor.GetContractVersion("csharp").ToString(System.Globalization.CultureInfo.InvariantCulture), storedVersion);
         }
         finally
         {

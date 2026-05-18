@@ -12,6 +12,17 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class SymbolExtractor
 {
+    public const int DefaultContractVersion = 1;
+
+    public static int GetContractVersion(string? lang)
+    {
+        return lang switch
+        {
+            null or "" => DefaultContractVersion,
+            _ => DefaultContractVersion,
+        };
+    }
+
     // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
     // instances and lookup tables are initialized once by the CLR and must be treated as
     // immutable after type initialization; per-file extraction state belongs in local
