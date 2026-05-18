@@ -220,6 +220,8 @@ files 1──N symbol_references
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
+| `goroutine_spawn` | `goroutine_spawn` | Go `go f()` async spawn edges; the ordinary `call` edge is also emitted for the invoked function. |
+| `channel_send`, `channel_receive` | raw label | Go channel communication edges for send and receive expressions; excluded from default invocation graphs. |
 | `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
@@ -227,6 +229,10 @@ files 1──N symbol_references
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
+
+### Python symbol taxonomy
+
+Python extraction uses `function` for ordinary functions and methods, `class` for class declarations and dynamic class factories, `property` for class attributes, `@property` descriptors, accessor decorators, `Final` constants, and walrus-assigned names, and `class_hook` for lifecycle dunder hooks such as `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__`. `SubKind` refines Python property accessors as `getter` / `setter` / `deleter`, walrus assignments as `walrus`, and class hooks as `dunder`.
 
 ### Extending reference extraction
 
@@ -449,7 +455,7 @@ Supported symbol kinds by language:
 | C# | methods, constructors, operators, conversion operators, indexers, properties, fields, events, delegates, classes, records, structs, interfaces, enums, enum members, `#region` | `using`, `using` alias, `extern alias`, XML-doc `cref`, type-position references | yes |
 | Java | methods, compact constructors, enum constants, classes, records, interfaces, annotations, enums, record components | imports, sealed `permits`, and `module-info.java` directives | yes |
 | Kotlin | functions, extension functions, secondary constructors, classes, objects, interfaces, enum classes, enum entries, properties | imports, type aliases, trailing-lambda calls | yes |
-| Go | functions, methods, type aliases, structs, interfaces | imports and type-position references | yes |
+| Go | functions, methods, test/benchmark/fuzz/example/init roles, type aliases, structs, interfaces | imports, type-position references, goroutine spawns, channel sends/receives | yes |
 | Rust | functions, macros, `const`, `static`, impl/type aliases, structs, unions, traits, enums | `use`, turbofish and structural type-position references | yes |
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
@@ -1702,6 +1708,8 @@ files 1──N symbol_references
 | Raw kind | Logical graph kind | 備考 |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
+| `goroutine_spawn` | `goroutine_spawn` | Go の `go f()` による非同期 spawn edge。呼び出し先には通常の `call` edge も併せて出力する。 |
+| `channel_send`, `channel_receive` | raw label | Go の channel send / receive 式を表す通信エッジ。既定の invocation graph からは除外する。 |
 | `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
 | `friend` | `friend` | C++ friend の access/coupling edge。依存関係寄りの graph query で可視化する。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
@@ -1921,7 +1929,7 @@ JS/TS の export surface 走査は、`export const { foo, renamed: localName } =
 | C# | method、constructor、operator、conversion operator、indexer、property、field、event、delegate、class、record、struct、interface、enum、enum member、`#region` | `using`、`using` alias、`extern alias`、XML-doc `cref`、type-position reference | yes |
 | Java | method、compact constructor、enum constant、class、record、interface、annotation、enum、record component | import、sealed `permits`、`module-info.java` directive | yes |
 | Kotlin | function、extension function、secondary constructor、class、object、interface、enum class、enum entry、property | import、type alias、trailing-lambda call | yes |
-| Go | function、method、type alias、struct、interface | import、type-position reference | yes |
+| Go | function、method、test/benchmark/fuzz/example/init role、type alias、struct、interface | import、type-position reference、goroutine spawn、channel send/receive | yes |
 | Rust | function、macro、`const`、`static`、impl/type alias、struct、union、trait、enum | `use`、turbofish、structural type-position reference | yes |
 | Swift | function、class、actor、struct、protocol、enum、stored property | import、trailing-closure call | yes |
 | Ruby | `def`、Rails DSL、block call、class、module、attribute | `require` | yes |

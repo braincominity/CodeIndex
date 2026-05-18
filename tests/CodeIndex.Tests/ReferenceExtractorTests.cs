@@ -31,6 +31,77 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_EmitsGoroutineAndChannelReferences()
+    {
+        const string content = """
+            package demo
+
+            func worker() {}
+
+            func run(ch chan int) {
+                go worker()
+                ch <- 1
+                value := <-ch
+                select {
+                case ch <- value:
+                case value = <-ch:
+                default:
+                }
+                if <-ch {
+                }
+                for <-ch {
+                }
+                switch <-ch {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "worker"
+            && reference.ReferenceKind == "goroutine_spawn"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "worker"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_send"
+            && reference.Line == 7);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 8);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_send"
+            && reference.Line == 10);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "value"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 10);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 11);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 14);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 16);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ch"
+            && reference.ReferenceKind == "channel_receive"
+            && reference.Line == 18);
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """
@@ -251,6 +322,46 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+    }
+
+    [Fact]
+    public void Extract_SwiftPropertyWrappers_EmitTypeReferences()
+    {
+        const string content = """
+            import SwiftUI
+
+            struct Screen {
+                @State private var count = 0
+                @Environment(\.colorScheme) var scheme
+                @MyWrapper var value: Int
+                @MyLib.State var qualifiedCount = 0
+                @IBOutlet weak var titleLabel: UILabel!
+                @NSManaged var persistedName: String
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "count");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Environment"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "scheme");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyWrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "value");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "State"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "qualifiedCount");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "IBOutlet" or "NSManaged"
+            && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -842,6 +953,98 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_PythonMultilineAnnotations_CapturesSignatureTypeReferences()
+    {
+        const string content = """
+            def build(
+                value: int | "User",
+                fallback: list[int | str],
+            ) -> "Result":
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "int"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build"
+            && reference.Line == 2);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "list"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build"
+            && reference.Line == 3);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "str"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "build"
+            && reference.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_PythonClassHook_AssignsReferencesToHookContainer()
+    {
+        const string content = """
+            class Base:
+                def __init_subclass__(cls, plugin: Plugin) -> None:
+                    register_plugin(cls)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Plugin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "__init_subclass__");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "register_plugin"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "__init_subclass__");
+    }
+
+    [Fact]
+    public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
+    {
+        const string content = """
+            from __future__ import annotations
+
+            def load(value: Optional["User"]) -> "Result | None":
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Optional"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "None"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "load");
     }
