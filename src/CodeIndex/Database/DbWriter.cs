@@ -821,13 +821,7 @@ public class DbWriter
                 WHERE f.lang = 'typescript'
                   AND s.name IS NOT NULL
                   AND s.name <> ''
-                  AND (
-                    s.kind = 'interface'
-                    OR (s.kind = 'import' AND s.signature GLOB 'type *')
-                    OR (s.kind = 'import' AND s.signature GLOB 'export type *')
-                    OR (s.kind = 'import' AND s.signature GLOB 'declare type *')
-                    OR (s.kind = 'import' AND s.signature GLOB 'export declare type *')
-                  )
+                  AND s.kind = 'interface'
                 ORDER BY s.name, s.file_id, s.line";
 
             using var reader = cmd.ExecuteReader();

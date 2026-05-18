@@ -314,7 +314,7 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesAndTypeAliases()
+    public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_aug_{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -391,7 +391,7 @@ public class DatabaseTests : IDisposable
 
         var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
-        Assert.Equal(6, inserted);
+        Assert.Equal(4, inserted);
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
@@ -401,10 +401,6 @@ public class DatabaseTests : IDisposable
             ORDER BY symbol_name, container_kind";
 
         using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("Options", reader.GetString(0));
-        Assert.Equal("type", reader.GetString(1));
-        Assert.Equal(2, reader.GetInt32(2));
         Assert.True(reader.Read());
         Assert.Equal("Request", reader.GetString(0));
         Assert.Equal("interface", reader.GetString(1));
