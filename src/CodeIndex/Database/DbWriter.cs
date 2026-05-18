@@ -720,7 +720,7 @@ public class DbWriter
         if (references.Count == 0) return;
 
         var referenceLineIds = new Dictionary<(long FileId, int Line), long>();
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 11);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
         for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, references.Count);
