@@ -316,6 +316,55 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src/current.py"), "print('same')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src/duplicate.py"), "print('same')\n");
+
+            var modified = new DateTime(2026, 5, 18, 0, 0, 0, DateTimeKind.Utc);
+            var currentId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/current.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            var staleId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/renamed-away.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            var duplicateId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/duplicate.py", Lang = "python", Size = 14, Lines = 1,
+                Checksum = "same_checksum", Modified = modified,
+            });
+            _writer.InsertChunks([
+                new() { FileId = currentId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "current" },
+                new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = duplicateId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "duplicate" },
+            ]);
+
+            var purged = _writer.PurgeStaleFilesSharingChecksum(projectRoot, "src/current.py", "same_checksum");
+
+            Assert.Equal(1, purged);
+            Assert.True(_writer.HasFileAtPath("src/current.py"));
+            Assert.False(_writer.HasFileAtPath("src/renamed-away.py"));
+            Assert.True(_writer.HasFileAtPath("src/duplicate.py"));
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM chunks";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot))
+                TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void InsertChunks_InsertsAndPopulatesFts()
     {
         var fileId = _writer.UpsertFile(new FileRecord

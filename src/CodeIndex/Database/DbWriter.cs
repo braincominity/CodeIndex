@@ -346,6 +346,60 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Purge stale DB rows for deleted/renamed files that still share the current file's checksum.
+    /// 現在のファイルと同じ checksum を持つ削除/rename 済みの古いDB行を削除する。
+    /// </summary>
+    public int PurgeStaleFilesSharingChecksum(string projectRoot, string retainedRelativePath, string? checksum)
+    {
+        if (string.IsNullOrEmpty(checksum))
+            return 0;
+
+        var staleIds = new List<long>();
+        var cmd = RentCommand(
+            "SELECT id, path FROM files WHERE checksum = @checksum AND path <> @path",
+            static c =>
+            {
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@path", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@checksum"].Value = checksum;
+            cmd.Parameters["@path"].Value = retainedRelativePath;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var relativePath = reader.GetString(1);
+                var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                    staleIds.Add(id);
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn?.Commit();
+
+        return staleIds.Count;
+    }
+
+    /// <summary>
     /// Check whether a file row already exists for the given relative path.
     /// 指定した相対パスの file 行が既に存在するか確認する。
     /// </summary>
