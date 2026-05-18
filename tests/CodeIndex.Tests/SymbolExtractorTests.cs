@@ -23562,10 +23562,10 @@ public class SymbolExtractorTests
     public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
     {
         // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
-        // normalization must run before StripLineLeadingBom so the line-leading BOM
-        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // normalization must run before StripLineLeadingInvisibles so the line-leading
+        // cleanup still recognizes mid-file BOMs (helper treats `\n` as the sole line
         // separator). Closes #183.
-        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingInvisibles は `\n` を唯一の
         // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
         // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
         const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";

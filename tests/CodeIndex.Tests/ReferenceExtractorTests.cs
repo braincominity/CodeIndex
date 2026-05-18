@@ -28608,8 +28608,8 @@ public class ReferenceExtractorTests
     public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
     {
         // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
-        // normalization must run before StripLineLeadingBom so call sites on mid-file
-        // BOM lines are still captured. Closes #183.
+        // normalization must run before StripLineLeadingInvisibles so call sites on
+        // mid-file BOM lines are still captured. Closes #183.
         // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
         // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
         const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
