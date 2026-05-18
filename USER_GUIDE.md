@@ -1524,6 +1524,8 @@ Once configured, the AI can directly call these tools:
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
+For `callers`, `impact_analysis`, and `deps`, the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) explains which edge kinds each command walks and how to reconcile count differences with `references <Name> --kind attribute` or `--kind annotation`.
+
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
 If you only need to upgrade an older `.cdidx/codeindex.db` for Unicode `--exact`, or to repair fold metadata drift by regenerating folded keys without reparsing source files, run:
@@ -3198,6 +3200,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
+
+`callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference_kind-フィルタの対応表)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
