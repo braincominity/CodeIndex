@@ -161,6 +161,40 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void GetChangedFilesFromCommit_RejectsRevisionRanges()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "first.txt"), "hello\n");
+        RunGit(repoDir, "add", "first.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        File.WriteAllText(Path.Combine(repoDir, "second.txt"), "hello\n");
+        RunGit(repoDir, "add", "second.txt");
+        RunGit(repoDir, "commit", "-m", "second");
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => GitHelper.GetChangedFilesFromCommit(repoDir, "HEAD~1..HEAD"));
+
+        Assert.Contains("ranges and tag refs are not accepted", ex.Message);
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_RejectsTagRefs()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "first.txt"), "hello\n");
+        RunGit(repoDir, "add", "first.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        RunGit(repoDir, "tag", "v1.0");
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => GitHelper.GetChangedFilesFromCommit(repoDir, "v1.0"));
+
+        Assert.Contains("Tag refs are not accepted", ex.Message);
+    }
+
+    [Fact]
     public void GetChangedFilesFromCommit_ReturnsFilesForMergeCommit()
     {
         var repoDir = CreateGitRepo();
